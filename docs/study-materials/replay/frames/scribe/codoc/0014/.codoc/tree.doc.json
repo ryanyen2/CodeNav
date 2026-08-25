@@ -74,7 +74,7 @@
       "attrs": {
         "fid": "f-79828ae5",
         "localId": "",
-        "version": "00000001787025256317-00000000000000000000-default",
+        "version": "00000001787700352830-00000000000000000000-default",
         "level": 1,
         "realized": true
       },
@@ -102,7 +102,7 @@
       "content": [
         {
           "type": "text",
-          "text": "A line counts as furniture when it sits near the top or bottom of a page and the same text repeats on at least 60% of pages. Repetition is the only signal available, which has two consequences worth knowing: a one-page letter can never show it, so its header stays; and a real heading that happens to repeat is thrown away with the furniture. This runs before headings are looked for, so nothing later can rescue it."
+          "text": "A line counts as furniture when it sits near the top or bottom of a page that has at least twice the configured edge margin plus two lines, and the same text repeats on at least 60% of pages. Repetition is the only signal available, which has two consequences worth knowing: a one-page letter can never show it, so its header stays; and a real heading that happens to repeat is thrown away with the furniture. This runs before headings are looked for, so nothing later can rescue it."
         }
       ],
       "attrs": {
@@ -142,7 +142,7 @@
       "attrs": {
         "fid": "f-1fe8bbcb",
         "localId": "",
-        "version": "00000001787268149339-00000000000000000000-default",
+        "version": "00000001787025256318-00000000000000000000-default",
         "level": 1,
         "realized": true
       },
@@ -158,7 +158,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Runs the stages in one fixed order: strip the furniture, find the blocks, collect the footnotes and rejoin the paragraphs together in one pass over the prose, then tidy the characters."
+          "text": "Runs the stages in one fixed order: strip the furniture, find the blocks, collect the footnotes, rejoin the paragraphs, then tidy the characters."
         }
       ],
       "attrs": {
@@ -170,7 +170,7 @@
       "content": [
         {
           "type": "text",
-          "text": "The order is the design. Furniture goes first so a running header is never mistaken for a heading; footnotes and paragraphs share a pass because both work on the same line of text, so walking the document twice for them would be wasted work; characters are tidied last so every rule before it sees the text exactly as the PDF gave it. Move a stage and rules start seeing text another stage has already altered."
+          "text": "The order is the design. Furniture goes first so a running header is never mistaken for a heading; characters are tidied last so every rule before it sees the text exactly as the PDF gave it. Move a stage and rules start seeing text another stage has already altered."
         }
       ],
       "attrs": {
@@ -262,7 +262,7 @@
       "attrs": {
         "fid": "f-0e5fb2f7",
         "localId": "",
-        "version": "00000001787025256319-00000000000000000000-default",
+        "version": "00000001787700362093-00000000000000000000-default",
         "level": 1,
         "realized": true
       },
@@ -290,7 +290,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Ordinary line breaks are joined; a blank line or a short line ending in a full stop ends the paragraph. A word split at the margin is rejoined and the hyphen dropped, so `photogram-` + `metry` becomes `photogrammetry`. Some hyphens belong to the word, though, so a short list of prefixes keeps theirs: `well-` + `being` stays `well-being`. The text alone cannot tell a real compound from a line break, which is why that list exists."
+          "text": "Ordinary line breaks are joined; a blank line or a short line ending in a full stop ends the paragraph. A word split at the margin is rejoined and the hyphen dropped, so `photogram-` + `metry` becomes `photogrammetry`. Some hyphens belong to the word, though, so a configurable list of prefixes keeps theirs: `well-` + `being` stays `well-being`. The text alone cannot tell a real compound from a line break, which is why that list exists."
         }
       ],
       "attrs": {
@@ -340,37 +340,9 @@
     {
       "type": "featureHeading",
       "attrs": {
-        "fid": "f-199583cc",
+        "fid": "f-9b9f0ce4",
         "localId": "",
-        "version": "00000001787268057984-00000000000000000000-default",
-        "level": 0,
-        "realized": true
-      },
-      "content": [
-        {
-          "type": "text",
-          "text": "Configuration files"
-        }
-      ]
-    },
-    {
-      "type": "paragraph",
-      "content": [
-        {
-          "type": "text",
-          "text": "Finds an optional scribe.toml by walking up from the working directory, and turns it into settings: a defaults section for every document, and sections that override it for one document by name. Unknown sections, unknown names and wrong value types are rejected before a conversion starts rather than being guessed at."
-        }
-      ],
-      "attrs": {
-        "ownerId": "f-199583cc"
-      }
-    },
-    {
-      "type": "featureHeading",
-      "attrs": {
-        "fid": "f-6f29a12b",
-        "localId": "",
-        "version": "00000001787268057983-00000000000000000000-default",
+        "version": "00000001787700319059-00000000000000000000-default",
         "level": 0,
         "realized": true
       },
@@ -390,7 +362,35 @@
         }
       ],
       "attrs": {
-        "ownerId": "f-6f29a12b"
+        "ownerId": "f-9b9f0ce4"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-b9c1412c",
+        "localId": "",
+        "version": "00000001787700319061-00000000000000000000-default",
+        "level": 0,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Configuration files"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Finds an optional scribe.toml by walking up from the working directory, and turns it into settings: a defaults section for every document, and sections that override it for one document by name. Unknown sections, unknown names and wrong value types are rejected before a conversion starts rather than being guessed at."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-b9c1412c"
       }
     },
     {
@@ -464,9 +464,9 @@
     {
       "type": "featureHeading",
       "attrs": {
-        "fid": "f-ce8ea44e",
+        "fid": "f-cfa1bc12",
         "localId": "",
-        "version": "00000001787268057982-00000000000000000000-default",
+        "version": "00000001787700319058-00000000000000000000-default",
         "level": 1,
         "realized": true
       },
@@ -486,7 +486,7 @@
         }
       ],
       "attrs": {
-        "ownerId": "f-ce8ea44e"
+        "ownerId": "f-cfa1bc12"
       }
     },
     {

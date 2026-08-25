@@ -340,39 +340,11 @@
     {
       "type": "featureHeading",
       "attrs": {
-        "fid": "f-199583cc",
+        "fid": "f-9b9f0ce4",
         "localId": "",
-        "version": "00000001787268050804-00000000000000000000-default",
+        "version": "00000001787700319059-00000000000000000000-default",
         "level": 0,
-        "realized": false
-      },
-      "content": [
-        {
-          "type": "text",
-          "text": "Configuration files"
-        }
-      ]
-    },
-    {
-      "type": "paragraph",
-      "content": [
-        {
-          "type": "text",
-          "text": "Finds an optional scribe.toml by walking up from the working directory, and turns it into settings: a defaults section for every document, and sections that override it for one document by name. Unknown sections, unknown names and wrong value types are rejected before a conversion starts rather than being guessed at."
-        }
-      ],
-      "attrs": {
-        "ownerId": "f-199583cc"
-      }
-    },
-    {
-      "type": "featureHeading",
-      "attrs": {
-        "fid": "f-6f29a12b",
-        "localId": "",
-        "version": "00000001787268051598-00000000000000000000-default",
-        "level": 0,
-        "realized": false
+        "realized": true
       },
       "content": [
         {
@@ -390,7 +362,35 @@
         }
       ],
       "attrs": {
-        "ownerId": "f-6f29a12b"
+        "ownerId": "f-9b9f0ce4"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-b9c1412c",
+        "localId": "",
+        "version": "00000001787700319061-00000000000000000000-default",
+        "level": 0,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Configuration files"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Finds an optional scribe.toml by walking up from the working directory, and turns it into settings: a defaults section for every document, and sections that override it for one document by name. Unknown sections, unknown names and wrong value types are rejected before a conversion starts rather than being guessed at."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-b9c1412c"
       }
     },
     {
@@ -464,11 +464,11 @@
     {
       "type": "featureHeading",
       "attrs": {
-        "fid": "f-ce8ea44e",
+        "fid": "f-cfa1bc12",
         "localId": "",
-        "version": "00000001787268051189-00000000000000000000-default",
+        "version": "00000001787700319058-00000000000000000000-default",
         "level": 1,
-        "realized": false
+        "realized": true
       },
       "content": [
         {
@@ -486,7 +486,7 @@
         }
       ],
       "attrs": {
-        "ownerId": "f-ce8ea44e"
+        "ownerId": "f-cfa1bc12"
       }
     },
     {

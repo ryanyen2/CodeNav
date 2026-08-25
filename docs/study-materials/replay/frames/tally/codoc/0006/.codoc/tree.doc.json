@@ -408,37 +408,9 @@
     {
       "type": "featureHeading",
       "attrs": {
-        "fid": "f-011be521",
+        "fid": "f-3692f54b",
         "localId": "",
-        "version": "00000001787268280755-00000000000000000000-default",
-        "level": 0,
-        "realized": false
-      },
-      "content": [
-        {
-          "type": "text",
-          "text": "Statement periods"
-        }
-      ]
-    },
-    {
-      "type": "paragraph",
-      "content": [
-        {
-          "type": "text",
-          "text": "Decides which period a transaction belongs to, for a month and for a week. The month is lined up on the date the payment was made and the week on the date the bank posted it, because the two are read for different reasons. A month answers what was spent in January, and a week is read next to the statement the bank sends."
-        }
-      ],
-      "attrs": {
-        "ownerId": "f-011be521"
-      }
-    },
-    {
-      "type": "featureHeading",
-      "attrs": {
-        "fid": "f-d828b612",
-        "localId": "",
-        "version": "00000001787268281153-00000000000000000000-default",
+        "version": "00000001787700067290-00000000000000000000-default",
         "level": 0,
         "realized": false
       },
@@ -458,7 +430,35 @@
         }
       ],
       "attrs": {
-        "ownerId": "f-d828b612"
+        "ownerId": "f-3692f54b"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-0bc678c9",
+        "localId": "",
+        "version": "00000001787700068513-00000000000000000000-default",
+        "level": 0,
+        "realized": false
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Statement periods"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Decides which period a transaction belongs to, for a month and for a week. The month is lined up on the date the payment was made and the week on the date the bank posted it, because the two are read for different reasons. A month answers what was spent in January, and a week is read next to the statement the bank sends."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-0bc678c9"
       }
     },
     {
@@ -560,9 +560,9 @@
     {
       "type": "featureHeading",
       "attrs": {
-        "fid": "f-dd75c3f7",
+        "fid": "f-e324f641",
         "localId": "",
-        "version": "00000001787268280371-00000000000000000000-default",
+        "version": "00000001787700067958-00000000000000000000-default",
         "level": 1,
         "realized": false
       },
@@ -582,7 +582,7 @@
         }
       ],
       "attrs": {
-        "ownerId": "f-dd75c3f7"
+        "ownerId": "f-e324f641"
       }
     },
     {

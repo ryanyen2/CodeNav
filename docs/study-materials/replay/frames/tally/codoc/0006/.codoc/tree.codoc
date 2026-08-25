@@ -47,11 +47,11 @@
 
       Both the description and the amount have to match, or a weekly supermarket shop would look like a subscription. Three months rather than two, so a coincidence does not become a commitment.
 
-- Statement periods  ⟨f-011be521⟩
-    Decides which period a transaction belongs to, for a month and for a week. The month is lined up on the date the payment was made and the week on the date the bank posted it, because the two are read for different reasons. A month answers what was spent in January, and a week is read next to the statement the bank sends.
-
-- Rule settings  ⟨f-d828b612⟩
+- Rule settings  ⟨f-3692f54b⟩
     Gathers every value the rules read, meaning the merchant patterns, what happens to a merchant nothing matches, and which date each summary is lined up on, into one file the reader edits instead of constants spread through the modules. Nothing supplies a default for a missing value, so a file with a piece missing stops the run and says which piece.
+
+- Statement periods  ⟨f-0bc678c9⟩
+    Decides which period a transaction belongs to, for a month and for a week. The month is lined up on the date the payment was made and the week on the date the bank posted it, because the two are read for different reasons. A month answers what was spent in January, and a week is read next to the statement the bank sends.
 
 - Producing a monthly spending summary  ⟨f-007dec9d⟩
     What comes out at the end: totals per category per month, and the ways to ask for them.
@@ -64,7 +64,7 @@
   - Command-line summary interface  ⟨f-ebd24159⟩
       `tally summarise statement.csv` prints the summary; pointed at a folder it reads every CSV in it. There is a check mode that reads and reports without writing anything, which is how you see what a rule change does before committing to it.
 
-  - Weekly spending summary  ⟨f-dd75c3f7⟩
+  - Weekly spending summary  ⟨f-e324f641⟩
       The same summary at a finer grain, grouped into weeks and written beside the monthly one rather than over it, so both are readable at once. Recurring payments stay counted in months whichever summary is being read, because that is about when a commitment falls.
 
 - Checking statements  ⟨f-19871689⟩

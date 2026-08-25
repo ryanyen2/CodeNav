@@ -290,7 +290,7 @@
       "attrs": {
         "fid": "f-0bb3f871",
         "localId": "",
-        "version": "00000001787026352353-00000000000000000000-default",
+        "version": "00000001787700119181-00000000000000000000-default",
         "level": 1,
         "realized": true
       },
@@ -318,7 +318,7 @@
       "content": [
         {
           "type": "text",
-          "text": "The first pattern that matches wins, so specific ones sit before broad ones — a rule for one coffee shop has to come before the general `cafe` rule or it never fires. Anything unmatched goes to an uncategorised bucket, so the summary still adds up and the gap is visible instead of silent."
+          "text": "The first pattern that matches wins, so specific ones sit before broad ones — a rule for one coffee shop has to come before the general `cafe` rule or it never fires. Anything unmatched goes to an uncategorised bucket unless rules.toml says to stop and report every unknown merchant with its row locations, so the summary either adds up with the gap visible or names what needs a rule."
         }
       ],
       "attrs": {
@@ -408,37 +408,9 @@
     {
       "type": "featureHeading",
       "attrs": {
-        "fid": "f-011be521",
+        "fid": "f-3692f54b",
         "localId": "",
-        "version": "00000001787268287547-00000000000000000000-default",
-        "level": 0,
-        "realized": true
-      },
-      "content": [
-        {
-          "type": "text",
-          "text": "Statement periods"
-        }
-      ]
-    },
-    {
-      "type": "paragraph",
-      "content": [
-        {
-          "type": "text",
-          "text": "Decides which period a transaction belongs to, for a month and for a week. The month is lined up on the date the payment was made and the week on the date the bank posted it, because the two are read for different reasons. A month answers what was spent in January, and a week is read next to the statement the bank sends."
-        }
-      ],
-      "attrs": {
-        "ownerId": "f-011be521"
-      }
-    },
-    {
-      "type": "featureHeading",
-      "attrs": {
-        "fid": "f-d828b612",
-        "localId": "",
-        "version": "00000001787268287540-00000000000000000000-default",
+        "version": "00000001787700074921-00000000000000000000-default",
         "level": 0,
         "realized": true
       },
@@ -458,7 +430,35 @@
         }
       ],
       "attrs": {
-        "ownerId": "f-d828b612"
+        "ownerId": "f-3692f54b"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-0bc678c9",
+        "localId": "",
+        "version": "00000001787700074931-00000000000000000000-default",
+        "level": 0,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Statement periods"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Decides which period a transaction belongs to, for a month and for a week. The month is lined up on the date the payment was made and the week on the date the bank posted it, because the two are read for different reasons. A month answers what was spent in January, and a week is read next to the statement the bank sends."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-0bc678c9"
       }
     },
     {
@@ -494,7 +494,7 @@
       "attrs": {
         "fid": "f-b62f4884",
         "localId": "",
-        "version": "00000001787026352354-00000000000000000000-default",
+        "version": "00000001787700119173-00000000000000000000-default",
         "level": 1,
         "realized": true
       },
@@ -510,7 +510,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Adds the transactions up into monthly category totals, and reports what it did with the rest: how many rows it read, what it dropped as duplicates, what it treated as transfers, what it could not categorise, and which payments look recurring."
+          "text": "Adds the transactions up into category totals for the selected month or week, and reports what it did with the rest: how many rows it read, what it dropped as duplicates, what it treated as transfers, what it could not categorise, which rows it merged, and which payments look recurring."
         }
       ],
       "attrs": {
@@ -522,7 +522,7 @@
       "content": [
         {
           "type": "text",
-          "text": "The policies run before the adding up, so the totals and the notes underneath them are telling the same story. Reordering that changes the numbers."
+          "text": "The policies run before the adding up, so the totals and the notes underneath them are telling the same story. Reordering that changes the numbers. Weekly summaries use the weekly settings, while recurring payments remain counted by month."
         }
       ],
       "attrs": {
@@ -560,9 +560,9 @@
     {
       "type": "featureHeading",
       "attrs": {
-        "fid": "f-dd75c3f7",
+        "fid": "f-e324f641",
         "localId": "",
-        "version": "00000001787268287548-00000000000000000000-default",
+        "version": "00000001787700074932-00000000000000000000-default",
         "level": 1,
         "realized": true
       },
@@ -582,7 +582,7 @@
         }
       ],
       "attrs": {
-        "ownerId": "f-dd75c3f7"
+        "ownerId": "f-e324f641"
       }
     },
     {
