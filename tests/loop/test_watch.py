@@ -381,3 +381,45 @@ def test_mixed_batch_runs_both_loops(dirs):
     assert a.seen["called"]                       # Loop A ALSO ran (code change)
     assert a.seen["file_scope"] == {"pkg/mod.py"}
     assert out and "codoc→code" in out[0] and "code→codoc" in out[0]
+
+
+def test_initial_watch_state_records_host_logs_as_unseen(dirs):
+    """P7 startup gap, half 1: an op appended to edits.host.jsonl during the long
+    startup window (after the startup drain, before the watcher's first event) must
+    not be baked into the self-write guard as already-seen. The host append-logs are
+    CONSUMED by a drain, so any bytes still on disk at state-seeding time are new
+    input, and recording their live hash would suppress them forever."""
+    from codoc.loop.edits import host_ops_path
+    from codoc.loop.watch import initial_watch_state
+    root, codoc_dir, tp = dirs
+    host_ops_path(codoc_dir).write_text('{"fn":"appendCommand","arg":{"id":"c-9"}}\n')
+
+    state = initial_watch_state(codoc_dir)
+
+    assert state.last_host_hash == ""          # unseen — the idle tick will route it
+    assert state.last_tree_hash == _hash(tp)   # the tree guard still seeds normally
+
+
+def test_idle_tick_pending_input_drains_a_pre_watcher_host_log(dirs):
+    """P7 startup gap, half 2: no watch event ever fires for a file that already
+    existed when watchfiles started watching, so the idle tick must notice channel
+    bytes the last pass did not leave behind and route them into Loop B."""
+    from codoc.loop.edits import host_ops_path
+    from codoc.loop.watch import _pending_channel_input
+    root, codoc_dir, tp = dirs
+    hp = host_ops_path(codoc_dir)
+    hp.write_text('{"fn":"appendCommand","arg":{"id":"c-9","kind":"add","payload":{"title":"A"}}}\n')
+    state = WatchState(last_tree_hash=_hash(tp))  # last_host_hash "" → log is unseen
+
+    pending = _pending_channel_input(codoc_dir, state)
+    assert str(hp) in pending
+
+    def b_consume(root_dir, codoc_dir, **kw):
+        host_ops_path(codoc_dir).unlink(missing_ok=True)  # mimic merge consuming the log
+        return LoopBResult(commands=1)
+
+    out = process_batch(pending, root, codoc_dir, state,
+                        loop_a=_spy(LoopAResult()), loop_b=b_consume, render=_noop_render)
+    assert out and out[0] == "codoc→code"
+    # Drained: the next tick sees nothing pending — no refire loop.
+    assert _pending_channel_input(codoc_dir, state) == []

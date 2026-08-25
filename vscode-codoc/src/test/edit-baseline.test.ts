@@ -342,3 +342,35 @@ describe('a deletion retires when it holds, and not before', () => {
         expect(retires(p.settle([], 1, 't2'))).toEqual([]);
     });
 });
+
+// ── The resurrect race (P7 class): a projection between the two settles ───────
+//
+// The daemon cannot apply a retire that has not been emitted yet, so every
+// projection it renders during the deletion's two-settle hold STILL CARRIES the
+// deleted feature. If the editor adopts that slice back into the doc, the next
+// settle sees the node present, the absence set disarms, and the deletion is
+// silently lost — the deleted heading visibly "comes back" on save. The gate
+// holds the slice out (doc-gate `deletedFids`); this pins the provenance half:
+// as long as the settled doc keeps missing the node, an intervening projection
+// must not reset the hold.
+describe('a projection between the two settles does not disarm the deletion', () => {
+    const unit = (fid: string, title: string): FeatureUnit => ({
+        fid, localId: null, title, description: '', parentId: null,
+        retired: false, realized: true,
+    });
+    const TREE = [unit('f-1', 'Alpha feature one'), unit('f-2', 'Beta feature two'),
+                  unit('f-3', 'Gamma feature three')];
+
+    const retires = (cmds: readonly { kind: string; feature_id?: string }[]): string[] =>
+        cmds.filter(c => c.kind === 'retire').map(c => c.feature_id!);
+
+    it('retires on the second settle even though a fresh projection carried the node', () => {
+        const p = new EditProvenance('s');
+        p.observe(TREE, 1);
+        p.settle(TREE.slice(0, 2), 1, 't1');   // first absence — armed
+        p.observe(TREE, 2);                    // daemon re-render: f-3 still in the store
+        // The editor's gate kept f-3 OUT of the doc, so the settle that follows the
+        // adopt still misses it — and cites the projection it now shows (id 2).
+        expect(retires(p.settle(TREE.slice(0, 2), 2, 't2'))).toEqual(['f-3']);
+    });
+});

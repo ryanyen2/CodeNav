@@ -234,3 +234,52 @@ describe('shouldDeferProjection — adopt-while-typing (pilot bug C)', () => {
         expect(shouldDeferProjection(idle)).toBe(false);
     });
 });
+
+describe('gateProjection — armed deletions (the deleted-heading resurrect, P7 class)', () => {
+    it('keeps a locally deleted feature OUT while the store has not applied the retire', () => {
+        // The user deleted f-B's heading. The retire fires only once the absence has
+        // held across two settles, so the daemon's next projection still carries the
+        // feature at the SAME version — adopting it would resurrect the node and
+        // disarm the retire.
+        const local = doc(feature('f-A', 'A', 'A-text', 'vA1'));
+        const incoming = doc(
+            feature('f-A', 'A', 'A-text', 'vA1'),
+            feature('f-B', 'B', 'B-text', 'vB1'),
+        );
+        const r = gateProjection(base({
+            incoming, local,
+            localVersions: new Map([['f-A', 'vA1'], ['f-B', 'vB1']]),
+            deletedFids: new Set(['f-B']),
+        }));
+        expect(bodyOf(r.doc, 'f-B')).toBe(null);   // stays deleted — no resurrect
+        expect(r.adopted.has('f-B')).toBe(false);
+        expect(bodyOf(r.doc, 'f-A')).toBe('A-text');
+    });
+
+    it('surfaces the slice again when somebody else wrote to it after the deletion', () => {
+        const local = doc(feature('f-A', 'A', 'A-text', 'vA1'));
+        const incoming = doc(
+            feature('f-A', 'A', 'A-text', 'vA1'),
+            feature('f-B', 'B', 'B-rewritten', 'vB2'),  // strictly newer than vB1
+        );
+        const r = gateProjection(base({
+            incoming, local,
+            localVersions: new Map([['f-A', 'vA1'], ['f-B', 'vB1']]),
+            deletedFids: new Set(['f-B']),
+        }));
+        // Someone else's write must not vanish under a stale deletion: the slice
+        // returns, and the author sees what their delete would take with it.
+        expect(bodyOf(r.doc, 'f-B')).toBe('B-rewritten');
+        expect(r.adopted.get('f-B')).toBe('vB2');
+    });
+
+    it('without the armed set, a locally absent feature still adopts (existing contract)', () => {
+        const local = doc(feature('f-A', 'A', 'A-text', 'vA1'));
+        const incoming = doc(
+            feature('f-A', 'A', 'A-text', 'vA1'),
+            feature('f-B', 'B', 'B-text', 'vB1'),
+        );
+        const r = gateProjection(base({ incoming, local, localVersions: new Map([['f-A', 'vA1']]) }));
+        expect(bodyOf(r.doc, 'f-B')).toBe('B-text');
+    });
+});

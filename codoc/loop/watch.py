@@ -583,6 +583,42 @@ def process_batch(
     return " + ".join(label for label, _ in outs), " · ".join(summary for _, summary in outs)
 
 
+def initial_watch_state(codoc_dir: str) -> WatchState:
+    """Seed the self-write guards from what the startup drain left behind.
+
+    The two host append-logs are CONSUMED by a drain (the merge renames them away),
+    so any bytes still on disk at seeding time arrived after it and are recorded as
+    unseen (``""``) — the idle tick's pending-input check then routes them into
+    Loop B. Recording their live hash instead is how a hand-off could sit unapplied
+    forever: appended during the long startup reconcile, baked in as a "self-write",
+    and no watch event ever fires for a file that predates the watcher."""
+    return WatchState(
+        last_tree_hash=_hash(tree_path(codoc_dir)),
+        last_edits_hash=_hash(edits_path(codoc_dir)),
+        last_inbox_hash=_hash(inbox_path(codoc_dir)),
+        last_host_hash="",
+        last_inbox_host_hash="",
+    )
+
+
+def _pending_channel_input(codoc_dir: str, state: WatchState) -> list[str]:
+    """IDE channel files whose bytes differ from what the last pass left behind.
+
+    A file that already exists when ``watchfiles`` starts watching fires no event,
+    so input appended between the startup drain and the watcher's first report — or
+    an event the OS dropped — would otherwise sit unprocessed until the next
+    unrelated edit, which may never come. Checked on the idle tick; the same hashes
+    the self-write guards record make "pending" and "self-write" one comparison, so
+    a pass's own clears never re-fire."""
+    checks = (
+        (host_ops_path(codoc_dir), state.last_host_hash),
+        (edits_path(codoc_dir), state.last_edits_hash),
+        (inbox_path(codoc_dir), state.last_inbox_hash),
+        (host_verdicts_path(codoc_dir), state.last_inbox_host_hash),
+    )
+    return [str(p) for p, last in checks if _hash(p) != last]
+
+
 def safe_process_batch(
     paths: list[str],
     root_dir: str,
@@ -736,19 +772,21 @@ def run_watch(
         except Exception as e:  # noqa: BLE001
             printer(f"⚠ startup edits merge failed (continuing to watch): {e}")
 
-    state = WatchState(
-        last_tree_hash=_hash(tree_path(codoc_dir)),
-        last_edits_hash=_hash(edits_path(codoc_dir)),
-        last_inbox_hash=_hash(inbox_path(codoc_dir)),
-        last_host_hash=_hash(host_ops_path(codoc_dir)),
-        last_inbox_host_hash=_hash(host_verdicts_path(codoc_dir)),
-    )
+    state = initial_watch_state(codoc_dir)
+
+    # Say we are alive BEFORE the startup reconcile, not after: that reconcile can
+    # take a minute or more (indexing + an LLM pass), and a `codoc watch` that
+    # prints nothing for that long reads as hung — P7 killed and restarted it
+    # twice, and each restart began the same silent minute over again.
+    suffix = "  (--auto-realize: unattended implement when no session is open)" if auto_realize else ""
+    printer(f"codoc watching {root_dir} — edit code or .codoc/tree.codoc (Ctrl-C to stop){suffix}")
 
     # Startup drift reconcile: catch any code↔tree divergence that accumulated
     # while the daemon was down (or that a previously-crashed cycle missed). This
     # is what makes a (re)started daemon self-heal instead of sitting blind.
     if not no_realize:
         try:
+            printer("▸ startup reconcile  checking code↔tree drift (can take a while on a fresh index)…")
             res = reconcile_drift(root_dir, codoc_dir)
             if res.proposed or res.applied_structural or res.auto:
                 printer(f"▸ startup reconcile  {res.summary()}")
@@ -766,8 +804,6 @@ def run_watch(
     except Exception as e:  # noqa: BLE001 — a failed seed must not stop the daemon
         printer(f"⚠ startup render failed (the doc pane may be blank): {e}")
 
-    suffix = "  (--auto-realize: unattended implement when no session is open)" if auto_realize else ""
-    printer(f"codoc watching {root_dir} — edit code or .codoc/tree.codoc (Ctrl-C to stop){suffix}")
     # `yield_on_timeout` wakes the loop every PARENT_POLL_MS even with no file
     # changes, so the parent-death self-exit (when the extension spawned us) is
     # checked on a steady cadence rather than only on the next edit.
@@ -789,6 +825,18 @@ def run_watch(
             # touch a file — which may be never if they've moved on to other work.
             if state.epoch_open:
                 out = safe_process_batch([], root_dir, codoc_dir, state,
+                                         no_realize=no_realize, dry_run=dry_run, printer=printer)
+                if out:
+                    printer(f"▸ {out[0]}  {out[1]}")
+            # IDE input the watcher can never report: a channel file that already
+            # existed when watchfiles started (appended during the startup
+            # reconcile, or an event the OS dropped) fires no event, so the tick
+            # compares the channels against what the last pass left behind and
+            # routes any difference into a normal batch. This is what un-wedges a
+            # hand-off sent while the daemon was still starting up.
+            pending = _pending_channel_input(codoc_dir, state)
+            if pending:
+                out = safe_process_batch(pending, root_dir, codoc_dir, state,
                                          no_realize=no_realize, dry_run=dry_run, printer=printer)
                 if out:
                     printer(f"▸ {out[0]}  {out[1]}")

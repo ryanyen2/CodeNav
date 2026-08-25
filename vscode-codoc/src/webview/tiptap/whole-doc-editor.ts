@@ -79,7 +79,7 @@ import { codeRefsIn, mintCommentId, CommentThread } from '../../state/comment-mo
 import { hlcWallMs } from '../../state/blame-model';
 import type { HoldDetail } from '../../state/bindings-model';
 import type { Suggestion } from '../../state/suggestion-model';
-import { inlineRunsToText, type PMNode } from '../../state/pm-doc';
+import { inlineRunsToText, NODE_FEATURE_HEADING, type PMNode } from '../../state/pm-doc';
 import { tweenScrollTop, navDuration, muteWindowFor, prefersReducedMotion, staggerHover, sparkIn, type TweenController } from '../motion';
 import { icon } from '../icons';
 import type { FeaturePhase } from '../../state/activity-model';
@@ -419,6 +419,53 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     // to it has nothing left to protect, so the feature stops being pending — without
     // this an undo pins a feature pending forever and no projection can reach it again.
     const adoptedText = new Map<string, string>();
+    // Fids whose heading the USER deleted, still awaiting their retire. A deletion has
+    // no local slice for the gate to keep, and it is not in `pendingFids` (onUpdate
+    // marks the CARET's slice — the caret lands in a neighbour when a heading goes).
+    // Without arming it here, any projection adopted before the absence has held across
+    // two settles re-materializes the node AND disarms the retire — the deleted heading
+    // "comes back" on save. Armed by the deleting transaction; disarmed when the heading
+    // returns (undo / paste-back) or when a projection stops carrying the feature (the
+    // retire landed). In-memory only, like the rest of the gate state.
+    const deletedFids = new Set<string>();
+    // Heading fids as of the last observed doc state — what a user transaction is
+    // diffed against to detect a heading deletion.
+    let knownHeadingFids = new Set<string>();
+
+    /** The top-level feature-heading fids of a doc. */
+    function headingFids(doc: PMNode): Set<string> {
+        const out = new Set<string>();
+        for (const b of doc.content ?? []) {
+            if (b.type !== NODE_FEATURE_HEADING) continue;
+            const f = (b.attrs as { fid?: unknown } | undefined)?.fid;
+            if (typeof f === 'string' && f) out.add(f);
+        }
+        return out;
+    }
+
+    /** The live doc's heading fids, read off the ProseMirror tree directly — this runs
+     *  on every user transaction, so it must not serialize the doc (getJSON is O(doc)). */
+    function liveHeadingFids(): Set<string> {
+        const out = new Set<string>();
+        editor.state.doc.forEach(node => {
+            if (node.type.name !== NODE_FEATURE_HEADING) return;
+            const f = node.attrs.fid as unknown;
+            if (typeof f === 'string' && f) out.add(f);
+        });
+        return out;
+    }
+
+    /** Re-derive heading-deletion tracking from the live doc. `userEdit` transactions
+     *  ARM a fid that vanished; every call DISARMS fids that are present again (an
+     *  undo, or an adopt that surfaced somebody else's newer write). */
+    function refreshHeadingTracking(userEdit: boolean): void {
+        const now = liveHeadingFids();
+        if (userEdit) {
+            for (const f of knownHeadingFids) if (!now.has(f)) deletedFids.add(f);
+        }
+        for (const f of now) deletedFids.delete(f);
+        knownHeadingFids = now;
+    }
 
     const editor = new Editor({
         element: surface,
@@ -583,6 +630,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // wording straight over their words, with nothing to say it happened.
             const editedKey = activeSliceKey();
             if (editedKey) pendingFids.add(editedKey);
+            // A deleted heading is a pending edit too, but its fid is nowhere near the
+            // caret — track it by diffing the heading set, so the projection gate can
+            // hold the deletion until its retire lands (or an undo brings it back).
+            refreshHeadingTracking(true);
             opts.onEditFeature?.(editedFid);
             // P2 fix 2: editing the feature means the user is now reviewing it → clear its
             // code-touched tick (it has served its purpose).
@@ -1397,6 +1448,9 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         suppressUpdate = true;
         editor.view.dispatch(tr.setMeta(REFLECT_META, true).setMeta('addToHistory', false));
         suppressUpdate = false;
+        // The minted fids changed the heading identity set outside onUpdate — refresh
+        // the deletion-tracking baseline so deleting a just-minted node still arms.
+        refreshHeadingTracking(false);
     }
 
     // ── inline comments — selection toolbar + composer + resolve ──────────────
@@ -2270,7 +2324,14 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // projected per-feature version is strictly newer. An advance on an
             // unrelated feature therefore never reverts a pending edit on another.
             const local = editor.getJSON() as PMNode;
-            const gate = gateProjection({ incoming, local, localVersions, pendingFids });
+            // A projection that no longer carries an armed-deleted feature is the
+            // retire echoing back — the deletion is done, stop holding it. (One the
+            // projection STILL carries stays armed; the gate below keeps it out.)
+            if (deletedFids.size) {
+                const incomingFids = headingFids(incoming);
+                for (const f of [...deletedFids]) if (!incomingFids.has(f)) deletedFids.delete(f);
+            }
+            const gate = gateProjection({ incoming, local, localVersions, pendingFids, deletedFids });
             const doc = gate.doc;
             // Fold the adopted per-feature versions into the local tracking and clear
             // their pending edits — those features are now in sync with the projection.
@@ -2339,6 +2400,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 // settling — the user keeps typing into a surface that no longer saves.
                 suppressUpdate = false;
             }
+            // The reload above bypassed onUpdate (suppressUpdate), so re-derive the
+            // heading set the NEXT user transaction diffs against — a programmatic
+            // change is never a user deletion, so this arms nothing (userEdit=false).
+            refreshHeadingTracking(false);
             // Keep the user's caret WHERE IT WAS instead of yanking it to the feature
             // heading. The common case is a settle round-trip where the new doc is ~identical,
             // so restoring the pre-reload absolute position (clamped) keeps the caret exactly

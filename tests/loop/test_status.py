@@ -93,3 +93,20 @@ def test_mcp_status_reports_held_drafts(codoc_dir):
     out = tools.read_status(codoc_dir)
     assert out["held_drafts"] == 1
     assert out["held_draft_list"][0]["feature_id"] == "f-1"
+
+
+def test_pending_edits_detail_does_not_say_start_watch_when_a_daemon_runs(codoc_dir, monkeypatch):
+    """P7: the daemon WAS running (deep in its silent startup) while status told the
+    participant to start codoc watch — so they concluded it had crashed and killed
+    it. When a live daemon owns the repo, the pending-edits detail must say the
+    edits are queued for it instead of prescribing a command that will stand down."""
+    from codoc.loop import watch
+
+    _host_command(codoc_dir)
+    monkeypatch.setattr(watch, "daemon_running", lambda d: True)
+    with open_store(codoc_dir) as store:
+        st = status.refresh_status(codoc_dir, store)
+    data = _read_state(st)
+    assert data["state"] == "tree_dirty"
+    assert "start codoc watch" not in data["detail"]
+    assert "daemon" in data["detail"]

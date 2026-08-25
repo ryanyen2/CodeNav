@@ -155,6 +155,17 @@ export interface GateInput {
     localVersions: Map<string, string>;
     /** Fids with an un-acked local edit since their last adopt. */
     pendingFids: Set<string>;
+    /**
+     * Fids whose heading the USER deleted and whose retire has not yet landed. A
+     * deletion has no local slice, so without this the adopt branch reads it as
+     * "nothing to clobber" and re-materializes the node from the projection — the
+     * deleted heading visibly comes back, and because a retire only fires once the
+     * absence has held across two settles, the resurrection also disarms it. The
+     * editor arms a fid here on the deleting transaction and disarms it when the
+     * heading returns (undo) or the projection stops carrying the feature (the
+     * retire landed).
+     */
+    deletedFids?: ReadonlySet<string>;
 }
 
 export interface GateResult {
@@ -182,6 +193,7 @@ export interface GateResult {
  */
 export function gateProjection(input: GateInput): GateResult {
     const { incoming, local, localVersions, pendingFids } = input;
+    const deleted = input.deletedFids ?? new Set<string>();
     const localSlices = slices(local);
     const localByKey = new Map<string, FeatureSlice>();
     for (const s of localSlices) if (s.key) localByKey.set(s.key, s);
@@ -203,6 +215,17 @@ export function gateProjection(input: GateInput): GateResult {
         const localSlice = localByKey.get(key);
         const hasPending = pendingFids.has(key);
         const localVersion = localVersions.get(key) ?? '';
+        // An ARMED DELETION: no local slice because the user removed the heading.
+        // Same asymmetry as `shouldAdopt`: keep the deletion unless the projected
+        // version moved strictly past the one the deletion was made against — a
+        // newer version means somebody else wrote to this feature after the delete,
+        // and that write must surface (the slice returns, the author sees what
+        // their delete would take with it). Otherwise the projection is just the
+        // store not having applied the retire yet, and adopting it would resurrect
+        // the node and disarm the two-settle retire.
+        if (!localSlice && inc.fid && deleted.has(inc.fid) && !(inc.version > localVersion)) {
+            continue;
+        }
         // No local copy of this feature → nothing to clobber; adopt.
         //
         // A PROPOSAL carries no HLC (it is not in the store), so both versions are ''

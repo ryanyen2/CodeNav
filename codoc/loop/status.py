@@ -225,8 +225,17 @@ def refresh_status(
         if pending is None:
             count = authored
         if not detail:
-            detail = (f"{authored} edit(s) waiting to be applied — start codoc watch, "
-                      "or run codoc sync once")
+            # Prescribe a command only when nobody is there to act. P7's daemon WAS
+            # running (deep in its silent startup) while this detail said "start
+            # codoc watch" — so they concluded it had crashed, and a second watch
+            # would only have stood down. Local import: watch imports this module.
+            from codoc.loop import watch as _watch
+
+            if _watch.daemon_running(codoc_dir):
+                detail = f"{authored} edit(s) queued — the running codoc daemon will apply them"
+            else:
+                detail = (f"{authored} edit(s) waiting to be applied — start codoc watch, "
+                          "or run codoc sync once")
     elif n_proposals:
         state = CODE_DRIFT
     else:
