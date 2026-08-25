@@ -632,9 +632,19 @@ def reflect(
     """
     _require_workspace(root)
     from codoc.loop.loop_a import reconcile_drift
+    from codoc.loop.reconcile import safe_write_tree
+    from codoc.store.db import open_store
 
+    cd = _codoc_dir(root)
     file_scope = {s.strip() for s in scope.split(",") if s.strip()} if scope else None
-    res = reconcile_drift(root, _codoc_dir(root), file_scope=file_scope)
+    res = reconcile_drift(root, cd, file_scope=file_scope)
+    # reconcile_drift writes the store, drift and status but none of the derived
+    # exports — the watch daemon renders after it, and with no daemon (the exact
+    # situation this command exists for) nothing else does: the store moved and
+    # the IDE kept showing the pre-reflect projection. Guarded render, always —
+    # recovery includes healing exports staler than this pass's own changes.
+    with open_store(cd) as store:
+        safe_write_tree(store, cd)
     typer.echo(f"▸ reflect  {res.summary()}")
 
 

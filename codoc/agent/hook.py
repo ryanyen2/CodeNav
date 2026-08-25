@@ -359,11 +359,23 @@ def _maybe_spawn_reflect(codoc_dir: str, data: dict, ep: dict) -> None:
     cmd = [sys.executable, "-m", "codoc.cli.main", "reflect",
            "--root", root, "--scope", ",".join(write_files)]
     try:
+        # The reflect's output goes to a log, not DEVNULL: it is detached and
+        # fire-and-forget, so a reflect that dies otherwise leaves no trace and
+        # "the workspace quietly stopped reflecting" has no evidence behind it.
+        log_path = os.path.join(codoc_dir, "reflect.log")
+        try:
+            mode = "wb" if os.path.getsize(log_path) > 1_000_000 else "ab"
+        except OSError:
+            mode = "ab"
+        log = open(log_path, mode)  # noqa: SIM115 — the child inherits the fd
+        log.write(f"--- reflect {datetime.now(timezone.utc).isoformat()} "
+                  f"scope={','.join(write_files)}\n".encode())
         subprocess.Popen(  # detached: outlives this hook + the agent session
             cmd, cwd=root,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=log, stderr=log,
             start_new_session=True,
         )
+        log.close()  # the child keeps its own descriptor
     except Exception:  # noqa: BLE001 — never block the agent's stop
         pass
 

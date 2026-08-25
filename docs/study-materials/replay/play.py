@@ -304,6 +304,35 @@ def _scrub_record(value, recorded_root: str, target_root: str):
     return value
 
 
+def verify_carried(frames: Path, manifest: dict) -> None:
+    """Refuse a recording whose frame dirs lost a write the manifest names.
+
+    The manifest is the promise and the frame dir is the bytes. A listed write
+    with nothing behind it used to play as a silent skip — the tally recording
+    shipped that way, and the participant got a document from one derive run
+    over a store from another, with nothing anywhere saying so. `record.py`
+    refuses to cut such a frame now; this is the same refusal for a frameset
+    already cut, checked before the first frame goes in so a defective
+    recording leaves the workspace untouched. Machine-local wiring is exempt:
+    an older manifest may still name it, and the player never copies it anyway.
+    """
+    missing = []
+    for frame in manifest.get("frames", []):
+        src = frames / f"{frame['n']:04d}"
+        for rel in frame.get("writes", []):
+            if is_machine_local(Path(rel).as_posix()):
+                continue
+            if not (src / rel).is_file():
+                missing.append(f"frame {frame['n']}: {rel}")
+    if missing:
+        shown = "\n  ".join(missing[:8])
+        more = f"\n  … and {len(missing) - 8} more" if len(missing) > 8 else ""
+        raise SystemExit(
+            "this recording names writes its frames do not carry, so replaying "
+            f"it would assemble a state nobody recorded:\n  {shown}{more}\n"
+            "re-derive the frames (record.py refuses to cut such a frame now).")
+
+
 def segments(manifest: dict) -> list[tuple[int, int]]:
     """The frame ranges between checkpoints, as [start, end) over frame NUMBERS.
 
@@ -340,6 +369,7 @@ def play(workspace: Path, frames: Path, speed: float, step: bool,
     if not manifest_path.exists():
         raise SystemExit(f"no manifest in {frames}")
     manifest = json.loads(manifest_path.read_text())
+    verify_carried(frames, manifest)
     target_root = str(workspace.resolve())
     recorded = manifest.get("recorded_root") or ""
 

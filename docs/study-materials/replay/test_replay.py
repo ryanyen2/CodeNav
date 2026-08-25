@@ -300,6 +300,54 @@ class RoundTripTest(unittest.TestCase):
             play.play(ws, frames, 1000.0, False, True, False)
             self.assertEqual(record.scan(ws), first)
 
+    def test_a_recording_whose_frames_lost_a_named_write_is_refused(self):
+        # The tally recording shipped frames naming nine .codoc writes and
+        # carrying three, and the player copied what it found: a document from
+        # one derive run over a store from another, with nothing anywhere saying
+        # so. `record.py` now refuses to CUT such a frame, but a frameset already
+        # cut (or corrupted in transit) reaches the player first — so the player
+        # checks the promise against the bytes before the first frame goes in,
+        # and refuses the way it refuses a recording that is not neutral.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            raw, frames, ws = tmp / "raw", tmp / "frames", tmp / "workspace"
+            fake_recording(raw, SESSION)
+            record.build(raw, None, frames, seconds=0.01)
+            manifest = json.loads((frames / "manifest.json").read_text())
+            frame, rel = next((f, rel) for f in manifest["frames"]
+                              for rel in f["writes"])
+            (frames / f"{frame['n']:04d}" / rel).unlink()
+
+            ws.mkdir()
+            with self.assertRaises(SystemExit) as refusal:
+                play.play(ws, frames, 1000.0, False, True, False)
+            self.assertIn(rel, str(refusal.exception))
+            self.assertEqual(record.scan(ws), {},
+                             "a refused replay must leave the workspace untouched")
+
+    def test_a_manifest_naming_machine_local_wiring_still_plays(self):
+        # An older manifest can still name `.vscode/settings.json` in `writes`
+        # while the (repaired) frame dir no longer carries it. The player skips
+        # machine-local wiring on copy anyway, so its absence is not a defect —
+        # refusing here would brick every bundle the wiring fix repaired.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            frames, ws = tmp / "frames", tmp / "workspace"
+            frame_dir = frames / "0001"
+            frame_dir.mkdir(parents=True)
+            write(frame_dir, "scribe/lines.py", "one\n")
+            (frames / "base").mkdir()
+            (frames / "manifest.json").write_text(json.dumps({
+                "recorded_root": "/Users/seed/recording",
+                "frames": [{"n": 1, "delay_s": 0, "terminal": "",
+                            "writes": ["scribe/lines.py", ".vscode/settings.json"],
+                            "deletes": []}],
+            }))
+            ws.mkdir()
+            play.play(ws, frames, speed=1000.0, step=False,
+                      do_reset=True, do_transcript=False)
+            self.assertEqual((ws / "scribe/lines.py").read_text(), "one\n")
+
 
 class DeriveTest(unittest.TestCase):
     def test_deriving_carries_the_code_and_records_what_the_condition_added(self):

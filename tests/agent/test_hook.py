@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -326,6 +327,34 @@ def test_stop_spawns_reflect_when_no_daemon(repo, no_real_spawn):
     cmd = no_real_spawn[0]
     assert "reflect" in cmd and "--scope" in cmd
     assert "src/app.py" in cmd[cmd.index("--scope") + 1]
+
+
+def test_stop_reflect_keeps_its_output(repo, monkeypatch):
+    """The detached reflect used to send stdout AND stderr to DEVNULL, so a
+    reflect that died left no trace anywhere: the workspace just quietly stopped
+    reflecting, and 'nothing happened after the edit' had no evidence behind it.
+    The spawn now writes both streams to `.codoc/reflect.log`."""
+    import subprocess
+
+    seen: dict = {}
+
+    def fake_popen(cmd, *a, **k):
+        seen.update(k)
+        return None
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    root, codoc_dir = repo
+    handle_session_start(_payload(str(root)), str(codoc_dir))
+    handle_pre_tool(
+        _payload(str(root), tool_name="Edit", tool_input={"file_path": str(root / "src/app.py")}),
+        str(codoc_dir),
+    )
+    handle_stop(_payload(str(root)), str(codoc_dir))
+
+    err = seen.get("stderr")
+    assert err is not None and err is not subprocess.DEVNULL
+    assert Path(err.name) == Path(codoc_dir) / "reflect.log"
+    assert seen.get("stdout") is err
 
 
 def test_stop_skips_reflect_when_daemon_running(repo, no_real_spawn):

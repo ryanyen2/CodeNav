@@ -93,6 +93,32 @@ def test_help_lists_new_commands():
     assert "install-hooks" in r.output
 
 
+def test_reflect_renders_the_derived_exports(tmp_path, monkeypatch):
+    """`codoc reflect` is the no-daemon reflection path (the Stop hook spawns it),
+    and `reconcile_drift` writes the store, drift and status but none of the
+    derived exports — the daemon compensates with its own render pass, and this
+    command must too. Without it a daemonless workspace's store moves and the IDE
+    never sees it: an agent's edit was amended into the store while the doc pane
+    stayed on the pre-edit prose."""
+    monkeypatch.setattr("codoc.pipelines.indexing.runner.update_index",
+                        lambda *a, **k: None)
+    monkeypatch.setattr("codoc.pipelines.indexing.reader.read_all_chunks",
+                        lambda *a, **k: [])
+
+    cd = tmp_path / ".codoc"
+    cd.mkdir()
+    s = open_store(cd)
+    s.upsert_feature(Feature(title="Cache", description="Caches values."))
+    s.close()
+
+    r = runner.invoke(app, ["reflect", "--root", str(tmp_path)])
+    assert r.exit_code == 0, r.output
+    assert (cd / "tree.codoc").exists(), "reflect left the derived exports unrendered"
+    assert "Cache" in (cd / "tree.codoc").read_text()
+    assert (cd / "tree.doc.json").exists()
+    assert (cd / "tree.bindings.json").exists()
+
+
 def test_propose_creates_pending_event(tmp_path):
     """``codoc propose add_node`` should create a plan proposal."""
     cd = tmp_path / ".codoc"
