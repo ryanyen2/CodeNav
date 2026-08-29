@@ -503,9 +503,14 @@ def apply_changeset(
     # Doc-wins + causality (classify rows 13 / 6). ``held`` = features with pending
     # doc-ahead intent (live suggestion or queued directive): code-side
     # AMEND/RETIRE/MOVE on them is deferred; binding maintenance still applies.
-    # ``caused_by_map`` (feature_id → directive id) + ``default_caused_by`` stamp
-    # ops produced while a realize queue is being implemented, so the IDE can group
-    # the surfaced-back changes under the doc edit that triggered them.
+    # ``caused_by_map`` (feature_id → directive id) stamps ops produced while a
+    # realize queue is being implemented, so the IDE can group the surfaced-back
+    # changes under the doc edit that triggered them. ``default_caused_by`` is the
+    # fallback for ops on features the map does not name; only a caller that KNOWS
+    # every op this pass produces belongs to one directive may set it. The run
+    # entrypoints do not (see :func:`_doc_intent`) — a pass reconciles unrelated
+    # drift too, and a wrong cause here closes the realize queue from under a
+    # directive nobody implemented.
     held: set[str] | None = None,
     caused_by_map: dict[str, str] | None = None,
     default_caused_by: str = "",
@@ -1263,14 +1268,31 @@ def _doc_intent(codoc_dir: str) -> tuple[set[str], dict[str, str], str]:
     """Pending doc-ahead intent for a pass: ``(held, caused_by_map, default_caused_by)``.
 
     ``held`` (live suggestions ∪ queued directives) drives doc-wins suppression;
-    the manifest's feature→directive map (+ the sole directive id as the default)
-    stamps ``caused_by`` on ops produced while the realize queue is implemented.
-    Once ``/codoc:sync`` deletes the queue, all three are empty again."""
+    the manifest's feature→directive map stamps ``caused_by`` on ops produced while
+    the realize queue is implemented. Once ``/codoc:sync`` deletes the queue, both
+    are empty again.
+
+    There is deliberately NO blanket default. A sole queued directive used to become
+    the cause of every op the pass produced, on any feature — and that is an
+    assertion of causation from a coincidence of counting. It is false exactly when
+    a pass reconciles code the directive did not cause, which is the ordinary case:
+    Loop B mints a directive and the Loop A pass in the same ``codoc sync`` then
+    reflects whatever the PREVIOUS change left unreflected. Those refresh/attach ops
+    landed on other features carrying the new directive's id, and
+    :func:`loop_b.prune_satisfied_directives` reads any applied event citing an id as
+    proof that directive was carried out — so a steer was minted, stamped onto
+    unrelated bookkeeping, and closed as finished before the agent ever saw it. The
+    trigger file was then removed and ``codoc realize`` reported nothing queued.
+
+    The feature→directive map says only what the manifest actually knows, so it
+    stays. Cross-feature fallout of a directive now carries no cause rather than a
+    wrong one, which is the honest reading: codoc cannot tell that work apart from
+    unrelated drift, and a provenance chain built on a guess is worse than a short
+    one."""
     held = edits_channel.hold_set(codoc_dir)
     manifest = edits_channel.read_manifest(codoc_dir)
     cb_map = {d.feature_id: d.id for d in manifest if d.feature_id}
-    default_cb = manifest[0].id if len(manifest) == 1 else ""
-    return held, cb_map, default_cb
+    return held, cb_map, ""
 
 
 def _backfill_types_hashes(store: Store, rows, bindings: list | None = None) -> int:

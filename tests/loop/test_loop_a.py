@@ -676,3 +676,68 @@ def test_model_may_not_reattribute_code_the_change_never_touched(store):
     assert still is not None and still.feature_id == owner.id
     moved = store.binding_at("loud.py", "loud.py::fresh")
     assert moved is not None and moved.feature_id == thief.id
+
+
+def test_sole_queued_directive_is_not_the_cause_of_every_op(tmp_path):
+    """A lone directive in the manifest never becomes the blanket cause for a pass.
+
+    It used to: `_doc_intent` returned `manifest[0].id` as `default_caused_by`
+    whenever the queue held exactly one entry, so every op that pass produced — on
+    any feature — was stamped with it. That is causation inferred from a count.
+    """
+    from codoc.loop import edits as edits_channel
+    from codoc.loop.loop_a import _doc_intent
+
+    codoc_dir = tmp_path / ".codoc"
+    codoc_dir.mkdir()
+    # The trigger has to exist beside the manifest, or read_manifest reads a
+    # handed-off queue with no realize.md as "the agent finished" and drains it.
+    (codoc_dir / "realize.md").write_text("queued", encoding="utf-8")
+    edits_channel.write_manifest(str(codoc_dir), [
+        edits_channel.Directive(id="d-1", feature_id="f-panic", kind="steer"),
+    ])
+
+    _held, cb_map, default_cb = _doc_intent(str(codoc_dir))
+
+    assert cb_map == {"f-panic": "d-1"}   # what the manifest actually knows
+    assert default_cb == ""               # and nothing beyond it
+
+
+def test_fresh_steer_survives_a_pass_that_reflects_unrelated_code(store, tmp_path):
+    """Reconciling a previous change's leftovers must not close a new directive.
+
+    This is the sequence the two comment-driven demo beats hit. Loop B mints a steer
+    for Panic; the Loop A pass in the SAME `codoc sync` then reflects code that an
+    earlier beat left unreflected, on entirely different features. Those refresh ops
+    carried the steer's id, and `prune_satisfied_directives` treats any applied event
+    citing an id as proof that directive was carried out — so the steer was closed,
+    realize.md was deleted, and `codoc realize` reported nothing queued while the
+    agent never ran.
+    """
+    from codoc.loop import edits as edits_channel
+    from codoc.loop.loop_a import _doc_intent
+    from codoc.loop.loop_b import prune_satisfied_directives
+
+    codoc_dir = tmp_path / ".codoc"
+    codoc_dir.mkdir()
+    (codoc_dir / "realize.md").write_text("queued", encoding="utf-8")
+
+    panic = _feature(store, title="Panic")
+    trails = _feature(store, title="Trails")
+    _bind(store, trails.id, "trails.py", "trails.py::record")
+
+    # The steer is queued and handed off; the agent has not run yet.
+    edits_channel.write_manifest(str(codoc_dir), [
+        edits_channel.Directive(id="d-steer", feature_id=panic.id, kind="steer",
+                                text='STEER FEATURE: "Panic"', handed_off=True),
+    ])
+
+    # The pass reflects an earlier change to a DIFFERENT feature's code.
+    _held, cb_map, default_cb = _doc_intent(str(codoc_dir))
+    cs = ChangeSet(modified=[ChunkRef("trails.py", "trails.py::record", "new")])
+    apply_changeset(cs, store, propose=_raising, caused_by_map=cb_map,
+                    default_caused_by=default_cb)
+
+    assert not store.implemented_directive_ids({"d-steer"})
+    prune_satisfied_directives(store, str(tmp_path), str(codoc_dir))
+    assert [d.id for d in edits_channel.read_manifest(str(codoc_dir))] == ["d-steer"]
