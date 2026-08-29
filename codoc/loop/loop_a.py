@@ -266,6 +266,35 @@ def _discriminating(symbol_path: str) -> set[str]:
             if len(t) >= 4 or has_cjk(t)}
 
 
+def _orphaned_features(
+    store: Store, held: set[str] | None,
+) -> dict[str, tuple[str, str]]:
+    """Features that own no code NOW, once did, and are nobody's parent — each with
+    the last chunk the ledger says they lost.
+
+    The retire question asked from current state instead of from one pass's diff.
+    A feature emptied while it was HELD is skipped by the hold guard, and by the
+    next pass its chunks have left the change set, so nothing asks again and the
+    node outlives its code. Asking a feature is held for a reason, so a still-held
+    one is skipped here too — it is being re-specified, not abandoned.
+
+    Two exclusions keep this from eating an organizational tree: a feature with
+    children is structure rather than code, and a feature with no DETACH behind it
+    never had code to lose (that check lives in the store query).
+    """
+    orphaned = store.features_that_lost_all_code()
+    if not orphaned:
+        return {}
+    feats = store.list_features()
+    parents = {f.parent_id for f in feats if f.parent_id}
+    by_id = {f.id: f for f in feats}
+    return {
+        fid: chunk for fid, chunk in orphaned.items()
+        if not is_held(fid, held) and fid not in parents
+        and (f := by_id.get(fid)) is not None and not f.retired and f.realized
+    }
+
+
 def _gc_superseded_proposals(
     store: Store, removed_keys: frozenset[tuple[str, str]] = frozenset()
 ) -> int:
@@ -582,7 +611,13 @@ def apply_changeset(
         in_scope = {b.feature_id for b in store.bindings_in_files(file_scope)}
         merge_drift(codoc_dir, fresh, in_scope=in_scope)
 
-    if cs.is_empty():
+    # Features that own no code NOW and once did — asked about from current state
+    # rather than from this pass's diff, so one emptied while it was held is still
+    # reconsidered after the hold clears. See the sweep below for why that is the
+    # normal case rather than an edge case. Only the authoritative pass sweeps.
+    orphaned = _orphaned_features(store, held) if allow_retire else {}
+
+    if cs.is_empty() and not orphaned:
         # An empty change set drifted nothing — persist an empty (fresh) map so a
         # feature that re-followed since the last pass loses its badge. (Scoped
         # passes still preserve out-of-scope badges via the merge.)
@@ -663,6 +698,19 @@ def apply_changeset(
         and not store.bindings_for_feature(fid)
         and (f := store.get_feature(fid)) and not f.retired and f.realized
     }
+    # ``removed_owner`` names only what THIS changeset emptied, and the hold guard
+    # above drops whatever was held at that moment — so a feature emptied while
+    # held was never asked about, and no later pass asks either, because by then
+    # its chunks are long gone from the changeset. It stays live with nothing
+    # behind it.
+    #
+    # That is not an edge case: it is what asking an agent to remove a feature
+    # looks like. The steer holds the feature for exactly as long as the deletion
+    # takes, so the one path that deliberately empties a feature is the one path
+    # whose retire was unreachable. ``orphaned`` re-derives the same question from
+    # current state — computed before the empty-changeset return, because the pass
+    # that finally sees it usually has nothing else to report.
+    emptied |= set(orphaned)
     added_unbound = [
         a for a in cs.added
         if store.binding_at(a.file, a.symbol_path) is None
@@ -731,11 +779,19 @@ def apply_changeset(
             {"file": a.file, "symbol_path": a.symbol_path, "source": a.source[:_SNIPPET]}
             for a in added_unbound
         ],
+        # An orphaned feature's chunks left in some earlier pass, so they are not in
+        # this change set. It is described with the chunk the ledger says it lost,
+        # which is the same shape — "this feature has just lost its last binding" —
+        # so the model needs no new vocabulary to answer.
         "removed": [
             {"file": r.file, "symbol_path": r.symbol_path,
              "current_feature_id": removed_owner[(r.file, r.symbol_path)]}
             for r in cs.removed
             if removed_owner.get((r.file, r.symbol_path)) in emptied
+        ] + [
+            {"file": file, "symbol_path": symbol_path, "current_feature_id": fid}
+            for fid, (file, symbol_path) in orphaned.items()
+            if fid in emptied
         ],
         "modified": [
             {"file": m.file, "symbol_path": m.symbol_path, "source": m.source[:_SNIPPET],

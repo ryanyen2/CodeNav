@@ -510,6 +510,70 @@ def test_unrealized_placeholder_not_retire_candidate(store):
     assert store.get_feature(plan.id).retired is False
 
 
+def test_feature_emptied_while_held_is_reconsidered_next_authoritative_pass(store):
+    """A feature whose code is deleted WHILE IT IS HELD is still a retire candidate
+    afterwards, on the pass that re-derives from current state.
+
+    This is what asking an agent to remove a feature looks like: the steer holds the
+    feature for as long as the deletion takes, so the hold guard skips it on the pass
+    that empties it, and `removed_owner` no longer names it on any later pass. Without
+    a current-state sweep the node stays live forever with no code behind it.
+    """
+    f = _feature(store, title="Alignment")
+    _bind(store, f.id, "a.py", "a.py::alignment")
+
+    # Pass one: the code goes while the feature is held by its own directive.
+    cs = ChangeSet(removed=[ChunkRef("a.py", "a.py::alignment")])
+    res = apply_changeset(cs, store, propose=_raising, held={f.id})
+    assert res.auto == {"detach": 1}      # bindings are still maintained
+    assert not res.llm_called             # held ⇒ never asked about
+    assert not store.bindings_for_feature(f.id)
+
+    # Pass two: the hold has cleared and nothing else changed.
+    ops = [NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=f.id, rationale="code gone")]
+    res = apply_changeset(ChangeSet(), store, propose=_propose(ops), allow_retire=True)
+
+    assert res.llm_called
+    assert res.proposed and res.proposed[0].kind is NodeOpKind.RETIRE_NODE
+    assert store.get_feature(f.id).retired is False   # proposed, not applied
+
+
+def test_current_state_sweep_spares_parents_and_never_bound_features(store):
+    """The sweep asks about features that LOST code, not ones that never had any.
+
+    A parent node holding children, and a feature nothing was ever bound to, both own
+    zero bindings; neither lost anything, so neither is a retire candidate. Retiring
+    them is how a current-state sweep would eat an organizational tree.
+    """
+    parent = _feature(store, title="Flocking")
+    child = _feature(store, title="Cohesion", parent_id=parent.id)
+    _bind(store, child.id, "a.py", "a.py::cohesion")
+    _feature(store, title="Never bound")
+
+    # The parent also once owned a chunk, so only its children keep it alive.
+    _bind(store, parent.id, "a.py", "a.py::flock")
+    cs = ChangeSet(removed=[ChunkRef("a.py", "a.py::flock")])
+    apply_changeset(cs, store, propose=_raising, held={parent.id})
+
+    res = apply_changeset(ChangeSet(), store, propose=_raising, allow_retire=True)
+
+    assert not res.llm_called   # nothing to ask about
+    assert not res.proposed
+
+
+def test_current_state_sweep_only_on_the_authoritative_pass(store):
+    """The temporal pass (allow_retire=False) does not sweep current state."""
+    f = _feature(store, title="Lonely")
+    _bind(store, f.id, "a.py", "a.py::foo")
+    apply_changeset(ChangeSet(removed=[ChunkRef("a.py", "a.py::foo")]), store,
+                    propose=_raising, held={f.id})
+
+    res = apply_changeset(ChangeSet(), store, propose=_raising, allow_retire=False)
+
+    assert not res.llm_called
+    assert not res.proposed
+
+
 def test_amend_on_change_runs_llm_only_when_enabled(store):
     """A pure in-place modification to a realized feature's code triggers the LLM
     (for a possible description amend) only when amend_on_change=True."""

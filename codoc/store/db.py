@@ -1033,6 +1033,42 @@ class Store:
         ).fetchall()
         return [_row_to_event(r) for r in rows]
 
+    def features_that_lost_all_code(self) -> dict[str, tuple[str, str]]:
+        """Live features that own no binding NOW but once owned one, each with the
+        last chunk it lost.
+
+        The ledger, not the binding table, is what separates the two ways a
+        feature can have no code: an organizational parent that never had any,
+        and a feature whose code was deleted. Only the second is a retire
+        candidate, and an applied DETACH is the record that it happened.
+
+        Loop A's per-pass ``emptied`` set answers the same question for the
+        chunks THIS pass removed. This one answers it from current state, for
+        the authoritative pass, which is the only way a feature emptied while
+        it was held is ever reconsidered. The returned chunk is what lets that
+        pass describe the loss to the model in the terms it already reads.
+        """
+        rows = self.conn.execute(
+            "SELECT e.feature_id, e.op_json FROM events e"
+            " JOIN features f ON f.id = e.feature_id"
+            " WHERE e.applied=1 AND e.feature_id != ''"
+            "   AND json_extract(e.op_json, '$.kind') = 'detach'"
+            "   AND f.retired = 0"
+            "   AND NOT EXISTS (SELECT 1 FROM bindings b WHERE b.feature_id = f.id)"
+            " ORDER BY e.at ASC"
+        ).fetchall()
+        out: dict[str, tuple[str, str]] = {}
+        for fid, op_json in rows:
+            if not fid:
+                continue
+            try:
+                binds = (json.loads(op_json) or {}).get("bindings") or []
+            except (TypeError, ValueError):
+                continue
+            if binds and len(binds[0]) == 2:
+                out[fid] = (str(binds[0][0]), str(binds[0][1]))
+        return out
+
     def implemented_directive_ids(self, ids: set[str]) -> set[str]:
         """Which of ``ids`` some APPLIED event cites as its ``caused_by``.
 
