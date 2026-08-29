@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import sys
+import uuid
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -209,7 +210,8 @@ class RealizeMonitor:
         try:
             status_mod.write_status(
                 self.codoc_dir, status_mod.REALIZING,
-                detail=format_realize_detail(self._done, self._total, title))
+                detail=format_realize_detail(self._done, self._total, title),
+                owner=os.environ.get(status_mod.REALIZE_OWNER_ENV, ""))
         except Exception:  # noqa: BLE001 — status is advisory, never break realize
             pass
 
@@ -341,9 +343,15 @@ async def _run(root_dir: str, codoc_dir: str, *, permission_mode: str,
     )
 
     monitor = RealizeMonitor(root_dir, codoc_dir, printer=printer)
+    # Name this pass, and put the same token in the environment the spawned agent
+    # inherits. Without it that agent reads the lease WE just wrote, concludes a
+    # rival pass owns the queue, and stands down — half the time, with no error and
+    # "0 file(s) written". See status._realizing_is_fresh.
+    owner_token = uuid.uuid4().hex
+    os.environ[status_mod.REALIZE_OWNER_ENV] = owner_token
     try:
         status_mod.write_status(codoc_dir, status_mod.REALIZING,
-                                detail=_STATIC_DETAIL)
+                                detail=_STATIC_DETAIL, owner=owner_token)
     except Exception:  # noqa: BLE001 — status is advisory
         pass
 
@@ -365,6 +373,10 @@ async def _run(root_dir: str, codoc_dir: str, *, permission_mode: str,
                 os.environ.pop("CODOC_EPOCH_ORIGIN", None)
             else:
                 os.environ["CODOC_EPOCH_ORIGIN"] = prev_origin
+            # The token names a pass that has ended. Leaving it set would exempt a
+            # LATER foreground realize in this same process from a lease it does
+            # not own — the mirror of the bug this fixes.
+            os.environ.pop(status_mod.REALIZE_OWNER_ENV, None)
         printer(monitor.summary())
     finally:
         # The agent deletes realize.md when the queue is done; recompute the honest

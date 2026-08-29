@@ -14,6 +14,7 @@ queues directives for the session). The IDE watches the file and never has to po
 """
 from __future__ import annotations
 
+import os
 import re
 import time
 from pathlib import Path
@@ -56,13 +57,25 @@ def _realize_queue_size(codoc_dir: str | Path) -> int:
     return len(re.findall(r"(?m)^### ", text)) or 1
 
 
-def write_status(codoc_dir: str | Path, state: str, *, pending: int = 0, detail: str = "") -> Path:
+#: Env var naming the session that OWNS the current realizing lease. A realize pass
+#: stamps a token into ``status.json`` and puts the same token in the environment the
+#: agent it spawns inherits, so that agent can tell "a pass is running" (true, and it
+#: is me) from "another pass is running" (a reason to stand down). See
+#: :func:`_realizing_is_fresh`.
+REALIZE_OWNER_ENV = "CODOC_REALIZE_OWNER"
+
+
+def write_status(codoc_dir: str | Path, state: str, *, pending: int = 0, detail: str = "",
+                 owner: str = "") -> Path:
     dest = status_path(codoc_dir)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(dest, {
+    payload = {
         "version": 1, "state": state, "pending": pending,
         "detail": detail, "at": HLC.now().to_str(),
-    })
+    }
+    if owner:
+        payload["owner"] = owner
+    atomic_write_json(dest, payload)
     return dest
 
 
@@ -87,6 +100,17 @@ def _realizing_is_fresh(codoc_dir: str | Path, *, now: float | None = None,
         return False  # nothing queued → nothing can still be "in progress"
     data = read_json(status_path(codoc_dir), default={})
     if not isinstance(data, dict) or data.get("state") != REALIZING:
+        return False
+    # The lease is not "someone else is working" to the session the pass itself
+    # spawned. `codoc realize` writes REALIZING and only THEN starts the agent, so
+    # that agent's first `codoc_status` reports a live pass owning the queue it was
+    # spawned to implement — and standing down is the correct reading of that. Half
+    # the time it did, and `codoc realize` finished with "0 file(s) written" and no
+    # error, which is the worst way for the one gesture that builds anything to fail.
+    # Matching the owner token makes the exemption exact: an UNRELATED pass carries a
+    # different token (or none) and still sees the lease.
+    owner = data.get("owner")
+    if owner and os.environ.get(REALIZE_OWNER_ENV) == owner:
         return False
     try:
         mtime = status_path(codoc_dir).stat().st_mtime
@@ -127,7 +151,10 @@ def touch_realizing_lease(codoc_dir: str | Path) -> bool:
         return False
     write_status(codoc_dir, REALIZING,
                  pending=int(data.get("pending") or 0),
-                 detail=str(data.get("detail") or ""))
+                 detail=str(data.get("detail") or ""),
+                 # Carry the owner through, or a heartbeat would anonymize the lease
+                 # and the pass's own agent would start seeing it as a rival again.
+                 owner=str(data.get("owner") or ""))
     return True
 
 

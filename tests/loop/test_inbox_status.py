@@ -353,3 +353,43 @@ def test_realize_md_outranks_code_drift(codoc_dir):
     finally:
         store.close()
     assert _state(codoc_dir) == status.AWAITING_IMPL
+
+
+def test_lease_owner_sees_its_own_pass_not_a_rival(codoc_dir, monkeypatch):
+    """The session a realize pass spawns must not read that pass's own lease as
+    somebody else working.
+
+    `codoc realize` writes REALIZING and only THEN starts the agent, so the agent's
+    first `codoc_status` reports a live pass owning the very queue it was spawned to
+    implement. Standing down is the correct reading of that, and the agent did —
+    about half the time, finishing with "0 file(s) written" and no error at all.
+    """
+    from pathlib import Path
+
+    Path(codoc_dir, "realize.md").write_text('### 1. STEER FEATURE: "Panic"\n')
+    status.write_status(codoc_dir, status.REALIZING, detail="implementing (sdk)",
+                        owner="tok-abc")
+
+    # Anyone else — no token, or a different pass's token — still sees the lease.
+    monkeypatch.delenv(status.REALIZE_OWNER_ENV, raising=False)
+    assert status.realizing_is_fresh(codoc_dir) is True
+    monkeypatch.setenv(status.REALIZE_OWNER_ENV, "tok-other")
+    assert status.realizing_is_fresh(codoc_dir) is True
+    # The pass that owns it does not.
+    monkeypatch.setenv(status.REALIZE_OWNER_ENV, "tok-abc")
+    assert status.realizing_is_fresh(codoc_dir) is False
+
+
+def test_heartbeat_keeps_the_owner(codoc_dir, monkeypatch):
+    """A heartbeat that dropped the owner would anonymize the lease, and the pass's
+    own agent would start reading it as a rival again on the next status call."""
+    from pathlib import Path
+
+    Path(codoc_dir, "realize.md").write_text('### 1. STEER FEATURE: "Panic"\n')
+    status.write_status(codoc_dir, status.REALIZING, detail="d", owner="tok-abc")
+
+    assert status.touch_realizing_lease(codoc_dir) is True
+
+    assert json.loads(status.status_path(codoc_dir).read_text())["owner"] == "tok-abc"
+    monkeypatch.setenv(status.REALIZE_OWNER_ENV, "tok-abc")
+    assert status.realizing_is_fresh(codoc_dir) is False
