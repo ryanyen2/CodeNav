@@ -35,6 +35,27 @@ function attrsOf(d: unknown): { class?: string; title?: string } | undefined {
     return (d as { type?: { attrs?: { class?: string; title?: string } } }).type?.attrs;
 }
 
+describe('mdDisplayText — the stored form projected into display space', () => {
+    it('drops the markers around a bold span, because the document holds a mark', () => {
+        expect(mdDisplayText('The world **turns bodies back** now.'))
+            .toBe('The world turns bodies back now.');
+    });
+
+    it('collapses a citation to one char and keeps bold inside it literal', () => {
+        // `**` inside a link LABEL is part of the label, not markup — `boldMatches`
+        // skips it, so the projection must not eat those asterisks either.
+        expect(mdDisplayText('See [**x**](codoc:a.py#f) now.')).toBe(`See ${ATOM_CHAR} now.`);
+    });
+
+    it('leaves alone the markers the document would not consume either', () => {
+        // `**  **` carries no focus, so `boldMatches` skips it and the paragraph keeps
+        // the asterisks as prose. The projection has to make the same call, or the two
+        // spaces disagree in the other direction.
+        expect(mdDisplayText('Empty **  ** and a lone ** star.'))
+            .toBe('Empty **  ** and a lone ** star.');
+    });
+});
+
 describe('alignParas — exact-match anchored paragraph pairing', () => {
     it('pairs identical lists 1:1', () => {
         expect(alignParas(['A', 'B'], ['A', 'B'])).toEqual([0, 1]);
@@ -87,6 +108,22 @@ describe('the human channel — chips and alignment, through the real decoration
         buildSettlementDecorations(doc, stagesOf(baseJson)).find()
             .filter(d => (attrsOf(d)?.class ?? '').includes('human'))
             .map(d => doc.textBetween(d.from, d.to, ' ', '¤'));
+
+    it('marks NOTHING on a bolded paragraph nobody has touched', () => {
+        // The bug class this pins: bold is a MARK in the document and `**…**` in the
+        // store, so the two spaces disagreed on every bolded description. The word diff
+        // matched the middle words and reported the two touching the markers — `turns`
+        // and `back` — as an unsent human edit, on a feature the author had already
+        // saved and could not clear. Every focus span the demo asks for is bold, so
+        // every one of them pulsed blue forever.
+        const bold = (t: string): PMNode => ({ type: 'text', text: t, marks: [{ type: 'bold' }] });
+        const blocks = [
+            heading('f-a', 'Edge behaviour'),
+            para(text('The world '), bold('turns bodies back'), text(' when it nears an edge.')),
+        ];
+        const doc = docOf(...blocks);
+        expect(humanAdds(doc, { type: 'doc', content: blocks } as PMNode)).toEqual([]);
+    });
 
     it('marks an added word in a paragraph that cites code (a chip is ONE position)', () => {
         // The bug class this pins: a chip contributes zero chars via textContent and

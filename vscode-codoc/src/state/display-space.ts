@@ -17,17 +17,48 @@
  * that genuinely needs ProseMirror) so the pure model layer can reach it. That module
  * re-exports these, so its call sites are unchanged.
  */
-import { REF_RE_SOURCE } from './pm-doc';
+import { REF_RE_SOURCE, boldMatches } from './pm-doc';
 
 /** One char per inline atom — U+FFFC OBJECT REPLACEMENT CHARACTER. */
 export const ATOM_CHAR = '￼';
 
 /**
  * A stored/serialized paragraph projected into display space: inline
- * `[label](codoc:…)` citations and hard-break newlines collapse to ATOM_CHAR —
- * matching what `paraDisplayText` yields for the corresponding live block.
- * (External links and emphasis stay literal: the doc keeps them as plain text.)
+ * `[label](codoc:…)` citations and hard-break newlines collapse to ATOM_CHAR, and the
+ * `**` markers around a bold span are dropped — matching what `paraDisplayText` yields
+ * for the corresponding live block. External links stay literal, because the doc keeps
+ * those as plain text.
+ *
+ * The bold markers are the reason this is a character walk rather than two regex
+ * replacements. `textToInlineRuns` consumes `**…**` into a MARK, so the live block holds
+ * `turns bodies back` while the store holds `**turns bodies back**`. Leaving the
+ * asterisks in made every bolded description diff against itself forever: the word
+ * diff matched the middle words and reported the two touching the markers as an
+ * unsent human edit, so a feature the author had already saved kept pulsing blue on
+ * `turns` and `back` with nothing left to send. Which markers to drop is not a regex
+ * either — `boldMatches` is the function that decides what actually becomes a mark,
+ * and asking it here is what keeps the two spaces from disagreeing again.
  */
 export function mdDisplayText(s: string): string {
-    return s.replace(new RegExp(REF_RE_SOURCE, 'g'), ATOM_CHAR).replace(/\n/g, ATOM_CHAR);
+    const refs: Array<{ start: number; end: number }> = [];
+    const re = new RegExp(REF_RE_SOURCE, 'g');
+    for (let m = re.exec(s); m; m = re.exec(s)) {
+        refs.push({ start: m.index, end: m.index + m[0].length });
+    }
+    const bolds = boldMatches(s, refs);
+    if (!refs.length && !bolds.length) return s.replace(/\n/g, ATOM_CHAR);
+    const refAt = new Map(refs.map(r => [r.start, r]));
+    const marker = new Array<boolean>(s.length).fill(false);
+    for (const b of bolds) {
+        marker[b.start] = marker[b.start + 1] = marker[b.end - 2] = marker[b.end - 1] = true;
+    }
+    let out = '';
+    for (let i = 0; i < s.length;) {
+        const ref = refAt.get(i);
+        if (ref) { out += ATOM_CHAR; i = ref.end; continue; }
+        if (marker[i]) { i++; continue; }
+        out += s[i] === '\n' ? ATOM_CHAR : s[i];
+        i++;
+    }
+    return out;
 }

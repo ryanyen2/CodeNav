@@ -253,7 +253,9 @@ interface RefMatch { start: number; end: number; node: PMNode }
  * prose keeps the text on disk byte-identical instead of drifting one asterisk at a
  * time. Mirrored in `doc_render._bold_matches`.
  */
-function boldMatches(text: string, refs: RefMatch[]): Array<{ start: number; end: number }> {
+export function boldMatches(
+    text: string, refs: ReadonlyArray<{ start: number; end: number }>,
+): Array<{ start: number; end: number }> {
     const out: Array<{ start: number; end: number }> = [];
     const re = new RegExp(BOLD_RE_SOURCE, 'g');
     let prevEnd = -1;
