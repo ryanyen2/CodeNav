@@ -20,8 +20,14 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // Add addresses here to grant an experimenter access. Nothing else grants it.
+    //
+    // The second address is a collaborator on the analysis, added 2026-09-02 once
+    // collection had finished. Note what it opens: an allowlisted address reads
+    // `contacts` as well, which is the one collection that holds a participant's
+    // name. The export handed to an analyst does not carry it, so anybody who
+    // only needs the data should be given the export rather than an entry here.
     function allowlist() {
-      return ['ryanyen2@mit.edu'];
+      return ['ryanyen2@mit.edu', 'feliciafeng35@gmail.com'];
     }
 
     // Reads the token defensively. An anonymous account has no email claim at

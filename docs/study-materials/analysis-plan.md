@@ -226,6 +226,58 @@ render the block on the signoff step instead of the task step, which keeps detec
 measurable and still guarantees nobody leaves the session confused about what the task
 contained.
 
+## Which sessions can be pooled, and the one date still to settle
+
+Everything above records a change and the date it was made. What none of it does
+is decide, for the cohort that actually exists, which measures survive. That is
+mechanical once the dates are instants rather than days, so it is mechanised:
+
+```
+cd study-app
+export CODOC_STUDY_TOKEN='<ID token from the dashboard console>'
+npm run export:all -- --out ~/study/export        # every participant, one file each
+npm run instrument:report -- --in ~/study/export  # what pools, what does not
+```
+
+`shared/instrument-eras.js` holds the boundaries as COMMIT INSTANTS with the
+measures each one breaks, and `test/instrument-eras.test.js` pins them. The
+report places every participant by `task-<condition>.startedAt` — the page's own
+clock, stamped once on their machine — and never by `updatedAt`, which is the
+last write and therefore lies for exactly the sessions whose answers sat in
+localStorage while saving was broken and were flushed days later.
+
+Three things it refuses to do, and the refusals are the point:
+
+- **A session inside a deploy window is UNPLACEABLE, not assigned.** A commit is
+  not a deploy. The participant saw whatever was on the site, which changed when
+  somebody ran `npm run build && firebase deploy`, and nothing in this repository
+  records when that happened. Firebase's console keeps a release history and it
+  is the only source for it.
+- **A measure nobody holds reads ABSENT, never "poolable".** Green beside 0/N is
+  worse than nothing.
+- **`ctl4` is scored on its own and is not inside the `control` construct mean.**
+  It is the one item in the study whose two wordings mean opposite things, so
+  averaging it in is the error that produces an ordinary-looking number.
+
+### The 2026-08-23 date above does not match the code
+
+The section "The page states the fault, from 2026-08-23" dates the end of
+detection coverage to the 23rd. The prose that states the fault — `prose.js`,
+`repl.after.expected` and `repl.after.fault` — first appears in `d3ffe54`,
+committed **2026-08-24 at 19:55 EDT**, and that same commit is the one that wrote
+the 08-23 heading into this file.
+
+This is worth an hour of somebody's time before any detection number is reported.
+Detection coverage is one of the two pre-registered confirmatory predictions. If
+the change reached participants on the 23rd it is dead for anybody run that day;
+if it reached them when the code says, **every session that finished before the
+evening of the 24th still measures it**. One day decides whether a confirmatory
+claim survives, and the Hosting release history for `codoc-11b10` settles it.
+
+The other confirmatory prediction, a durable written trace, is untouched by every
+boundary in the file. That is stated here as well as above because it is the one
+thing the study can report no matter how the date resolves.
+
 ## Is the record true at the end  (serves RQ2, and it is the headline)
 
 | Measure | Computed from |

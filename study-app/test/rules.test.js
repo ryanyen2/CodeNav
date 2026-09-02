@@ -38,6 +38,10 @@ import { doc, getDoc, setDoc, deleteDoc, collection, getDocs, addDoc } from 'fir
 const here = dirname(fileURLToPath(import.meta.url));
 const PROJECT = 'codoc-study-rules-test';
 const ALLOWED = 'ryanyen2@mit.edu';
+// The analysis collaborator, added to the allowlist on 2026-09-02. Pinned by a
+// test of its own so that a second address is something the suite knows about
+// rather than a line somebody added to the rules and nothing checks.
+const COLLABORATOR = 'feliciafeng35@gmail.com';
 const OUTSIDER = 'someone@example.com';
 const CODE = 'p-abcdefghjkmn';
 const OTHER = 'p-nmkjhgfedcba';
@@ -282,6 +286,12 @@ test('an allowlisted experimenter can create a participant and write an assessme
         { createdAt: Date.now(), order: 'baseline-first', released: false }));
     await assertSucceeds(setDoc(doc(db, `participants/${CODE}/assessments/codoc`),
         { signoffConfidence: 4, grounds: 'read the diff' }));
+});
+
+test('the collaborator address on the allowlist reads the study data too', async () => {
+    const db = env.authenticatedContext('exp3', { email: COLLABORATOR, email_verified: true }).firestore();
+    await assertSucceeds(getDocs(collection(db, 'participants')));
+    await assertSucceeds(getDoc(doc(db, `participants/${CODE}/answers/after-codoc`)));
 });
 
 test('an unverified email on the allowlist is still refused', async () => {
