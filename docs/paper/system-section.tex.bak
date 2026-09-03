@@ -1,0 +1,124 @@
+% Draft v6 -- Tomas-Petricek-style pass: calm and measured, examples after the point,
+% one sentence per line (LaTeX semantic line breaks), \citep at sentence ends, figures referenced.
+% NOTE: citation keys (\citep{...}) and figure labels (fig:overview, fig:roundtrip) are PLACEHOLDERS
+% to reconcile with the Related Work section and the final figure set.
+% Style rules held: no colons, no prose parentheses, no em-dashes, semicolons used sparingly,
+% no "not X but Y" fragments, no incomplete hook sentences. "intent" replaced by purpose/description.
+
+\section{The System}
+
+A codebase records what the software does, but it says very little about what each part of it is for or why it was built a particular way.
+That knowledge usually lives somewhere outside the code, in a comment, a commit message, a design document that slowly falls behind, or a summary an assistant writes at the end of a working session, and in every one of those places it drifts away from the code as soon as the code moves on.
+CoDoc is an attempt to keep that knowledge in one place and hold it current as the code changes.
+It maintains a document that describes a codebase in terms of the features it provides and what each feature is responsible for, and it keeps that document and the code synchronized as either side changes.
+
+This section walks through the document itself, the way it is kept faithful to the code, the way a person turns a change in the document into a change in the code, and what the system does when the two disagree.
+We introduce each of these choices through a single running task.
+An engineer named Alicia is working on a small coding agent, and she wants its calls to a local model server to keep working when that server is slow or briefly unavailable.
+Where it helps, we also point out how an earlier version of CoDoc made a different choice and what that choice cost, since the current design is in several places a considered reaction to the earlier one.
+The two directions of synchronization are sketched in \autoref{fig:roundtrip}, and the interface a person works in is shown in \autoref{fig:overview}.
+
+\subsection{The feature document}
+
+Everything in CoDoc is organized around a single document that we call the feature document.
+It is a navigable outline of a codebase, written in terms of the features the system provides rather than in terms of the files the code is stored in.
+Its unit is a feature, which is a named part of the system together with a short description of what that part is responsible for.
+Each feature is linked to the exact code that implements it, and we call those links bindings.
+One feature can bind many pieces of code spread across several files, and any one piece of code belongs to at most one feature, so the document reads as a division of the codebase by purpose rather than as a second copy of the source laid out by file.
+The reason for having such a document at all is to give the purpose behind a codebase a place to live where a person can find it, read it, trust it, and change it, which is something the running code cannot offer on its own.
+
+When Alicia opens the repository in Visual Studio Code, the feature document opens as its own editor and she can keep it beside the source, as in \autoref{fig:overview}.
+She reads down the outline, finds a feature titled Ollama model backend client, and follows the link in its description straight to the class that implements it, \texttt{OllamaModelClient} in \texttt{mini\_coding\_agent.py}, without having opened that file herself first.
+The outline is nested, the links to code are ordinary clickable references, and any change the system wants to make to the outline appears in place with a small accept or reject control beside it.
+CoDoc builds the outline once at the start by reading the repository into a syntax tree, grouping the pieces into features, and nesting those features roughly the way the code is organized, so the shape of the outline follows the shape of the system and Alicia can move around it the way she would move around the code.
+
+The important choice here is that the feature document is something a person writes and reads, while the record of which code implements which feature is a secondary index the system keeps up to date on its own.
+This is where CoDoc differs from the notes that teams already keep alongside their agents.
+A CLAUDE.md file or a memory bank is usually a summary the agent wrote about code that nobody went back to check, and over time it tends to become a change log a reader cannot fully rely on and cannot easily edit \citep{agentmemory}.
+It also differs from recent tools that keep a live description aimed at the machine rather than at the reader.
+Some of these keep a structured map of what a repository can do and refresh it as commits land, though the map is meant for an agent to traverse rather than for a person to sit and read \citep{repograph}, and others keep a specification beside the code that is written for the model and drifts from the code the way ordinary documentation always has \citep{speclang}.
+CoDoc keeps the same live link between description and code and hands the description to a person to edit directly, which follows the argument that automation is most useful when it is arranged around a representation the person still holds \citep{heer2019}.
+
+An earlier version of CoDoc made the opposite choice about how to organize the document.
+There the document mirrored the structure of the code directly, through a lightweight syntax for directories, files, components, and functions, so that a line in the document stood for a file or a function in the codebase \citep{codoc-prior}.
+That made the correspondence between the two easy to see, and it grew out of a study of how people already point at code, where files and function names turned out to be the anchors they reached for.
+It also tied the document to the shape of the code, and a concern that cut across several files, such as how the whole system should behave when a request times out, had no natural place to live, because it did not match any single file or function.
+Organizing the document by feature instead lets such a concern be one entry that binds to code wherever that code happens to sit, and this is the main reason we moved away from the earlier design.
+The cost of the newer choice is that the document is only ever as trustworthy as the effort spent keeping it aligned with the code, so much of the rest of the design is about holding it faithful to the code while asking as little of that effort as possible.
+
+\subsection{Keeping the document faithful to the code}
+
+The first half of the system watches the code and updates the document to match it.
+Its aim is to absorb the ordinary churn of day-to-day coding on its own and to ask a person for a decision only where a decision is genuinely needed.
+After Alicia's agent finishes editing \texttt{mini\_coding\_agent.py}, most of what changed does not matter to the document.
+A method was edited in place, and a function was moved to another file.
+CoDoc settles changes like these by comparing a fresh reading of the repository against the links it already holds.
+When a linked piece of code is edited in place, CoDoc refreshes the link.
+When the piece is deleted, it drops the link.
+When the piece moves to another file or is renamed, it follows the code and reattaches the same feature.
+In this way the record of which code belongs to which feature survives ordinary refactoring without anyone being asked to step in.
+
+The cases this bookkeeping cannot settle on its own are new code that no feature yet describes and a feature that has lost the last piece of code it was linked to.
+The retry helper Alicia's agent just added is the first kind, since no feature yet claims it.
+For a case like this CoDoc makes a single call to a language model, and that call sees the new code together with the whole outline and every feature title at once.
+Two things follow from giving the model that view.
+Because a piece of code can belong to only one feature, the model has to choose a single owner for the helper rather than spread it across several features.
+Because it can see every existing title in the same pass, it tends to attach the helper to the existing model client feature instead of creating a second feature that would mean the same thing.
+Changes that only affect wording or links are applied quietly, while a change that would alter the shape of the outline, such as adding, moving, or retiring a feature, is shown to Alicia as a proposal she can accept or reject where it sits in the document.
+
+The choice here is to read the code as it actually is and let a model judge which feature new code belongs to, and to accept in return that this judgment is approximate and has to remain reviewable.
+The older way of connecting prose and code was to hold them together in a single form from which each could be regenerated.
+Literate programming kept the explanation and the code in one source so that either could be produced from the other \citep{knuth1984}, and later round-trip tools regenerated one side from the other through a fixed grammar, and both became fragile as soon as real code stopped fitting the grammar.
+CoDoc gives up exact reversibility on the assumption that everyday code is regular enough for a model to attribute correctly most of the time, and that where the model is unsure it should raise a proposal rather than decide quietly.
+The cost is that this half of the system is not guaranteed to be correct, which is why a change to the shape of the document is a proposal a person approves rather than an edit made on their behalf, and why review is built into the design from the start rather than added on later.
+
+\subsection{Turning a description into code}
+
+The second half of the system runs in the other direction and turns a change in the document into a change in the code.
+Its central decision is a careful one.
+Editing the document counts as documentation by default, and it becomes a request to change code only when the person makes an explicit gesture we call a hand-off.
+When a person edits a feature's description, CoDoc records the edit and quietly prepares a held draft, which is a plan for the corresponding code change that describes what is wanted and then waits.
+Nothing runs, no code changes, and no model is called, until the person decides the draft is ready and hands it off.
+
+Alicia reads the model client, works out why its calls fail, and edits the feature's description to say that the client should retry a request that times out or fails, wait a little longer after each attempt, give up after three tries, and be covered by a test on the retry path.
+The document is plain text, so she writes this as ordinary prose, and she pastes in a link to the team's runbook on backoff the same way she would in any other document.
+CoDoc reads a few plain markings in the description as guidance for the agent, without asking her to learn a syntax.
+A quoted line is treated as a direct note to the agent, bold text marks the part she most wants attended to, and an external link is treated as something to read before writing code.
+Her edit sits on the feature as a held draft until she is ready.
+When she hands it off, CoDoc assembles an instruction out of the description, the linked code, and the runbook link, and places it in front of the coding session she already has open in the same window.
+The agent carries out the change there, in her own session, and returns an ordinary diff, and the revised description comes back to her as tracked changes she can accept or reject one line at a time.
+
+Two decisions inside this half are worth stating plainly.
+The first is that the hand-off is a deliberate gesture rather than something the system guesses from the way a description is phrased.
+An earlier version of CoDoc tried to read the phrasing and act on descriptions that sounded like commands, and we removed that, because guessing a request from phrasing goes wrong in both directions, treating a description that happens to begin with a verb as an order and overlooking a genuine request written as a calm statement.
+Leaving the decision to a gesture lets a person write freely in the document without wondering whether a sentence will be taken as an instruction.
+The second decision is that the code is written inside the person's own coding session rather than in a separate automated one.
+This lets the same run that writes the code also record which feature the new code belongs to, so the description and the record of the code stay together through the change, and it keeps the document as plain, editable text.
+The systems that made the specification the primary artifact, such as intentional software and the projectional editors that grew out of it, generated code from a structured model the person edited in place, and the price was that ordinary typing and version control no longer applied, because there was no text left to compare \citep{simonyi2006, voelter2011}.
+CoDoc keeps the person writing in an ordinary document and lets the agent change code only after a hand-off, so every change still arrives as a diff the person reviews.
+
+Here too the current design steps back from an earlier one that did more on its own.
+The earlier CoDoc created files and placeholder functions in the codebase as soon as the document was edited, and it let an undo in the document step the code backward in step with it \citep{codoc-prior}.
+That felt immediate, and it also meant the code began moving before the person had decided they were ready.
+The current design chooses the opposite default and waits for the hand-off.
+The cost we accept is a loss of immediacy, since a description a person has already written does not turn into code until they come back and hand it off, and we prefer that delay to a system that begins rewriting the code the moment a description changes.
+
+\subsection{When the document and the code disagree}
+
+Sooner or later both halves reach for the same feature at once.
+Alicia can be partway through rewriting a description at the moment the code side, having noticed a change in the code, wants to update that same feature.
+CoDoc settles this with a single rule.
+The document wins.
+There were other ways to settle it.
+A collaborative editor would usually let the last writer win or merge the two versions into one text, and one could argue instead that the code side should win because the code is what actually runs \citep{crdt}.
+We chose the document, because the document is where a person writes down the purpose of the code, while the code side only reports what the code is currently doing.
+When the two genuinely disagree, the written side is the one worth keeping, and the report the code side wanted to make will still be true and can be made again on the next pass once the person has finished.
+
+In practice, as long as a feature carries an edit of Alicia's she has not yet resolved, that feature is held, and the code side holds off on anything it would have changed in the feature's wording or structure, so a description she is in the middle of writing is never rewritten under her.
+The one thing the hold does not stop is the upkeep of the links, because a link only records where a piece of code currently lives and says nothing about what the feature means, so it stays correct even while the feature is held.
+
+This rule can stay simple only because the description and the links were separated in the first place.
+A link carries no purpose of its own, so it is always safe to keep current, while the wording and structure carry the purpose, so they wait for the person who is editing them.
+The cost is that a held feature can fall a little behind, since while Alicia's edit is unresolved the code side may not touch that feature's wording or structure, so the document can stay accurate about purpose while going briefly out of date about detail until she resolves the edit.
+We accept that, because the alternative is worse, which is a person losing a half-finished thought to the machine, and because the gap closes on its own the moment the hold lifts.
+What the person keeps in return is that the reason for a change stays recorded in the same place the change was made, so the next person to open the feature sees that the client now retries and can also see why it was made to.
