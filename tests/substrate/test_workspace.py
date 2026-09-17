@@ -1,0 +1,119 @@
+"""Logs, inbox, rebuild, clock (spec §7)."""
+import json
+
+from codoc.calculus import ops as K
+from codoc.calculus.doc import HEADING, PARAGRAPH
+from codoc.calculus.ids import START
+from codoc.substrate import log as L
+from codoc.substrate.clock import Clock, SkewError, fmt
+from codoc.substrate.log import Submission
+from codoc.substrate.workspace import Workspace
+
+
+def seed(ws: Workspace, actor="human:local"):
+    ws.submit([
+        {"kind": K.BLOCK_ADD, "target": {"bid": "h1"}, "payload": {"kind": HEADING, "level": 1, "after": START}},
+        {"kind": K.TEXT_INSERT, "target": {"bid": "h1", "path": "text"}, "payload": {"after": START, "text": "Client"}},
+        {"kind": K.BLOCK_ADD, "target": {"bid": "p1"}, "payload": {"kind": PARAGRAPH, "after": "h1"}},
+        {"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "Retries once."}},
+    ], actor=actor)
+
+
+def test_session_log_is_written_validated_and_rebuilt(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws)
+    ws.close()
+    files = L.list_sessions(tmp_path / ".codoc")
+    assert len(files) == 1
+    f = L.read_session(files[0])
+    assert f.valid and len(f.ops) == 4 and f.ops[0].id == f"{f.session}:1"
+    ws2 = Workspace(tmp_path / ".codoc")
+    assert ws2.store.blocks["p1"].text().live_text() == "Retries once."
+    assert ws2.store.state_fingerprint() == ws.store.state_fingerprint()
+    assert ws2.session != ws.session
+    # A second session continues the same tree; both files replay together.
+    ws2.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                 "payload": {"after": list(ws2.store.blocks["p1"].text().last_live_ref()), "text": " Then gives up."}}],
+               actor="human:local")
+    ws2.close()
+    ws3 = Workspace(tmp_path / ".codoc")
+    assert ws3.store.blocks["p1"].text().live_text() == "Retries once. Then gives up."
+    assert len(L.list_sessions(tmp_path / ".codoc")) == 3   # ws3 opened its own
+
+
+def test_tampered_log_is_skipped_whole_and_reported(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws)
+    ws.close()
+    path = L.list_sessions(tmp_path / ".codoc")[0]
+    lines = path.read_text().splitlines()
+    d = json.loads(lines[2])
+    d["id"] = d["id"].rsplit(":", 1)[0] + ":9"   # out of sequence
+    lines[2] = json.dumps(d)
+    path.write_text("\n".join(lines) + "\n")
+    ws2 = Workspace(tmp_path / ".codoc")
+    assert ws2.problems and "out of sequence" in ws2.problems[0].reason
+    assert "h1" not in ws2.store.blocks   # nothing from that file applied
+
+
+def test_inbox_drain_is_idempotent_and_stamps_actor(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws)
+    L.submit(tmp_path / ".codoc", "ide", [
+        Submission(cid="c1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                   payload={"after": list(ws.store.blocks["p1"].text().last_live_ref()), "text": " More."}),
+    ])
+    done = ws.drain_inbox({"ide": "human:local"})
+    assert len(done) == 1 and done[0].actor == "human:local" and done[0].conflict is None
+    assert ws.store.blocks["p1"].text().live_text() == "Retries once. More."
+    # Resubmitting the same client id applies nothing.
+    L.submit(tmp_path / ".codoc", "ide", [Submission(cid="c1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                                                       payload={"after": START, "text": "X"})])
+    assert ws.drain_inbox({"ide": "human:local"}) == []
+    # An unknown client is ignored.
+    L.submit(tmp_path / ".codoc", "stranger", [Submission(cid="z", kind=K.BLOCK_DELETE, target={"bid": "h1"}, payload={})])
+    assert ws.drain_inbox({"ide": "human:local"}) == []
+    assert ws.store.blocks["h1"].live
+
+
+def test_suggest_role_writes_only_plans(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws)
+    denied = ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "X"}}],
+                       actor="human:contrib")
+    assert denied[0].conflict == "authority"
+    pid = ws.open_plan(actor="human:contrib", note="suggestion")
+    ok = ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "X"}}],
+                   actor="human:contrib", plan=pid)
+    assert ok[0].conflict is None
+    assert ws.store.blocks["p1"].text().segs[0].plan == pid
+
+
+def test_ingest_through_workspace_gates_to_plan(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws)
+    t = ws.store.blocks["p1"].text()
+    res, ops = ws.ingest("p1", "text", base_text=t.live_text(), new_md="Retries three times.", actor="loop", gate=0.5)
+    assert res.refused is None and res.demote_to_plan is None
+    assert ws.store.blocks["p1"].text().live_text() == "Retries three times."
+    t = ws.store.blocks["p1"].text()
+    res, ops = ws.ingest("p1", "text", base_text=t.live_text(), new_md="Completely new words here.", actor="loop", gate=0.5)
+    assert res.demote_to_plan == "over_gate"
+    assert any(o.plan for o in ops)
+    plan = ws.store.plans[ops[-1].plan]
+    assert plan.actor == "loop" and plan.status == "open"
+
+
+def test_clock_observes_and_refuses_skew():
+    c = Clock("n")
+    a = c.tick()
+    b = c.tick()
+    assert a < b
+    w = c.wall
+    c.observe(fmt(w + 1000, 0, "other"))
+    assert c.tick() > fmt(w + 999, 0, "zzz")
+    try:
+        c.observe(fmt(c.wall + 60 * 60 * 1000, 0, "far"))
+        assert False, "expected SkewError"
+    except SkewError:
+        pass

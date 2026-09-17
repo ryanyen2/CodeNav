@@ -1,0 +1,131 @@
+"""The ``Op`` record and the op vocabulary (spec §3).
+
+An op on the wire carries its target and payload as the client wrote them.
+The applier fills ``payload`` with the canonical form (a delete's explicit
+segments, a move's computed range), ``inverse`` with the op bodies that undo
+it, and ``conflict`` when it could not be applied. The stored record is the
+truth; the wire form is what it was before apply.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import TypedDict
+
+from codoc.calculus.ids import OpId
+
+# Text
+TEXT_INSERT = "text.insert"
+TEXT_DELETE = "text.delete"
+TEXT_RESTORE = "text.restore"
+TEXT_MARK = "text.mark"
+# Blocks
+BLOCK_ADD = "block.add"
+BLOCK_SET = "block.set"
+BLOCK_SPLIT = "block.split"
+BLOCK_MERGE = "block.merge"
+BLOCK_MOVE = "block.move"
+BLOCK_DELETE = "block.delete"
+BLOCK_RESTORE = "block.restore"
+# Bindings
+BIND_ATTACH = "bind.attach"
+BIND_DETACH = "bind.detach"
+BIND_REFRESH = "bind.refresh"
+# Plans
+PLAN_OPEN = "plan.open"
+PLAN_ACCEPT = "plan.accept"
+PLAN_REJECT = "plan.reject"
+PLAN_REOPEN = "plan.reopen"      # the inverse of a verdict; reaches the log only through undo
+# Watermarks
+FEATURE_HANDOFF = "feature.handoff"
+FEATURE_REALIZED = "feature.realized"
+
+KINDS = frozenset({
+    TEXT_INSERT, TEXT_DELETE, TEXT_RESTORE, TEXT_MARK,
+    BLOCK_ADD, BLOCK_SET, BLOCK_SPLIT, BLOCK_MERGE, BLOCK_MOVE, BLOCK_DELETE, BLOCK_RESTORE,
+    BIND_ATTACH, BIND_DETACH, BIND_REFRESH,
+    PLAN_OPEN, PLAN_ACCEPT, PLAN_REJECT, PLAN_REOPEN,
+    FEATURE_HANDOFF, FEATURE_REALIZED,
+})
+
+# Ops a plan may carry. A plan proposes and never destroys: its deletions are
+# ``suggest_del`` marks, so ``text.delete``, ``block.delete`` and ``block.merge``
+# are not here. Each kind here has an inverse that ``plan.reject`` applies.
+PLANNABLE = frozenset({TEXT_INSERT, TEXT_MARK, BLOCK_ADD, BLOCK_SET, BLOCK_SPLIT, BLOCK_MOVE})
+
+# Verdicts and hand-offs: ``owner`` or ``maintainer`` only. ``feature.realized``
+# is emitted by the daemon on evidence, never by an agent; the shipped policy
+# denies it to every ``agent:*`` actor.
+VERDICTS = frozenset({PLAN_ACCEPT, PLAN_REJECT, PLAN_REOPEN, FEATURE_HANDOFF, FEATURE_REALIZED})
+
+STRUCTURAL = frozenset({BLOCK_ADD, BLOCK_SPLIT, BLOCK_MERGE, BLOCK_MOVE, BLOCK_DELETE, BLOCK_RESTORE})
+
+
+class OpBody(TypedDict):
+    """An op without identity, provenance or tag: what an inverse records and
+    what a client submits. An inverse is a list of bodies applied IN ORDER (a
+    displacing attach undoes as "detach, then re-attach the prior owner"). An
+    undo is the person's own untagged op, so an inverse carries no ``plan`` and
+    no ``caused_by``."""
+    kind: str
+    target: dict
+    payload: dict
+
+
+def body(kind: str, target: dict, payload: dict) -> OpBody:
+    return {"kind": kind, "target": dict(target), "payload": dict(payload)}
+
+
+@dataclass
+class Op:
+    id: OpId
+    at: str                     # HLC string, lexicographically ordered
+    actor: str
+    batch: str
+    kind: str
+    target: dict = field(default_factory=dict)
+    payload: dict = field(default_factory=dict)
+    base: dict = field(default_factory=dict)       # Frontier {session: seq}
+    plan: str | None = None
+    caused_by: str | None = None
+    inverse: list[OpBody] = field(default_factory=list)
+    conflict: str | None = None
+
+    def to_json(self) -> dict:
+        d = {
+            "id": self.id, "at": self.at, "actor": self.actor, "batch": self.batch,
+            "kind": self.kind, "target": self.target, "payload": self.payload,
+        }
+        if self.base:
+            d["base"] = self.base
+        if self.plan:
+            d["plan"] = self.plan
+        if self.caused_by:
+            d["caused_by"] = self.caused_by
+        if self.inverse:
+            d["inverse"] = self.inverse
+        if self.conflict:
+            d["conflict"] = self.conflict
+        return d
+
+    @classmethod
+    def from_json(cls, d: dict) -> "Op":
+        return cls(
+            id=d["id"], at=d["at"], actor=d["actor"], batch=d.get("batch", ""),
+            kind=d["kind"], target=dict(d.get("target") or {}), payload=dict(d.get("payload") or {}),
+            base=dict(d.get("base") or {}), plan=d.get("plan"), caused_by=d.get("caused_by"),
+            inverse=list(d.get("inverse") or []), conflict=d.get("conflict"),
+        )
+
+
+def frontier_union(a: dict, b: dict) -> dict:
+    """Per-session max: the monotone merge of two frontiers (spec I9)."""
+    out = dict(a)
+    for s, n in b.items():
+        if n > out.get(s, -1):
+            out[s] = n
+    return out
+
+
+def in_frontier(op_id: OpId, frontier: dict) -> bool:
+    session, _, seq = op_id.rpartition(":")
+    return int(seq) <= frontier.get(session, -1)

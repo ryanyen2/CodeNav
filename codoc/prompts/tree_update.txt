@@ -12,8 +12,14 @@ near-duplicate nodes.
 - `attach`      — bind added chunk(s) to an EXISTING feature. Fields: `feature_id`, `bindings`.
 - `add_node`    — create a NEW feature for chunk(s) no existing node covers.
                   Fields: `parent_id` (omit/null = top level), `title`, `description`, `bindings`.
-- `amend`       — update a feature's `title` and/or `description` (e.g. modified code
-                  shifted its meaning). Fields: `feature_id`, `title?`, `description?`.
+- `amend`       — repair a feature's `title` and/or its paragraphs (e.g. modified code
+                  shifted its meaning). Fields: `feature_id`, `title?`, `blocks?`.
+                  `blocks` is the feature's paragraph list, BY ID: each entry is
+                  `{"id": "<block id from the subtree>", "text": "<the paragraph as it should read>"}`.
+                  Repeat every paragraph you keep with its id (unchanged text is fine);
+                  an entry without an `id` is a NEW paragraph inserted after the previous
+                  entry; a paragraph you leave out is proposed for removal. Never move
+                  text between ids.
 - `move_node`   — reparent a feature (uplift / restructure). Fields: `feature_id`, `parent_id`.
 - `retire_node` — retire a feature that lost all its code. Fields: `feature_id`.
 
@@ -126,8 +132,8 @@ Return ONLY this, inside solution tags:
 {"ops": [
   {"kind": "attach", "feature_id": "f-1a2b", "bindings": [["codoc/loop/diff.py", "codoc/loop/diff.py::compute_changeset"]], "rationale": "same snapshot-diff behavior as the existing node"},
   {"kind": "attach", "feature_id": "f-7e8f", "bindings": [["metrics_utils.py", "metrics_utils.py::print_metrics_table"], ["metrics_utils.py", "metrics_utils.py::format_delta"]], "rationale": "rich terminal rendering belongs to the metrics summary feature"},
-  {"kind": "amend", "feature_id": "f-7e8f", "description": "Answers whether a checkpoint is good enough to keep, by aggregating its runs, comparing them against the baseline, and flagging anything that crosses a threshold. The comparison is drawn straight to the terminal by [print_metrics_table()](codoc:metrics_utils.py#print_metrics_table), with coloured deltas and range bars, so a regression is visible without opening a dashboard.", "rationale": "it can draw the comparison now, not just format numbers, so 'display formatting' undersold it"},
-  {"kind": "amend", "feature_id": "f-3c4d", "description": "Holds the queue of edits that are waiting to be implemented. Every write goes through a temporary file and a rename, so a crash in the middle of one can never leave a half-parsed queue on disk. A reader that finds no file at all carries on, because an empty queue and a missing queue mean the same thing.", "rationale": "the write path moved to a temp-file rename, so the old sentence about writing in place was wrong"},
+  {"kind": "amend", "feature_id": "f-7e8f", "blocks": [{"id": "b-91ac", "text": "Answers whether a checkpoint is good enough to keep, by aggregating its runs, comparing them against the baseline, and flagging anything that crosses a threshold. The comparison is drawn straight to the terminal by [print_metrics_table()](codoc:metrics_utils.py#print_metrics_table), with coloured deltas and range bars, so a regression is visible without opening a dashboard."}], "rationale": "it can draw the comparison now, not just format numbers, so 'display formatting' undersold it"},
+  {"kind": "amend", "feature_id": "f-3c4d", "blocks": [{"id": "b-0c2e", "text": "Holds the queue of edits that are waiting to be implemented. Every write goes through a temporary file and a rename, so a crash in the middle of one can never leave a half-parsed queue on disk."}, {"text": "A reader that finds no file at all carries on, because an empty queue and a missing queue mean the same thing."}], "rationale": "the write path moved to a temp-file rename, so the old sentence about writing in place was wrong"},
   {"kind": "add_node", "parent_id": "f-09cd", "title": "Relevant subtree selection", "description": "Keeps one tree-update call small enough to stay affordable, by sending only the features whose bindings share a file with the change rather than the whole tree, so the cost of a pass stays flat as the tree grows.", "bindings": [["codoc/loop/subtree.py", "codoc/loop/subtree.py::select_relevant_subtree"]], "rationale": "no existing node covers subtree scoping"}
 ]}
 </solution>
@@ -187,7 +193,8 @@ children). Prefer attaching new chunks here.
   description. If they write short and concrete, do not answer in long and
   abstract; if they stay above the mechanism, stay above it too.
 
-The subtree entries carry `written_by` — `human` when a person last wrote that
-description, otherwise the agent or loop that did. Rule 8 depends on it.
+The subtree entries carry `blocks` — the feature's paragraphs, each with the
+`id` an `amend` must name — and `written_by`: `human` when a person last wrote
+that prose, otherwise the agent or loop that did. Rule 8 depends on it.
 
 Now return the minimal op set for this change, inside solution tags.
