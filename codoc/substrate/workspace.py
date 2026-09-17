@@ -52,19 +52,24 @@ class Roles:
 
 class Workspace:
     def __init__(self, codoc_dir: str | Path, *, node: str = "local", roles: Roles | None = None,
-                 session: str | None = None) -> None:
+                 session: str | None = None, readonly: bool = False) -> None:
         self.codoc_dir = Path(codoc_dir)
         self.node = node
-        self.roles = roles or Roles({"human:local": OWNER})
+        # The local person owns the checkout; a v1 import runs only on that
+        # person's machine and writes in their name.
+        self.roles = roles or Roles({"human:local": OWNER, "human:import": OWNER})
         self.clock = Clock(node)
         self.store = Store(policy=self.roles.policy)
         self.problems: list[L.LogProblem] = []
         self.quarantined: list[Op] = []
         self._inbox_offsets: dict[str, int] = {}
         self.rebuild()
+        self.readonly = readonly
         self.session = session or new_session_id()
         self.seq = 0
-        self.writer = L.SessionWriter(self.codoc_dir, self.session, node, self.clock.tick())
+        # A read-only open (an MCP read, `codoc status`) replays the logs and
+        # writes nothing: no session file, and `submit` refuses.
+        self.writer = None if readonly else L.SessionWriter(self.codoc_dir, self.session, node, self.clock.tick())
 
     # ── replay ─────────────────────────────────────────────────────────────
     def rebuild(self) -> None:
@@ -110,6 +115,8 @@ class Workspace:
     def submit(self, bodies: list[dict], *, actor: str, batch: str | None = None, plan: str | None = None,
                base: dict | None = None, caused_by: str | None = None) -> list[Op]:
         """Mint, apply and log a batch of op bodies ``{kind, target, payload}``."""
+        if self.writer is None:
+            raise RuntimeError("read-only workspace: submit through the daemon's inbox")
         batch = batch or new_batch_id()
         out: list[Op] = []
         for b in bodies:
@@ -189,6 +196,18 @@ class Workspace:
             for s in subs:
                 if s.cid in acked.get(client, set()):
                     continue
+                if s.kind == "ingest":
+                    # A whole-text write from another process: the boundary diff
+                    # runs here, in the applier. The ack names the first op.
+                    res, ops = self.ingest(s.target["bid"], s.target.get("path", "text"),
+                                           base_text=s.payload.get("base_text", ""), new_md=s.payload.get("new_md", ""),
+                                           actor=actor, plan=s.plan, caused_by=s.caused_by, batch=s.batch or None)
+                    first = ops[0] if ops else Op(id="", at="", actor=actor, batch="", kind="ingest",
+                                                  conflict=res.refused or ("empty" if not ops else None))
+                    L.ack(self.codoc_dir, client, s.cid, first)
+                    acked.setdefault(client, set()).add(s.cid)
+                    out.extend(ops)
+                    continue
                 op = self._mint(s.kind, s.target, s.payload, actor=actor, batch=s.batch or new_batch_id(),
                                 plan=s.plan, base=s.base, caused_by=s.caused_by)
                 apply(self.store, op)
@@ -217,6 +236,8 @@ class Workspace:
     def rotate_session(self) -> str:
         """Close the current session log and open a new one (on commit, HEAD
         change, or at the caller's request)."""
+        if self.writer is None:
+            return self.session
         self.writer.close()
         self.session = new_session_id()
         self.seq = 0
@@ -224,7 +245,8 @@ class Workspace:
         return self.session
 
     def close(self) -> None:
-        self.writer.close()
+        if self.writer is not None:
+            self.writer.close()
 
 
 def _wire(op: Op) -> Op:

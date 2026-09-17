@@ -40,7 +40,20 @@ from codoc.loop.activity import write_activity as _write_activity
 from codoc.loop.filenames import REALIZE_FILENAME
 from codoc.loop.fsio import read_json
 
-BINDINGS_FILENAME = "tree.bindings.json"
+BINDINGS_FILENAME = "tree.bindings.json"   # v1
+PROJECTION_FILENAME = "projection.json"    # v2: {"bindings": {"by_feature", "by_file"}}
+
+
+def _bindings_slice(codoc_dir: str) -> dict:
+    """``{by_file, by_feature}`` from whichever derived file this workspace
+    publishes (v2 ``projection.json``, else the v1 sidecar)."""
+    proj = read_json(Path(codoc_dir) / PROJECTION_FILENAME, default=None)
+    if isinstance(proj, dict) and isinstance(proj.get("bindings"), dict):
+        b = proj["bindings"]
+        by_feature = {fid: [{"symbol_path": x["symbol"], "file": x["file"]} for x in rows]
+                      for fid, rows in (b.get("by_feature") or {}).items()}
+        return {"by_file": b.get("by_file") or {}, "by_feature": by_feature}
+    return read_json(Path(codoc_dir) / BINDINGS_FILENAME, default={}) or {}
 
 # Maximum recent-events to keep in the rolling log.
 _MAX_RECENT = 20
@@ -88,7 +101,7 @@ def _resolve_features(
     3. **File level** — otherwise the full set (ad hoc reads/edits with no finer
        signal; showing every bound feature is the honest fallback).
     """
-    sidecar = read_json(Path(codoc_dir) / BINDINGS_FILENAME, default={})
+    sidecar = _bindings_slice(codoc_dir)
     by_file: dict = sidecar.get("by_file", {})
     entries = by_file.get(rel_path, [])
     all_fids = list(dict.fromkeys(e["feature_id"] for e in entries if "feature_id" in e))

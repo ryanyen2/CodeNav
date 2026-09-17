@@ -65,6 +65,14 @@ def _ops_from(raw: dict | list) -> list[NodeOp]:
     return [_coerce_op(o) for o in ops_raw]
 
 
+def raw_ops(raw: dict | list) -> list[dict]:
+    """The model's ops as plain dicts in the prompt's JSON shape (v2 entry).
+    An ``add_node`` carries its temporary ``id`` (``"n1"``) that later ops in the
+    same reply reference as ``parent_id``; the caller remaps."""
+    ops_raw = raw.get("ops", []) if isinstance(raw, dict) else raw
+    return [o for o in (ops_raw or []) if isinstance(o, dict) and isinstance(o.get("kind"), str)]
+
+
 def propose_brief(
     readme: str,
     headers: list[dict],
@@ -196,6 +204,23 @@ def propose_file_features(
                                prefix_parts=prefix_parts))
 
 
+def propose_file_features_raw(file, chunks, edges, existing_titles, *, repo_name="codebase", config=None,
+                              why=None, brief=None, doc_language=None) -> list[dict]:
+    prefix_tpls, volatile_tpl = split_prompt(load_prompt("bootstrap_file", doc_language=doc_language))
+    kwargs = dict(
+        repo_name=repo_name, file=file,
+        chunks=json.dumps(chunks, indent=2, sort_keys=True, ensure_ascii=False),
+        edges=json.dumps(edges, indent=2, sort_keys=True, ensure_ascii=False),
+        existing_titles="\n".join(f"- {t}" for t in existing_titles) or "(none yet)",
+        brief=format_brief(brief),
+        why=(json.dumps(why, indent=2, sort_keys=True, ensure_ascii=False) if why
+             else "(no commit history recorded for this file)"),
+    )
+    prefix_parts = [format_prompt(t, **kwargs) for t in prefix_tpls]
+    volatile = format_prompt(volatile_tpl, **kwargs)
+    return raw_ops(run_agent(volatile, config or fast_llm_config(), prefix_parts=prefix_parts))
+
+
 def propose_organization(
     features: list[dict],
     edges: list[dict],
@@ -225,3 +250,16 @@ def propose_organization(
         brief=format_brief(brief),
     )
     return _ops_from(run_agent(prompt, config))
+
+
+def propose_organization_raw(features, edges, *, repo_name="codebase", config=None, flows=None,
+                             brief=None, doc_language=None) -> list[dict]:
+    template = load_prompt("bootstrap_org", doc_language=doc_language)
+    prompt = format_prompt(
+        template, repo_name=repo_name,
+        features=json.dumps(features, indent=2, ensure_ascii=False),
+        edges=json.dumps(edges, indent=2, ensure_ascii=False),
+        flows="\n".join(f"- {f}" for f in flows) if flows else "(no call paths could be derived)",
+        brief=format_brief(brief),
+    )
+    return raw_ops(run_agent(prompt, config))
