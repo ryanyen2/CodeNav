@@ -44,7 +44,7 @@ def _epoch_open(codoc_dir: str) -> bool:
     past 90 s — spawning a headless pass over it would race two agents on the
     same queue. The plan's TTL tiering (WS1.1) assigns seconds-scale to UI
     display and 900 s to daemon decisions; spawning is a daemon decision."""
-    from codoc.loop.watch import EPOCH_STALE_SECONDS
+    from codoc.substrate.daemon import EPOCH_STALE_SECONDS
 
     return epoch_alive(codoc_dir, ttl=EPOCH_STALE_SECONDS)
 

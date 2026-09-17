@@ -354,11 +354,18 @@ recorded with `conflict="authority"` and not applied, so a PR that carries a
 forged `plan.accept` in its session file has no effect on rebuild. The hub
 validates a PR's log files before merging.
 
-### 7.4 Idempotency
+### 7.4 Idempotency and provisional anchors
 
 A client submits ops through its inbox file with a client-side id; the daemon
 acks with the assigned `OpId`. A resubmitted client id is acked with the same
 `OpId` and not applied twice.
+
+A client cannot know the `OpId` of characters it inserted a moment ago and has
+not yet seen acked, so a submission may anchor to them provisionally as
+`["$cid", "<client id>", k]`, the k-th character of the insert that submission
+minted. The daemon resolves these against the acks it issues in the same drain,
+in order; an unresolvable one fails as an unknown anchor. This is what lets a
+burst of typing land as one chain of ops without a round trip per keystroke.
 
 ### 7.5 Snapshots
 

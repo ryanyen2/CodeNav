@@ -21,7 +21,7 @@ from pathlib import Path
 
 from codoc.loop.filenames import REALIZE_FILENAME
 from codoc.loop.fsio import atomic_write_json, read_json
-from codoc.model.hlc import HLC
+from codoc.substrate.clock import fmt as _hlc_fmt
 
 STATUS_FILENAME = "status.json"
 
@@ -71,7 +71,7 @@ def write_status(codoc_dir: str | Path, state: str, *, pending: int = 0, detail:
     dest.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "version": 1, "state": state, "pending": pending,
-        "detail": detail, "at": HLC.now().to_str(),
+        "detail": detail, "at": _hlc_fmt(int(time.time() * 1000), 0, "status"),
     }
     if owner:
         payload["owner"] = owner

@@ -357,7 +357,7 @@ def _maybe_spawn_reflect(codoc_dir: str, data: dict, ep: dict) -> None:
     if ep.get("origin") == "loop_b":
         return
     try:
-        from codoc.loop.watch import daemon_running
+        from codoc.substrate.daemon import daemon_running
         if daemon_running(codoc_dir):
             return
     except Exception:  # noqa: BLE001
@@ -617,7 +617,7 @@ def _drain_inbox_fallback(codoc_dir: str) -> None:
     are swallowed. No-ops when the inbox is empty or a live ``codoc watch`` daemon
     is already responsible for draining it."""
     from codoc.loop import inbox
-    from codoc.loop.watch import daemon_running
+    from codoc.substrate.daemon import daemon_running
 
     try:
         if daemon_running(codoc_dir) or not inbox.read_verdicts(codoc_dir):

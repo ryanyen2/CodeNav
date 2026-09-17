@@ -33,36 +33,6 @@ import json
 from codoc.agent.base import format_prompt, load_prompt, run_agent, split_prompt
 from codoc.config import LLMConfig, fast_llm_config
 from codoc.doclang import DocLanguage
-from codoc.model.event import NodeOp, NodeOpKind
-
-
-def _coerce_op(raw: dict) -> NodeOp:
-    """Coerce a raw op dict to a NodeOp, carrying a temporary local id.
-
-    For ``add_node`` the model assigns a temporary id (``"id": "n1"``) so other
-    ops in the same call can reference it as a ``parent_id``. We stash that
-    temporary id in ``feature_id`` (which is otherwise None for a new node); the
-    apply step in bootstrap_hier mints the real id and remaps references.
-    """
-    kind = NodeOpKind(raw["kind"])
-    fid = raw.get("feature_id")
-    if kind is NodeOpKind.ADD_NODE and not fid:
-        fid = raw.get("id")  # temporary local id (e.g. "n1", "t1")
-    bindings = [tuple(b) for b in raw.get("bindings", []) if len(b) == 2]
-    return NodeOp(
-        kind=kind,
-        feature_id=fid,
-        parent_id=raw.get("parent_id"),
-        title=raw.get("title"),
-        description=raw.get("description"),
-        bindings=bindings,
-        rationale=raw.get("rationale", ""),
-    )
-
-
-def _ops_from(raw: dict | list) -> list[NodeOp]:
-    ops_raw = raw.get("ops", []) if isinstance(raw, dict) else raw
-    return [_coerce_op(o) for o in ops_raw]
 
 
 def raw_ops(raw: dict | list) -> list[dict]:
@@ -157,52 +127,6 @@ def format_brief(brief: dict | None) -> str:
     return "\n\n".join(out) or "(no brief — describe this file on its own terms)"
 
 
-def propose_file_features(
-    file: str,
-    chunks: list[dict],
-    edges: list[dict],
-    existing_titles: list[str],
-    *,
-    repo_name: str = "codebase",
-    config: LLMConfig | None = None,
-    why: list[dict] | None = None,
-    brief: dict | None = None,
-    doc_language: DocLanguage | None = None,
-) -> list[NodeOp]:
-    """One LLM call: propose a small coherent feature set for a single file.
-
-    Cache-aligned (CACHE_BREAK markers in the template): the frozen instruction
-    block + the grow-only titles list form the stable prefix; only the file
-    block varies per call. Within a bootstrap wave every call shares the same
-    titles snapshot, so the whole prefix is identical across the wave.
-    Structured extraction → fast model tier by default.
-
-    ``why`` is this file's commit rationale (:func:`codoc.loop.why.commit_rationales`).
-    It goes in the volatile tail with the file itself — it is per-file by
-    construction, and putting it in the prefix would break the wave's shared
-    cache for no benefit. At bootstrap this is the *only* why-evidence there is:
-    nobody has edited the tree yet, so there are no directives and no recorded
-    rationale to fall back on.
-    """
-    # Split the raw template FIRST, then substitute per segment — substituted
-    # values are repo-derived and may contain a literal marker.
-    prefix_tpls, volatile_tpl = split_prompt(
-        load_prompt("bootstrap_file", doc_language=doc_language))
-    kwargs = dict(
-        repo_name=repo_name,
-        file=file,
-        chunks=json.dumps(chunks, indent=2, sort_keys=True, ensure_ascii=False),
-        edges=json.dumps(edges, indent=2, sort_keys=True, ensure_ascii=False),
-        existing_titles="\n".join(f"- {t}" for t in existing_titles) or "(none yet)",
-        brief=format_brief(brief),
-        why=(json.dumps(why, indent=2, sort_keys=True, ensure_ascii=False) if why
-             else "(no commit history recorded for this file)"),
-    )
-    prefix_parts = [format_prompt(t, **kwargs) for t in prefix_tpls]
-    volatile = format_prompt(volatile_tpl, **kwargs)
-    return _ops_from(run_agent(volatile, config or fast_llm_config(),
-                               prefix_parts=prefix_parts))
-
 
 def propose_file_features_raw(file, chunks, edges, existing_titles, *, repo_name="codebase", config=None,
                               why=None, brief=None, doc_language=None) -> list[dict]:
@@ -220,36 +144,6 @@ def propose_file_features_raw(file, chunks, edges, existing_titles, *, repo_name
     volatile = format_prompt(volatile_tpl, **kwargs)
     return raw_ops(run_agent(volatile, config or fast_llm_config(), prefix_parts=prefix_parts))
 
-
-def propose_organization(
-    features: list[dict],
-    edges: list[dict],
-    *,
-    repo_name: str = "codebase",
-    config: LLMConfig | None = None,
-    flows: list[str] | None = None,
-    brief: dict | None = None,
-    doc_language: DocLanguage | None = None,
-) -> list[NodeOp]:
-    """One LLM call: group file-level features under broad theme parents.
-
-    ``flows`` are the package's main call paths (:mod:`codoc.loop.surface`).
-    Coupling counts alone can only produce clusters — "these two call each other
-    a lot" — and a top level built from clusters reads as a filing system. The
-    paths say which features participate in one operation and in what order,
-    which is what lets a theme be a stage of the work instead of a bucket.
-    """
-    template = load_prompt("bootstrap_org", doc_language=doc_language)
-    prompt = format_prompt(
-        template,
-        repo_name=repo_name,
-        features=json.dumps(features, indent=2, ensure_ascii=False),
-        edges=json.dumps(edges, indent=2, ensure_ascii=False),
-        flows="\n".join(f"- {f}" for f in flows) if flows
-              else "(no call paths could be derived)",
-        brief=format_brief(brief),
-    )
-    return _ops_from(run_agent(prompt, config))
 
 
 def propose_organization_raw(features, edges, *, repo_name="codebase", config=None, flows=None,

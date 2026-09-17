@@ -117,3 +117,17 @@ def test_clock_observes_and_refuses_skew():
         assert False, "expected SkewError"
     except SkewError:
         pass
+
+
+def test_provisional_anchors_chain_a_typing_batch(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws)
+    last = list(ws.store.blocks["p1"].text().last_live_ref())
+    L.submit(tmp_path / ".codoc", "ide", [
+        Submission(cid="t1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"}, payload={"after": last, "text": " ab"}),
+        Submission(cid="t2", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"}, payload={"after": ["$cid", "t1", 2], "text": "c"}),
+        Submission(cid="t3", kind=K.TEXT_DELETE, target={"bid": "p1", "path": "text"}, payload={"from": ["$cid", "t1", 1], "to": ["$cid", "t2", 0]}),
+    ])
+    done = ws.drain_inbox({"ide": "human:local"})
+    assert [o.conflict for o in done] == [None, None, None]
+    assert ws.store.blocks["p1"].text().live_text() == "Retries once. "

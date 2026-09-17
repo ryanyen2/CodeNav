@@ -1,892 +1,165 @@
-import * as vscode from 'vscode';
-import * as path from 'path';
-import * as fs from 'fs';
+/**
+ * extension.ts — codoc for VS Code, v2.
+ *
+ * The extension provisions the Python core, keeps the daemon running as a
+ * reconciled invariant, registers the Codoc Tree editor, and offers a handful
+ * of commands. It holds no model of the tree: the editor reads the daemon's
+ * projection and writes ops to the daemon's inbox (host/provider.ts).
+ */
 import * as cp from 'node:child_process';
-import { WorkspaceState } from './state/workspace-state';
-import { CodocCodeLensProvider } from './providers/code-lens';
-import { CodocTreeLensProvider } from './providers/codoc-tree-lens';
-import { CodocCodeActionProvider } from './providers/code-actions';
-import { CodocCompletionProvider } from './providers/completion';
-import { CodocDocumentLinkProvider } from './providers/doc-links';
-import { CodocHoverProvider } from './providers/hover';
-import { registerPastContentProvider } from './providers/past-content';
-import { CodocInlayHintsProvider } from './providers/inlay';
-import { CodocFoldingProvider } from './providers/folding';
-import { CodocSymbolProvider } from './providers/symbol';
-import { applyDecorations, applyPendingCodeDecorations, createDecorations } from './providers/decoration';
-import { BridgeController } from './providers/bridge-controller';
-import { BridgeCodeLensProvider } from './providers/bridge-lens';
-import { subtreeTitleLines, siblingTitleLine, parentTitleLine, firstChildTitleLine } from './providers/feature-lines';
-import { bindingsForFeature } from './state/bindings-model';
-import { symbolLeaf } from './state/registry-model';
-import { DependencyFocus } from './providers/focus';
-import { AgentGutter } from './providers/agent';
-import { CodocFileDecorationProvider } from './providers/file-decoration';
-import { CodocTreeEditorProvider } from './providers/tree-editor';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as vscode from 'vscode';
+
+import { reapStaleLock, resetDaemonBackoff, startDaemon, stopDaemon } from './daemon/daemon-manager';
+import { CodocEditorProvider } from './host/provider';
+import { Workspace, statusBarView } from './host/workspace';
+import { DEFAULT_HUB_PORT, hubUrl, serveArgs } from './serve/serve-manager';
+import { bootstrapCredentials } from './setup/credentials';
 import {
-    ensureUv, provisionCodoc, cachedExecutables,
-    WorkspaceUntrustedError, ProvisionCancelledError,
+    ProvisionCancelledError, WorkspaceUntrustedError, cachedExecutables, ensureUv, provisionCodoc,
 } from './setup/provision';
-import { bootstrapCredentials, syncCredentialsToEnv, SECRET_OPENAI_KEY } from './setup/credentials';
-import { startDaemon, stopDaemon, reapStaleLock, resetDaemonBackoff } from './daemon/daemon-manager';
 import { SETUP_STEPS, needsSetup } from './setup/setup-flow';
-import { DEFAULT_HUB_PORT, hubUrl, serveCommandLine } from './serve/serve-manager';
 
-/** Shared "codoc" OutputChannel — same name provision.ts / credentials.ts / daemon-manager.ts use. */
-let _channel: vscode.OutputChannel | undefined;
-function outputChannel(): vscode.OutputChannel {
-    if (!_channel) _channel = vscode.window.createOutputChannel('codoc');
-    return _channel;
-}
+let channel: vscode.OutputChannel | undefined;
+const out = (): vscode.OutputChannel => (channel ??= vscode.window.createOutputChannel('codoc'));
 
-/** Once-per-session guard so the first-run "Set up codoc" nudge isn't shown on every reload. */
-let _setupOffered = false;
-
-/** How often the daemon invariant is re-checked when nothing else has happened.
- *  Slow on purpose: every other trigger is an edge that already fires, and this is
- *  only the backstop for a window where none of them did. */
 const DAEMON_RECONCILE_MS = 15_000;
 
-/**
- * The setup workspace root: a `.codoc/`-bearing root if one is already known
- * (re-run / repair), else the first workspace folder (the fresh-repo case where
- * `.codoc/` doesn't exist yet). Returns `undefined` when there is no folder open.
- */
-function setupRootDir(state: WorkspaceState): string | undefined {
-    return state.rootDir ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-}
-
-/**
- * Run a `codoc <subcommand>` console-script as a child process, streaming
- * stdout/stderr to the shared OutputChannel. Resolves on exit 0, rejects on a
- * non-zero exit or spawn error. Used for the long `codoc init` step (indexing +
- * LLM bootstrap), wrapped by the caller in `withProgress`.
- *
- * Argv-only (shell:false) with an explicit cwd/env; no untrusted input on argv.
- */
 function runCodoc(codocPath: string, args: readonly string[], rootDir: string): Promise<void> {
-    const channel = outputChannel();
-    channel.appendLine(`$ ${codocPath} ${args.join(' ')}`);
-    return new Promise<void>((resolve, reject) => {
-        const child = cp.spawn(codocPath, args as string[], {
-            cwd: rootDir,
-            env: { ...process.env },
-            shell: false,
-        });
-        child.stdout?.on('data', (buf: Buffer) => channel.append(buf.toString()));
-        child.stderr?.on('data', (buf: Buffer) => channel.append(buf.toString()));
-        child.on('error', err => reject(err));
-        child.on('close', code => {
-            if (code === 0) resolve();
-            else reject(new Error(`codoc ${args[0] ?? ''} failed (exit ${code}). See the codoc output channel.`));
-        });
+    return new Promise((resolve, reject) => {
+        const child = cp.spawn(codocPath, args, { cwd: rootDir, env: { ...process.env, PYTHONUNBUFFERED: '1' } });
+        child.stdout.on('data', d => out().append(String(d)));
+        child.stderr.on('data', d => out().append(String(d)));
+        child.on('error', reject);
+        child.on('close', code => (code === 0 ? resolve() : reject(new Error(`codoc ${args[0]} exited with ${code}`))));
     });
 }
 
-/**
- * Orchestrate the whole zero-manual-step setup, in the canonical order defined by
- * {@link SETUP_STEPS}: ensureUv → provisionCodoc → bootstrapCredentials → `codoc
- * init` → startDaemon. Credentials are written to `.env` BEFORE `codoc init` so
- * init's LLM bootstrap (indexing + tree proposal) has a configured provider — the
- * correctness invariant.
- *
- * Trust-gated (KTD6/R5): if the workspace is untrusted, prompts to trust it and
- * returns without spawning anything. Failures surface a Retry / View Log dialog.
- * On success sets the `codoc.ready` context key (drives the walkthrough completion).
- */
-async function runSetup(context: vscode.ExtensionContext, state: WorkspaceState): Promise<void> {
-    // KTD6/R5: gate every spawn/install on Workspace Trust.
+async function runSetup(context: vscode.ExtensionContext, state: Workspace): Promise<void> {
     if (!vscode.workspace.isTrusted) {
-        const choice = await vscode.window.showWarningMessage(
-            'codoc setup installs and runs a Python core, so it needs a trusted workspace.',
-            'Trust Workspace',
-        );
-        if (choice === 'Trust Workspace') {
-            await vscode.commands.executeCommand('workbench.trust.manage');
-        }
+        const choice = await vscode.window.showWarningMessage('codoc installs and runs a Python core, so it needs a trusted workspace.', 'Trust Workspace');
+        if (choice === 'Trust Workspace') await vscode.commands.executeCommand('workbench.trust.manage');
         return;
     }
-
-    const rootDir = setupRootDir(state);
-    if (!rootDir) {
-        void vscode.window.showInformationMessage('Open a folder before setting up codoc.');
-        return;
-    }
-
-    const channel = outputChannel();
-    state.setProvisioning(true); // status bar → "$(cloud-download) setting up…"
+    const rootDir = state.rootDir;
+    if (!rootDir) { void vscode.window.showInformationMessage('Open a folder before setting up codoc.'); return; }
+    state.setProvisioning(true);
     try {
-        // 1. ensure-uv → 2. provision (each cancellable inside provision.ts).
-        channel.appendLine(`codoc: ${SETUP_STEPS[0].label}`);
-        const uvPath = await ensureUv();
-        channel.appendLine(`codoc: ${SETUP_STEPS[1].label}`);
-        const execs = await provisionCodoc(context, uvPath);
-
-        // 3. credentials — MUST precede init (init runs the LLM bootstrap).
-        channel.appendLine(`codoc: ${SETUP_STEPS[2].label}`);
+        out().appendLine(`codoc: ${SETUP_STEPS[0].label}`);
+        const uv = await ensureUv();
+        out().appendLine(`codoc: ${SETUP_STEPS[1].label}`);
+        const execs = await provisionCodoc(context, uv);
+        out().appendLine(`codoc: ${SETUP_STEPS[2].label}`);
         await bootstrapCredentials(context, rootDir);
-
-        // 4. codoc init — long (indexing + LLM bootstrap); streamed to the channel.
-        channel.appendLine(`codoc: ${SETUP_STEPS[3].label}`);
-        await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: 'codoc: indexing your repo and proposing the feature tree…' },
-            () => runCodoc(execs.codoc, ['init', '--root', rootDir], rootDir),
-        );
-
-        // 5. start the managed daemon (reap a stale lock first).
-        channel.appendLine(`codoc: ${SETUP_STEPS[4].label}`);
+        out().appendLine(`codoc: ${SETUP_STEPS[3].label}`);
+        if (!fs.existsSync(path.join(rootDir, '.codoc', 'log'))) {
+            const legacy = path.join(rootDir, '.codoc', 'codoc.db');
+            const args = fs.existsSync(legacy) ? ['import-v1', '--root', rootDir] : ['init', '--root', rootDir];
+            await vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Notification, title: 'codoc: indexing your repo and building the feature tree…' },
+                () => runCodoc(execs.codoc, args, rootDir),
+            );
+        }
+        out().appendLine(`codoc: ${SETUP_STEPS[4].label}`);
         reapStaleLock(rootDir);
         startDaemon(context, execs.codoc, rootDir);
-
         await vscode.commands.executeCommand('setContext', 'codoc.ready', true);
-        void vscode.window.showInformationMessage('codoc is set up — open your feature tree to get started.', 'Open Tree')
-            .then(c => { if (c === 'Open Tree') void vscode.commands.executeCommand('codoc.open'); });
+        void vscode.window.showInformationMessage('codoc is set up.', 'Open Tree').then(c => { if (c === 'Open Tree') void vscode.commands.executeCommand('codoc.open'); });
     } catch (err) {
-        if (err instanceof ProvisionCancelledError) {
-            channel.appendLine('codoc: setup cancelled.');
-            return; // user-initiated; no error dialog
-        }
-        const msg = err instanceof WorkspaceUntrustedError
-            ? err.message
-            : `codoc setup failed: ${(err as Error).message}`;
-        channel.appendLine(`codoc: ${msg}`);
+        if (err instanceof ProvisionCancelledError) return;
+        const msg = err instanceof WorkspaceUntrustedError ? err.message : `codoc setup failed: ${(err as Error).message}`;
+        out().appendLine(`codoc: ${msg}`);
         const choice = await vscode.window.showErrorMessage(msg, 'Retry', 'View Log');
-        if (choice === 'Retry') {
-            await runSetup(context, state);
-        } else if (choice === 'View Log') {
-            channel.show();
-        }
+        if (choice === 'Retry') await runSetup(context, state);
+        else if (choice === 'View Log') out().show();
     } finally {
-        state.setProvisioning(false); // clear the "setting up…" status-bar state
+        state.setProvisioning(false);
     }
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-    const state = new WorkspaceState(context);
-    const codocSelector: vscode.DocumentSelector = { language: 'codoc' };
+    const state = new Workspace();
+    context.subscriptions.push(state);
+    const cli = () => cachedExecutables(context)?.codoc;
 
-    // W8: the read-only `codoc-past:` scheme — a file as it was at a commit, so the
-    // timeline's "open the code diff" has a real left-hand side.
-    registerPastContentProvider(context);
+    context.subscriptions.push(vscode.window.registerCustomEditorProvider(
+        CodocEditorProvider.viewType, new CodocEditorProvider(context, cli),
+        { webviewOptions: { retainContextWhenHidden: true }, supportsMultipleEditorsPerDocument: false }));
 
-    // ── Directive-completion notifications (W3) ───────────────────────────────
-    // realized.jsonl gains entries when the realize queue drains — the author's
-    // tree edit LANDED as code. Surface it even when they're not watching the
-    // webview; "Show feature" jumps to the feature in the tree.
-    context.subscriptions.push(state.onDidRealize(outcomes => {
-        const title = (fid: string): string =>
-            (state.sidecar.features?.[fid] as { title?: string } | undefined)?.title ?? fid;
-        if (outcomes.length === 1) {
-            const o = outcomes[0];
-            const label = o.featureId ? `"${title(o.featureId)}"` : 'a tree edit';
-            void vscode.window.showInformationMessage(
-                `codoc ✓ implemented ${label}`,
-                'Show feature',
-            ).then(pick => {
-                if (pick === 'Show feature' && o.featureId) {
-                    void vscode.commands.executeCommand('codoc.navigateToFeature', o.featureId);
-                }
-            });
-        } else {
-            void vscode.window.showInformationMessage(
-                `codoc ✓ ${outcomes.length} tree edits implemented`,
-                'Open tree',
-            ).then(pick => {
-                if (pick === 'Open tree') void vscode.commands.executeCommand('codoc.open');
-            });
-        }
-    }));
-
-    // ── The stalled realize queue → offer to run it ───────────────────────────
-    // Accepting a plan queues code work and, outside the agent's blocking
-    // `codoc_await_verdicts` window, nothing runs it: the status bar said "N to
-    // implement" and the queue sat there until the human typed something into Claude
-    // Code purely to trip the UserPromptSubmit hook. So make the offer instead of
-    // leaving a silent queue.
-    //
-    // Non-modal, and it starts nothing on its own. `codoc realize` is the one action
-    // that lets an agent write to the user's source files, which is the same reason
-    // daemon-manager refuses to pass `--auto-realize` (KTD6) — the difference between
-    // this and that is the click, so the click has to stay.
-    context.subscriptions.push(state.onDidStallRealize(offer => {
-        void vscode.window.showInformationMessage(offer.message, offer.action)
-            .then(pick => {
-                if (pick === offer.action) void vscode.commands.executeCommand('codoc.realize');
-            });
-    }));
-
-    // ── codoc.setup — one-click provision → init → daemon ─────────────────────
-    context.subscriptions.push(
-        vscode.commands.registerCommand('codoc.setup', () => runSetup(context, state)),
-        // codoc.repair is an alias — re-running setup repairs a broken/partial state.
-        vscode.commands.registerCommand('codoc.repair', () => runSetup(context, state)),
-    );
-
-    // ── URI handler: vscode://codoc.codoc/setup → codoc.setup ─────────────────
-    // Validate the path; NEVER forward URI query params into any shell/spawn.
-    context.subscriptions.push(
-        vscode.window.registerUriHandler({
-            handleUri(uri: vscode.Uri): void {
-                if (uri.path === '/setup') {
-                    void vscode.commands.executeCommand('codoc.setup');
-                }
-            },
-        }),
-    );
-
-    // ── Managed daemon lifecycle ──────────────────────────────────────────────
-    // The user never runs `codoc watch` by hand (KTD3), so this window owning the
-    // daemon is not a convenience: it is the only thing that drains a verdict.
-    //
-    // It used to be started on three EDGES — activation, trust being granted, and
-    // the replay lock going away — and never asked about again. Every one of those
-    // can be missed, and each miss is silent and permanent:
-    //
-    //   • the folder opens untrusted (which a freshly unpacked study workspace
-    //     always is) and the trust grant arrives before this extension activates;
-    //   • the replay lock is created and deleted while the window is still loading,
-    //     so both watcher events land on nobody;
-    //   • the watcher drops an event, which a recursive file watcher is permitted
-    //     to do;
-    //   • the daemon starts and then exits for a reason of its own.
-    //
-    // The symptom is the same in all four and says nothing about any of them: you
-    // accept a proposal and are told the verdict was not picked up. That reached a
-    // participant, with no way back short of quitting the editor.
-    //
-    // So the daemon is a RECONCILED invariant rather than a sequence of events:
-    // trusted, initialized, provisioned, nobody else writing, no live daemon → start
-    // one. Asked on every edge as before, on every `.codoc/` change, and on a slow
-    // timer so a window where nothing at all happens still recovers. `startDaemon`
-    // is idempotent (it defers to a live lock and to a child we already own), and it
-    // backs off after repeated fast exits so a daemon that cannot start is not
-    // respawned forever.
+    // The daemon as a reconciled invariant: trusted, initialized, provisioned,
+    // nobody else writing, no live daemon → start one. Idempotent; backs off.
     const reconcileDaemon = (): void => {
-        if (!vscode.workspace.isTrusted) return;
-        const rootDir = state.rootDir;
-        if (!rootDir) return;
-        // Something outside the editor is writing the files the daemon owns, and
-        // the two must not write them at once. See the watcher below.
-        if (fs.existsSync(path.join(rootDir, '.codoc', 'replay.lock'))) return;
+        if (!vscode.workspace.isTrusted || !state.rootDir || !state.initialized) return;
+        // Another writer (the study's replay harness) owns the workspace: stand down.
+        if (fs.existsSync(path.join(state.rootDir, '.codoc', 'replay.lock'))) return;
         const execs = cachedExecutables(context);
         if (!execs) return;
-        reapStaleLock(rootDir);
-        startDaemon(context, execs.codoc, rootDir);
+        reapStaleLock(state.rootDir);
+        startDaemon(context, execs.codoc, state.rootDir);
     };
     reconcileDaemon();
-    // Trust may be granted after activation — start the daemon then.
-    context.subscriptions.push(
-        vscode.workspace.onDidGrantWorkspaceTrust(() => reconcileDaemon()),
-        // Any `.codoc/` movement is a cheap moment to re-check the invariant: the
-        // state already watches those files, so this costs one existsSync and one
-        // lock read on a path the editor is walking anyway.
-        state.onDidChange(() => reconcileDaemon()),
-    );
     const daemonTicker = setInterval(reconcileDaemon, DAEMON_RECONCILE_MS);
-    context.subscriptions.push({ dispose: () => clearInterval(daemonTicker) });
+    context.subscriptions.push({ dispose: () => clearInterval(daemonTicker) },
+        vscode.workspace.onDidGrantWorkspaceTrust(() => reconcileDaemon()),
+        state.onDidChange(() => reconcileDaemon()),
+        { dispose: () => stopDaemon() });
+    if (state.codocDir) {
+        const lock = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(state.codocDir), 'replay.lock'));
+        context.subscriptions.push(lock, lock.onDidCreate(() => stopDaemon()), lock.onDidDelete(() => reconcileDaemon()));
+    }
 
-    // The recovery a person can reach for, and what the "verdict not picked up"
-    // notice points at. It also clears the crash-loop budget, because somebody
-    // asking is a reason to try again whatever happened last time.
+    const bar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
+    const paint = () => {
+        const v = statusBarView(state, !!cachedExecutables(context));
+        bar.text = v.text; bar.tooltip = v.tooltip; bar.command = v.command;
+        bar.backgroundColor = v.warn ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
+        bar.show();
+    };
+    paint();
+    context.subscriptions.push(bar, state.onDidChange(paint));
+
+    const term = (name: string, args: string[]) => {
+        const c = cli();
+        if (!c || !state.rootDir) { void vscode.window.showWarningMessage('codoc is not set up yet.'); return; }
+        const t = vscode.window.createTerminal({ name: `codoc ${name}`, cwd: state.rootDir });
+        t.show(true);
+        t.sendText([c, ...args].map(a => (/\s/.test(a) ? `"${a}"` : a)).join(' '));
+    };
+    const staticDir = vscode.Uri.joinPath(context.extensionUri, 'dist', 'webview').fsPath;
     context.subscriptions.push(
+        vscode.commands.registerCommand('codoc.setup', () => runSetup(context, state)),
         vscode.commands.registerCommand('codoc.startDaemon', () => {
-            const rootDir = state.rootDir;
-            if (!rootDir) {
-                void vscode.window.showWarningMessage('No codoc workspace is open.');
-                return;
-            }
-            if (fs.existsSync(path.join(rootDir, '.codoc', 'replay.lock'))) {
-                void vscode.window.showInformationMessage(
-                    'Another process is writing this workspace right now, so codoc is '
-                    + 'standing down until it has finished.');
-                return;
-            }
+            if (!state.rootDir) return;
             resetDaemonBackoff();
             const execs = cachedExecutables(context);
-            if (!execs) {
-                void vscode.commands.executeCommand('codoc.setup');
-                return;
-            }
-            reapStaleLock(rootDir);
-            const spawned = startDaemon(context, execs.codoc, rootDir);
-            void vscode.window.showInformationMessage(
-                spawned ? 'codoc is running.' : 'codoc was already running.');
+            if (!execs) { void vscode.commands.executeCommand('codoc.setup'); return; }
+            reapStaleLock(state.rootDir);
+            if (!startDaemon(context, execs.codoc, state.rootDir)) void vscode.window.showInformationMessage('A codoc daemon is already running for this repo.');
         }),
-    );
-
-    // ── Handing the workspace to another writer, and taking it back ───────────
-    //
-    // The daemon is started here and not by the author (KTD3), which is right up
-    // until something else needs to write `.codoc/` for a while: a recorded
-    // session being played back into the workspace writes exactly the files the
-    // daemon owns. Killing the daemon from outside leaves this extension believing
-    // it still has one, and starting a second one behind its back gives the
-    // workspace two writers, which is how a tree fills with proposals nobody asked
-    // for.
-    //
-    // So the other writer declares itself with `.codoc/replay.lock` and this
-    // stands down for as long as it is there. One owner throughout, and the
-    // handover is a file rather than a race.
-    const replayLock = vscode.workspace.createFileSystemWatcher('**/.codoc/replay.lock');
-    context.subscriptions.push(
-        replayLock,
-        replayLock.onDidCreate(() => stopDaemon()),
-        replayLock.onDidDelete(() => reconcileDaemon()),
-    );
-
-    // ── Secrets: OpenAI key change → re-mirror .env + restart the daemon ───────
-    context.subscriptions.push(
-        context.secrets.onDidChange(e => {
-            if (e.key !== SECRET_OPENAI_KEY) return;
-            const rootDir = state.rootDir;
-            if (!rootDir) return;
-            void syncCredentialsToEnv(context, rootDir).then(() => {
-                // Bounce the daemon so the new key (in .env) takes effect.
-                const execs = cachedExecutables(context);
-                if (vscode.workspace.isTrusted && execs) {
-                    stopDaemon();
-                    reapStaleLock(rootDir);
-                    startDaemon(context, execs.codoc, rootDir);
-                }
-            });
+        vscode.commands.registerCommand('codoc.open', async () => {
+            if (!state.codocDir) { void vscode.window.showInformationMessage('Open a folder with a .codoc workspace, or run "codoc: Set up codoc".'); return; }
+            const uri = vscode.Uri.file(path.join(state.codocDir, 'tree.codoc'));
+            if (!fs.existsSync(uri.fsPath)) fs.writeFileSync(uri.fsPath, '', 'utf8');
+            await vscode.commands.executeCommand('vscode.openWith', uri, CodocEditorProvider.viewType);
         }),
+        vscode.commands.registerCommand('codoc.sync', () => term('sync', ['sync'])),
+        vscode.commands.registerCommand('codoc.realize', () => term('realize', ['realize'])),
+        vscode.commands.registerCommand('codoc.serve.start', () => state.rootDir && term('serve', serveArgs({ root: state.rootDir, port: DEFAULT_HUB_PORT, staticDir }))),
+        vscode.commands.registerCommand('codoc.serve.startTunnel', () => state.rootDir && term('serve', serveArgs({ root: state.rootDir, port: DEFAULT_HUB_PORT, staticDir, tunnel: true }))),
+        vscode.commands.registerCommand('codoc.serve.stop', () => { void vscode.window.showInformationMessage(`Stop the terminal running the hub (${hubUrl()}).`); }),
+        vscode.commands.registerCommand('codoc.navigateToFeature', (fid: string) => CodocEditorProvider.reveal(fid)),
+        vscode.commands.registerCommand('codoc.find', () => CodocEditorProvider.find(false)),
+        vscode.commands.registerCommand('codoc.replace', () => CodocEditorProvider.find(true)),
+        vscode.window.registerUriHandler({ handleUri(uri) { if (uri.path === '/setup') void vscode.commands.executeCommand('codoc.setup'); } }),
     );
 
-    // ── First-run nudge: no .codoc/ + nothing provisioned → offer setup once ──
-    if (needsSetup(state.rootDir !== null, cachedExecutables(context) !== undefined) && !_setupOffered) {
-        _setupOffered = true;
-        void vscode.commands.executeCommand(
-            'workbench.action.openWalkthrough', 'codoc.codoc#codocSetup', false,
-        );
-        void vscode.window.showInformationMessage('Set up codoc to navigate your codebase as a feature tree.', 'Set up codoc')
+    if (state.rootDir && needsSetup(state.initialized, !!cachedExecutables(context)) && vscode.workspace.isTrusted) {
+        void vscode.window.showInformationMessage('codoc can index this repo and build a feature tree for it.', 'Set up codoc')
             .then(c => { if (c === 'Set up codoc') void vscode.commands.executeCommand('codoc.setup'); });
     }
-
-    // ── codoc.open ───────────────────────────────────────────────────────────
-    context.subscriptions.push(
-        vscode.commands.registerCommand('codoc.open', async () => {
-            const treePath = state.rootDir && path.join(state.rootDir, '.codoc', 'tree.codoc');
-            if (!treePath || !fs.existsSync(treePath)) {
-                await vscode.window.showInformationMessage('No codoc tree found — run `codoc init` in the terminal first.');
-                return;
-            }
-            // openWith the custom editor explicitly: showTextDocument opens the RAW
-            // text buffer, which is what the status bar surfaced to a user who
-            // clicked "3 to implement" and got an unrendered control file.
-            await vscode.commands.executeCommand(
-                'vscode.openWith', vscode.Uri.file(treePath), 'codoc.tree-editor');
-        }),
-    );
-
-    // ── codoc.sync — kick the daemon via the terminal ─────────────────────────
-    context.subscriptions.push(
-        vscode.commands.registerCommand('codoc.sync', () => {
-            if (!state.rootDir) { void vscode.window.showInformationMessage('No codoc tree found. Run `codoc init` first.'); return; }
-            const terminal = vscode.window.createTerminal({ name: 'codoc sync', cwd: state.rootDir });
-            terminal.show();
-            terminal.sendText('codoc sync');
-        }),
-    );
-
-    // ── codoc.realize — run the queue NOW, in a terminal the author can watch ──
-    //
-    // `codoc realize` is itself the hand-off gesture: with nothing queued it collects the
-    // held drafts, hands them off, and builds realize.md before running the agent. So a
-    // "Build it" that reaches here does the whole thing, and this stays one command.
-    //
-    // A TERMINAL rather than a background spawn, deliberately. This is the one action in
-    // codoc that lets an agent write to the user's source files, and the author must be
-    // able to see what it is doing and stop it — an output channel they have to go and
-    // find is not the same offer. It also matches `codoc.sync` beside it, so both
-    // agent-facing verbs behave the same way.
-    context.subscriptions.push(
-        vscode.commands.registerCommand('codoc.realize', () => {
-            if (!state.rootDir) {
-                void vscode.window.showInformationMessage('No codoc tree found. Run `codoc init` first.');
-                return;
-            }
-            if (!vscode.workspace.isTrusted) {
-                // Same gate `startTranslate` applies: running a process in the workspace
-                // is exactly what Restricted Mode exists to withhold.
-                void vscode.window.showWarningMessage(
-                    'codoc will not start an agent in a Restricted Mode workspace. '
-                    + 'Trust this folder to let it implement your notes.');
-                return;
-            }
-            const terminal = vscode.window.createTerminal({ name: 'codoc realize', cwd: state.rootDir });
-            terminal.show();
-            terminal.sendText('codoc realize');
-        }),
-    );
-
-    // ── codoc serve — the deployed hub (page deployment + multi-user editing) ──
-    // The hub is a SEPARATE process (peer to the extension): it supervises the
-    // daemon and serves the same intent-tree editor as a web app — localhost by
-    // default; remote contributors reach it over a tunnel + GitHub App. The
-    // extension just makes it easy to START and SHARE; it never owns the hub's
-    // lifecycle (the hub owns the daemon, and the local daemon-manager defers to
-    // it). We launch it in a dedicated integrated terminal so the user sees the
-    // live log and can Ctrl-C to stop. Pure argv/URL logic is in serve-manager.ts.
-    let _hubTerminal: vscode.Terminal | undefined;
-    const startHub = async (tunnel: boolean): Promise<void> => {
-        const root = state.rootDir ?? setupRootDir(state);
-        if (!root) { void vscode.window.showInformationMessage('No codoc tree found. Run `codoc init` first.'); return; }
-        // Same Workspace-Trust gate the daemon spawn uses (KTD6): the hub runs a
-        // server + can realize code, so never auto-launch in an untrusted folder.
-        if (!vscode.workspace.isTrusted) {
-            void vscode.window.showWarningMessage('codoc serve needs a trusted workspace.');
-            return;
-        }
-        // The standalone SPA the hub serves ships inside the extension (assembled
-        // into dist/webview by esbuild). Pointing --static-dir here makes the hub
-        // serve the REAL editor instead of the placeholder page.
-        const staticDir = path.join(context.extensionPath, 'dist', 'webview');
-        const cmd = serveCommandLine({
-            root, port: DEFAULT_HUB_PORT,
-            staticDir: fs.existsSync(staticDir) ? staticDir : undefined,
-            tunnel,
-        });
-        _hubTerminal?.dispose();
-        _hubTerminal = vscode.window.createTerminal({ name: 'codoc hub', cwd: root });
-        _hubTerminal.show();
-        _hubTerminal.sendText(cmd);
-
-        const url = hubUrl(DEFAULT_HUB_PORT);
-        const open = 'Open in browser', copy = 'Copy link', remote = 'Remote access…';
-        const msg = tunnel
-            ? `codoc hub starting with a tunnel — gate it with the GitHub App / Cloudflare Access (see the deploy doc). Local: ${url}`
-            : `codoc hub starting at ${url} — anyone on this machine can edit the tree. For remote contributors, set up the tunnel + GitHub App.`;
-        const pick = await vscode.window.showInformationMessage(msg, open, copy, remote);
-        if (pick === open) void vscode.env.openExternal(vscode.Uri.parse(url));
-        else if (pick === copy) await vscode.env.clipboard.writeText(url);
-        else if (pick === remote) void vscode.env.openExternal(vscode.Uri.parse(
-            'https://github.com/ryanyen2/CodeNav/blob/main/docs/serve-deployment.md'));
-    };
-    context.subscriptions.push(
-        vscode.commands.registerCommand('codoc.serve.start', () => startHub(false)),
-        vscode.commands.registerCommand('codoc.serve.startTunnel', () => startHub(true)),
-        vscode.commands.registerCommand('codoc.serve.stop', () => {
-            if (!_hubTerminal) { void vscode.window.showInformationMessage('codoc hub is not running from this window.'); return; }
-            _hubTerminal.dispose();   // SIGINT → uvicorn shutdown → supervisor.stop()
-            _hubTerminal = undefined;
-        }),
-        { dispose: () => _hubTerminal?.dispose() },
-    );
-
-    // A discoverable status-bar affordance for sharing (like a "Go Live" button).
-    const shareItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 50);
-    shareItem.text = '$(broadcast) Share';
-    shareItem.tooltip = 'codoc: start the deployed hub (browser editor for collaborators)';
-    shareItem.command = 'codoc.serve.start';
-    if (state.rootDir) shareItem.show();
-    context.subscriptions.push(
-        shareItem,
-        state.onDidChange(() => { if (state.rootDir) shareItem.show(); else shareItem.hide(); }),
-    );
-
-    // ── Proposal verdicts → .codoc/inbox.json (the daemon applies them) ───────
-    const verdict = async (ids: string[] | string, accept: boolean): Promise<void> => {
-        state.writeVerdict(Array.isArray(ids) ? ids : [ids], accept);
-        vscode.window.setStatusBarMessage('$(sync~spin) codoc: applying…', 3000);
-    };
-    const bulkVerdict = async (ids: string[], accept: boolean): Promise<void> => {
-        if (!ids || ids.length === 0) return;
-        const label = accept ? 'Accept all' : 'Reject all';
-        // Say what the batch actually IS before the click commits it: proposals from
-        // an agent's plan and proposals codoc's own background pass raised look
-        // identical in the tree, and "Accept all (6)" silently mixed them — the modal
-        // is the one place with room to break the count down by origin.
-        const props = state.sidecar.proposals;
-        const tagOf = (id: string): string => {
-            const bf = Object.values(props?.by_feature ?? {}).find(p => p.event_id === id);
-            if (bf) return bf.tag || 'code drift';
-            return props?.by_event?.[id]?.tag || 'code drift';
-        };
-        const counts = new Map<string, number>();
-        for (const id of ids) counts.set(tagOf(id), (counts.get(tagOf(id)) ?? 0) + 1);
-        const breakdown = [...counts.entries()].map(([t, n]) => `${n} from ${t}`).join(', ');
-        const choice = await vscode.window.showWarningMessage(
-            `${label} ${ids.length} proposed change${ids.length === 1 ? '' : 's'}? (${breakdown})`,
-            { modal: true }, label);
-        if (choice !== label) return;
-        await verdict(ids, accept);
-    };
-    context.subscriptions.push(
-        vscode.commands.registerCommand('codoc.acceptProposal', async (id: string) => verdict(id, true)),
-        vscode.commands.registerCommand('codoc.rejectProposal', async (id: string) => verdict(id, false)),
-        vscode.commands.registerCommand('codoc.acceptAll', async (ids: string[]) => bulkVerdict(ids, true)),
-        vscode.commands.registerCommand('codoc.rejectAll', async (ids: string[]) => bulkVerdict(ids, false)),
-    );
-
-    // ── codoc.openRef — jump from an inline [..](codoc:file#symbol) to code ───
-    context.subscriptions.push(
-        vscode.commands.registerCommand('codoc.openRef', async (file: string, symbol: string) => {
-            if (!state.rootDir) return;
-            // Containment guard: a `codoc:` ref is authored text (and, via the hub, can be
-            // teammate/remote-authored), so a crafted `codoc:../../../../etc/passwd` must
-            // not open an arbitrary file outside the repo. Resolve and require the target
-            // to stay under rootDir before opening.
-            const rootResolved = path.resolve(state.rootDir);
-            const target = path.resolve(rootResolved, file);
-            const rel = path.relative(rootResolved, target);
-            if (rel.startsWith('..') || path.isAbsolute(rel)) {
-                void vscode.window.showWarningMessage(`codoc: refusing to open ${file} — outside the workspace.`);
-                return;
-            }
-            const uri = vscode.Uri.file(target);
-            let doc: vscode.TextDocument;
-            let targetEditor: vscode.TextEditor;
-            try {
-                doc = await vscode.workspace.openTextDocument(uri);
-                // Open Beside, preserve focus on tree.codoc.
-                targetEditor = await vscode.window.showTextDocument(doc, {
-                    viewColumn: vscode.ViewColumn.Beside,
-                    preserveFocus: true,
-                    preview: true,
-                });
-            } catch {
-                void vscode.window.showWarningMessage(`codoc: couldn't open ${file} — the reference may be stale.`);
-                return;
-            }
-
-            if (!symbol) return;
-
-            let targetRange: vscode.Range | null = null;
-
-            // Try VS Code's document symbol provider for precise range.
-            try {
-                const syms = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
-                    'vscode.executeDocumentSymbolProvider', uri
-                );
-                if (syms) {
-                    // symbol may be "file::Qualified.Name" format; extract the leaf
-                    // (strip the `file::` qualifier, then the last `.`-segment).
-                    const leaf = symbolLeaf(symbol);
-                    const found = findSymbolByName(syms, leaf);
-                    if (found) targetRange = found.selectionRange;
-                }
-            } catch { /* fall through to regex */ }
-
-            // Fallback: regex scan
-            if (!targetRange) {
-                const leaf = symbolLeaf(symbol);
-                const re = new RegExp(`(?:def|class|function|const|let|var)\\s+${leaf}\\b|\\b${leaf}\\s*[=:(]`);
-                for (let i = 0; i < doc.lineCount; i++) {
-                    if (re.test(doc.lineAt(i).text)) {
-                        targetRange = new vscode.Range(i, 0, i, doc.lineAt(i).text.length);
-                        break;
-                    }
-                }
-            }
-
-            if (!targetRange) return;
-            targetEditor.revealRange(targetRange, vscode.TextEditorRevealType.InCenter);
-
-            // Flash highlight: apply then fade over 900ms.
-            const flashDec = vscode.window.createTextEditorDecorationType({
-                backgroundColor: new vscode.ThemeColor('editor.findMatchHighlightBackground'),
-                isWholeLine: false,
-            });
-            targetEditor.setDecorations(flashDec, [targetRange]);
-            setTimeout(() => { targetEditor.setDecorations(flashDec, []); flashDec.dispose(); }, 900);
-        }),
-    );
-
-    // ── codoc.pickBinding — chip click: quick-pick a binding to open ──────────
-    context.subscriptions.push(
-        vscode.commands.registerCommand('codoc.pickBinding', async (featureId: string) => {
-            const binds = bindingsForFeature(state.sidecar, featureId);
-            if (binds.length === 0) return;
-            if (binds.length === 1) {
-                await vscode.commands.executeCommand('codoc.openRef', binds[0].file, binds[0].symbol);
-                return;
-            }
-            const picked = await vscode.window.showQuickPick(
-                binds.map(b => {
-                    // DISPLAY variant (not canonical symbolLeaf): keep `Class.method`,
-                    // map the synthetic `__module__` to the `‹module›` glyph.
-                    const sym = b.symbol.split('::').pop() ?? b.symbol;
-                    const tail = sym === '__module__' ? '‹module›' : sym;
-                    return { label: `$(symbol-method) ${tail}`, description: b.file, b };
-                }),
-                { placeHolder: `${binds.length} bindings — pick one to open`, matchOnDescription: true },
-            );
-            if (picked) await vscode.commands.executeCommand('codoc.openRef', picked.b.file, picked.b.symbol);
-        }),
-    );
-
-    // ── codoc.openFirstBinding — Alt+B: jump from tree node to its first bound symbol ──
-    context.subscriptions.push(
-        vscode.commands.registerCommand('codoc.openFirstBinding', async () => {
-            const ed = vscode.window.activeTextEditor;
-            if (!ed || ed.document.languageId !== 'codoc') return;
-            const line = ed.selection.active.line;
-            // Find the feature whose title is at or above the cursor.
-            const features = state.features;
-            let best: typeof features[0] | undefined;
-            for (const f of features) {
-                if (f.line <= line && (!best || f.line > best.line)) best = f;
-            }
-            if (!best?.id) {
-                void vscode.window.showInformationMessage('No feature at cursor — position cursor on a feature title line.');
-                return;
-            }
-            const binds = bindingsForFeature(state.sidecar, best.id);
-            if (binds.length === 0) {
-                void vscode.window.showInformationMessage(`"${best.title}" has no code bindings yet.`);
-                return;
-            }
-            const b = binds[0];
-            await vscode.commands.executeCommand('codoc.openRef', b.file, b.symbol);
-        }),
-    );
-
-    // ── codoc.navigateToFeature ───────────────────────────────────────────────
-    context.subscriptions.push(
-        // ⌘F / ⌘⌥F in the Codoc Tree editor. The webview catches these itself when
-        // focus is inside it; these keybindings cover the rest of the surface (the
-        // nav tree, the toolbar), where VS Code routes the chord to a command.
-        vscode.commands.registerCommand('codoc.find', () => {
-            CodocTreeEditorProvider.openFind(false);
-        }),
-        vscode.commands.registerCommand('codoc.replace', () => {
-            CodocTreeEditorProvider.openFind(true);
-        }),
-        vscode.commands.registerCommand('codoc.navigateToFeature', async (titleOrId: string | null) => {
-            const treePath = state.rootDir && path.join(state.rootDir, '.codoc', 'tree.codoc');
-            if (!treePath || !titleOrId || !fs.existsSync(treePath)) return;
-            const treeUri = vscode.Uri.file(treePath);
-            // The Codoc Tree webview is the feature's real home — reveal it there.
-            // Resolve a title arg to its fid first (the webview reveals by fid).
-            const fid = titleOrId.startsWith('f-')
-                ? titleOrId
-                : state.sidecar?.features
-                    ? Object.entries(state.sidecar.features).find(
-                        ([, f]) => (f as { title?: string }).title === titleOrId)?.[0] ?? titleOrId
-                    : titleOrId;
-            if (CodocTreeEditorProvider.revealFeature(treeUri, fid)) return;
-            // No live panel yet — open the tree with its default (webview) editor,
-            // then reveal; the webview buffers the message until its first paint.
-            try {
-                await vscode.commands.executeCommand('vscode.openWith', treeUri, CodocTreeEditorProvider.viewType);
-                for (let tries = 0; tries < 10; tries++) {
-                    if (CodocTreeEditorProvider.revealFeature(treeUri, fid)) return;
-                    await new Promise(r => setTimeout(r, 150));
-                }
-            } catch { /* fall through to the raw-text path */ }
-            // Fallback (webview unavailable): the old raw tree.codoc text reveal.
-            const doc = await vscode.workspace.openTextDocument(treeUri);
-            const editor = await vscode.window.showTextDocument(doc);
-            // Match by feature id ⟨f-id⟩ first, then fall back to title/id substring.
-            const exactId = `⟨${titleOrId}⟩`;
-            let targetLine = -1;
-            for (let i = 0; i < doc.lineCount; i++) {
-                if (doc.lineAt(i).text.includes(exactId)) { targetLine = i; break; }
-            }
-            if (targetLine < 0) {
-                for (let i = 0; i < doc.lineCount; i++) {
-                    if (doc.lineAt(i).text.includes(titleOrId)) { targetLine = i; break; }
-                }
-            }
-            if (targetLine >= 0) {
-                const pos = new vscode.Position(targetLine, 0);
-                editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
-                editor.selection = new vscode.Selection(pos, pos);
-            }
-        }),
-    );
-
-    // ── Folding commands ─────────────────────────────────────────────────────
-    const isCodocEditor = (ed?: vscode.TextEditor): ed is vscode.TextEditor =>
-        !!ed && ed.document.languageId === 'codoc';
-    context.subscriptions.push(
-        vscode.commands.registerCommand('codoc.collapseAllFeatures', async () => {
-            if (isCodocEditor(vscode.window.activeTextEditor)) await vscode.commands.executeCommand('editor.foldAll');
-        }),
-        vscode.commands.registerCommand('codoc.expandAllFeatures', async () => {
-            if (isCodocEditor(vscode.window.activeTextEditor)) await vscode.commands.executeCommand('editor.unfoldAll');
-        }),
-        vscode.commands.registerCommand('codoc.collapseFeatureSubtree', async () => {
-            const ed = vscode.window.activeTextEditor;
-            if (!isCodocEditor(ed)) return;
-            const lines = subtreeTitleLines(ed.document, ed.selection.active.line);
-            if (lines.length) await vscode.commands.executeCommand('editor.fold', { selectionLines: lines });
-        }),
-        vscode.commands.registerCommand('codoc.expandFeatureSubtree', async () => {
-            const ed = vscode.window.activeTextEditor;
-            if (!isCodocEditor(ed)) return;
-            const lines = subtreeTitleLines(ed.document, ed.selection.active.line);
-            if (lines.length) await vscode.commands.executeCommand('editor.unfold', { selectionLines: lines });
-        }),
-    );
-
-    // ── Tree keyboard navigation (Alt+Arrow, doesn't break text editing) ────────
-    const navTo = (ed: vscode.TextEditor, target: number | null): void => {
-        if (target === null) return;
-        const pos = new vscode.Position(target, 0);
-        ed.selection = new vscode.Selection(pos, pos);
-        ed.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.Default);
-    };
-    context.subscriptions.push(
-        vscode.commands.registerCommand('codoc.nav.nextSibling', () => {
-            const ed = vscode.window.activeTextEditor;
-            if (!isCodocEditor(ed)) return;
-            navTo(ed, siblingTitleLine(ed.document, ed.selection.active.line, 'next'));
-        }),
-        vscode.commands.registerCommand('codoc.nav.prevSibling', () => {
-            const ed = vscode.window.activeTextEditor;
-            if (!isCodocEditor(ed)) return;
-            navTo(ed, siblingTitleLine(ed.document, ed.selection.active.line, 'prev'));
-        }),
-        vscode.commands.registerCommand('codoc.nav.parent', () => {
-            const ed = vscode.window.activeTextEditor;
-            if (!isCodocEditor(ed)) return;
-            navTo(ed, parentTitleLine(ed.document, ed.selection.active.line));
-        }),
-        vscode.commands.registerCommand('codoc.nav.firstChild', async () => {
-            const ed = vscode.window.activeTextEditor;
-            if (!isCodocEditor(ed)) return;
-            const curLine = ed.selection.active.line;
-            const target = firstChildTitleLine(ed.document, curLine);
-            if (target !== null) {
-                navTo(ed, target);
-            } else {
-                // No child — try to expand.
-                await vscode.commands.executeCommand('editor.unfold', { selectionLines: [curLine] });
-            }
-        }),
-    );
-
-    // ── Hunk-at-cursor accept/reject (keyboard shortcuts alt+a / alt+r) ──────────
-    const hunkVerdict = (accept: boolean): void => {
-        const ed = vscode.window.activeTextEditor;
-        if (!isCodocEditor(ed)) return;
-        const line = ed.selection.active.line;
-        const text = ed.document.lineAt(line).text;
-        const eventIdMatch = /⟨(e-[0-9a-f]+)⟩/.exec(text);
-        if (eventIdMatch) {
-            state.writeVerdict([eventIdMatch[1]], accept);
-        }
-    };
-    context.subscriptions.push(
-        vscode.commands.registerCommand('codoc.acceptHunkAtCursor', () => hunkVerdict(true)),
-        vscode.commands.registerCommand('codoc.rejectHunkAtCursor', () => hunkVerdict(false)),
-    );
-
-    // Auto-fold attribute blocks on first open (table-of-contents view).
-    const autoFolded = new Set<string>();
-    const maybeAutoFold = (ed?: vscode.TextEditor): void => {
-        if (!isCodocEditor(ed)) return;
-        if (!vscode.workspace.getConfiguration('codoc').get<boolean>('foldAttributesOnOpen', true)) return;
-        const key = ed.document.uri.toString();
-        if (autoFolded.has(key)) return;
-        autoFolded.add(key);
-        setTimeout(() => void vscode.commands.executeCommand('editor.foldAll'), 200);
-    };
-    context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(maybeAutoFold));
-    maybeAutoFold(vscode.window.activeTextEditor);
-
-    // ── Source-file code lens (which feature owns this symbol) ────────────────
-    context.subscriptions.push(
-        vscode.languages.registerCodeLensProvider(
-            [{ language: 'python' }, { language: 'typescript' }, { language: 'javascript' }],
-            new CodocCodeLensProvider(state),
-        ),
-    );
-
-    // ── tree.codoc language providers ─────────────────────────────────────────
-    context.subscriptions.push(
-        vscode.languages.registerCodeLensProvider(codocSelector, new CodocTreeLensProvider(state)),
-        vscode.languages.registerCodeActionsProvider(codocSelector, new CodocCodeActionProvider(state),
-            { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }),
-        vscode.languages.registerCompletionItemProvider(codocSelector, new CodocCompletionProvider(state), '[', '#', ':'),
-        vscode.languages.registerDocumentLinkProvider(codocSelector, new CodocDocumentLinkProvider()),
-        vscode.languages.registerInlayHintsProvider(codocSelector, new CodocInlayHintsProvider(state)),
-        vscode.languages.registerHoverProvider(codocSelector, new CodocHoverProvider(state)),
-        vscode.languages.registerFoldingRangeProvider(codocSelector, new CodocFoldingProvider()),
-        vscode.languages.registerDocumentSymbolProvider(codocSelector, new CodocSymbolProvider()),
-    );
-
-    // ── Decorations (hide ids, colour diff hunks, strike retired) ─────────────
-    const decorations = createDecorations(context);
-    const refreshDecorations = (editor?: vscode.TextEditor): void => {
-        const ed = editor ?? vscode.window.activeTextEditor;
-        if (!ed) return;
-        applyDecorations(ed, decorations, state.activeFeatureLines, state.sidecar, state.registry);
-        // Reverse direction: mark the code a queued tree edit will rework.
-        const rel = vscode.workspace.asRelativePath(ed.document.fileName);
-        applyPendingCodeDecorations(ed, decorations, state.pendingCodeForFile(rel));
-    };
-    refreshDecorations();
-
-    // ── Live cross-surface bridge (P2 / §A) — doc→code green highlight + live lens ──
-    const bridge = new BridgeController(context, state, decorations);
-    context.subscriptions.push(
-        vscode.languages.registerCodeLensProvider(
-            [{ language: 'python' }, { language: 'typescript' }, { language: 'javascript' }],
-            new BridgeCodeLensProvider(state, bridge),
-        ),
-        // §A.6 (P2 fix 3 / §6 hardening): the bridge remembers a dismissal only on a true TAB
-        // close, not a tab switch — so listen to BOTH visible-editor changes (repaint) and tab
-        // close/open (the dismissal signal). The `bridge.rearm` command re-enables auto-open.
-        vscode.window.onDidChangeVisibleTextEditors(() => bridge.noteVisibleEditorsChanged()),
-        vscode.window.tabGroups.onDidChangeTabs(() => bridge.noteVisibleEditorsChanged()),
-        vscode.commands.registerCommand('codoc.bridge.rearm', () => bridge.rearm()),
-        { dispose: () => bridge.dispose() },
-    );
-
-    context.subscriptions.push(
-        vscode.window.onDidChangeActiveTextEditor(refreshDecorations),
-        vscode.workspace.onDidChangeTextDocument(e => {
-            const ed = vscode.window.activeTextEditor;
-            if (ed && ed.document === e.document) refreshDecorations(ed);
-        }),
-        // Sidecar / realize.md reload must repaint overlays + pending-code marks
-        // across every visible editor (the changed file may not be active) + the bridge.
-        state.onDidChange(() => { vscode.window.visibleTextEditors.forEach(refreshDecorations); bridge.repaint(); }),
-    );
-
-    // ── Dependency focus (opacity dimming on cursor) ───────────────────────────
-    const focusController = new DependencyFocus(state, decorations, context);
-
-    // ── Agent gutter pulse ────────────────────────────────────────────────────
-    const agentGutter = new AgentGutter(state, context);
-
-    // ── File decoration provider (Explorer badges) ────────────────────────────
-    const fileDecProvider = new CodocFileDecorationProvider(state);
-    context.subscriptions.push(vscode.window.registerFileDecorationProvider(fileDecProvider));
-
-    // ── Custom GUI editor for tree.codoc (opens by default; ⇄ text drops out) ─
-    context.subscriptions.push(
-        vscode.window.registerCustomEditorProvider(
-            CodocTreeEditorProvider.viewType,
-            new CodocTreeEditorProvider(context, state, bridge),
-            { webviewOptions: { retainContextWhenHidden: true }, supportsMultipleEditorsPerDocument: false },
-        ),
-    );
-
-    state.onDidChange(() => {
-        refreshDecorations();
-        focusController.refresh();
-        agentGutter.update();
-        fileDecProvider.update();
-    });
-}
-
-/** Recursively find a document symbol by exact name. */
-function findSymbolByName(symbols: vscode.DocumentSymbol[], name: string): vscode.DocumentSymbol | undefined {
-    for (const s of symbols) {
-        if (s.name === name) return s;
-        const found = findSymbolByName(s.children, name);
-        if (found) return found;
-    }
-    return undefined;
 }
 
 export function deactivate(): void {
-    // All disposables registered on context.subscriptions.
-    // Synchronously SIGTERM the managed daemon (deactivate has a limited budget,
-    // can't await) — the Python parent-death self-exit is the backstop if this
-    // never runs (host crash).
     stopDaemon();
 }

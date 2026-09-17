@@ -184,9 +184,16 @@ class Workspace:
     def drain_inbox(self, identity: dict[str, str]) -> list[Op]:
         """Apply every new submission from every client. ``identity`` maps a
         client name to the actor the daemon stamps; unknown clients are
-        ignored (a file nobody vouches for writes nothing)."""
+        ignored (a file nobody vouches for writes nothing).
+
+        A client cannot know the op ids of characters it typed a moment ago and
+        has not yet seen acked, so an anchor may name them provisionally as
+        ``["$cid", "<client id>", k]``: the k-th character of the insert that
+        submission minted. The drain resolves those against the acks it has
+        given, in order, so a batch of typing lands as one chain of ops."""
         out: list[Op] = []
         acked = self._acked_cids()
+        minted: dict[str, str] = {}   # cid -> op id, for provisional anchors
         for client in L.clients(self.codoc_dir):
             actor = identity.get(client)
             if actor is None:
@@ -208,10 +215,12 @@ class Workspace:
                     acked.setdefault(client, set()).add(s.cid)
                     out.extend(ops)
                     continue
-                op = self._mint(s.kind, s.target, s.payload, actor=actor, batch=s.batch or new_batch_id(),
+                payload = _resolve_provisional(s.payload, minted)
+                op = self._mint(s.kind, s.target, payload, actor=actor, batch=s.batch or new_batch_id(),
                                 plan=s.plan, base=s.base, caused_by=s.caused_by)
                 apply(self.store, op)
                 self.writer.append(op)
+                minted[s.cid] = op.id
                 L.ack(self.codoc_dir, client, s.cid, op)
                 acked.setdefault(client, set()).add(s.cid)
                 out.append(op)
@@ -247,6 +256,21 @@ class Workspace:
     def close(self) -> None:
         if self.writer is not None:
             self.writer.close()
+
+
+def _resolve_provisional(payload: dict, minted: dict[str, str]) -> dict:
+    """Replace ``["$cid", cid, k]`` anchors with ``[op_id, k]`` once the insert
+    with that client id has been minted. An unresolvable one is left as is and
+    fails as an unknown anchor, which is the honest outcome."""
+    out = dict(payload)
+    for key in ("after", "from", "to", "start", "end", "at"):
+        v = out.get(key)
+        if isinstance(v, list) and len(v) == 3 and v[0] == "$cid" and v[1] in minted:
+            out[key] = [minted[v[1]], v[2]]
+    if isinstance(out.get("segments"), list):
+        out["segments"] = [[minted.get(seg[1], seg[0]) if isinstance(seg[0], str) and seg[0] == "$cid" else seg[0], *seg[1 + (seg[0] == "$cid"):]]
+                           if isinstance(seg, list) and seg and seg[0] == "$cid" else seg for seg in out["segments"]]
+    return out
 
 
 def _wire(op: Op) -> Op:

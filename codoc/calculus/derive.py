@@ -109,18 +109,20 @@ class Run:
     actor: str
     at: str
     plan: str | None = None
-    op: OpId = ""
+    op: OpId = ""       # the minting op of the run's first character
+    k0: int = 0         # …and that character's index within the op, so (op, k0 + i) is character i
 
 
 def attribution(text: Text, merge: bool = True) -> list[Run]:
-    """Live segments as offset runs; adjacent runs with the same actor and plan
-    merge. Word snapping for display is the renderer's business."""
+    """Live segments as offset runs. With ``merge`` adjacent runs by the same
+    actor and plan join (for display); without it every run is one segment and
+    ``(op, k0 + i)`` is the identity of its i-th character (for the editor)."""
     out: list[Run] = []
     i = 0
     for s in text.segs:
         if not s.live:
             continue
-        r = Run(i, i + len(s.chars), s.actor, s.at, s.plan, s.op)
+        r = Run(i, i + len(s.chars), s.actor, s.at, s.plan, s.op, s.k0)
         i += len(s.chars)
         if merge and out and out[-1].actor == r.actor and out[-1].plan == r.plan and out[-1].end == r.start:
             out[-1].end = r.end
@@ -475,7 +477,7 @@ def projection(store: Store, realizing: set[str] = frozenset()) -> dict:
             t = b.text(f)
             entry["fields"][f] = {
                 "text": t.live_text(),
-                "runs": [r.__dict__ for r in attribution(t)],
+                "runs": [r.__dict__ for r in attribution(t, merge=False)],
                 "spans": [{"kind": s.kind, "attrs": s.attrs, "start": s.start, "end": s.end} for s in live_spans(t)],
                 "suggest_del": [{"plan": s.attrs["plan"], "start": s.start, "end": s.end} for s in _suggest_spans(t, store)],
             }
@@ -483,5 +485,8 @@ def projection(store: Store, realizing: set[str] = frozenset()) -> dict:
             if k not in text_fields(b.kind):
                 entry["fields"][k] = v
         blocks.append(entry)
+    watermarks = {fid: {"handoff": w.handoff, "realized": w.realized}
+                  for fid, w in store.watermarks_by_fid.items() if (w.handoff or w.realized) and fid in phases}
     return {"head": store.pos, "frontier": dict(store.frontier), "blocks": blocks, "phases": phases,
-            "plans": [p.to_json() for p in store.plans.values() if p.status == "open"]}
+            "plans": [p.to_json() for p in store.plans.values() if p.status != "rejected"],
+            "watermarks": watermarks}

@@ -5,7 +5,6 @@ from dataclasses import dataclass
 
 import pytest
 
-from codoc.store.db import open_store
 
 
 @dataclass
@@ -24,8 +23,3 @@ class FakeRow:
     embedding: object = None
 
 
-@pytest.fixture
-def store(tmp_path):
-    s = open_store(tmp_path)
-    yield s
-    s.close()

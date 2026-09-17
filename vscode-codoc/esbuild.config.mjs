@@ -49,11 +49,11 @@ async function build() {
   //    live in assets/fonts/, copied to dist/webview/fonts/ by copyFonts() — they resolve
   //    at runtime relative to the served stylesheet's webview URI).
   const web = await esbuild.context({
-    entryPoints: [join(__dirname, 'src', 'webview', 'doc-view.ts')],
+    entryPoints: [join(__dirname, 'src', 'editor', 'app.ts')],
     bundle: true,
     format: 'iife',
     platform: 'browser',
-    outfile: join(__dirname, 'dist', 'webview', 'doc-view.js'),
+    outfile: join(__dirname, 'dist', 'webview', 'app.js'),
     external: ['*.woff2'],
     sourcemap: true,
   });
