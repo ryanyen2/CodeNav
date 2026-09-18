@@ -21,7 +21,7 @@ from codoc.agent.bootstrap_agent import (
     propose_brief, propose_file_features_raw, propose_organization_raw,
 )
 from codoc.calculus import ops as K
-from codoc.calculus.derive import description, title
+from codoc.calculus.derive import LOOP, description, title
 from codoc.calculus.doc import HEADING, PARAGRAPH
 from codoc.calculus.ids import START, new_batch_id, new_block_id
 from codoc.graph.flows import flow_lines
@@ -29,7 +29,6 @@ from codoc.graph.graph import Graph
 from codoc.loops.context import owner_of
 from codoc.substrate.workspace import Workspace
 
-LOOP = "loop"
 SOURCE_CAP = 1200
 CALLS_CAP = 6
 ORG_FEATURE_CAP = 400
@@ -261,11 +260,13 @@ def _ensure_file_coverage(ops: list[dict], frows: list, file: str) -> list[dict]
         primary = max(adds, key=lambda o: len(o.get("bindings", [])))
         primary["bindings"] = list(primary.get("bindings", [])) + [list(b) for b in uncovered]
         return ops
-    return list(ops) + [{"kind": "add_node", "title": _title_from_file(file), "description": "",
+    return list(ops) + [{"kind": "add_node", "title": title_from_file(file), "description": "",
                          "bindings": [list(b) for b in uncovered], "rationale": "coverage: no nodes for this file"}]
 
 
-def _title_from_file(file: str) -> str:
+def title_from_file(file: str) -> str:
+    """A file's name as a feature title: the reflect pass proposes one for a
+    file the tree has never named, the same way bootstrap did."""
     stem = os.path.splitext(os.path.basename(file))[0]
     words = stem.replace("-", " ").replace("_", " ").strip()
     return (words[:1].upper() + words[1:]) if words else file

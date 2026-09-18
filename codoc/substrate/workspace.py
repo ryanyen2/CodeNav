@@ -72,11 +72,19 @@ class Roles:
     - ``machine`` (agents, the loop, translators, imports): the trunk and plans,
       but no verdicts and no hand-offs; ``feature.realized`` only from the loop
       itself, which is the daemon settling evidence.
-    - ``suggest`` (everyone else): ``plan.open`` and ops tagged with a plan the
-      same actor opened. Riding someone else's open plan would land a stranger's
-      words when the maintainer accepts it. "Everyone else" is by the actor's
-      KIND, so an actor the grammar does not name (``unknown:x``) is a
-      suggester, not a machine.
+    - ``suggest`` (everyone else): ``plan.open``, ops tagged with a plan the
+      same actor opened, and comments. Riding someone else's open plan would
+      land a stranger's words when the maintainer accepts it. "Everyone else"
+      is by the actor's KIND, so an actor the grammar does not name
+      (``unknown:x``) is a suggester, not a machine. A contributor does not
+      have to tag anything themselves: the drain opens the plan and tags their
+      ops, turning a deletion into the plan's ``suggest_del`` (02 §3.6). What
+      it cannot carry under a plan — a merge, a block delete — stays refused.
+
+    A comment is writable untagged by anyone: it hangs off words rather than
+    standing among them, and there is nothing for a maintainer to accept. On a
+    hub that means a contributor can edit inside another person's comment
+    thread; the log says who did, under their GitHub identity.
     """
     table: dict[str, str] = field(default_factory=dict)
     default: str = "suggest"
@@ -388,14 +396,20 @@ class Workspace:
                             batch=s.batch, plan=s.plan, base=s.base, caused_by=s.caused_by)
 
     def _plan_for(self, actor: str, batch: str, bid: str, note: str) -> str | None:
-        """The plan this actor's writes ride in for this batch, opened on
-        demand. One per batch, because a repair the person answers as one
-        thing was written as one thing."""
+        """The plan this actor's writes ride in, opened on demand. One per edit,
+        not one per batch: the editor flushes every 350 ms, so a contributor
+        typing a sentence would otherwise leave the maintainer four proposals to
+        answer. An open plan of theirs on the same block is that edit."""
         key = (actor, batch)
         pid = self._suggest_plans.get(key)
         plan = self.store.plans.get(pid or "")
         if plan is not None and plan.status == "open":
             return pid
+        if bid:
+            for p in reversed(list(self.store.plans.values())):
+                if p.status == "open" and p.actor == actor and p.target == bid:
+                    self._suggest_plans[key] = p.id
+                    return p.id
         pid = new_plan_id()
         opened = self._apply(self._mint(K.PLAN_OPEN, {"pid": pid},
                                         {"kind": "edit", "target": bid if bid in self.store.blocks else None,

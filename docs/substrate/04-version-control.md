@@ -4,7 +4,7 @@
 
 ```
 .codoc/
-  config.json                 # doc language, kinds enabled; tracked
+  config.json                 # doc language, roles; tracked
   log/<session-id>.jsonl      # the op log; one file per writing session; tracked
   tree.codoc                  # Markdown export; tracked, derived, regenerable
   cache/, lancedb/, cocoindex.db, index.meta.json   # the code graph and index; ignored
@@ -88,9 +88,8 @@ The code side has commits; the document side has op ids. The join is recorded
 twice, both existing: `feature.handoff` carries `base_sha` (HEAD when the work
 was requested) and `feature.realized` carries `sha` (HEAD when the reflection
 landed). History's provenance card opens the code diff between the two. A
-`post-commit` hook appends a `commit(sha)` marker op so the timeline can also
-be scrubbed by commit ("what did the tree say at v0.3"), which today needs a
-timestamp guess.
+Scrubbing by commit ("what did the tree say at v0.3") would need a marker op a
+`post-commit` hook appends; neither exists, and the timeline scrubs by op.
 
 ## 5. Snapshots and size
 
@@ -103,8 +102,10 @@ records the frontier of ops it folded; earlier logs move under `log/archive/`.
 A rebuild applies the snapshot first and then every op outside its frontier
 regardless of HLC, so a branch forked before the snapshot merges correctly and
 its inserts after pre-snapshot tombstones still land, because the snapshot
-keeps dead segments. Attribution survives because segments carry their actor;
-the archive stays readable for scrubbing before the snapshot. Snapshots and
+keeps dead segments. Attribution survives because segments carry their actor,
+and the ops of every unsettled feature ride in the snapshot so the views that
+read history answer the same before and after a fold (`01` §7.5). The archive
+keeps the rest, readable but unread: no view opens it today. Snapshots and
 logs should not be in git-lfs: the merge driver would receive pointer files.
 
 ## 6. What the hub adds
@@ -124,9 +125,9 @@ actor its table does not allow.
 
 The log is committed, so a hand-off's `asked` prompt and every actor's
 GitHub login are in the repository's history. `config.json`
-`privacy.prompts = text | hash` decides whether prompt text or only its hash
-is logged (the text then lives in the ignored cache); `init` defaults to
-`hash` when the remote is public. Keystroke-level history is inherent to the
+`privacy.prompts = text | hash`, to log only a hash of the prompt with the text
+in the ignored cache, is **not built**; today the text is always in the log.
+Keystroke-level history is inherent to the
 design and is what `snapshot` plus archive removal is for when a repository
 must shed it.
 

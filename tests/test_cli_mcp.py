@@ -131,3 +131,21 @@ def test_no_build_takes_the_words_without_the_work(tmp_path):
     assert r.exit_code == 0
     st = client.read(cd).store
     assert st.plans[res["plan_id"]].status == "accepted" and queued(st) == []
+
+
+def test_accepting_a_plan_that_adds_features_queues_each_of_them(tmp_path):
+    """An `add` plan names no target — the headings it proposes do not exist
+    when it opens — so handing off its target alone queued nothing at all."""
+    from codoc.loops.realize import queued
+    root, cd = seeded(tmp_path)
+    res = tools.propose(str(cd), ops=[{"kind": "add_node", "title": "Retry policy", "description": "How often."},
+                                      {"kind": "add_node", "title": "Back-off", "description": "How long."}],
+                        note="two new features", root_dir=str(root))
+    assert res["ok"], res
+    st = client.read(cd).store
+    assert st.plans[res["plan_id"]].target is None
+    r = runner.invoke(app, ["accept", res["plan_id"], "--root", str(root)])
+    assert r.exit_code == 0, r.output
+    st = client.read(cd).store
+    added = [h.id for h in st.headings() if tools.title(st, h.id) in ("Retry policy", "Back-off")]
+    assert len(added) == 2 and sorted(queued(st)) == sorted(added), (added, queued(st))

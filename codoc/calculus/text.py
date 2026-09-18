@@ -171,10 +171,6 @@ class Text:
         except AnchorError:
             return False
 
-    def is_live(self, ref: CharRef) -> bool:
-        i, _ = self.locate(ref)
-        return self.segs[i].live
-
     def ref_at(self, offset: int) -> CharRef:
         """The live character at live offset ``offset``."""
         seen = 0
@@ -185,9 +181,6 @@ class Text:
                 return s.ref(offset - seen)
             seen += len(s.chars)
         raise IndexError(offset)
-
-    def anchor_before(self, offset: int) -> CharRef | str:
-        return START if offset == 0 else self.ref_at(offset - 1)
 
     def offset_of(self, ref: CharRef) -> int | None:
         """Live offset of a character, or None when it is dead."""

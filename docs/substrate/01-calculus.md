@@ -41,6 +41,7 @@ CharRef  := (op: OpId, k: int)          # the k-th Unicode scalar inserted by op
 BlockId  := str                         # "b-" + 12 hex, minted by the creator
 PlanId   := str                         # "p-" + 12 hex
 Actor    := "human:<id>" | "agent:<id>" | "loop" | "translator:<lang>" | "import"
+           # `human:import` too: a v1 import writes what a person wrote, as a person
 Frontier := { Session: int }            # per-session max seq; a set of ops, compactly
 
 Seg      := { op: OpId, k0: int, len: int, actor: Actor, at: HLC,
@@ -220,7 +221,11 @@ conflict, and the op is recorded with `conflict` and not applied.
   characters now sit (a split or merge may have moved them); a block the plan
   added or split off dies when it is now empty; a move is not undone when
   someone re-ranked the block since (their move stands). Marks are removed by
-  the op that placed them. Both verdicts record exactly what they changed so
+  what the op RECORDED putting there — its own `added` entries, matched on
+  kind, attrs, start and placer — because the mark a toggle leaves behind does
+  not always carry that toggle's id: widening a mark keeps the neighbour's
+  placer, and displacing one keeps the displaced mark's on the pieces. Both
+  verdicts record exactly what they changed so
   their inverse, `plan.reopen`, restores it, subset included.
 - `feature.handoff` records the `Frontier` of ops it drained. A feature's
   queued work is the set difference between its latest handoff frontier and
@@ -299,14 +304,18 @@ ingest(bid, path, base: Frontier, base_text: str, new_text: str, actor, plan?, c
 6. An empty `new_text` deletes every live character and leaves the block; the
    caller decides whether to `block.delete`.
 7. The call records `deleted_fraction`, the share of the field's live
-   characters it tombstoned. The loop's amend gate reads it per block: above
-   the threshold for a block whose last live author (open plans excluded) is a
+   characters it tombstoned. The amend gate reads it per block: above the
+   threshold for a block whose last live author (open plans excluded) is a
    person (stricter) or anyone else, the amend becomes a plan instead of
-   landing on the trunk.
-8. While a feature has unsent human ink or is queued, a loop amend on any of
-   its blocks becomes a plan regardless of size (the ledger's row 13: the
+   landing on the trunk. The gate is on **every machine** — the loop, a
+   translator, and a coding agent through `codoc_reflect` — and it lives at the
+   one boundary all of them pass, `Workspace.ingest`, not in the loop that
+   happens to have been written first.
+8. While a feature has unsent human ink or is queued, a machine's amend on any
+   of its blocks becomes a plan regardless of size (the ledger's row 13: the
    document wins). One amend is one plan: every block it repairs, adds or
-   strikes rides under the same plan id, so one repair gets one verdict.
+   strikes rides under the same plan id, so one repair gets one verdict. A
+   caller that sees the whole repair decides once, for all of it.
 
 Known and accepted: a rewrite that reorders two sentences re-authors the moved
 one (its characters die and are re-minted by this call). The gate in step 7
@@ -341,19 +350,19 @@ Pure over the store, cached by the keys stated.
 | read modes | `live` is the raw state (every plan's words and mark toggles applied); `rejected` is the document without any open plan, which is what the export, the directive and every model read use; `accepted` is every open plan taken. The editor's page is neither: the projection gives it the rejected marks with the plans' words and toggles drawn over them, so a proposal to unbold a word leaves the word bold and says so beside it | |
 | `tree` | live headings in rank order folded by level; a heading deeper than the preceding one is its child | structural head (advances on add/delete/move/set kind or level) |
 | `description(f)` | `f`'s own live paragraphs (before the next heading), joined by blank lines; a child's prose is the child's | structural head + the blocks' heads |
-| `attribution(field, window)` | segments since `window`, merged when adjacent segments share actor, plan and dead-ness, snapped to `doclang.tokens` boundaries for display only | on read |
+| `attribution(field, window)` | segments since `window`, merged when adjacent segments share actor, plan and dead-ness. (Snapping runs to `doclang.tokens` boundaries is a display idea that is not built; the editor paints the segments as they are) | on read |
 | `ink(f)` | human live segments on `f`'s blocks beyond the latest handoff frontier (unsent) or within it and beyond the realized frontier (sent). Moving a paragraph into `f` therefore makes its words `f`'s unsent ink, even though nobody retyped them: the words are new to this feature, the move was the person's op, and `f`'s build has never seen them. Only blocks in the reading flow count — a margin comment is a request about the prose, not the prose (`written_by` and the directive agree) | |
 | `ground(f)` | loop segments and loop-killed dead segments on `f` since the person last engaged with it: the later of the latest hand-off and their newest op on its blocks (in apply order). A feature the person never touched paints nothing: there is no "since". | |
 | `plan(f)` | live segments with `plan` set whose plan is open, plus `suggest_del` marks | |
 | `queued(f)` | the hand-off frontier is not covered by the realized frontier (`covered(handoff, realized)`, one definition for phase, the queue file and phantoms); a feature being edited or built right now is still queued | |
 | `phase(f)` | `edited` (unsent ink) · `realizing` (lease, the one ephemeral input, read from `status.json`) · `queued` · `planned` (queued and unbound) · `proposed` (open plan on f) · `drifted` · `synced`, first that holds. Doc wins: the person's unsent edit shows even while an agent holds the lease. `drifted` means the newest op among `bind.refresh`/`bind.detach` on `f`, text ops on its blocks (any actor) and `feature.realized` is a binding change; a `bind.attach` is a relocation, not drift | |
-| `directive(f)` | rendered from the all-rejected read mode of `f`'s text plus the person's ink, with the ops between the frontiers: Focus from `bold` marks a person turned on since the last realization (each by its own placing op), Consult from `link` marks, `Author asked` from the hand-off's `asked`; for a dead heading with a `delete_code` hand-off, "remove". `Edit only:` returns with comments (a `cite` inside an open comment span); until then the scope is the binding set | |
+| `directive(f)` | rendered from the all-rejected read mode of `f`'s text plus the person's ink, with the ops between the frontiers: Focus from `bold` marks a person turned on since the last realization (each by its own placing op), Consult from `link` marks, `Author asked` from the hand-off's `asked`; for a dead heading with a `delete_code` hand-off, "remove"; each in-flow kind block's `consult`, and each block's `lower` (03 §5.1). A comment thread reaches it through its own `lower`, once, and rides every hand-off until it is resolved. `Edit only:` is not built — the scope an agent is confined to is the feature's binding set (the hub enforces it; a local run is advised by it) | |
 | `history(f)` | every op recorded against the heading or a block `f` currently dominates, by the block the op actually landed in, conflicted ops included with their code; ops on blocks `f` dominated at the time but no longer does are omitted | |
 | `timeline(pos)` | un-apply from the live store over a bounded window, per block | |
 | `dead_cites` | `cite` marks whose `(file, symbol)` is absent from the index | index head |
 | `lang(block)` | `doclang.detect_prose_language` of its live text when it differs from the workspace language | per block |
 | `export` | Markdown in the `rejected` read mode (an open plan is not the document), `## Title {#b-id}`, paragraphs, kind fences, marks as written with `* [ ] \ # \`` escaped where they would read as markup; comments omitted. `import(export(s))` rebuilds `s` | structural head + block heads, debounced |
-| `projection` | per live block `{id, kind, level, rank, head, text, segs (live, plus dead inside the display window), marks, aria}`; `aria` is a per-segment description for screen readers | per block |
+| `projection` | per live block `{id, kind, level, rank, head, fields: {<text field>: {text, runs, spans, suggest_del}}}`, plus `plans`, `phases`, `watermarks`, `tree` and `bindings`. (`aria`, a per-segment description for screen readers, and a per-block `lang` for a bilingual tree are designed and not built) | per block |
 
 ## 7. Sessions, order, authority, and the log
 
@@ -437,16 +446,23 @@ first — **without the authority check**, since a fold re-expresses ops that
 were authorized when they were written and is not a new decision — and then
 every op not inside its frontier, with the check on, regardless of `at`, so a
 branch forked before the snapshot merges correctly. `state_fingerprint` is
-equal across a fold. The archive stays readable for the timeline. A snapshot
-is therefore as trusted as the log it replaces: the hub refuses a pull request
-that introduces or changes one.
+equal across a fold — and the state is not all a reader reads, so the fold also
+archives the ops of every feature that is not settled: the directive's `Focus:`
+and `removed:` lines, `ground`'s reds and greens, and the symbols a phantom
+settles against are read from the ops, and a fold that dropped them would
+answer differently the moment it ran. The rebuild remembers those ops without
+applying them. What a settled feature did is history, and history stays
+readable in `log/archive/` (no reader opens it yet; the timeline reads the
+window). A snapshot is therefore as trusted as the log it replaces: the hub
+refuses a pull request that introduces or changes one.
 
 ### 7.6 Privacy
 
 `feature.handoff.asked` is the person's prompt and is committed with the log.
-`config.json` `privacy.prompts = "text" | "hash"` chooses whether the log holds
-the text or a hash whose text lives in the ignored cache; the default is `text`
-for a private repository and `hash` when `init` detects a public remote.
+**Not built yet:** `config.json` `privacy.prompts = "text" | "hash"`, to choose
+whether the log holds the text or a hash whose text lives in the ignored cache,
+defaulting to `hash` when `init` detects a public remote. Today the text is
+always in the log.
 
 ## 8. Invariants
 

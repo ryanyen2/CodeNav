@@ -15,17 +15,19 @@ class Kind:
     lift:    (code_context, block?) -> content | None     # code → block, read-only, idempotent
     lower:   (old, new, feature, bindings) -> Directive | Draft | None   # block → code request
     consult: (content) -> str                # what the realizing agent reads before implementing
-    text_view: (content) -> str              # what an LLM reads when the block is context
-    write_back: (content, agent_text) -> content   # how an agent's reply becomes content
-    export:  (content) -> Markdown           # deterministic; fenced with the kind name
-    import_: (Markdown) -> content           # inverse of export, for hand-written trees
 ```
 
 The three arrows keep today's names and rules (`lift` may only read code and
-return content; `lower` may only propose; `consult` is passive). The three
-additions, `text_view`, `write_back` and `export`/`import_`, are what "how does
-an agent write to an image block" and "what does it look like in git" needed
-and did not have.
+return content; `lower` may only propose; `consult` is passive).
+
+Three more were designed and are **not built**, because nothing called them:
+`text_view` ("what an LLM reads when the block is context" — the context
+builder sends paragraphs, so a kind block is never context), `write_back`
+("how an agent's reply becomes content" — an agent writes a block through
+`codoc_write_block`, which takes the content directly), and per-kind
+`export`/`import_` (`export.py` fences every kind as one generic JSON block,
+§5.1). Each can come back with a caller; a declared arrow nobody pulls is a
+promise the code does not keep.
 
 ## 2. Text fields are attributed automatically
 
@@ -51,11 +53,8 @@ lift:    for a bound UI feature, run the registered screenshot tool; return new 
 lower:   a person edited `caption` → a Draft directive quoting old and new caption,
          scoped to the feature's bindings (a caption edit is documentation until handed off)
 consult: "Image <alt>. Caption: <caption>. File: .codoc/media/<asset>."
-text_view: the same string
-write_back: the agent cannot produce pixels from text, so write_back accepts a
-         tool result: an asset ref the agent captured (the screenshot tool) or a
-         diagram the agent drew that a renderer turned into an asset
 export:  ![alt](.codoc/media/asset.png){#b-id}\n: caption
+         (today: the generic `codoc:image` JSON fence, §5.1)
 import_: the reverse
 ```
 
@@ -79,7 +78,9 @@ export:  omitted from tree.codoc; present in the projection
 
 Message bodies are Text, so replies are attributed and a comment written by an
 agent (AnchoredAI's finding: anchored beats a chat panel) shows as the agent's.
-Resolving is `block.set(status)`. The anchor mark has `expand=none`; when its
+Resolving is `block.set(status)`, and until somebody does, an open thread is a
+standing request: it rides in **every** hand-off of its feature, not only the
+first, because nothing else records that it has been answered. The anchor mark has `expand=none`; when its
 characters are all tombstoned the card reports what it commented on, from the
 tombstones, and ages out.
 
@@ -87,14 +88,14 @@ tombstones, and ages out.
 
 Kinds register on the Python side (`codoc.kinds.register`) and on the webview
 side by name (a NodeView per kind). A block whose kind the editor does not know
-renders as a read-only fenced view of its `text_view`, so an old extension
+renders as a read-only fenced view of its content, so an old extension
 never breaks a new tree and never authors ops against content it cannot
 display. The projection carries `kind` and the content; the editor does not
 need the schema to render Text fields, only to render the rest.
 
 ## 5.1 As built (`codoc/kinds/`)
 
-- `Kind(name, text_fields, schema, lift, lower, consult, text_view, write_back, exported)`.
+- `Kind(name, text_fields, schema, lift, lower, consult, exported)`.
   `lower(old_content, new_content, LowerContext) -> str | None` returns the
   directive text or nothing; `lift(LiftContext) -> content | None` returns
   only the fields that changed. Both see content with Text fields rendered as

@@ -365,11 +365,17 @@ def write_offsets(codoc_dir: str | Path, offsets: dict[str, int]) -> None:
 
 def rotate_acks(codoc_dir: str | Path, keep: int = ACK_KEEP) -> None:
     """Trim each client's ack file to its newest lines. An ack answers one
-    submission; once the remembered offset is past it nothing can resubmit that
-    cid, and the only cost left is the read at every daemon start. Called at
-    session open, while this process holds the workspace."""
+    submission; once the remembered offset is past it nothing can RE-READ that
+    line, and the only cost left is the read at every daemon start. Called at
+    session open, while this process holds the workspace.
+
+    This bounds 01 §7.4's rule — "a resubmitted client id is acked with the same
+    OpId" — to the newest ``keep`` acks per client. What is left is a client
+    that re-APPENDS an id it sent more than that many acks ago, which means it
+    lost its own state and kept its counter; the editor mints ids under a
+    per-page random prefix, so a page that restarts never collides with one."""
     d = inbox_dir(codoc_dir)
-    if not d.exists():
+    if keep < 1 or not d.exists():
         return
     for p in d.glob("*.ack.jsonl"):
         lines = p.read_text(encoding="utf-8").splitlines(keepends=True)

@@ -35,7 +35,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from codoc.calculus import ops as K
-from codoc.calculus.derive import GATE_HUMAN, GATE_MACHINE, HELD, block_written_by, phase
+from codoc.calculus.derive import GATE_HUMAN, GATE_MACHINE, HELD, LOOP, block_written_by, phase
 from codoc.calculus.doc import HEADING, PARAGRAPH, text_fields
 from codoc.calculus.ids import START, new_block_id
 from codoc.calculus.ingest import Ingest
@@ -44,10 +44,10 @@ from codoc.calculus.store import Store
 from codoc.calculus.text import SUGGEST_DEL
 from codoc.graph.graph import Graph
 from codoc.loop.diff import ChangeSet, ChunkRef
+from codoc.loops.bootstrap import title_from_file
 from codoc.loops.context import impacted_features, owner_of, select_context
 from codoc.substrate.workspace import Workspace
 
-LOOP = "loop"
 MAX_ADDED_PER_CALL = 25
 
 
@@ -236,7 +236,7 @@ def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: s
                             caused_by=p.cause(home))])
             res.auto["net"] += 1
         else:
-            _add_plan(p, {"title": _title_from_file(a.file), "parent_id": None, "description": "",
+            _add_plan(p, {"title": title_from_file(a.file), "parent_id": None, "description": "",
                           "rationale": "no feature covered this file"}, [key], fp, th)
     return res
 
@@ -378,12 +378,6 @@ def _batches(items: list, size: int) -> list[list]:
         batches.append(cur)
     return batches
 
-
-def _title_from_file(file: str) -> str:
-    import os
-    stem = os.path.splitext(os.path.basename(file))[0]
-    words = stem.replace("-", " ").replace("_", " ").strip()
-    return (words[:1].upper() + words[1:]) if words else file
 
 
 def _place_after(store: Store, parent: str | None) -> tuple[str, int]:

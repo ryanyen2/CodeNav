@@ -46,7 +46,7 @@ def test_delete_returns_canonical_segments_and_keeps_tombstones():
     killed = t.delete((op(1), 1), (op(1), 3), by=op(2))
     assert killed == [(op(1), 1, 3)]
     assert t.live_text() == "aef"
-    assert t.holds((op(1), 2)) and not t.is_live((op(1), 2))
+    assert t.holds((op(1), 2)) and (op(1), 2) not in set(t.live_refs())
     # An insert after a dead char still lands there (positioned tombstone).
     t.insert((op(1), 2), "Z", op=op(3), actor="human:a", at="3")
     assert t.live_text() == "aZef"

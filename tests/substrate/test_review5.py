@@ -492,3 +492,24 @@ def test_a_suggesters_no_op_ingest_leaves_no_empty_open_plan(tmp_path):
     empty = [p for p in ws.store.plans.values() if p.status == "open" and not p.ops]
     assert not empty, [(p.id, p.actor, p.ops) for p in empty]
     ws.close()
+
+
+def test_a_contributor_typing_over_several_settles_leaves_one_proposal(tmp_path):
+    """The editor flushes every 350 ms. A plan per flush would leave the
+    maintainer four verdicts to give on one sentence."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    from codoc.doclang import write_config
+    write_config(cd, roles={"human:gh:alice": "suggest"})
+    ws.roles = Roles.load(cd)
+    ws.store.policy = ws.roles.policy
+    seed(ws)
+    for i, word in enumerate(["One ", "two ", "three "]):
+        last = ws.store.blocks["p1"].text().last_live_ref()
+        L.submit(cd, "hub-alice", [_sub(f"c{i}", K.TEXT_INSERT, {"bid": "p1", "path": "text"},
+                                        {"after": list(last), "text": word}, batch=f"t{i}")])
+        assert all(o.conflict is None for o in ws.drain_inbox() if o.kind != K.PLAN_OPEN)
+    open_plans = [p for p in ws.store.plans.values() if p.status == "open"]
+    assert len(open_plans) == 1, [(p.id, p.ops) for p in open_plans]
+    assert len(open_plans[0].ops) == 3
+    ws.close()

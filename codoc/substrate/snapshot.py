@@ -22,7 +22,13 @@ op outside its frontier with the check on.
 
 Dead blocks are kept because anchors may still name their characters from a
 branch forked before the snapshot. Attribution survives because segments
-carry their actor. ``state_fingerprint`` is equal across a fold.
+carry their actor. ``state_fingerprint`` is equal across a fold — but the state
+is not all a reader reads: the directive's ``Focus:`` and ``removed:`` lines,
+the reds and greens ``ground`` paints, and the symbols a phantom settles
+against all come from the ops. So the fold also archives every op on a feature
+that is not settled, and the rebuild remembers those the way it remembers an
+open plan's. What a settled feature did is history, and history lives in
+``log/archive/``.
 """
 from __future__ import annotations
 

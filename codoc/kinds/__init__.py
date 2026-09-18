@@ -8,8 +8,6 @@ schema for the rest, and up to five codecs:
     lift(ctx)                  code → content; read-only on code; idempotent; run by the loop
     lower(old, new, ctx)       content → a directive string, or None; run when a hand-off renders
     consult(content)           what the realizing agent reads before implementing
-    text_view(content)         what an LLM reads when the block is context (default: consult)
-    write_back(content, reply) how an agent's reply becomes content (default: the reply itself)
 
 A kind never touches ops. ``write.py`` is the one boundary that turns content
 into ops: ``block.set`` for a non-Text field, ``ingest`` for a Text field, both
@@ -52,12 +50,7 @@ class Kind:
     lift: Callable[[LiftContext], dict | None] | None = None
     lower: Callable[[dict, dict, LowerContext], str | None] | None = None
     consult: Callable[[dict], str] = lambda c: ""
-    text_view: Callable[[dict], str] | None = None
-    write_back: Callable[[dict, dict], dict] | None = None
     exported: bool = True
-
-    def view(self, content: dict) -> str:
-        return (self.text_view or self.consult)(content)
 
     def validate(self, content: dict, *, partial: bool = False) -> str | None:
         """Why ``content`` does not fit the schema, or None. Text fields are

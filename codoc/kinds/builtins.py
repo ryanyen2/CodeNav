@@ -186,8 +186,6 @@ IMAGE = Kind(
     name="image", text_fields=("alt", "caption"),
     schema={"asset": {"type": "string", "required": True}, "source": {"type": "string", "enum": ["screenshot", "upload", "agent"]}},
     consult=lambda c: f"Image {c.get('alt') or ''}. " + (f"Caption: {c['caption']}. " if c.get("caption") else "") + f"File: {c.get('asset', '')}",
-    # An agent cannot make pixels from text: its reply names an asset it captured or drew.
-    write_back=lambda content, reply: {**content, **{k: reply[k] for k in ("asset", "alt", "caption") if k in reply}, "source": "agent"},
 )
 
 SCREENSHOT = Kind(

@@ -215,6 +215,19 @@ def handoff(feature: str, root: str = ROOT,
         "payload": {"base_sha": head_sha(root), "asked": asked, "delete_code": delete_code}}]), "handed off")
 
 
+def _plan_features(store, plan) -> list[str]:
+    """Every feature this plan is a request about: the one it names, and the
+    one each of its ops belongs to. A plan that adds several headings names
+    none of them, so a hand-off of its target alone queues nothing."""
+    out: list[str] = []
+    for bid in [plan.target] + [(store.by_id[i].target.get("bid") or store.by_id[i].target.get("fid"))
+                                for i in plan.ops if i in store.by_id]:
+        fid = store.feature_of(bid) if bid else None
+        if fid and fid not in out:
+            out.append(fid)
+    return out
+
+
 @app.command()
 def accept(plan: str, root: str = ROOT,
            build: bool = typer.Option(True, "--build/--no-build", help="Hand the feature off in the same batch.")):
@@ -233,11 +246,11 @@ def accept(plan: str, root: str = ROOT,
     cd = _require(root)
     ws = client.read(cd)
     pl = ws.store.plans.get(plan)
-    fid = ws.store.feature_of(pl.target) if pl is not None and pl.target else None
     bodies = [{"kind": K.PLAN_ACCEPT, "target": {"pid": plan}, "payload": {}}]
-    if build and fid and (pl is None or pl.kind != "delete"):
-        bodies.append({"kind": K.FEATURE_HANDOFF, "target": {"fid": fid},
-                       "payload": {"base_sha": head_sha(root), "asked": f"Build the plan {plan}."}})
+    if build and pl is not None and pl.kind != "delete":
+        for fid in _plan_features(ws.store, pl):
+            bodies.append({"kind": K.FEATURE_HANDOFF, "target": {"fid": fid},
+                           "payload": {"base_sha": head_sha(root), "asked": f"Build the plan {plan}."}})
     _report(client.write(cd, client="cli", root_dir=root, bodies=bodies), "accepted")
 
 
