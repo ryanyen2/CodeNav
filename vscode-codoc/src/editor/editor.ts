@@ -61,8 +61,12 @@ const decoKey = new PluginKey('codoc-paints');
 const SETTLE_MS = 350;
 
 let seq = 0;
+// A per-page prefix: two windows of the same client mint client ids from their
+// own counters, and without it two of them in one millisecond collide — the
+// daemon's per-client dedup then drops the second window's op as a replay.
+const tab = Math.random().toString(36).slice(2, 8);
 const newBid = () => `b-${Math.random().toString(16).slice(2, 14).padEnd(12, '0')}`;
-const newCid = () => `ide-${Date.now().toString(36)}-${(seq++).toString(36)}`;
+const newCid = () => `ide-${tab}-${Date.now().toString(36)}-${(seq++).toString(36)}`;
 const newBatch = () => `t-${Math.random().toString(16).slice(2, 14)}`;
 
 export function mountEditor(container: HTMLElement, proj: Projection, host: EditorHost): EditorHandle {
@@ -94,31 +98,48 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         props: { decorations: state => paints.getState(state)?.set ?? null },
     });
 
-    /** Paints per block, memoized on everything that can change them: the
-     *  block's head, how many of its ops are unacked, its feature's phase and
-     *  the History stance. Every keystroke rebuilds the decoration set, and at
-     *  a thousand features that is the difference between typing and waiting. */
-    const paintMemo = new Map<string, { key: string; paints: Paint[] }>();
+    /** Paints per block. The MAP is kept, not rebuilt: every keystroke and every
+     *  ack redraws the decoration set, and walking three thousand blocks to
+     *  build a key for each is the difference between typing and waiting. A
+     *  keystroke changes one block's unacked count, so it repaints one block;
+     *  everything that can change them all — a projection, the realizing set,
+     *  the History stance, a block appearing or leaving — says so. */
+    const paintsOut = new Map<string, Paint[]>();
+    const paintFid = new Map<string, string | null>();
+    let paintsAll = true;
+    const paintsDirty = new Set<string>();
+
+    function repaint(bid?: string): void {
+        if (bid === undefined) paintsAll = true;
+        else paintsDirty.add(bid);
+    }
+
+    function paintsOf(bid: string, fid: string | null): void {
+        const pb = projection.blocks.find(b => b.id === bid);
+        if (!pb) { paintsOut.delete(bid); return; }
+        paintsOut.set(bid, paintsFor(pb, projection, fid, unackedOps(bid), watermarksFor(fid), history));
+    }
 
     function paintMap(d: PMNode): Map<string, Paint[]> {
-        const out = new Map<string, Paint[]>();
-        const byId = new Map(projection.blocks.map(b => [b.id, b]));
-        let fid: string | null = null;
-        d.forEach(block => {
-            const bid = block.attrs.bid as string | null;
-            if (!bid) return;
-            if (block.type.name === 'heading') fid = bid;
-            const pb = byId.get(bid);
-            if (!pb) return;
-            const unacked = unackedOps(bid);
-            const key = `${pb.head}|${unacked.size}|${fid ?? ''}|${projection.phases[fid ?? ''] ?? ''}|${history}|${realizing.has(fid ?? '')}`;
-            const hit = paintMemo.get(bid);
-            if (hit && hit.key === key) { out.set(bid, hit.paints); return; }
-            const paints = paintsFor(pb, projection, fid, unacked, watermarksFor(fid), history);
-            paintMemo.set(bid, { key, paints });
-            out.set(bid, paints);
-        });
-        return out;
+        if (paintsAll) {
+            paintsOut.clear();
+            paintFid.clear();
+            const byId = new Map(projection.blocks.map(b => [b.id, b]));
+            let fid: string | null = null;
+            d.forEach(block => {
+                const bid = block.attrs.bid as string | null;
+                if (!bid) return;
+                if (block.type.name === 'heading') fid = bid;
+                paintFid.set(bid, fid);
+                const pb = byId.get(bid);
+                if (pb) paintsOut.set(bid, paintsFor(pb, projection, fid, unackedOps(bid), watermarksFor(fid), history));
+            });
+        } else {
+            for (const bid of paintsDirty) if (paintFid.has(bid)) paintsOf(bid, paintFid.get(bid) ?? null);
+        }
+        paintsAll = false;
+        paintsDirty.clear();
+        return paintsOut;
     }
 
     function watermarksFor(fid: string | null): { handoff: Record<string, number>; realized: Record<string, number> } {
@@ -174,7 +195,9 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         let ci = 0;
         let first = '';
         const hold = (bid: unknown, cid: string) => {
-            if (typeof bid === 'string' && bid) unacked.set(bid, (unacked.get(bid) ?? new Set()).add(cid));
+            if (typeof bid !== 'string' || !bid) return;
+            unacked.set(bid, (unacked.get(bid) ?? new Set()).add(cid));
+            repaint(bid);
         };
         for (const op of ops) {
             const cid = op.kind === 'text.insert' ? (cids[ci++] ?? newCid()) : newCid();
@@ -205,6 +228,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             for (const [bid, set] of unacked) {
                 if (set.delete(a.cid)) {
                     waiting.push(bid);
+                    repaint(bid);
                     if (a.conflict) refused.set(bid, a.conflict);
                     if (set.size === 0) unacked.delete(bid);
                 }
@@ -341,6 +365,9 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             // next projection took them away (09-editor §4 rule 1).
             const { state: next, transactions } = view.state.applyTransaction(tr);
             for (const applied of transactions) record(applied);
+            // Which feature a block belongs to is where it sits, so a block
+            // arriving or leaving can change any later block's paints.
+            if (tr.docChanged && !sameStructure(view.state.doc, next.doc)) repaint();
             view.updateState(next);
             if (tr.selectionSet || tr.docChanged) { host.onFeature?.(featureAt(next.selection.from)); menus?.update(); }
         },
@@ -403,6 +430,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         flush();
         projection = next;
         realizing = nowRealizing;
+        repaint();                     // a new projection can change any block's paints
         const current: Array<{ bid: string; head: number }> = [];
         view.state.doc.forEach(n => current.push({ bid: n.attrs.bid as string, head: force.has(n.attrs.bid) ? -1 : n.attrs.head as number }));
         const held = new Set([...unacked.keys()].filter(b => (unacked.get(b)?.size ?? 0) > 0 && !force.has(b)));
@@ -452,7 +480,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             const moved = caretRef ? shadows.get(caretBid)?.indexOf(caretRef) ?? -1 : -1;
             const off = moved >= 0 ? moved + 1 : caretOff;
             let pos = 0;
-            tr.doc.forEach((n, p) => { if (n.attrs.bid === caretBid) pos = p + 1 + unitAt(n, off); });
+            tr.doc.forEach((n, p) => { if (n.attrs.bid === caretBid) pos = p + 1 + unitOffset(n, off); });
             if (pos) tr = tr.setSelection(TextSelection.create(tr.doc, Math.min(pos, tr.doc.content.size)));
         }
         view.dispatch(tr);
@@ -464,10 +492,6 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
     }
 
     /** UTF-16 offset inside a block for a scalar offset. */
-function unitAt(node: PMNode, scalar: number): number {
-    return unitOffset(node, scalar);
-}
-
 function scalarCaret(pos: number): number {
         const $p = view.state.doc.resolve(pos);
         return $p.depth >= 1 ? scalarOffset($p.node(1), $p.parentOffset) : 0;
@@ -479,7 +503,7 @@ function scalarCaret(pos: number): number {
         ack,
         flush,
         featureAt,
-        setHistory: on => { history = on; view.dispatch(view.state.tr.setMeta(decoKey, true)); },
+        setHistory: on => { history = on; repaint(); view.dispatch(view.state.tr.setMeta(decoKey, true)); },
         find: replace => finder.open(replace),
         selectionAnchor: () => {
             const { from, to, empty } = view.state.selection;

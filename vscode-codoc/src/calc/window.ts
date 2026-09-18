@@ -25,6 +25,10 @@ export interface WindowEntry {
     caused_by: string | null;
     blocks: Record<string, string>;     // text of each touched block right after the op
     inverse: OpBody[];
+    /** Blocks whose presence on the page this op changed: id → there after it. */
+    live?: Record<string, boolean>;
+    /** Blocks whose rank this op set: id → the rank it took. */
+    ranks?: Record<string, string>;
 }
 
 export interface HistoryWindow {
@@ -33,10 +37,27 @@ export interface HistoryWindow {
     before: Record<string, string>;     // text of each touched block before the window
     /** Blocks created inside the window: they have no "before". */
     born?: string[];
-    /** Rank per block the window names, live or not, so a past page can be
-     *  rendered in the order it had. */
+    /** Blocks already off the page entering the window. */
+    dead?: string[];
+    /** Rank per block entering the window, so a past page can be rendered in
+     *  the order it had rather than today's. */
     ranks?: Record<string, string>;
     ops: WindowEntry[];
+}
+
+/** The shape of the page at window position `pos`: which blocks were not on it,
+ *  and the rank each one had. Both are folded forward from what the window says
+ *  entering it, the way `before` is — a deleted paragraph keeps its words in the
+ *  store, so without this it reads as present on every page after its deletion,
+ *  and a merged-away one as an empty phantom. */
+export function shapeAt(w: HistoryWindow, pos: number): { dead: Set<string>; rank: Map<string, string> } {
+    const dead = new Set(w.dead ?? []);
+    const rank = new Map(Object.entries(w.ranks ?? {}));
+    for (let i = 0; i <= Math.min(pos, w.ops.length - 1); i++) {
+        for (const [bid, there] of Object.entries(w.ops[i].live ?? {})) { if (there) dead.delete(bid); else dead.add(bid); }
+        for (const [bid, r] of Object.entries(w.ops[i].ranks ?? {})) rank.set(bid, r);
+    }
+    return { dead, rank };
 }
 
 function depth(batch: string): number {

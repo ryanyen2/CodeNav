@@ -16,7 +16,7 @@ import * as vscode from 'vscode';
 import type { Ack, Projection, Submission } from '../calc/projection';
 
 export interface HostToWebview {
-    kind: 'projection' | 'acks' | 'status' | 'reveal' | 'find' | 'history';
+    kind: 'projection' | 'acks' | 'status' | 'reveal' | 'find' | 'history' | 'notice';
     proj?: Projection;
     history?: unknown;
     realizing?: string[];
@@ -24,6 +24,8 @@ export interface HostToWebview {
     status?: Record<string, unknown>;
     fid?: string;
     replace?: boolean;
+    /** A sentence for the status bar: something the host could not do, and why. */
+    text?: string;
 }
 
 export interface WebviewToHost {

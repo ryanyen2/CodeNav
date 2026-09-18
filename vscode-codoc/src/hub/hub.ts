@@ -21,8 +21,13 @@
             }).then(async r => {
                 if (r.status === 401) { location.href = '/auth/login'; return; }
                 const body = await r.json().catch(() => null) as { kind?: string } | null;
-                if (r.ok && body && typeof body.kind === 'string') window.postMessage(body, window.location.origin);   // a reply the app reads as a host message
-                else if (!r.ok && r.status !== 202) console.warn('codoc hub refused', m, body);
+                if (r.ok && body && typeof body.kind === 'string') { window.postMessage(body, window.location.origin); return; }  // a reply the app reads as a host message
+                // 202 is the hub saying it cannot do this one (it has no
+                // terminal): a reply, not a failure, and the person pressed a
+                // button, so they hear about it rather than nothing.
+                const said = body && typeof (body as { error?: string }).error === 'string' ? (body as { error: string }).error : '';
+                if (said) window.postMessage({ kind: 'notice', text: said }, window.location.origin);
+                else if (!r.ok) console.warn('codoc hub refused', m, body);
             }).catch(err => console.warn('codoc hub unreachable', err));
         },
         getState: () => state,

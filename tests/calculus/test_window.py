@@ -18,7 +18,9 @@ def texts_after_each_op(store: Store) -> list[dict[str, str]]:
     fresh = Store()
     for o in store.ops:
         apply(fresh, Op.from_json(copy.deepcopy(o.to_json())))
-        out.append({b.id: b.text().live_text() for b in fresh.all_blocks()})
+        # What the page showed: a dead block reads as nothing, whatever text the
+        # store still holds so its characters can be named.
+        out.append({b.id: (b.text().live_text() if b.live else "") for b in fresh.all_blocks()})
     return out
 
 

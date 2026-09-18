@@ -103,7 +103,14 @@ Three rules make this exact rather than heuristic:
    A `filterTransaction` refuses any other transaction that would add, drop,
    duplicate or un-id a top-level block, so the class of bug where ProseMirror
    takes a block out of the page and nothing reaches the store is impossible
-   rather than patched gesture by gesture. A selection spanning paragraphs is
+   rather than patched gesture by gesture. **The recorder speaks only for what
+   the page took**: the transaction is applied first and the recorder runs over
+   what came back, because a refused gesture that still advanced the shadows
+   would move the loss from the page into the store, where nobody can see it.
+   Enter with a selection inside one block is therefore two dispatches — the
+   delete, which the recorder speaks for, and then the split, which is a
+   gesture — since together they are a structural change no single gesture
+   describes. A selection spanning paragraphs is
    deleted as ops (the covered text of each, `block.delete` for the ones it
    swallows whole, `block.merge` of the two ends); one that touches a heading
    is refused with a word about the delete gesture, because a feature
@@ -150,6 +157,14 @@ the webview; the webview adopts **per block**:
 - blocks added, removed or re-ranked by the projection are inserted, removed
   or moved in the document.
 
+**Held means the page is right about a block — that it is there, and what it
+says.** A gesture holds every block it names and every block whose existence it
+changed, so a projection published a few hundred milliseconds before the
+gesture cannot put back the paragraph it merged away, drop the one it split
+off, or bring back a deleted feature; and a held block the projection does not
+know about keeps the place the page gave it, after the block it currently
+follows, rather than jumping to the top.
+
 There is no baseline citation and no whole-document diff: the projection is
 the truth for every block the person is not holding.
 
@@ -165,7 +180,7 @@ data plus the shadow; nothing is stored in the doc.
 | opacity (gray) | `plan` marks; `suggest_del` marks as strike; a plan's proposed mark toggles as a dashed gray underline (the prose itself shows what it says today, the rejected read mode) |
 | margin marker, tree rows, rail | `phases[fid]` |
 | comment cards | comment blocks whose anchor mark resolves |
-| History stance | `attribution` runs per block (`authorPaints`); the scrubber renders `history.json`'s snapshots read-only, marking that moment's change with a word diff (`editor/timeline.ts`) |
+| History stance | `attribution` runs per block (`authorPaints`); the scrubber renders `history.json`'s snapshots read-only, marking that moment's change with a word diff (`editor/timeline.ts`). A past page shows the blocks that were on it, in the order they had: the window says which blocks were off the page entering it and which each op took off or put back, and the rank each move displaced, and the reader folds both forward (`calc/window.shapeAt`). Without that a deleted paragraph keeps its words in the store and so reads as present on every page after its deletion |
 | Catch up | a viewer-local read cursor (`localStorage`) over loop batches newer than it |
 
 One palette on every surface, as in v1: blue is the person, gray a plan, green

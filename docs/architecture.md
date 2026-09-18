@@ -277,12 +277,18 @@ a kind whose anchor is a `comment{block}` mark.
 serves the same editor bundle over HTTP: a GitHub session maps the visitor's
 collaborator permission to a role in the tracked `config.json`, their edits
 become submissions in `inbox/hub-<login>.jsonl` (the daemon stamps
-`human:<login>` and applies them under that role), and one SSE feed carries the
-projection, status, their acks and the timeline window. `worker.py` turns each
-uncovered hand-off into a pull request from a sandboxed agent on a worktree
-(`sandbox.py`, `realize_agent.py`, `consult.py`: no shell, edits confined to
-the feature's bound files, secrets unreadable, tokens scrubbed, a post-run
-scope gate), and `ratelimit.py` bounds writes per login.
+`human:gh:<login>`, which no local identity can collide with, and applies them
+under that role; a contributor's untagged edit is wrapped in a plan of theirs,
+because that is what `suggest` may write), and one SSE feed carries the
+projection, status, their acks and the timeline window. A live session's
+permission is re-asked of GitHub on a cadence, so revoking access reaches a tab
+that is already open. `worker.py` turns each uncovered hand-off into a pull
+request from a sandboxed agent on a worktree (`sandbox.py`,
+`realize_agent.py`, `consult.py`: no shell, every path-taking tool confined to
+the worktree, edits confined to the feature's bound files, secrets unreadable,
+tokens scrubbed, a post-run scope gate), `validate.py` reads a pull request's
+own session logs against the roles table before anyone merges them, and
+`ratelimit.py` bounds writes per login.
 
 ## 8. Version control (`04-version-control.md`)
 

@@ -150,3 +150,52 @@ def test_a_contributor_and_the_person_edit_one_checkout_at_once(tmp_path):
     assert ("human:gh:alice", "twice not ") in [(s.actor, s.chars) for s in ws.store.blocks["p1"].text().segs if s.live]
     assert Publisher(cd, str(tmp_path)).publish(ws.store, force=True)["state"] == "edited"
     ws.close()
+
+
+def test_a_revoked_collaborator_loses_the_session_at_the_next_recheck(tmp_path):
+    """A role is decided at sign-in and a sign-in lasts a working day, so
+    revoking somebody's access has to reach a tab that is already open."""
+    cd = workspace(tmp_path)
+    perms = {"alice": "admin"}
+    auth = AuthContext(SessionStore(), resolver=FakeResolver(perms), oauth=FakeOAuth(), recheck_seconds=0)
+    c = TestClient(build_app(str(cd), auth=auth), follow_redirects=False)
+    state = c.get("/auth/login").headers["location"].split("state=")[1].split("&")[0]
+    r = c.get("/auth/callback", params={"code": "good", "state": state})
+    c.cookies.set(COOKIE_NAME, r.cookies[COOKIE_NAME])
+    assert c.get("/api/whoami").json()["role"] == MAINTAINER
+    perms["alice"] = "read"                       # demoted
+    assert c.get("/api/whoami").json()["role"] == SUGGEST
+    perms.pop("alice")                            # removed from the repository
+    assert c.get("/api/whoami").json()["authenticated"] is False
+    assert c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "submit", "subs": [
+        {"cid": "x1", "kind": K.PLAN_ACCEPT, "target": {"pid": "p-1"}, "payload": {}, "batch": "b"}]}).status_code == 401
+
+
+def test_a_live_session_is_not_re_asked_on_every_request(tmp_path):
+    """The check costs a GitHub call, and a person types many times a minute."""
+    cd = workspace(tmp_path)
+    calls = []
+
+    class Counting(FakeResolver):
+        def permission(self, login):
+            calls.append(login)
+            return super().permission(login)
+
+    auth = AuthContext(SessionStore(), resolver=Counting({"alice": "admin"}), oauth=FakeOAuth())
+    c = TestClient(build_app(str(cd), auth=auth), follow_redirects=False)
+    state = c.get("/auth/login").headers["location"].split("state=")[1].split("&")[0]
+    r = c.get("/auth/callback", params={"code": "good", "state": state})
+    c.cookies.set(COOKIE_NAME, r.cookies[COOKIE_NAME])
+    for _ in range(5):
+        c.get("/api/whoami")
+    assert len(calls) == 1, calls
+
+
+def test_set_language_takes_a_tag_and_not_a_string(tmp_path):
+    """The tree's language is written into a tracked file every clone reads."""
+    cd = workspace(tmp_path)
+    c = TestClient(build_app(str(cd)))
+    bad = c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "set-language", "tag": "x" * 5000})
+    assert bad.status_code == 400 and "config.json" not in [p.name for p in cd.iterdir()]
+    assert c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "set-language", "tag": "zh-Hans"}).json() == {"ok": True}
+    assert json.loads((cd / "config.json").read_text())["doc_language"] == "zh-Hans"

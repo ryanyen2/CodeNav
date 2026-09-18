@@ -102,12 +102,15 @@ def make_sandboxed_agent(*, consult_allowlist=None, resolve=None, run_capture=No
     The returned agent runs the directive on a Claude-Agent-SDK session bound to
     :func:`realize_tool_policy` and ``HUB_ALLOWED_TOOLS``, in a token-scrubbed env, and
     returns the files it changed. FAIL-SAFE: any inability to enforce the sandbox (SDK
-    missing, hook unsupported) yields an empty change list — never an unsandboxed run."""
+    missing, hook unsupported) yields ``None`` — never an unsandboxed run, and never
+    the empty list, which means "ran and changed nothing" and buries the request as a
+    refusal. A hub without the SDK would otherwise silently refuse every hand-off it
+    will ever see, with the wrong reason."""
     allowlist = consult_allowlist if consult_allowlist is not None else consult_allowlist_from_env()
     resolver = resolve or _default_resolve
     capture = run_capture or _default_run_capture
 
-    def agent(directive: dict, worktree_path: str, scope=None) -> list[str]:
+    def agent(directive: dict, worktree_path: str, scope=None) -> list[str] | None:
         policy = realize_tool_policy(scope, consult_allowlist=allowlist, resolve=resolver, root=worktree_path)
         ran = _run_sandboxed_sdk(
             prompt=build_directive_prompt(directive, scope),
@@ -115,7 +118,7 @@ def make_sandboxed_agent(*, consult_allowlist=None, resolve=None, run_capture=No
             policy=policy,
         )
         if not ran:
-            return []  # fail-safe: sandbox not enforceable → produced nothing
+            return None  # fail-safe: the sandbox is not enforceable, so nothing ran
         return changed_files(worktree_path, run_capture=capture)
 
     return agent

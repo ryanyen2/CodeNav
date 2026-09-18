@@ -14,11 +14,19 @@ reversed, every later effect on its characters is already gone, so whatever
 state they are in is the one this op left.
 
 A block born inside the window is absent from ``before`` and named in ``born``,
-so a reader never shows it before it existed. ``ranks`` orders every block the
-window names, live or not, so the scrubber can render a page that held a
-paragraph since merged away. Each entry carries ``batch_first``: where its
-batch began, so an undo can tell a batch it holds whole from one that reaches
-back past the window.
+so a reader never shows it before it existed. Three more facts are folded
+forward by the reader the same way ``before`` is — the window says what was
+true entering it and what each op changed:
+
+- ``dead`` and each entry's ``live``: which blocks were not on the page. A
+  reader without this shows a deleted paragraph on every page after its
+  deletion, and a merged-away one as an empty phantom, because their text is
+  still in the store.
+- ``ranks`` and each entry's ``ranks``: the order the page had. Today's ranks
+  render a page from before a move in the order the move produced.
+
+Each entry carries ``batch_first``: where its batch began, so an undo can tell
+a batch it holds whole from one that reaches back past the window.
 """
 from __future__ import annotations
 
@@ -144,24 +152,69 @@ def history_window(store: Store, limit: int = 200) -> dict:
 
     entries: list[dict] = []
     born: set[str] = set()
+    dead = {b.id for b in store.blocks.values() if not b.live}
+    rank = {b.id: b.rank for b in store.blocks.values()}
     for o in reversed(ops):
         # A block born after this op did not exist then, and `born` holds
         # exactly those, since we are walking newest first.
-        after = {bid: t.live_text() for bid, path in touched(o)
+        # A block that was not on the page then read as nothing, whatever text
+        # the store still holds for it: a deleted paragraph keeps its words so
+        # an anchor can still name them, and a reader that showed them would
+        # put the paragraph back on every page after its deletion.
+        after = {bid: ("" if bid in dead else t.live_text()) for bid, path in touched(o)
                  if bid not in born and path == "text" and (t := clone(bid, path)) is not None}
+        gone, back = _liveness(o)
+        moved = _rank_rows(o)
         entries.append({"pos": store.position[o.id], "id": o.id, "at": o.at, "actor": o.actor, "kind": o.kind,
                         "batch": o.batch, "batch_first": store.batch_first.get(o.batch, store.position[o.id]),
-                        "plan": o.plan, "caused_by": o.caused_by, "blocks": after, "inverse": list(o.inverse)})
+                        "plan": o.plan, "caused_by": o.caused_by, "blocks": after, "inverse": list(o.inverse),
+                        "live": {**{i: False for i in gone}, **{i: True for i in back}},
+                        "ranks": {i: rank[i] for i, _ in moved if i in rank}})
         unapply(o)
+        dead.difference_update(gone)
+        dead.update(back)
+        rank.update(moved)
         if o.kind == K.BLOCK_ADD:
             born.add(o.target["bid"])
         elif o.kind == K.BLOCK_SPLIT and not o.payload.get("new_takes"):
             born.add(o.payload["new"])
     entries.reverse()
-    before = {bid: t.live_text() for (bid, path), t in clones.items() if path == "text" and bid not in born}
-    ranks = {bid: store.blocks[bid].rank for bid, _ in clones if bid in store.blocks}
+    before = {bid: ("" if bid in dead else t.live_text()) for (bid, path), t in clones.items()
+              if path == "text" and bid not in born}
+    named = {bid for bid, _ in clones} | born | {i for e in entries for i in e["live"]} | {i for e in entries for i in e["ranks"]}
     return {"start": (store.position[ops[0].id] if ops else store.pos), "head": store.pos, "before": before,
-            "born": sorted(born), "ranks": ranks, "ops": entries}
+            "born": sorted(born), "dead": sorted(dead & named),
+            "ranks": {b: r for b, r in rank.items() if b in named}, "ops": entries}
+
+
+def _liveness(o: Op) -> tuple[list[str], list[str]]:
+    """The blocks this op took off the page, and the blocks it put back."""
+    p = o.payload
+    if o.kind == K.BLOCK_DELETE:
+        return [str(i) for i in p.get("killed", [])], []
+    if o.kind == K.BLOCK_RESTORE:
+        return [], [str(i) for i in p.get("revived", [])]
+    if o.kind == K.BLOCK_MERGE:
+        return [str(o.target.get("bid"))], []
+    if o.kind == K.BLOCK_SPLIT and p.get("new_takes"):
+        return [], [str(p.get("new"))]              # a merge's inverse brings the dead block back
+    struck = [str(i) for i in list(p.get("deleted_blocks", [])) + list(p.get("blocks", []))]
+    if o.kind in (K.PLAN_ACCEPT, K.PLAN_REJECT):
+        return struck, []
+    if o.kind == K.PLAN_REOPEN:
+        return [], struck
+    return [], []
+
+
+def _rank_rows(o: Op) -> list[tuple[str, str]]:
+    """(block, the rank it held before this op), from a move's own record or,
+    for a move that restores one, from its inverse."""
+    if o.kind != K.BLOCK_MOVE:
+        return []
+    rows = o.payload.get("prev")
+    if rows is None and o.inverse:
+        rows = (o.inverse[0].get("payload") or {}).get("restore")
+    return [(str(r[0]), str(r[1])) for r in (rows or [])]
 
 
 def _segs(segments) -> list[Segment]:

@@ -21,6 +21,11 @@ from typing import Callable, Protocol
 
 COOKIE_NAME = "codoc_session"
 DEFAULT_TTL_SECONDS = 8 * 3600
+# How often a live session's collaborator permission is asked of GitHub again.
+# A role is decided at sign-in and a sign-in lasts a working day, so without
+# this a collaborator removed from the repository keeps the authority they
+# arrived with until the cookie expires.
+DEFAULT_RECHECK_SECONDS = 600.0
 MAINTAINER, SUGGEST, NONE = "maintainer", "suggest", "none"
 
 _WRITE = frozenset({"admin", "write", "maintain"})
@@ -47,6 +52,7 @@ class Session:
     login: str
     role: str
     created_at: float
+    checked_at: float = 0.0        # when the role was last re-asked of GitHub
 
 
 @dataclass
@@ -58,7 +64,8 @@ class SessionStore:
     _sessions: dict[str, Session] = field(default_factory=dict)
 
     def create(self, login: str, role: str) -> Session:
-        s = Session(secrets.token_urlsafe(32), login, role, self.clock())
+        now = self.clock()
+        s = Session(secrets.token_urlsafe(32), login, role, now, now)
         self._sessions[s.sid] = s
         return s
 
@@ -80,6 +87,25 @@ class AuthContext:
     store: SessionStore
     resolver: CollaboratorResolver | None = None
     oauth: object | None = None           # github_auth.GithubOAuth in deployment
+    recheck_seconds: float = DEFAULT_RECHECK_SECONDS
+
+    def session(self, sid: str | None) -> Session | None:
+        """The session behind this cookie, with its role re-asked of GitHub on a
+        cadence. Revoking access has to reach a tab that is already open, and
+        the role it signed in with is a decision somebody has since changed."""
+        s = self.store.get(sid)
+        if s is None:
+            return None
+        now = self.store.clock()
+        if self.resolver is None or now - s.checked_at < self.recheck_seconds:
+            return s
+        s.checked_at = now
+        role = authorize(s.login, self.resolver)
+        if role == NONE:
+            self.store.delete(s.sid)
+            return None
+        s.role = role
+        return s
 
 
 def record_role(codoc_dir: str | Path, login: str, role: str) -> None:

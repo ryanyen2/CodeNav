@@ -106,7 +106,11 @@ def realize_one(req: Request, worktree: str, *, run, agent, base: str = "main", 
     branch = branch_name(req.handoff)
     if run(["git", "worktree", "add", "-b", branch, worktree], cwd=root):
         return Result(False, branch, "git refused to create the worktree or branch", transient=True)
-    changed = agent({"text": req.text, "id": req.handoff, "title": req.title}, worktree, scope=req.scope) or []
+    changed = agent({"text": req.text, "id": req.handoff, "title": req.title}, worktree, scope=req.scope)
+    if changed is None:
+        # The sandbox could not be enforced, so nothing ran. That is not a
+        # refusal of this request; burying it would refuse every one for ever.
+        return Result(False, branch, "the sandbox could not be enforced, so nothing ran", transient=True)
     bad = out_of_scope_changes(changed, req.scope, worktree)
     if bad:
         return Result(False, branch, "the agent wrote outside the feature's bindings", bad)
@@ -135,8 +139,10 @@ def _published_head(codoc_dir: str) -> int | None:
 
 
 def process_ready(root_dir: str, codoc_dir: str, *, base: str = "main", run=_run, agent=None,
-                  store=None, printer=print) -> list[str]:
-    """Realize every ready hand-off once; returns the hand-off ids that got a PR."""
+                  store=None, printer=print, retry: list[str] | None = None) -> list[str]:
+    """Realize every ready hand-off once; returns the hand-off ids that got a PR.
+    Hand-offs left unanswered by a transient failure are appended to ``retry``,
+    which is how the worker knows to come back to them before the tree moves."""
     store = store if store is not None else client.read(codoc_dir).store
     reqs = pending(codoc_dir, store)
     if not reqs:
@@ -161,9 +167,12 @@ def process_ready(root_dir: str, codoc_dir: str, *, base: str = "main", run=_run
             record_pr(codoc_dir, req.handoff, "refused: out of scope")
             printer(f"  ✗ hub realize {req.fid} wrote out of scope ({', '.join(res.out_of_scope)}) — no PR")
         elif res.transient:
-            # git or gh failed: the request was never answered, so the next
-            # interval tries again rather than burying it in the ledger.
+            # git or gh failed, or the sandbox could not run: the request was
+            # never answered, so the next interval tries again rather than
+            # burying it in the ledger.
             printer(f"  ⚠ hub realize {req.fid}: {res.reason}; will retry")
+            if retry is not None:
+                retry.append(req.handoff)
         else:
             # A run that produced nothing produces nothing again; a person hands
             # the feature off anew when they want another try.
@@ -191,16 +200,23 @@ class Worker:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._head: int | None = None
+        self._unanswered = False
 
     def _loop(self) -> None:
         while not self._stop.is_set():
             try:
-                # Replaying the log to find nothing is the common case; the
-                # published head says when there is nothing to find.
+                # Replaying the log to find nothing is the common case, and the
+                # published head says when there is nothing to find — but a
+                # transient failure left a request unanswered, and that one is
+                # retried whether or not anybody has edited the tree since
+                # (`docs/serve-deployment.md`: "a git or gh failure is not a
+                # refusal and is retried").
                 head = _published_head(self.codoc_dir)
-                if head != self._head:
+                if head != self._head or self._unanswered:
                     self._head = head
-                    process_ready(self.root_dir, self.codoc_dir, base=self.base, printer=self.printer)
+                    again: list[str] = []
+                    process_ready(self.root_dir, self.codoc_dir, base=self.base, printer=self.printer, retry=again)
+                    self._unanswered = bool(again)
             except Exception as exc:  # noqa: BLE001 — the worker thread never dies
                 self.printer(f"  ⚠ hub realize worker: {exc}")
             self._stop.wait(self.interval)

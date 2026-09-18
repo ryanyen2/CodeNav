@@ -61,7 +61,7 @@ def build_app(codoc_dir: str, *, static_dir: str | None = None, auth: AuthContex
     def session(request: Request) -> Session | None:
         if auth is None:
             return LOCAL
-        s = auth.store.get(request.cookies.get(COOKIE_NAME))
+        s = auth.session(request.cookies.get(COOKIE_NAME))
         return s if s and s.role != NONE else None
 
     def denied() -> JSONResponse:
@@ -184,11 +184,11 @@ def handle_message(cd: Path, s: Session, m: dict) -> JSONResponse:
         if s.role != MAINTAINER:
             return JSONResponse({"error": "only a maintainer changes the tree's language"}, status_code=403)
         tag = str(m.get("tag") or "").strip()
-        if not tag:
-            return JSONResponse({"error": "tag required"}, status_code=400)
+        from codoc.doclang import is_language_tag, write_config
+        if not is_language_tag(tag):
+            return JSONResponse({"error": "a BCP 47 language tag is required"}, status_code=400)
         # Atomically, like every other writer of the tracked config: the daemon
         # reads it on each inbox pass, and a torn read would drop every role.
-        from codoc.doclang import write_config
         write_config(cd, doc_language=tag)
         return JSONResponse({"ok": True})
     if kind in ("realize", "sync", "open-cite", "open-file", "find"):

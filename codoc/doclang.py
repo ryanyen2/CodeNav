@@ -511,6 +511,16 @@ def _generic(code: str) -> DocLanguage:
     )
 
 
+# A BCP 47 tag: subtags of letters or digits, 1–8 characters, joined by hyphens.
+# The tree's language is written into a tracked file every clone reads, so the
+# hub takes a tag and not a string.
+_TAG = re.compile(r"^[A-Za-z0-9]{1,8}(-[A-Za-z0-9]{1,8}){0,4}$")
+
+
+def is_language_tag(code: str | None) -> bool:
+    return bool(_TAG.match((code or "").strip()))
+
+
 def resolve(code: str | None) -> DocLanguage:
     """The profile for a language tag. Blank/unknown-shaped input → English.
 

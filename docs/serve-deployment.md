@@ -37,8 +37,17 @@ the tracked `.codoc/config.json`; the daemon applies every op from
 `inbox/hub-<login>.jsonl` as `human:gh:<login>` (namespaced, so a login called
 `local` cannot arrive as the maintainer) under that role, so a suggester's
 edits can only be plans of their own and a forged verdict is a recorded
-`authority` conflict. The browser holds an opaque cookie, never a token. Writes
-are rate limited per login.
+`authority` conflict. A contributor does not have to know that: the daemon
+opens the plan for them, one per submitted batch, and a comment needs none.
+Their permission is re-asked of GitHub every ten minutes of an open session, so
+taking someone off the repository reaches the tab they already have open. The
+browser holds an opaque cookie, never a token. Writes are rate limited per
+login.
+
+The hub's own viewer on `localhost` writes as `human:local`, the same actor as
+the VS Code window on that machine — the person at the machine, in both places.
+One consequence is worth knowing: ⌘Z in that browser tab undoes the newest
+batch that person made anywhere, including one they made in the editor.
 
 ## What travels
 
@@ -68,7 +77,10 @@ lands and the maintainer's daemon indexes it, exactly as for a local build.
 `.codoc/cache/hub-prs.json` (ignored) remembers which hand-offs already have a
 pull request, and which were refused (an agent that wrote outside the scope,
 or produced nothing) so the same request is not tried again and again; a git
-or `gh` failure is not a refusal and is retried. `CODOC_SERVE_BASE` is the base
+or `gh` failure is not a refusal, and neither is a sandbox that could not run
+at all (the SDK missing, the hook unsupported) — both leave the request
+unanswered, and the worker comes back to it on the next interval whether or not
+anybody has edited the tree since. `CODOC_SERVE_BASE` is the base
 branch (default `main`); `CODOC_SERVE_PR=0` turns the worker off and leaves the
 queue for a person.
 

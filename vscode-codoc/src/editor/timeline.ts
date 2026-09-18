@@ -5,7 +5,7 @@
  * recorder would record the author reverting the tree.
  */
 import type { Projection } from '../calc/projection';
-import { textAt, wordDiff, type HistoryWindow } from '../calc/window';
+import { shapeAt, textAt, wordDiff, type HistoryWindow } from '../calc/window';
 
 export class Timeline {
     readonly bar: HTMLElement;
@@ -64,8 +64,11 @@ export class Timeline {
         const live = new Map(proj.blocks.filter(b => b.kind !== 'comment').map(b => [b.id, b]));
         const gone = new Set<string>();
         for (const entry of w.ops) for (const bid of Object.keys(entry.blocks)) if (!live.has(bid)) gone.add(bid);
-        const order = [...live.keys(), ...gone].sort((a, b2) => (w.ranks?.[a] ?? live.get(a)?.rank ?? a).localeCompare(w.ranks?.[b2] ?? live.get(b2)?.rank ?? b2));
+        const shape = shapeAt(w, p);
+        const rankOf = (id: string) => shape.rank.get(id) ?? live.get(id)?.rank ?? id;
+        const order = [...live.keys(), ...gone].sort((a, b2) => rankOf(a).localeCompare(rankOf(b2)));
         for (const bid of order) {
+            if (shape.dead.has(bid)) continue;              // not on the page then
             const b = live.get(bid) ?? { id: bid, kind: 'paragraph', level: 0, rank: '', head: 0, fields: {} };
             const f = b.fields.text as { text?: string } | undefined;
             const now = textAt(w, bid, p, f?.text ?? '');
@@ -74,7 +77,7 @@ export class Timeline {
             el.className = b.kind === 'heading' ? `codoc-heading codoc-h${b.level}` : 'codoc-paragraph';
             if (!live.has(bid)) el.classList.add('codoc-past-gone');
             if (bid in e.blocks) {
-                const was = textAt(w, bid, p - 1, f?.text ?? '') ?? '';
+                const was = (p > 0 && shapeAt(w, p - 1).dead.has(bid)) ? '' : (textAt(w, bid, p - 1, f?.text ?? '') ?? '');
                 for (const [k, t] of wordDiff(was, now)) {
                     const span = document.createElement(k === 'eq' ? 'span' : k);
                     span.textContent = t;

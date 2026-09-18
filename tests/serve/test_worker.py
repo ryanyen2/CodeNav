@@ -1,6 +1,7 @@
 """The hub's realize worker: a hand-off becomes a PR, under the sandbox."""
 import json
 import os
+import time
 
 from codoc.calculus import ops as K
 from codoc.loops.realize import handoff
@@ -110,3 +111,38 @@ def test_an_unbound_feature_is_not_built_by_the_hub(tmp_path):
               actor="human:gh:eve")
     ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h2"}, "payload": {}}], actor="human:local")
     assert [r.fid for r in pending(cd, ws.store)] == ["h1"]
+
+
+def test_a_sandbox_that_could_not_run_is_not_a_refusal(tmp_path):
+    """`make_sandboxed_agent` fails safe when the SDK is missing or the hook is
+    unsupported. Reading that as "produced nothing" buried the hand-off in the
+    ledger for ever, so a hub without the SDK silently refused every request it
+    would ever see, with the wrong reason."""
+    cd, ws, ho = ready(tmp_path)
+    ws.close()
+    out = []
+    retry = []
+    process_ready(str(tmp_path), str(cd), run=lambda a, cwd=None: 0, agent=lambda *a, **k: None,
+                  printer=out.append, retry=retry)
+    assert ho.id not in read_ledger(cd), read_ledger(cd)
+    assert retry == [ho.id] and any("will retry" in line for line in out), out
+
+
+def test_the_worker_comes_back_to_an_unanswered_request_before_the_tree_moves(tmp_path, monkeypatch):
+    """docs/serve-deployment.md: "a git or gh failure is not a refusal and is
+    retried". The loop skips a pass when the published head has not moved, so
+    without this the retry waited for somebody else to edit the tree."""
+    from codoc.serve import worker as W
+    passes = []
+
+    def fake(root, cd, *, base="main", printer=print, retry=None, **kw):
+        passes.append(1)
+        if retry is not None and len(passes) < 3:
+            retry.append("s:9")            # still unanswered
+        return []
+    monkeypatch.setattr(W, "_published_head", lambda cd: 7)
+    monkeypatch.setattr(W, "process_ready", fake)
+    w = W.Worker(str(tmp_path), str(tmp_path / ".codoc"), interval=0.01, printer=lambda *_: None).start()
+    time.sleep(0.2)
+    w.stop()
+    assert len(passes) == 3, f"{len(passes)} pass(es): the retry stopped early or never stopped"

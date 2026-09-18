@@ -175,7 +175,10 @@ function notify(text: string): void {
 
 // ── actions ──────────────────────────────────────────────────────────────────
 let seq = 0;
-const cid = () => `ide-${Date.now().toString(36)}-${(seq++).toString(36)}`;
+// A per-page prefix, for the same reason as in the editor: two windows of one
+// client must not mint the same id in the same millisecond.
+const tab = Math.random().toString(36).slice(2, 8);
+const cid = () => `ide-${tab}-${Date.now().toString(36)}-${(seq++).toString(36)}`;
 const batch = () => `t-${Math.random().toString(16).slice(2, 14)}`;
 
 function submit(subs: Submission[]): void {
@@ -313,6 +316,9 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
             if (typeof m.status?.actor === 'string') actor = m.status.actor;
             if (projection) renderToolbar(projection);
             renderStatus();
+            return;
+        case 'notice':
+            if (m.text) notify(m.text);
             return;
         case 'find':
             editor?.find(!!m.replace);
