@@ -28,6 +28,12 @@ let projection: Projection | null = null;
 let status: Record<string, unknown> = {};
 let history = false;
 let selected: string | null = null;
+let language = 'en';
+let notice = '';
+let noticeTimer: number | undefined;
+
+const LANGUAGES: Array<[string, string]> = [['en', 'English'], ['zh-Hans', '中文（简体）'], ['zh-Hant', '中文（繁體）'], ['ja', '日本語'], ['ko', '한국어'],
+    ['es', 'Español'], ['fr', 'Français'], ['de', 'Deutsch'], ['pt', 'Português']];
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''): HTMLElementTagNameMap[K] => {
     const e = document.createElement(tag);
@@ -78,8 +84,15 @@ function renderToolbar(proj: Projection): void {
     toolbar.append(title, chip, el('span', 'codoc-spacer'));
     const hist = el('button', `codoc-btn${history ? ' is-on' : ''}`, 'History');
     hist.title = 'who wrote which words, and when';
-    hist.addEventListener('click', () => { history = !history; page.classList.toggle('is-history', history); renderToolbar(projection!); });
+    hist.addEventListener('click', () => { history = !history; page.classList.toggle('is-history', history); editor?.setHistory(history); renderToolbar(projection!); });
     toolbar.append(hist);
+    const lang = el('select', 'codoc-lang');
+    lang.title = 'the language the tree is written in';
+    for (const [tag, name] of LANGUAGES.some(([t]) => t === language) ? LANGUAGES : [...LANGUAGES, [language, language] as [string, string]]) {
+        const o = el('option', '', name); o.value = tag; o.selected = tag === language; lang.append(o);
+    }
+    lang.addEventListener('change', () => send({ kind: 'set-language', tag: lang.value }));
+    toolbar.append(lang);
     if (openPlans.length) {
         const acceptAll = el('button', 'codoc-btn codoc-btn-plan', `Accept all (${openPlans.length})`);
         acceptAll.addEventListener('click', () => verdicts(openPlans.map(p => p.id), true));
@@ -103,7 +116,15 @@ function renderToolbar(proj: Projection): void {
 
 function renderStatus(): void {
     const n = projection ? projection.blocks.filter(b => b.kind === 'heading').length : 0;
-    statusBar.textContent = `${n} features · ${String(status.state ?? 'synced')}`;
+    statusBar.textContent = notice || `${n} features · ${String(status.state ?? 'synced')}`;
+    statusBar.classList.toggle('is-notice', !!notice);
+}
+
+function notify(text: string): void {
+    notice = text;
+    renderStatus();
+    if (noticeTimer) window.clearTimeout(noticeTimer);
+    noticeTimer = window.setTimeout(() => { notice = ''; renderStatus(); }, 6000);
 }
 
 // ── actions ──────────────────────────────────────────────────────────────────
@@ -139,10 +160,10 @@ function reveal(fid: string): void {
 
 document.addEventListener('keydown', ev => {
     const mac = navigator.platform.toUpperCase().includes('MAC');
-    if ((mac ? ev.metaKey : ev.ctrlKey) && ev.key.toLowerCase() === 's') {
-        ev.preventDefault();
-        handoffAll();
-    }
+    const mod = mac ? ev.metaKey : ev.ctrlKey;
+    if (mod && ev.key.toLowerCase() === 's') { ev.preventDefault(); handoffAll(); }
+    else if (mod && ev.key.toLowerCase() === 'f') { ev.preventDefault(); editor?.find(ev.altKey); }
+    else if (mod && ev.key.toLowerCase() === 'h') { ev.preventDefault(); editor?.find(true); }
 });
 
 // ── messages ─────────────────────────────────────────────────────────────────
@@ -158,6 +179,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
                     submit,
                     onFeature: fid => { if (fid && fid !== selected) { selected = fid; tree.querySelectorAll('.codoc-row').forEach(r => r.classList.toggle('is-selected', (r as HTMLElement).dataset.fid === fid)); } },
                     openCite: (file, symbol) => send({ kind: 'open-cite', file, symbol }),
+                    onConflict: (_bid, conflict) => notify(`an edit could not apply (${conflict}); the paragraph was reloaded`),
                 });
             } else {
                 editor.adopt(m.proj, realizing);
@@ -172,8 +194,12 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
             return;
         case 'status':
             status = m.status ?? {};
+            if (typeof m.status?.doc_language === 'string') language = m.status.doc_language;
             if (projection) renderToolbar(projection);
             renderStatus();
+            return;
+        case 'find':
+            editor?.find(!!m.replace);
             return;
         case 'reveal':
             if (m.fid) reveal(m.fid);

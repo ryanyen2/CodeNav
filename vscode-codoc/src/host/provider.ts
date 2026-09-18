@@ -26,10 +26,11 @@ export interface HostToWebview {
 }
 
 export interface WebviewToHost {
-    kind: 'ready' | 'submit' | 'open-cite' | 'realize' | 'sync' | 'open-file';
+    kind: 'ready' | 'submit' | 'open-cite' | 'realize' | 'sync' | 'open-file' | 'set-language';
     subs?: Submission[];
     file?: string;
     symbol?: string;
+    tag?: string;
 }
 
 const CLIENT = 'ide';
@@ -62,7 +63,8 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
         };
         const postStatus = async () => {
             const st = await readJson<Record<string, unknown>>(path.join(codocDir, 'status.json'));
-            if (st) post({ kind: 'status', status: st });
+            const cfg = await readJson<{ doc_language?: string }>(path.join(codocDir, 'config.json'));
+            if (st) post({ kind: 'status', status: { ...st, doc_language: cfg?.doc_language ?? 'en' } });
         };
 
         // Acks: tail the ack file from its current end.
@@ -78,11 +80,11 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
             if (acks.length) post({ kind: 'acks', acks });
         };
 
-        const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(codocDir), '{projection.json,status.json,inbox/ide.ack.jsonl}'));
+        const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(codocDir), '{projection.json,status.json,config.json,inbox/ide.ack.jsonl}'));
         const onChange = (uri: vscode.Uri) => {
             const name = path.basename(uri.fsPath);
             if (name === 'projection.json') void postProjection();
-            else if (name === 'status.json') void postStatus();
+            else if (name === 'status.json' || name === 'config.json') void postStatus();
             else if (name.endsWith('.ack.jsonl')) void drainAcks();
         };
         const subs = [watcher, watcher.onDidChange(onChange), watcher.onDidCreate(onChange)];
@@ -106,6 +108,16 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
                 case 'open-file':
                     if (msg.file) await vscode.window.showTextDocument(vscode.Uri.file(path.join(root, msg.file)), { preview: true });
                     return;
+                case 'set-language': {
+                    // `.codoc/config.json` is the one tracked setting file; the daemon and
+                    // every prompt read `doc_language` from it (codoc lang does the same).
+                    if (!msg.tag) return;
+                    const p = path.join(codocDir, 'config.json');
+                    const cfg = (await readJson<Record<string, unknown>>(p)) ?? {};
+                    await fsp.writeFile(p, JSON.stringify({ ...cfg, doc_language: msg.tag }, null, 2) + '\n', 'utf8');
+                    await postStatus();
+                    return;
+                }
                 case 'realize':
                 case 'sync': {
                     const cli = this.codocCli();

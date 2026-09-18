@@ -145,6 +145,30 @@ export function makeHeading(state: EditorState, env: Env, level: number, markerL
     return { tr: tag(tr, ops), ops, cids: [] };
 }
 
+/** Turn the caret's heading back into a paragraph (the `/` menu), dropping
+ *  the typed marker characters. A heading with a body keeps its body: the
+ *  paragraphs simply join the previous feature. */
+export function makeParagraph(state: EditorState, env: Env, markerLen: number): Gesture | null {
+    const b = blockAt(state, state.selection.from);
+    if (!b) return null;
+    const bid = b.node.attrs.bid as string;
+    const shadow = env.shadows.get(bid);
+    if (!shadow) return null;
+    const ops: OpBody[] = [];
+    let tr = state.tr;
+    if (markerLen > 0) {
+        const refs = shadow.delete(0, markerLen);
+        ops.push({ kind: 'text.delete', target: { bid, path: 'text' }, payload: { from: refs[0], to: refs[refs.length - 1] } });
+        tr = tr.delete(b.pos + 1, b.pos + 1 + markerLen);
+    }
+    if (b.node.type.name === 'heading') {
+        ops.push({ kind: 'block.set', target: { bid, path: 'kind' }, payload: { value: 'paragraph' } });
+        tr = tr.setNodeMarkup(b.pos, state.schema.nodes.paragraph, { bid, head: b.node.attrs.head });
+    }
+    if (!ops.length) return null;
+    return { tr: tag(tr, ops), ops, cids: [] };
+}
+
 /** Tab / Shift-Tab on a heading: one level deeper or shallower. */
 export function relevel(state: EditorState, env: Env, delta: number): Gesture | null {
     const b = blockAt(state, state.selection.from);

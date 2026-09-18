@@ -10,7 +10,8 @@
  */
 import type { Claim, Phase, ProjectedBlock, Projection, Run, TextField } from './projection';
 
-export type Ink = 'ink-unsent' | 'ink-sent' | 'plan-open' | 'plan-accepted' | 'plan-cut' | 'code-added' | 'code-removed';
+export type Ink = 'ink-unsent' | 'ink-sent' | 'plan-open' | 'plan-accepted' | 'plan-cut' | 'code-added' | 'code-removed'
+    | 'author-human' | 'author-loop' | 'author-agent' | 'author-other';
 
 export interface Paint {
     bid: string;
@@ -77,14 +78,15 @@ export function groundPaints(claims: Claim[] | undefined): Paint[] {
 /** All paints for one block. Ink wins over ground where both claim a range
  *  (the person's words are theirs, whatever the code did around them). */
 export function paintsFor(b: ProjectedBlock, proj: Projection, fid: string | null, unacked: ReadonlySet<string>,
-                          watermarks: { handoff: Record<string, number>; realized: Record<string, number> }): Paint[] {
+                          watermarks: { handoff: Record<string, number>; realized: Record<string, number> },
+                          history = false): Paint[] {
     const f = b.fields.text as TextField | undefined;
     if (!f || !('runs' in f)) return [];
     const ink = inkPaints(b, f, watermarks.realized, watermarks.handoff, unacked);
     const plan = planPaints(b, f, proj.plans);
     const ground = groundPaints(fid ? proj.claims[fid]?.filter(c => c.bid === b.id) : undefined)
         .filter(g => !ink.some(i => i.start < g.end && g.start < i.end));
-    return [...ground, ...plan, ...ink];
+    return [...(history ? authorPaints(b, f) : []), ...ground, ...plan, ...ink];
 }
 
 /** The margin marker and row glyph for a feature's phase: one palette. */
@@ -101,6 +103,14 @@ export const PHASE_LABEL: Record<Phase, string> = {
 export const PHASE_CHANNEL: Record<Phase, 'human' | 'plan' | 'code' | 'none'> = {
     synced: 'none', edited: 'human', queued: 'human', realizing: 'none', proposed: 'plan', drifted: 'code', planned: 'plan',
 };
+
+/** History: who wrote each run of words, one class per actor kind. */
+export function authorPaints(b: ProjectedBlock, f: TextField): Paint[] {
+    return displayRuns(f).map(r => {
+        const kind = r.actor.startsWith(HUMAN) ? 'human' : r.actor === 'loop' ? 'loop' : r.actor.startsWith('agent:') ? 'agent' : 'other';
+        return { bid: b.id, start: r.start, end: r.end, cls: `author-${kind}` as Ink, title: `written by ${r.actor}` };
+    });
+}
 
 /** Display runs for History: adjacent runs by the same actor merge, then snap
  *  to word boundaries so a one-character fix does not split a word visually. */

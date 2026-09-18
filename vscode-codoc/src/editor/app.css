@@ -67,3 +67,35 @@ html, body { margin: 0; height: 100%; background: var(--codoc-bg); color: var(--
 
 @keyframes codoc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 @media (prefers-reduced-motion: reduce) { .codoc-ink-unsent, .codoc-dot-realizing, .codoc-marker-realizing { animation: none; } }
+
+/* find */
+.codoc-page { position: relative; }
+.codoc-find { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -16px -32px 12px; padding: 6px 12px; background: var(--codoc-bg); border-bottom: 1px solid var(--codoc-faint); font-size: 12.5px; }
+.codoc-find-input { font: inherit; padding: 2px 6px; border: 1px solid var(--codoc-faint); border-radius: 4px; background: transparent; color: var(--codoc-fg); min-width: 16ch; }
+.codoc-find-count { color: var(--codoc-muted); min-width: 6ch; }
+.codoc-find-replace { display: flex; gap: 6px; flex-basis: 100%; }
+.codoc-find-match { background: color-mix(in srgb, #e6b800 30%, transparent); }
+.codoc-find-match.is-current { outline: 2px solid #e6b800; }
+
+/* the / and @ menus */
+.codoc-menu { position: absolute; z-index: 6; min-width: 18ch; max-width: 48ch; background: var(--codoc-bg); border: 1px solid var(--codoc-faint); border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.12); font-size: 12.5px; overflow: hidden; }
+.codoc-menu-item { display: flex; justify-content: space-between; gap: 12px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+.codoc-menu-item.is-active, .codoc-menu-item:hover { background: var(--codoc-faint); }
+.codoc-menu-detail { color: var(--codoc-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; overflow: hidden; text-overflow: ellipsis; }
+
+/* drag handles */
+.codoc-handle { position: absolute; left: -34px; top: 0.35em; width: 12px; height: 16px; border-radius: 3px; cursor: grab; opacity: 0; background: radial-gradient(circle, var(--codoc-muted) 1px, transparent 1.5px) 0 0 / 6px 6px; }
+.codoc-paragraph, .codoc-heading { position: relative; }
+.codoc-paragraph:hover .codoc-handle, .codoc-heading:hover .codoc-handle { opacity: .7; }
+.is-drop-above { box-shadow: 0 -2px 0 var(--codoc-human); }
+.is-drop-below { box-shadow: 0 2px 0 var(--codoc-human); }
+
+/* History: who wrote which words */
+.codoc-author-human { background: color-mix(in srgb, var(--codoc-human) 12%, transparent); }
+.codoc-author-loop { background: color-mix(in srgb, var(--codoc-added) 12%, transparent); }
+.codoc-author-agent { background: color-mix(in srgb, var(--codoc-plan) 18%, transparent); }
+.codoc-author-other { background: color-mix(in srgb, var(--codoc-fg) 6%, transparent); }
+
+/* toolbar extras */
+.codoc-lang { font: inherit; font-size: 12px; border: 1px solid var(--codoc-faint); border-radius: 6px; background: transparent; color: var(--codoc-fg); padding: 1px 4px; }
+.codoc-status.is-notice { color: var(--codoc-removed); }

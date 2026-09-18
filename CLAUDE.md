@@ -26,12 +26,13 @@ codoc watch                      # the daemon (the only applier)
 codoc status | sync | realize    # where things stand; one pass; build the queue
 codoc handoff <feature> --asked  # the CLI's ⌘S
 codoc accept|reject <plan>       # verdicts
+codoc done <feature>             # mark a request realized when the build moved no bound symbol
 codoc history <feature>          # ops and per-word attribution
 codoc lang [tag] | translate     # authoring language; convert existing prose
 codoc rebuild | snapshot         # replay the logs; fold them
 codoc import-v1                  # bring a v1 codoc.db into the log
 
-python3.11 -m pytest tests/      # Python tests (179)
+python3.11 -m pytest tests/      # Python tests (202)
 cd vscode-codoc && npx vitest run && npx tsc --noEmit && node esbuild.config.mjs
 ```
 

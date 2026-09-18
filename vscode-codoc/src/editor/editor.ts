@@ -24,6 +24,9 @@ import { Recorder, reconcile } from '../calc/recorder';
 import type { Shadow } from '../calc/shadow';
 import { RECORDED, deleteFeature, makeHeading, mergeBackward, mergeForward, moveBlock, relevel, splitBlock, type Env } from './commands';
 import { buildDecorations } from './decorations';
+import { dragPlugin } from './drag';
+import { FindWidget, findPlugin } from './find';
+import { Menus } from './menus';
 import { codocSchema } from './schema';
 
 export interface EditorHost {
@@ -33,6 +36,8 @@ export interface EditorHost {
     onFeature?(fid: string | null): void;
     /** Open a code location (a cite mark). */
     openCite?(file: string, symbol: string): void;
+    /** The daemon refused one of this editor's ops; the block was re-adopted. */
+    onConflict?(bid: string, conflict: string): void;
 }
 
 export interface EditorHandle {
@@ -41,6 +46,9 @@ export interface EditorHandle {
     ack(acks: Ack[]): void;
     flush(): void;
     featureAt(pos: number): string | null;
+    /** Show who wrote each run of words (the History stance). */
+    setHistory(on: boolean): void;
+    find(replace: boolean): void;
     deleteFeature(fid: string): void;
     moveBlock(bid: string, afterBid: string | 'START', levelDelta?: number): void;
     projection(): Projection | null;
@@ -60,6 +68,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
     const { doc, shadows } = docFrom(schema, proj);
     let projection: Projection = proj;
     let realizing: ReadonlySet<string> = new Set();
+    let history = false;
     /** Client ids awaiting an ack, by block. */
     const unacked = new Map<string, Set<string>>();
     /** Submissions not yet flushed. */
@@ -94,7 +103,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             const pb = byId.get(bid);
             if (!pb) return;
             const marks = watermarksFor(fid);
-            out.set(bid, paintsFor(pb, projection, fid, unackedOps(bid), marks));
+            out.set(bid, paintsFor(pb, projection, fid, unackedOps(bid), marks, history));
         });
         return out;
     }
@@ -158,11 +167,22 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
     }
 
     function ack(acks: Ack[]): void {
+        const refused = new Map<string, string>();
         for (const a of acks) {
             for (const [bid, set] of unacked) {
-                if (set.delete(a.cid) && set.size === 0) unacked.delete(bid);
+                if (set.delete(a.cid)) {
+                    if (a.conflict) refused.set(bid, a.conflict);
+                    if (set.size === 0) unacked.delete(bid);
+                }
             }
-            if (a.op) for (const sh of shadows.values()) sh.resolve(a.cid, a.op);
+            if (a.op && !a.conflict) for (const sh of shadows.values()) sh.resolve(a.cid, a.op);
+        }
+        if (refused.size) {
+            // The op did nothing in the store: the block's shadow lies. Take the
+            // projection's word for that block again (09-editor §5).
+            for (const [bid, code] of refused) host.onConflict?.(bid, code);
+            adopt(projection, realizing, new Set(refused.keys()));
+            return;
         }
         view.dispatch(view.state.tr.setMeta(decoKey, true));
     }
@@ -214,10 +234,15 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         return g.tr.delete(b.before(1) + 1, b.before(1) + 1 + n).setMeta(RECORDED, g.ops);
     });
 
+    let menus: Menus | null = null;
     const state = EditorState.create({
         schema,
         doc,
-        plugins: [keys, inputRules({ rules: [headingRule] }), keymap(baseKeymap), decoPlugin],
+        plugins: [
+            new Plugin({ props: { handleKeyDown: (_v, ev) => menus?.handleKeyDown(ev) ?? false } }),
+            keys, inputRules({ rules: [headingRule] }), keymap(baseKeymap), decoPlugin, findPlugin(),
+            dragPlugin((bid, after) => { const g = moveBlock(view.state, env, bid, after); if (g) view.dispatch(g.tr); }),
+        ],
     });
 
     const view = new EditorView(container, {
@@ -226,7 +251,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             record(tr);
             const next = view.state.apply(tr);
             view.updateState(next);
-            if (tr.selectionSet || tr.docChanged) host.onFeature?.(featureAt(next.selection.from));
+            if (tr.selectionSet || tr.docChanged) { host.onFeature?.(featureAt(next.selection.from)); menus?.update(); }
         },
         handleClickOn(_v, _pos, node, _np, event) {
             const cite = (event.target as HTMLElement | null)?.closest?.('[data-cite]') as HTMLElement | null;
@@ -237,6 +262,9 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             return false;
         },
     });
+
+    menus = new Menus(view, env, () => projection, container);
+    const finder = new FindWidget(view, container);
 
     function featureAt(pos: number): string | null {
         const $p = view.state.doc.resolve(Math.min(pos, view.state.doc.content.size));
@@ -249,13 +277,13 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
     }
 
     // ── adoption ───────────────────────────────────────────────────────────
-    function adopt(next: Projection, nowRealizing: ReadonlySet<string> = new Set()): void {
+    function adopt(next: Projection, nowRealizing: ReadonlySet<string> = new Set(), force: ReadonlySet<string> = new Set()): void {
         flush();
         projection = next;
         realizing = nowRealizing;
         const current: Array<{ bid: string; head: number }> = [];
-        view.state.doc.forEach(n => current.push({ bid: n.attrs.bid as string, head: n.attrs.head as number }));
-        const held = new Set([...unacked.keys()].filter(b => (unacked.get(b)?.size ?? 0) > 0));
+        view.state.doc.forEach(n => current.push({ bid: n.attrs.bid as string, head: force.has(n.attrs.bid) ? -1 : n.attrs.head as number }));
+        const held = new Set([...unacked.keys()].filter(b => (unacked.get(b)?.size ?? 0) > 0 && !force.has(b)));
         const plan = adoptionPlan(current, next, held);
         if (!plan.length) { view.dispatch(view.state.tr.setMeta(decoKey, true)); return; }
         const byId = new Map(next.blocks.map(b => [b.id, b]));
@@ -269,7 +297,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         for (const b of next.blocks) {
             if (held.has(b.id) && currentNodes.has(b.id)) { nodes.push(currentNodes.get(b.id)!); continue; }
             const cur = currentNodes.get(b.id);
-            if (cur && cur.attrs.head === b.head) { nodes.push(cur); continue; }
+            if (cur && cur.attrs.head === b.head && !force.has(b.id)) { nodes.push(cur); continue; }
             const { node, shadow } = blockNode(schema, b);
             if (shadow) shadows.set(b.id, shadow);
             nodes.push(node);
@@ -302,6 +330,8 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         ack,
         flush,
         featureAt,
+        setHistory: on => { history = on; view.dispatch(view.state.tr.setMeta(decoKey, true)); },
+        find: replace => finder.open(replace),
         deleteFeature: fid => {
             const binds = projection.bindings.by_feature[fid] ?? [];
             const g = deleteFeature(view.state, env, fid, binds);
