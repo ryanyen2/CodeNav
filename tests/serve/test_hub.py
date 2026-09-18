@@ -199,3 +199,4 @@ def test_set_language_takes_a_tag_and_not_a_string(tmp_path):
     assert bad.status_code == 400 and "config.json" not in [p.name for p in cd.iterdir()]
     assert c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "set-language", "tag": "zh-Hans"}).json() == {"ok": True}
     assert json.loads((cd / "config.json").read_text())["doc_language"] == "zh-Hans"
+

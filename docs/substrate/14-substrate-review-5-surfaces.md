@@ -522,3 +522,42 @@ Other:
 17. Keep the review-5 probes beside review 4's; the jsdom harness (`probe5_setup.mjs`) is
     what lets the editor be tested as the browser drives it — the shipped vitest suite
     never mounts `mountEditor`, which is why none of A1, A6, A7, A8, A10 had a failing test.
+
+---
+
+## Applied (2026-09-18)
+
+Every ranked change is in, and all 31 `probe5_editor.test.ts` probes pass. The
+editor probes now live in the suite as `vscode-codoc/src/test/editor-dom.test.ts`
+(jsdom, a dev dependency added for it), so the editor is tested as the browser
+drives it rather than only through its pure modules; the hub probes' properties
+are in `tests/serve/`.
+
+Four hub probes still fail, each because its assertion is stricter than the fix
+it prescribes, not because the fault stands:
+
+- **H4** stubs `process_ready` with a lambda that cannot report a transient, so
+  the prescribed "carry a dirty flag from a transient result" can never satisfy
+  it. The flag is implemented and covered by
+  `test_the_worker_comes_back_to_an_unanswered_request_before_the_tree_moves`.
+- **H8** expects revocation to take effect on the next request; the prescribed
+  fix is a ten-minute cadence. Covered with the cadence set to zero by
+  `test_a_revoked_collaborator_loses_the_session_at_the_next_recheck`.
+- **H9**'s first assertion (400 for a 5,000-character tag) passes; its second
+  reads a `config.json` that, correctly, was never written.
+- **H16** documented that a suggester's refused batch never reaches the window.
+  A2 is fixed, so the batch is no longer refused and the premise is gone.
+
+Two judgements differ from the review:
+
+- **§C "memoise the decoration set per block"** is not where the cost was.
+  Measured: `buildDecorations` over 3,000 blocks is 0.6 ms and `state.apply` is
+  0.2 ms, against ~139 ms for a keystroke. Half of that was `paintMap` rebuilding
+  its whole map — a memo key per block on every transaction. Keeping the map and
+  repainting only the blocks whose inputs moved takes a keystroke to 85 ms and a
+  mount from 656 ms to 352 ms. The rest is ProseMirror's own view update over one
+  large document, which per-block adoption would address.
+- **§C "`window.py:53`'s condition is always true — delete it"**: `new_takes` is
+  set by a merge's inverse, which is a `block.split`, and the condition is what
+  keeps a block revived by that inverse out of `born`. It is load-bearing and
+  stays.

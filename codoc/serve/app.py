@@ -119,6 +119,10 @@ def build_app(codoc_dir: str, *, static_dir: str | None = None, auth: AuthContex
         s = session(request)
         if s is None:
             return denied()
+        # Each connection polls the control files twice a second for as long as
+        # it is held, so opening them is a write of its own kind.
+        if rate_limiter is not None and not rate_limiter.allow(f"events:{s.login}"):
+            return JSONResponse({"error": "rate limited"}, status_code=429)
         from sse_starlette.sse import EventSourceResponse
         from codoc.serve.push import event_source
         return EventSourceResponse(event_source(cd, inbox_of(s), is_disconnected=request.is_disconnected))

@@ -117,6 +117,8 @@ def record_role(codoc_dir: str | Path, login: str, role: str) -> None:
     from codoc.doclang import read_config, write_config
     from codoc.substrate.log import hub_actor
     roles = dict(read_config(codoc_dir).get("roles") or {})
+    if roles.get(hub_actor(login)) == role:
+        return                       # a tracked file: signing in is not a change
     roles[hub_actor(login)] = role
     write_config(codoc_dir, roles=roles)
 

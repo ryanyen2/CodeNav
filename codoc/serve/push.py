@@ -89,22 +89,30 @@ class Feed:
                 out.append({"kind": "projection", "proj": json.loads(proj), "realizing": []})
             except ValueError:
                 pass
-        st = status_message(self.dir, self.actor)
-        key = json.dumps(st, sort_keys=True) if st else ""
-        if st and key != self.sent.get(STATUS):
-            self.sent[STATUS] = key
-            out.append(st)
+        # Status is two files and a roles table; this runs twice a second per
+        # connection, so it is read only when one of them has been written.
+        if self._moved(STATUS) or self._moved(CONFIG):
+            st = status_message(self.dir, self.actor)
+            key = json.dumps(st, sort_keys=True) if st else ""
+            if st and key != self.sent.get(STATUS):
+                self.sent[STATUS] = key
+                out.append(st)
         acks = self._acks()
         if acks:
             out.append({"kind": "acks", "acks": acks})
         return out
 
     def _if_changed(self, name: str) -> str | None:
+        return None if not self._moved(name) else _read(self.dir / name)
+
+    def _moved(self, name: str) -> bool:
+        """Whether this file has been written since we last looked. A file that
+        does not exist has no stamp, and is looked at every time."""
         stamp = _stamp(self.dir / name)
         if stamp is not None and stamp == self.stamps.get(name):
-            return None
+            return False
         self.stamps[name] = stamp
-        return _read(self.dir / name)
+        return True
 
     def _acks(self) -> list[dict]:
         path = L.inbox_dir(self.dir) / f"{self.client}.ack.jsonl"

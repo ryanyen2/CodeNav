@@ -11,6 +11,7 @@
     const w = window as unknown as { acquireVsCodeApi?: () => unknown };
     if (typeof w.acquireVsCodeApi === 'function') return;   // inside VS Code: nothing to do
     let state: unknown;
+    let signedOut = false;
     try { state = JSON.parse(localStorage.getItem('codoc:state') ?? 'null'); } catch { state = undefined; }
     w.acquireVsCodeApi = () => ({
         postMessage(m: unknown) {
@@ -19,7 +20,17 @@
                 headers: { 'content-type': 'application/json', 'x-codoc-csrf': '1' },
                 body: JSON.stringify(m),
             }).then(async r => {
-                if (r.status === 401) { location.href = '/auth/login'; return; }
+                if (r.status === 401) {
+                    // Navigating away here loses every word typed since the last
+                    // flush, with no notice. Say so, leave the page standing, and
+                    // let the person sign in again in their own time — the words
+                    // are still on screen and the next flush will carry them.
+                    signedOut = true;
+                    window.postMessage({ kind: 'notice', text: 'your session ended; sign in again to send these edits' },
+                                       window.location.origin);
+                    return;
+                }
+                signedOut = false;
                 const body = await r.json().catch(() => null) as { kind?: string } | null;
                 if (r.ok && body && typeof body.kind === 'string') { window.postMessage(body, window.location.origin); return; }  // a reply the app reads as a host message
                 // 202 is the hub saying it cannot do this one (it has no
@@ -39,5 +50,20 @@
             try { window.postMessage(JSON.parse((ev as MessageEvent).data), window.location.origin); } catch { /* torn event */ }
         });
     }
-    es.onerror = () => { /* EventSource reconnects on its own; a 401 shows the sign-in page on reload */ };
+    // EventSource reconnects on its own and cannot report the status it got, so
+    // a session that ended mid-edit shows up here as a silent stream of
+    // retries. Ask once: if the hub no longer knows this viewer, say so rather
+    // than letting them keep typing into a page nothing will accept.
+    es.onerror = () => {
+        if (signedOut) return;
+        void fetch('/api/whoami', { credentials: 'same-origin' })
+            .then(r => r.json())
+            .then((me: { authenticated?: boolean }) => {
+                if (me.authenticated) return;
+                signedOut = true;
+                window.postMessage({ kind: 'notice', text: 'your session ended; sign in again to send these edits' },
+                                   window.location.origin);
+            })
+            .catch(() => undefined);
+    };
 })();
