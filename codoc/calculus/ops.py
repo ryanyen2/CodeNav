@@ -59,6 +59,9 @@ PLANNABLE = frozenset({TEXT_INSERT, TEXT_MARK, BLOCK_ADD, BLOCK_SET, BLOCK_SPLIT
 # denies it to every ``agent:*`` actor.
 VERDICTS = frozenset({PLAN_ACCEPT, PLAN_REJECT, PLAN_REOPEN, FEATURE_HANDOFF, FEATURE_REALIZED})
 
+# Ops that change the set of plans or a plan's status, whatever blocks they touch.
+PLAN_KINDS = frozenset({PLAN_OPEN, PLAN_ACCEPT, PLAN_REJECT, PLAN_REOPEN})
+
 STRUCTURAL = frozenset({BLOCK_ADD, BLOCK_SPLIT, BLOCK_MERGE, BLOCK_MOVE, BLOCK_DELETE, BLOCK_RESTORE})
 
 

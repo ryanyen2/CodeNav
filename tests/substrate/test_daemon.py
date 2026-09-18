@@ -65,3 +65,55 @@ def test_inbox_ops_are_drained_and_acked(tmp_path):
     assert (L.inbox_dir(d.codoc_dir) / "ide.ack.jsonl").exists()
     status = json.loads((d.codoc_dir / "status.json").read_text())
     assert status["state"] == "edited"
+
+
+def test_a_warm_publisher_writes_what_a_cold_one_would(tmp_path):
+    """The per-block memo is a pure-function cache: every key is a counter the
+    store advances when the answer can change (spec §6)."""
+    import json
+    import random
+    from codoc.calculus.doc import PARAGRAPH
+    from codoc.calculus.ids import START
+    from codoc.substrate.publish import Publisher
+    from codoc.substrate.workspace import Workspace
+
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws)
+    warm = Publisher(tmp_path / ".codoc", str(tmp_path))
+    rng = random.Random(4)
+    last = None
+    for step in range(60):
+        t = ws.store.blocks["p1"].text()
+        r = rng.random()
+        if r < 0.3:
+            ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                        "payload": {"after": list(t.last_live_ref()), "text": f" w{step}"}}], actor="human:local")
+        elif r < 0.45 and t.live_len() > 3:
+            ws.submit([{"kind": K.TEXT_MARK, "target": {"bid": "p1", "path": "text"},
+                        "payload": {"kind": "bold", "attrs": {}, "start": list(t.ref_at(0)), "end": list(t.ref_at(3)),
+                                    "on": rng.random() < 0.5}}], actor="human:local")
+        elif r < 0.6:
+            last = ws.open_plan(actor="loop", kind="edit", target="p1")
+            ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                        "payload": {"after": list(t.last_live_ref()), "text": " proposed"}}], actor="loop", plan=last)
+        elif r < 0.7 and last:
+            ws.submit([{"kind": K.PLAN_ACCEPT if rng.random() < 0.5 else K.PLAN_REJECT,
+                        "target": {"pid": last}, "payload": {}}], actor="human:local")
+            last = None
+        elif r < 0.8:
+            bid = f"b{step}"
+            ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": bid}, "payload": {"kind": PARAGRAPH, "after": "p1"}},
+                       {"kind": K.TEXT_INSERT, "target": {"bid": bid, "path": "text"}, "payload": {"after": START, "text": f"para {step}"}}],
+                      actor="loop")
+        elif r < 0.9:
+            ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {}}], actor="human:local")
+        else:
+            ws.submit([{"kind": K.BIND_REFRESH, "target": {"fid": "h1"},
+                        "payload": {"file": "c.py", "symbol": "c.py::send", "fingerprint": f"f{step}"}}], actor="loop")
+        got = warm.publish(ws.store, force=True)
+        warm_files = {f: (tmp_path / ".codoc" / f).read_text() for f in ("projection.json", "tree.codoc")}
+        cold = Publisher(tmp_path / ".codoc", str(tmp_path))
+        assert cold.phases(ws.store) == warm.phases(ws.store), step
+        assert json.loads(warm_files["projection.json"]) == cold.projection(ws.store, cold.phases(ws.store)), step
+        assert warm_files["tree.codoc"] == cold.export(ws.store), step
+        assert got["state"] == cold.publish(ws.store, force=True)["state"], step

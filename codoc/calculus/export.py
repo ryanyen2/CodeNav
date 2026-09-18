@@ -41,36 +41,37 @@ _FENCE = re.compile(r"^```codoc:([a-z_]+) \{#(b-[0-9a-f]+)\}$")
 MODE = "rejected"
 
 
-def export_markdown(store: Store) -> str:
+def export_block(store: Store, b) -> list[str]:
+    """One block's lines in the export (empty when it says nothing). Pure, and
+    a function of the block plus which plans are open, so a caller may memoize
+    it on ``(block_head[b.id], plans_head)``."""
+    if b.kind in (HEADING, PARAGRAPH):
+        t = b.text()
+        md = markdown(t, MODE, store)
+        if t.live_len() and not md.strip():
+            return []          # nothing here but an open plan's words
+        if b.kind == HEADING:
+            return [f"{'#' * max(1, b.level)} {md} {{#{b.id}}}", ""]
+        return [md, ""] if md.strip() else []
+    if not is_exported(b.kind):
+        return []
+    # Text fields as Markdown, empty ones left out (an import recreates them
+    # empty), so the fence is a function of what the block says.
+    content = {}
+    for k, v in b.content.items():
+        if k in text_fields(b.kind):
+            md_field = markdown(v, MODE, store)
+            if md_field:
+                content[k] = md_field
+        else:
+            content[k] = v
+    return [f"```codoc:{b.kind} {{#{b.id}}}", json.dumps(content, ensure_ascii=False, sort_keys=True), "```", ""]
+
+
+def export_markdown(store: Store, lines=export_block) -> str:
     out: list[str] = []
     for b in store.ordered():
-        if b.kind in (HEADING, PARAGRAPH):
-            t = b.text()
-            md = markdown(t, MODE, store)
-            if t.live_len() and not md.strip():
-                continue        # nothing here but an open plan's words
-        if b.kind == HEADING:
-            out.append(f"{'#' * max(1, b.level)} {md} {{#{b.id}}}")
-            out.append("")
-        elif b.kind == PARAGRAPH:
-            if md.strip():
-                out.append(md)
-                out.append("")
-        elif is_exported(b.kind):
-            # Text fields as Markdown, empty ones left out (an import recreates
-            # them empty), so the fence is a function of what the block says.
-            content = {}
-            for k, v in b.content.items():
-                if k in text_fields(b.kind):
-                    md_field = markdown(v, MODE, store)
-                    if md_field:
-                        content[k] = md_field
-                else:
-                    content[k] = v
-            out.append(f"```codoc:{b.kind} {{#{b.id}}}")
-            out.append(json.dumps(content, ensure_ascii=False, sort_keys=True))
-            out.append("```")
-            out.append("")
+        out.extend(lines(store, b))
     return "\n".join(out).rstrip("\n") + "\n" if out else ""
 
 

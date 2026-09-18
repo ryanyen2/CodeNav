@@ -29,7 +29,7 @@ from codoc.loop.activity import close_epoch, epoch_touched_files, read_epoch
 from codoc.loop.gitref import head_sha
 from codoc.loops import realize as R
 from codoc.substrate import log as L
-from codoc.substrate.publish import publish, realizing_is_fresh
+from codoc.substrate.publish import Publisher, realizing_is_fresh
 from codoc.substrate.workspace import Roles, Workspace
 
 CODE_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".rb", ".cpp", ".c", ".h"}
@@ -70,7 +70,7 @@ class Daemon:
         self._changeset = changeset
         self._propose = propose
         self.identity = L.actor_for          # inbox file name → actor (log.CLIENT_IDENTITY, hub-<login>)
-        self._published: tuple | None = None
+        self.publisher = Publisher(self.codoc_dir, str(self.root))
 
     # ── routing ────────────────────────────────────────────────────────────
     def classify(self, paths: list[str]) -> tuple[set[str], bool, bool]:
@@ -95,6 +95,7 @@ class Daemon:
         now = now if now is not None else time.time()
         code, inbox, activity = self.classify(paths)
         notes: list[str] = []
+        rebuilt = False
         # 1. HEAD moved → the set of logs on disk may have changed (a checkout,
         # a pull): rebuild from them, then start a new session file.
         sha = head_sha(self.root)
@@ -102,7 +103,8 @@ class Daemon:
             self.state.head = sha
             self.ws.rebuild()
             self.ws.rotate_session()
-            self._published = None
+            self.publisher.invalidate()      # a different set of logs is a different tree
+            rebuilt = True
             notes.append("session rotated (HEAD moved)")
         # 2. Client ops, under the roles the tracked config names right now
         # (the hub adds a login's role when they sign in).
@@ -145,13 +147,9 @@ class Daemon:
                 notes.append(f"holding {len(code)} file(s) for the open session")
             else:
                 notes.append(self.reflect(code, under_epoch=under_epoch))
-        # 5. Publish, unless nothing that feeds the derived files has changed.
-        lease = realizing_is_fresh(self.codoc_dir, now)
-        key = (self.ws.store.pos, lease)
-        if key != self._published:
-            realizing = set(R.queued(self.ws.store)) if lease else set()
-            publish(self.codoc_dir, self.ws.store, root_dir=str(self.root), realizing=realizing)
-            self._published = key
+        # 5. Publish (the publisher skips the write when nothing moved).
+        realizing = set(R.queued(self.ws.store)) if realizing_is_fresh(self.codoc_dir, now) else set()
+        self.publisher.publish(self.ws.store, realizing=realizing, force=rebuilt)
         return "; ".join(notes) or "no-op"
 
     def reflect(self, files: set[str], *, under_epoch: bool = False) -> str:

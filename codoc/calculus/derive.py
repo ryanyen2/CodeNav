@@ -431,30 +431,38 @@ def dead_cites(store: Store, known: set[tuple[str, str]]) -> list[tuple[str, Mar
 
 # ── projection ───────────────────────────────────────────────────────────────
 
-def projection(store: Store, realizing: set[str] = frozenset(), phases: dict[str, str] | None = None) -> dict:
+def block_entry(store: Store, b: Block) -> dict:
+    """One block as the editor reads it. Pure, and a function of the block's
+    own state plus which plans are open, so a caller may memoize it on
+    ``(block_head[b.id], plans_head)`` (spec §6, ``projection``)."""
+    entry = {"id": b.id, "kind": b.kind, "level": b.level, "rank": b.rank, "head": store.block_head.get(b.id, 0),
+             "fields": {}}
+    for f in text_fields(b.kind):
+        t = b.text(f)
+        entry["fields"][f] = {
+            "text": t.live_text(),
+            "runs": [r.__dict__ for r in attribution(t, merge=False)],
+            "spans": [{"kind": s.kind, "attrs": s.attrs, "start": s.start, "end": s.end} for s in live_spans(t)],
+            "suggest_del": [{"plan": s.attrs["plan"], "start": s.start, "end": s.end} for s in _suggest_spans(t, store)],
+        }
+    for k, v in b.content.items():
+        if k not in text_fields(b.kind):
+            entry["fields"][k] = v
+    return entry
+
+
+def projection(store: Store, realizing: set[str] = frozenset(), phases: dict[str, str] | None = None,
+               entry=block_entry) -> dict:
     """What an editor needs: every live block with its text, runs, spans, plan
     claims and its feature's phase. Dead segments are omitted; the editor asks
-    for ``ground`` per feature when History is on. ``phases`` may be passed in
-    by a caller that already computed them."""
+    for ``ground`` per feature when History is on. ``phases`` and ``entry`` may
+    be passed in by a caller that already computed or memoized them."""
     blocks = []
     phases = dict(phases) if phases is not None else {}
     for b in store.ordered():
         if b.kind == HEADING and b.id not in phases:
             phases[b.id] = phase(store, b.id, realizing)
-        entry = {"id": b.id, "kind": b.kind, "level": b.level, "rank": b.rank, "head": store.block_head.get(b.id, 0),
-                 "fields": {}}
-        for f in text_fields(b.kind):
-            t = b.text(f)
-            entry["fields"][f] = {
-                "text": t.live_text(),
-                "runs": [r.__dict__ for r in attribution(t, merge=False)],
-                "spans": [{"kind": s.kind, "attrs": s.attrs, "start": s.start, "end": s.end} for s in live_spans(t)],
-                "suggest_del": [{"plan": s.attrs["plan"], "start": s.start, "end": s.end} for s in _suggest_spans(t, store)],
-            }
-        for k, v in b.content.items():
-            if k not in text_fields(b.kind):
-                entry["fields"][k] = v
-        blocks.append(entry)
+        blocks.append(entry(store, b))
     watermarks = {fid: {"handoff": w.handoff, "realized": w.realized}
                   for fid, w in store.watermarks_by_fid.items() if (w.handoff or w.realized) and fid in phases}
     return {"head": store.pos, "frontier": dict(store.frontier), "blocks": blocks, "phases": phases,

@@ -17,7 +17,11 @@ mutation that changes them:
                       canonical holders of an applied op; the client's hint
                       for a conflicted one), so every "ops on this feature"
                       view is O(ops on the feature), not O(log)
-- ``block_head`` / ``structural_head``   cache keys for the derived views
+- ``block_head`` / ``structural_head`` / ``plans_head``   cache keys for the
+                      derived views: a block's own head advances whenever an op
+                      changes it, the structural head on any add/delete/move/
+                      level change, the plans head on any plan or verdict. A
+                      view keyed on these may be memoized (``substrate.publish``)
 """
 from __future__ import annotations
 
@@ -25,6 +29,7 @@ import bisect
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from codoc.calculus import ops as K
 from codoc.calculus import rank as R
 from codoc.calculus.doc import HEADING, Block, text_fields
 from codoc.calculus.ids import CharRef, OpId
@@ -91,6 +96,7 @@ class Store:
         self.ops_by_block: dict[str, list[int]] = {}
         self.rank_head: dict[str, int] = {}
         self.structural_head: int = 0
+        self.plans_head: int = 0
         self.policy: Policy | None = policy
 
     @property
@@ -307,6 +313,10 @@ class Store:
                     break
         if structural:
             self.structural_head = pos + 1
+        if op.conflict is None and op.kind in K.PLAN_KINDS:
+            # A plan's existence or status changes what the rejected read mode
+            # hides and which proposals are offered, on blocks it never touched.
+            self.plans_head = pos + 1
 
     def ops_on(self, bids) -> list[Op]:
         """The recorded ops on any of ``bids``, oldest first, each once."""
