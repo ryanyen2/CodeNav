@@ -112,6 +112,42 @@ def test_feed_sends_a_snapshot_then_only_changes_and_this_viewers_acks(tmp_path)
     assert [m["kind"] for m in got] == ["status"] and got[0]["status"]["doc_language"] == "ja"
 
 
+def test_a_viewer_keeps_receiving_acks_after_the_daemon_trims_the_ack_file(tmp_path):
+    """Review 7: `rotate_acks` rewrites the file to its newest lines at every
+    daemon start, and both tails (this one and `provider.ts`'s `readFrom`)
+    follow it by byte offset. A file shorter than where they stopped read as
+    "nothing new" for the rest of the session, so every block stayed held and
+    ⌘Z waited for ever."""
+    cd = workspace(tmp_path)
+    for i in range(2100):
+        L.ack(cd, "hub-alice", f"c{i}", None)
+    feed = Feed(cd, "hub-alice")
+    feed.pending()
+    L.rotate_acks(cd, keep=2000)                        # the daemon restarted
+    L.ack(cd, "hub-alice", "fresh", None)
+    got = [a["cid"] for m in feed.pending() if m["kind"] == "acks" for a in m["acks"]]
+    assert "fresh" in got, got
+
+
+def test_the_feed_sends_acks_before_the_projection_that_followed_them(tmp_path):
+    """Disk order: the daemon acks during the drain and publishes afterwards.
+    The editor skips a held block when it adopts, and the ack is what lifts the
+    hold — so a feed that sends the projection first made the hub the one
+    surface where a block was always still held when its projection landed."""
+    cd = workspace(tmp_path)
+    feed = Feed(cd, "ide")
+    feed.pending()
+    ws = Workspace(cd)
+    t = ws.store.blocks["p1"].text()
+    L.submit(cd, "ide", [Submission(cid="k1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                                    payload={"after": list(t.last_live_ref()), "text": " More."}, batch="b1")])
+    ws.drain_inbox()
+    publish(cd, ws.store, root_dir=str(tmp_path))
+    ws.close()
+    kinds = [m["kind"] for m in feed.pending()]
+    assert kinds.index("acks") < kinds.index("projection"), kinds
+
+
 def test_a_contributor_and_the_person_edit_one_checkout_at_once(tmp_path):
     """The workflow the hub exists for: a suggester proposes from the browser
     while the person types in VS Code, and only a maintainer's verdict lands it."""

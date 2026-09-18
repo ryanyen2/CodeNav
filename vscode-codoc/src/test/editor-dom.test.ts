@@ -31,12 +31,12 @@ vi.mock('../calc/adopt', async (importOriginal) => {
     };
 });
 
-import type { OpBody, Projection, ProjectedBlock, Submission } from '../calc/projection';
+import type { OpBody, Projection, ProjectedBlock, Submission, TextField } from '../calc/projection';
 import type { Shadow } from '../calc/shadow';
 import { nextUndo, textAt, type HistoryWindow } from '../calc/window';
 import { mountEditor, type EditorHandle } from '../editor/editor';
 import { Timeline } from '../editor/timeline';
-import { anchorsOf, threadsOf } from '../editor/comments';
+import { Margin, anchorsOf, threadsOf } from '../editor/comments';
 
 
 if (!Range.prototype.getClientRects) {
@@ -528,3 +528,145 @@ describe.runIf(process.env.CODOC_ROUNDTRIP)('R. the round trip', () => {
     });
 });
 
+
+// ── H. held blocks, acks and the projection ──────────────────────────────────
+//
+// The seam review 7 found: `adopt` leaves a held block alone, and nothing read
+// the projection again when the ack lifted the hold. None of it is visible with
+// one actor, which is why the fuzz above never saw it.
+describe('H. a projection skipped for a held block', () => {
+    /** The page after Bob's letter arrives while the person's own 'x' is unacked. */
+    function twoActors(extra: Partial<Projection> = {}, text = 'Bonex', runs?: TextField['runs']) {
+        const m = mount([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one')]);
+        select(m.view, posIn(m.view, 'p1', 3));
+        typeText(m.view, 'x');
+        m.handle.flush();
+        const cid = m.submitted[0].cid;
+        const mine = (m.proj.blocks[1].fields.text as TextField).runs[0];
+        const p1: ProjectedBlock = { id: 'p1', kind: 'paragraph', level: 0, rank: 'p1', head: 9,
+            fields: { text: { text, spans: [], suggest_del: [], runs: runs ?? [
+                { op: 'bob:1', k0: 0, start: 0, end: 1, actor: 'human:gh:bob', at: '2', plan: null },
+                { op: mine.op, k0: 0, start: 1, end: 4, actor: 'human:a', at: '1', plan: null },
+                { op: 'h:5', k0: 0, start: 4, end: 5, actor: 'human:local', at: '3', plan: null }] } } };
+        return { m, cid, p1: proj([block('h', 'heading', 'T'), p1], { frontier: { h: 5, bob: 1, ag: 1 }, ...extra }) };
+    }
+
+    it("is taken up when the ack lifts the hold, so another actor's word appears", () => {
+        const { m, cid, p1 } = twoActors();
+        m.handle.adopt(p1);
+        expect(texts(m.view.state.doc)[1]).toBe('onex');          // held: left alone, as §6 says
+        m.handle.ack([{ cid, op: 'h:5', conflict: null }]);
+        expect(texts(m.view.state.doc)[1]).toBe('Bonex');
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it('is NOT taken up when the projection predates the gesture', () => {
+        const { m, cid, p1 } = twoActors();
+        // The same projection, but its frontier does not carry the acked op: it
+        // was published before that op landed, so its word for p1 is older than
+        // the page's and adopting it would undo the person's typing.
+        m.handle.adopt({ ...p1, frontier: { bob: 1 } });
+        m.handle.ack([{ cid, op: 'h:5', conflict: null }]);
+        expect(texts(m.view.state.doc)[1]).toBe('onex');
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it("shows an agent's plan that arrived in the paragraph the person was typing in", () => {
+        const { m, cid, p1 } = twoActors(
+            { plans: [{ id: 'pl1', actor: 'agent:x', kind: 'edit', target: 'p1', note: '', status: 'open' }] },
+            'onex more',
+            [{ op: 's:p10', k0: 0, start: 0, end: 3, actor: 'human:a', at: '1', plan: null },
+             { op: 'h:5', k0: 0, start: 3, end: 4, actor: 'human:local', at: '3', plan: null },
+             { op: 'ag:1', k0: 0, start: 4, end: 9, actor: 'agent:x', at: '4', plan: 'pl1' }]);
+        m.handle.adopt(p1);
+        m.handle.ack([{ cid, op: 'h:5', conflict: null }]);
+        expect(texts(m.view.state.doc)[1]).toBe('onex more');
+        expect(m.view.dom.querySelectorAll('[data-plan]').length).toBe(1);
+    });
+
+    it("shows a contributor's own Backspace as the plan's strike-through, not as an absence", () => {
+        const m = mount([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one two')]);
+        select(m.view, posIn(m.view, 'p1', 4), posIn(m.view, 'p1', 7));
+        key(m.view, 'Backspace', 8);
+        m.handle.flush();
+        expect(texts(m.view.state.doc)[1]).toBe('one ');
+        const cid = m.submitted[0].cid;
+        // The daemon turned the suggester's delete into the plan's suggest_del
+        // (`workspace._as_proposal`) and published, then acked.
+        const p1: ProjectedBlock = { ...m.proj.blocks[1], head: 9,
+            fields: { text: { ...(m.proj.blocks[1].fields.text as TextField), suggest_del: [{ plan: 'pl1', start: 4, end: 7 }] } } };
+        m.handle.adopt(proj([block('h', 'heading', 'T'), p1],
+            { frontier: { h: 6 }, plans: [{ id: 'pl1', actor: 'human:gh:alice', kind: 'edit', target: 'p1', note: '', status: 'open' }] }));
+        m.handle.ack([{ cid, op: 'h:6', conflict: null }]);
+        expect(texts(m.view.state.doc)[1]).toBe('one two');
+        expect(m.view.dom.querySelectorAll('[data-suggest-del]').length).toBe(1);
+    });
+});
+
+describe('I. what a page must not lose to an arriving projection', () => {
+    it('a multi-paragraph paste leaves the page NFC, like the shadow and the op', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', 'ab')]);
+        select(m.view, posIn(m.view, 'p', 2));
+        expect(paste(m, ['x', 'café ok'])).toBe(true);      // decomposed é, as a macOS paste gives it
+        m.handle.flush();
+        expect(shadowFaults(m)).toEqual([]);
+        expect(m.submitted.filter(s => s.kind === 'text.insert').map(s => (s.payload as { text: string }).text))
+            .toContain('café ok');
+        const nb = ids(m.view.state.doc)[2].split(':')[1];
+        select(m.view, posIn(m.view, nb, 4));                     // after "café"
+        typeText(m.view, '!');
+        m.handle.flush();
+        expect(shadowFaults(m)).toEqual([]);
+        expect(texts(m.view.state.doc)[2]).toBe('café! ok');
+    });
+
+    it('a comment being written survives a projection (every settle anywhere publishes one)', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one two'), block('p2', 'paragraph', 'three')]);
+        const page = document.createElement('div');
+        document.body.append(page);
+        const posted: OpBody[] = [];
+        const margin = new Margin(page, () => m.view,
+            { submit: ops => posted.push(...ops), build: () => undefined, newBid: () => 'c-new', featureOf: () => 'h' });
+        const p = proj([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one two'), block('p2', 'paragraph', 'three'),
+            { id: 'c1', kind: 'comment', level: 0, rank: 'z', head: 1, fields: { thread: 'c1', anchor: 'p2', anchor_text: 'three',
+              scope: 'code', status: 'open', body: { text: 'tighten this', spans: [], suggest_del: [],
+              runs: [{ op: 'o', k0: 0, start: 0, end: 12, actor: 'human:gh:bob', at: '1', plan: null }] } } }]);
+        (p.blocks[2].fields.text as TextField).spans.push({ kind: 'comment', attrs: { block: 'c1' }, start: 0, end: 5 });
+        margin.update(p);
+        margin.compose('p1', 'one', ['s:x', 0], ['s:x', 2]);
+        (page.querySelector('.codoc-card.is-draft textarea') as HTMLTextAreaElement).value = 'please split this sentence';
+        (page.querySelector('.codoc-card:not(.is-draft) textarea') as HTMLTextAreaElement).value = 'agreed, and rename it';
+        margin.update(p);                                          // someone else typed elsewhere
+        expect((page.querySelector('.codoc-card.is-draft textarea') as HTMLTextAreaElement | null)?.value).toBe('please split this sentence');
+        expect((page.querySelector('.codoc-card:not(.is-draft) textarea') as HTMLTextAreaElement | null)?.value).toBe('agreed, and rename it');
+        expect(posted).toEqual([]);
+    });
+
+    it('the History scrubber sitting at now stays at now when the window grows', () => {
+        const parent = document.createElement('div');
+        document.body.append(parent);
+        const dom = document.createElement('div');
+        parent.append(dom);
+        const tl = new Timeline(parent, () => dom);
+        const p = proj([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one')]);
+        const entry = (pos: number): HistoryWindow['ops'][number] => ({ pos, id: `s:${pos}`, at: `2026-09-18T00:00:0${pos}`,
+            actor: 'human:gh:bob', kind: 'text.insert', batch: `b${pos}`, plan: null, caused_by: null, blocks: { p1: `one${pos}` }, inverse: [] });
+        tl.setWindow({ start: 0, head: 2, before: { p1: 'one' }, ops: [entry(0), entry(1)] }, p);
+        tl.toggle(true);
+        expect(tl.past.hidden).toBe(true);                         // at "now"
+        tl.setWindow({ start: 0, head: 3, before: { p1: 'one' }, ops: [entry(0), entry(1), entry(2)] }, p);
+        expect(tl.past.hidden).toBe(true);                         // still now: nobody dragged the scrubber
+        expect(dom.hidden).toBe(false);
+    });
+
+    it('a drag keeps every margin marker on the page', () => {
+        const m = mount([block('h1', 'heading', 'A'), block('p1', 'paragraph', 'a'),
+                         block('h2', 'heading', 'B'), block('p2', 'paragraph', 'b')],
+                        { phases: { h1: 'edited', h2: 'drifted' } });
+        expect(m.view.dom.querySelectorAll('.codoc-marker').length).toBe(2);
+        m.handle.moveBlock('h2', 'START');
+        expect(ids(m.view.state.doc)).toEqual(['heading:h2', 'paragraph:p2', 'heading:h1', 'paragraph:p1']);
+        // Right after the gesture, before any ack or keystroke, both keep theirs.
+        expect(m.view.dom.querySelectorAll('.codoc-marker').length).toBe(2);
+    });
+});
