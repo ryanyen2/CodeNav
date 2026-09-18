@@ -823,7 +823,7 @@ def _h_plan_accept(store: Store, op: Op, touched: set[str]):
             deleted.append(i)
             touched.add(i)
         record["detached"] = _detach_dead(store, [plan.target], touched)
-    plan.status = "accepted"
+    plan.status, plan.decided_by = "accepted", op.actor
     canonical = {"subset": subset, "accepted": accepted, "rejected": rejected, "deleted_blocks": deleted, **record}
     return canonical, [body(K.PLAN_REOPEN, {"pid": pid},
                             {"from": "accepted", "closure": accepted if subset is not None else None,
@@ -842,7 +842,7 @@ def _h_plan_reject(store: Store, op: Op, touched: set[str]):
     _touch_plan(store, plan, pops, touched)
     for o in reversed(pops):
         _undo_plan_op(store, o, op.id, touched, record)
-    plan.status = "rejected"
+    plan.status, plan.decided_by = "rejected", op.actor
     return dict(record), [body(K.PLAN_REOPEN, {"pid": pid}, {"from": "rejected", "by": op.id, **record})]
 
 
@@ -938,7 +938,7 @@ def _h_plan_reopen(store: Store, op: Op, touched: set[str]):
         store.bindings[key] = Binding(entry["fid"], entry["file"], entry["symbol"],
                                       entry.get("fingerprint", ""), entry.get("types_hash", ""))
         touched.add(entry["fid"])
-    plan.status = "open"
+    plan.status, plan.decided_by = "open", ""
     _touch_plan(store, plan, _plan_ops(store, plan), touched)
     verdict = K.PLAN_ACCEPT if p.get("from") == "accepted" else K.PLAN_REJECT
     vpayload = {"subset": p["closure"]} if verdict == K.PLAN_ACCEPT and p.get("closure") is not None else {}

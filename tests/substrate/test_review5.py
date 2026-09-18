@@ -623,6 +623,31 @@ def test_the_fold_stops_where_the_work_in_flight_begins(tmp_path):
     ws2.close()
 
 
+def test_a_fold_keeps_who_answered_and_who_asked(tmp_path):
+    """Review 7: the fold re-emits a decided plan's verdict and a watermark's
+    hand-off, and emitted both as `import` — so after a fold the tree could not
+    say who accepted a proposal or who asked for the work. `Plan` records no
+    verdict actor, so it had to: `decided_by`. WHEN is deliberately not kept,
+    because every op a fold emits carries the fold's own clock."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws, actor="loop")
+    pid = ws.open_plan(actor="loop", kind="edit", target="p1")
+    ins(ws, "p1", list(refs(ws, "p1")[-1]), " Proposed.", actor="loop", plan=pid)
+    ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor=H)
+    ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {"asked": "build it"}}], actor=H)
+    ws.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": "h1"},
+                "payload": {"covers": dict(ws.store.frontier)}}], actor="loop")
+    assert ws.store.plans[pid].decided_by == H
+    ws.close()
+    fold(cd)
+    st = Workspace(cd, readonly=True).store
+    assert st.plans[pid].status == "accepted" and st.plans[pid].decided_by == H
+    verdicts = [o for o in st.ops if o.kind == K.PLAN_ACCEPT]
+    handoffs = [o for o in st.ops if o.kind == K.FEATURE_HANDOFF]
+    assert [o.actor for o in verdicts] == [H], [(o.actor, o.kind) for o in verdicts]
+    assert [o.actor for o in handoffs] == [H], [(o.actor, o.kind) for o in handoffs]
+
+
 def test_a_fold_never_folds_a_fold(tmp_path):
     """Two folds in a row must not carry the first fold's own ops into the
     second: an archive that grows by a copy of the state per fold is not a

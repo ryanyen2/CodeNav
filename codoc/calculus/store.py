@@ -63,10 +63,17 @@ class Plan:
     status: str = "open"          # open | accepted | rejected
     ops: list[OpId] = field(default_factory=list)   # the plan's ops in apply order
     opened_by: OpId | None = None
+    # Who answered. Without it a fold re-emits the verdict as the importer and
+    # the tree forgets who decided — the log says, until it is archived, which
+    # is exactly what a fold does to it. WHEN is not kept: every op a fold
+    # emits carries the fold's clock, so a stored `decided_at` would be the one
+    # timestamp that looked authentic and was not.
+    decided_by: str = ""
 
     def to_json(self) -> dict:
         return {"id": self.id, "actor": self.actor, "kind": self.kind, "target": self.target,
-                "note": self.note, "status": self.status, "ops": list(self.ops), "opened_by": self.opened_by}
+                "note": self.note, "status": self.status, "ops": list(self.ops), "opened_by": self.opened_by,
+                "decided_by": self.decided_by}
 
 
 @dataclass

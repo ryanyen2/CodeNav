@@ -125,7 +125,11 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
         # flight, so `settled_prefix` stopped before its first op.
         emit(K.PLAN_OPEN, {"pid": p.id}, {"kind": p.kind, "target": p.target, "note": p.note,
                                           "ops": list(p.ops), "opened_by": p.opened_by}, actor=p.actor)
-        emit(K.PLAN_ACCEPT if p.status == "accepted" else K.PLAN_REJECT, {"pid": p.id}, {})
+        # The person who answered, not the importer: after the fold the log
+        # that said so is archived, and a verdict nobody signed is a verdict
+        # the History card cannot explain.
+        emit(K.PLAN_ACCEPT if p.status == "accepted" else K.PLAN_REJECT, {"pid": p.id}, {},
+             actor=p.decided_by or SNAPSHOT_ACTOR)
     for fid, w in store.watermarks_by_fid.items():
         if fid not in store.blocks:
             continue
@@ -135,7 +139,8 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
             for k in ("asked", "base_sha", "delete_code"):
                 if asked is not None and asked.payload.get(k):
                     payload[k] = asked.payload[k]
-            emit(K.FEATURE_HANDOFF, {"fid": fid}, payload)
+            emit(K.FEATURE_HANDOFF, {"fid": fid}, payload,
+                 actor=asked.actor if asked is not None else SNAPSHOT_ACTOR)
         if w.realized:
             # A realization settles a request, so there has to be one to settle
             # or `nothing_queued` refuses it — and a person may undo a hand-off
