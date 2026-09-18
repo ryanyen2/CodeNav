@@ -66,10 +66,6 @@ class Block:
     def live(self) -> bool:
         return self.dead is None
 
-    @property
-    def is_heading(self) -> bool:
-        return self.kind == HEADING
-
     def text(self, path: str = "text") -> Text:
         t = self.content.get(path)
         if not isinstance(t, Text):

@@ -443,17 +443,6 @@ class Text:
                 added.extend(pieces)
         return removed, added
 
-    def remove_marks(self, *, op: OpId | None = None, plan: str | None = None) -> list[Mark]:
-        """Remove marks by the op that placed them, or every ``suggest_del`` of a
-        plan. Returns the removed marks (the inverse re-adds them)."""
-        out = []
-        for m in list(self.marks):
-            if (op is not None and m.op == op) or (plan is not None and m.kind == SUGGEST_DEL
-                                                     and m.attrs.get("plan") == plan):
-                self.marks.remove(m)
-                out.append(m)
-        return out
-
     def marks_of(self, op: OpId) -> list[Mark]:
         return [m for m in self.marks if m.op == op]
 
