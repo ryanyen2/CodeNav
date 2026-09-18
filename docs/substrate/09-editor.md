@@ -83,7 +83,7 @@ to name characters:
 | the merge command (Backspace at start, Delete at end, paragraphs only) | `block.merge(into, bid)` |
 | `## ` input rule, set kind command | `block.set(kind)` (+ `block.set(level)`) |
 | Tab / Shift-Tab, drag | `block.move(after, level_delta)` |
-| delete feature command | `block.delete` × own body, `block.set(level)` × promoted children, `bind.detach` × bindings |
+| delete feature command | `block.delete` (its own body, and its bindings, which the applier detaches and records) + `block.set(level)` × promoted children |
 | paste of several paragraphs | `block.add` per paragraph after the caret's block, then `text.insert` per block |
 
 Two rules make this exact rather than heuristic:

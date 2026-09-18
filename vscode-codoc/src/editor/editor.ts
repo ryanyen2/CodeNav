@@ -351,8 +351,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             return { bid, text: sh.chars.slice(a, b).join(''), start: sh.ref(a), end: sh.ref(b - 1) };
         },
         deleteFeature: fid => {
-            const binds = projection.bindings.by_feature[fid] ?? [];
-            const g = deleteFeature(view.state, env, fid, binds);
+            const g = deleteFeature(view.state, env, fid);
             if (g) view.dispatch(g.tr);
         },
         moveBlock: (bid, after, delta = 0) => { const g = moveBlock(view.state, env, bid, after, delta); if (g) view.dispatch(g.tr); },

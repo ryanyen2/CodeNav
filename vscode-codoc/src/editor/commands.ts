@@ -222,8 +222,9 @@ export function moveBlock(state: EditorState, env: Env, bid: string, afterBid: s
 }
 
 /** Delete a feature: its heading and own body; its children are promoted one
- *  level; its bindings are detached (the daemon's `caused_by` chain records why). */
-export function deleteFeature(state: EditorState, env: Env, fid: string, bindings: Array<{ file: string; symbol: string }>): Gesture | null {
+ *  level. Its bindings are detached by the applier, which records them so an
+ *  undo re-attaches (spec §3); this gesture must not send its own detaches. */
+export function deleteFeature(state: EditorState, env: Env, fid: string): Gesture | null {
     const doc = state.doc;
     let idx = -1;
     doc.forEach((n, _p, i) => { if (n.attrs.bid === fid) idx = i; });
@@ -245,7 +246,6 @@ export function deleteFeature(state: EditorState, env: Env, fid: string, binding
             ops.push({ kind: 'block.set', target: { bid: n.attrs.bid, path: 'level' }, payload: { value: Math.max(1, n.attrs.level - 1) } });
         }
     }
-    for (const b of bindings) ops.push({ kind: 'bind.detach', target: { fid }, payload: { file: b.file, symbol: b.symbol } });
     let start = 0, stop = 0;
     doc.forEach((n, pos, i) => { if (i === idx) start = pos; if (i === end - 1) stop = pos + n.nodeSize; });
     tr = tr.delete(start, stop);

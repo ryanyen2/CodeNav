@@ -85,12 +85,14 @@ describe('structural commands', () => {
         expect(moveBlock(state, env(shadows), 'a', 'b')).toBeNull();   // cannot move under itself
     });
 
-    it('deleting a feature removes its own body, promotes children and detaches', () => {
+    it('deleting a feature removes its own body and promotes children; the applier detaches', () => {
         const { doc, shadows } = docFrom(schema, proj([block('a', 'heading', 'A'), block('p', 'paragraph', 'x'),
                                                         block('b', 'heading', 'B', 2), block('c', 'heading', 'C')]));
         const state = EditorState.create({ schema, doc });
-        const g = deleteFeature(state, env(shadows), 'a', [{ file: 'f.py', symbol: 'f.py::g' }])!;
-        expect(g.ops.map(o => o.kind)).toEqual(['block.delete', 'block.set', 'bind.detach']);
+        const g = deleteFeature(state, env(shadows), 'a')!;
+        // No bind.detach here: block.delete detaches and records, so an undo
+        // re-attaches; sending our own would conflict as not_bound.
+        expect(g.ops.map(o => o.kind)).toEqual(['block.delete', 'block.set']);
         expect(ids(g.tr.doc)).toEqual(['heading:b', 'heading:c']);
         expect(g.tr.doc.child(0).attrs.level).toBe(1);
     });
