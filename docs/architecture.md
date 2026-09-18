@@ -175,8 +175,11 @@ Given a `ChangeSet` from the index (`codoc/loop/diff.py`):
    chunks, `bind.detach` for removed ones, `bind.attach` for relocations
    (same fingerprint moved; or a unique AST shape among everything removed
    matched with a unique shape among what arrived).
-2. **Emptied features** open `delete` plans (the loop proposes, never deletes)
-   unless the feature is held (`edited`/`queued`/`planned`).
+2. **Emptied features** open `delete` plans (the loop proposes, never deletes).
+   The rule is state-based, not edge-triggered: a live feature that once had
+   code, has none now, and has never been proposed for deletion, unless it is
+   held (`edited`/`queued`/`planned`), in which case the next quiet pass
+   offers it. A rejected proposal is an answer, so it is never asked twice.
 3. **One LLM pass** (`agent/tree_update.py`, `prompts/tree_update.txt`) over
    the added and modified chunks with an ego-graph context
    (`context.select_context`). Its answer is validated (`validate_raw`) before

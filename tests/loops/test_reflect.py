@@ -5,6 +5,7 @@ from codoc.calculus.doc import HEADING, PARAGRAPH
 from codoc.calculus.ids import START
 from codoc.graph.graph import Graph
 from codoc.loop.diff import ChangeSet, ChunkRef
+from codoc.loops.realize import handoff
 from codoc.loops.reflect import reflect
 from codoc.substrate.workspace import Workspace
 
@@ -108,3 +109,27 @@ def test_emptied_feature_becomes_delete_plan_and_accept_deletes(tmp_path):
     assert [c.stage for c in plan_claims(ws.store, "h1")] == ["removed", "removed"]
     ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": p.id}, "payload": {}}], actor="human:local")
     assert not ws.store.blocks["h1"].live and not ws.store.blocks["p1"].live
+
+
+def test_a_feature_emptied_while_the_person_typed_is_proposed_on_the_next_pass(tmp_path):
+    """The delete proposal is state-based: held once, offered later, and never
+    a second time once the person has answered it."""
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws)
+    t = ws.store.blocks["p1"].text()
+    ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                "payload": {"after": list(t.last_live_ref()), "text": " Keeping this."}}], actor="human:local")
+    r = reflect(ws, ChangeSet(removed=[chunk("c.py", "c.py::send", "f1", "t1")]), Graph(), propose=lambda *a, **k: [])
+    assert r.auto["detach"] == 1 and r.plans == []             # the person is mid-thought
+    assert phase(ws.store, "h1") == "edited"
+    # The person hands off and, since no bound symbol is left to move, marks it
+    # done by hand (`codoc done`): the feature is no longer held.
+    handoff(ws, "h1", actor="human:local")
+    ws.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": "h1"}, "payload": {}}], actor="human:local")
+    assert phase(ws.store, "h1") == "synced"
+    r = reflect(ws, ChangeSet(added=[chunk("n.py", "n.py::x", "fz", "tz")]), Graph(), propose=lambda *a, **k: [])
+    pid = next(p for p in r.plans if ws.store.plans[p].kind == "delete")
+    assert ws.store.plans[pid].target == "h1"
+    ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": pid}, "payload": {}}], actor="human:local")
+    r = reflect(ws, ChangeSet(added=[chunk("n.py", "n.py::y", "fy", "ty")]), Graph(), propose=lambda *a, **k: [])
+    assert not any(ws.store.plans[p].target == "h1" for p in r.plans)   # answered once, not asked again

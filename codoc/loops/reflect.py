@@ -145,17 +145,15 @@ def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: s
             if op.conflict is None:
                 res.auto["relocate"] += 1
 
-    # 2. Emptied features → delete plans.
+    # 2. Emptied features → delete plans. The rule is state-based, not edge-
+    # triggered: any live feature that once had code and has none now, has
+    # never been proposed for deletion, and is not held. A feature emptied
+    # while the person was typing is therefore proposed on the next quiet pass
+    # instead of being missed forever.
     if allow_delete:
-        for fid in sorted(set(removed_owner.values())):
-            b = store.blocks.get(fid)
-            if b is None or not b.live or any(x.feature == fid for x in store.bindings.values()):
-                continue
-            if phase(store, fid) in HELD:
-                continue   # the document wins; the person is re-specifying it
-            if any(pl.kind == "delete" and pl.target == fid and pl.status == "open" for pl in store.plans.values()):
-                continue
-            _delete_plan(p, fid, note="lost all of its code")
+        for fid in _emptied(store):
+            if phase(store, fid) not in HELD:     # the document wins while they are re-specifying it
+                _delete_plan(p, fid, note="lost all of its code")
 
     # 3. The LLM pass over what needs judgment.
     added_unbound = [a for a in cs.added if (a.file, a.symbol_path) not in store.bindings
@@ -296,6 +294,21 @@ def _bind(kind: str, fid: str, file: str, symbol: str, fingerprint: str = "", ty
     if caused_by:
         body["caused_by"] = caused_by
     return body
+
+
+def _emptied(store: Store) -> list[str]:
+    """Live features with no bindings that used to have some, and no delete
+    plan (of any verdict: a rejected one is an answer, not an invitation)."""
+    bound = {b.feature for b in store.bindings.values()}
+    proposed = {pl.target for pl in store.plans.values() if pl.kind == "delete"}
+    out = []
+    for h in store.headings():
+        if h.id in bound or h.id in proposed:
+            continue
+        if any(o.kind == K.BIND_DETACH and o.target.get("fid") == h.id and not o.conflict
+               for o in store.ops_on([h.id])):
+            out.append(h.id)
+    return out
 
 
 def _causes(store: Store) -> dict[str, str]:
