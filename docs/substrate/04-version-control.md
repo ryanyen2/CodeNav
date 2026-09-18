@@ -7,7 +7,7 @@
   config.json                 # doc language, kinds enabled; tracked
   log/<session-id>.jsonl      # the op log; one file per writing session; tracked
   tree.codoc                  # Markdown export; tracked, derived, regenerable
-  cache/                      # SQLite store, index, lancedb; ignored
+  cache/, lancedb/, cocoindex.db, index.meta.json   # the code graph and index; ignored
   inbox/<client>.jsonl        # client → daemon op submissions; ignored
 ```
 
@@ -47,7 +47,10 @@ session is the one thing two people merging the same branches may differ by.
 Each log file is validated at load: schema, monotone `seq`, well-formed and
 non-decreasing HLC stamps. A file carries every actor the daemon stamped in
 that session (the person, the loop, the agents); authority is checked per op.
-A file that fails is reported and skipped, never partially applied.
+A file that fails mid-way is reported and skipped, never partially applied; a
+torn *last* line (a crash mid-write) keeps the prefix, since that is a state the
+daemon was in, and the next daemon start cuts the torn line so every later
+rebuild agrees.
 Only one daemon may own a checkout's `cache/`; the existing watch singleton
 lock is kept for exactly that reason.
 

@@ -292,18 +292,21 @@ class Store:
         self.position[op.id] = len(self.ops) - 1
         session, _, seq = op.id.rpartition(":")
         self.frontier = frontier_union(self.frontier, {session: int(seq)})
-        p = self.pos
+        pos = len(self.ops) - 1
         for bid in touched:
-            self.block_head[bid] = p
-            self.ops_by_block.setdefault(bid, []).append(p - 1)
-        if not touched and op.conflict:
-            # A refused op is still history for the block the client named.
-            for hint in (op.target.get("bid"), op.target.get("fid"), op.target.get("into")):
+            self.block_head[bid] = pos + 1
+            self.ops_by_block.setdefault(bid, []).append(pos)
+        if not touched:
+            # An op that changed no block (a refused op, a verdict that only
+            # confirmed) is still history for the block or plan target it named.
+            pid = op.target.get("pid")
+            plan_target = self.plans[pid].target if pid in self.plans else None
+            for hint in (op.target.get("bid"), op.target.get("fid"), op.target.get("into"), plan_target):
                 if hint:
-                    self.ops_by_block.setdefault(hint, []).append(p - 1)
+                    self.ops_by_block.setdefault(hint, []).append(pos)
                     break
         if structural:
-            self.structural_head = p
+            self.structural_head = pos + 1
 
     def ops_on(self, bids) -> list[Op]:
         """The recorded ops on any of ``bids``, oldest first, each once."""

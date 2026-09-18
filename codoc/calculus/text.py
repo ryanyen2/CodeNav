@@ -402,11 +402,12 @@ class Text:
             # person's cite by one word does not make it the loop's cite.
             lo, hi = new.start, new.end
             keep_actor, keep_op = actor, op
+            merged = False
             for m in list(self.marks):
                 if m.same(new) and (self._overlaps(m, new) or self._adjacent(m, new)):
                     self.marks.remove(m)
-                    if not removed:
-                        keep_actor, keep_op = m.actor, m.op
+                    if not merged:
+                        keep_actor, keep_op, merged = m.actor, m.op, True
                     removed.append(m)
                     lo = m.start if self._before(m.start, lo) else lo
                     hi = m.end if self._before(hi, m.end) else hi

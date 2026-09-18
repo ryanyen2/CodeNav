@@ -62,7 +62,7 @@ export interface Claim {
     start: number;
     end: number;
     channel: 'human' | 'plan' | 'code';
-    stage: 'unsent' | 'sent' | 'open' | 'accepted' | 'added' | 'removed';
+    stage: 'unsent' | 'sent' | 'open' | 'accepted' | 'added' | 'removed' | 'marked' | 'unmarked';
     actor: string;
     text: string;
 }

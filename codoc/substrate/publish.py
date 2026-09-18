@@ -18,7 +18,7 @@ import os
 import time
 from pathlib import Path
 
-from codoc.calculus.derive import ground, ink, phase, plan_claims, projection
+from codoc.calculus.derive import ground, ink, open_plans, phase, plan_claims, projection
 from codoc.calculus.export import export_markdown
 from codoc.calculus.store import Store
 from codoc.loops.realize import queued, write_queue
@@ -92,7 +92,7 @@ def write_status(codoc_dir: str | Path, store: Store, *, phases: dict[str, str] 
     phases = phases if phases is not None else phases_of(store)
     q = queued(store)
     edited = sum(1 for p in phases.values() if p == "edited")
-    open_plans = sum(1 for p in store.plans.values() if p.status == "open")
+    proposals = len(open_plans(store))
     if realizing:
         state, pending = "realizing", len(q)
     elif q:
@@ -101,9 +101,9 @@ def write_status(codoc_dir: str | Path, store: Store, *, phases: dict[str, str] 
     elif edited:
         state, pending = "edited", edited
         detail = detail or f"{edited} feature(s) with unsent edits — hand off to build"
-    elif open_plans:
-        state, pending = "proposed", open_plans
-        detail = detail or f"{open_plans} proposal(s) awaiting your verdict"
+    elif proposals:
+        state, pending = "proposed", proposals
+        detail = detail or f"{proposals} proposal(s) awaiting your verdict"
     else:
         state, pending = "synced", len(phases)
     d = {"version": 2, "state": state, "pending": pending, "detail": detail, "head": store.pos,

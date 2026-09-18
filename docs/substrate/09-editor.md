@@ -62,7 +62,7 @@ CharRef  := [op, k]  |  ["$cid", cid, k]
 ```
 
 `["$cid", cid, k]` is the k-th character of the insert this client submitted as
-`cid`. The daemon resolves it against the acks it has issued in the same drain
+`cid`. The daemon resolves it against every ack it has issued to that client
 (spec §7.4), and the ack rewrites the shadow's provisional refs to real ones.
 
 The shadow holds live text only; tombstones stay in the store. An anchor the

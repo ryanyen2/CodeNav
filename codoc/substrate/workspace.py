@@ -48,6 +48,18 @@ class Roles:
     table: dict[str, str] = field(default_factory=dict)
     default: str = "suggest"
 
+    @classmethod
+    def load(cls, codoc_dir: str | Path) -> "Roles":
+        """The table every clone must agree on lives in the tracked
+        ``config.json`` (``roles: {actor: role}``); the local person and a v1
+        import are owners unless it says otherwise."""
+        from codoc.doclang import read_config
+        cfg = read_config(codoc_dir).get("roles")
+        table = {"human:local": OWNER, "human:import": OWNER}
+        if isinstance(cfg, dict):
+            table.update({str(k): str(v) for k, v in cfg.items()})
+        return cls(table)
+
     def role(self, actor: str) -> str:
         if actor in self.table:
             return self.table[actor]
@@ -78,14 +90,13 @@ class Workspace:
                  session: str | None = None, readonly: bool = False) -> None:
         self.codoc_dir = Path(codoc_dir)
         self.node = node
-        # The local person owns the checkout; a v1 import runs only on that
-        # person's machine and writes in their name.
-        self.roles = roles or Roles({"human:local": OWNER, "human:import": OWNER})
+        self.roles = roles or Roles.load(self.codoc_dir)
         self.clock = Clock(node)
         self.store = Store(policy=self.roles.policy)
         self.problems: list[L.LogProblem] = []
+        self.torn: list[L.SessionFile] = []
         self._inbox_offsets: dict[str, int] = {}
-        self._acked: dict[str, set[str]] = L.acked_cids(self.codoc_dir)
+        self._acked: dict[str, dict[str, str]] = L.acked(self.codoc_dir)   # client → cid → op id
         self.rebuild()
         self.readonly = readonly
         self.session = session or new_session_id()
@@ -100,10 +111,13 @@ class Workspace:
         truth: nothing replayed is refused, and the clock advances past it."""
         self.store = Store(policy=self.roles.policy)
         self.problems = []
+        self.torn = []
         files = []
         for p in L.list_sessions(self.codoc_dir):
             f = L.read_session(p)
             self.problems.extend(f.problems)
+            if f.torn_tail is not None:
+                self.torn.append(f)
             if f.valid:
                 files.append(f)
         exclude = None
@@ -160,10 +174,10 @@ class Workspace:
 
     # ── ingest ─────────────────────────────────────────────────────────────
     def plan_ingest(self, bid: str, path: str, *, base_text: str, new_md: str, actor: str,
-                    plan: str | None = None) -> Ingest:
+                    trunk: bool = True) -> Ingest:
         """The boundary diff, computed and not applied: what ``new_md`` would do
-        to the field. ``plan`` here only says whether the human-mark refusal
-        applies (it does not on a plan, where the person decides)."""
+        to the field. ``trunk`` says the ops will land on the trunk, where a
+        machine may not drop a person's mark; under a plan the person decides."""
         block = self.store.blocks.get(bid)
         if block is None:
             return Ingest(refused="no_block")
@@ -171,8 +185,8 @@ class Workspace:
             return Ingest(refused="dead_block")
         if not is_text_field(block.kind, path):
             return Ingest(refused="not_text")
-        return ingest(block.text(path), bid=bid, path=path, base_text=base_text, new_md=new_md, actor=actor, plan=plan,
-                      multiline=block.kind not in (HEADING, PARAGRAPH))
+        return ingest(block.text(path), bid=bid, path=path, base_text=base_text, new_md=new_md, actor=actor,
+                      trunk=trunk, multiline=block.kind not in (HEADING, PARAGRAPH))
 
     def commit_ingest(self, res: Ingest, *, actor: str, plan: str | None = None, batch: str | None = None,
                       base: dict | None = None, caused_by: str | None = None) -> list[Op]:
@@ -198,65 +212,65 @@ class Workspace:
         return ops
 
     def ingest(self, bid: str, path: str, *, base_text: str, new_md: str, actor: str, base: dict | None = None,
-               plan: str | None = None, caused_by: str | None = None, batch: str | None = None,
-               plan_note: str = "", gate: float | None = None) -> tuple[Ingest, list[Op]]:
-        """``plan_ingest`` then ``commit_ingest``. ``gate`` is the
-        ``deleted_fraction`` above which a trunk write becomes a plan; ``None``
-        means never. A demotion opens a plan with this actor and tags every op
-        with it (``res.demote_to_plan`` says so)."""
-        res = self.plan_ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, plan=plan)
+               plan: str | None = None, caused_by: str | None = None, batch: str | None = None) -> tuple[Ingest, list[Op]]:
+        """``plan_ingest`` then ``commit_ingest``, on the trunk or under ``plan``.
+        The loop's gate (a large repair becomes a plan) lives in the loop,
+        which sees the whole repair; this is one field."""
+        res = self.plan_ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, trunk=plan is None)
         if res.refused:
             return res, []
-        if plan is None and gate is not None and res.deleted_fraction > gate:
-            plan = self.open_plan(actor=actor, kind="edit", target=bid, note=plan_note or "over_gate")
-            res.demote_to_plan = "over_gate"
         return res, self.commit_ingest(res, actor=actor, plan=plan, batch=batch, base=base, caused_by=caused_by)
 
     # ── clients ────────────────────────────────────────────────────────────
-    def drain_inbox(self, identity: dict[str, str]) -> list[Op]:
+    def drain_inbox(self, identity=L.actor_for) -> list[Op]:
         """Apply every new submission from every client. ``identity`` maps a
-        client name to the actor the daemon stamps; unknown clients are
-        ignored (a file nobody vouches for writes nothing). Only whole lines
-        are consumed; a malformed one is acked with an error so the client
-        learns, and the offset advances line by line, after the ack.
+        client name to the actor the daemon stamps (a callable or a dict);
+        unknown clients are ignored (a file nobody vouches for writes nothing).
+        Only whole lines are consumed; a malformed one is acked with an error so
+        the client learns, and the offset advances line by line, after the ack.
 
         A client cannot know the op ids of characters it typed a moment ago and
         has not yet seen acked, so an anchor may name them provisionally as
         ``["$cid", "<client id>", k]``: the k-th character of the insert that
-        submission minted. The drain resolves those against the acks it has
-        given, in order, so a batch of typing lands as one chain of ops."""
+        submission minted. The drain resolves those against every ack it has
+        ever given that client, so a chain of typing survives a drain boundary
+        the client did not choose. No line can block the next: a submission
+        that raises is acked with the error and left behind."""
         out: list[Op] = []
-        minted: dict[str, str] = {}   # cid -> op id, for provisional anchors
         for client in L.clients(self.codoc_dir):
-            actor = identity.get(client)
+            actor = identity(client) if callable(identity) else identity.get(client)
             if actor is None:
                 continue
-            acked = self._acked.setdefault(client, set())
+            acked = self._acked.setdefault(client, {})
             for line in L.read_inbox(self.codoc_dir, client, self._inbox_offsets.get(client, 0)):
                 s = line.sub
                 if s is None:
                     L.ack(self.codoc_dir, client, line.cid, error=line.error)
                 elif s.cid not in acked:
-                    if s.kind == "ingest":
-                        # A whole-text write from another process: the boundary
-                        # diff runs here, in the applier. The ack names the first op.
-                        res, ops = self.ingest(s.target["bid"], s.target.get("path", "text"),
-                                               base_text=s.payload.get("base_text", ""), new_md=s.payload.get("new_md", ""),
-                                               actor=actor, plan=s.plan, caused_by=s.caused_by, batch=s.batch or None)
-                        L.ack(self.codoc_dir, client, s.cid, ops[0] if ops else None,
-                              error=res.refused or (None if ops else "unchanged"))
-                        out.extend(ops)
-                    else:
-                        op = self._apply(self._mint(s.kind, s.target, _resolve_provisional(s.payload, minted),
-                                                    actor=actor, batch=s.batch or new_batch_id(), plan=s.plan,
-                                                    base=s.base, caused_by=s.caused_by))
-                        minted[s.cid] = op.id
-                        L.ack(self.codoc_dir, client, s.cid, op)
-                        out.append(op)
-                    acked.add(s.cid)
+                    try:
+                        out.extend(self._drain_one(client, actor, s, acked))
+                    except Exception as e:  # noqa: BLE001 — the applier is total; so is the drain
+                        L.ack(self.codoc_dir, client, s.cid, error=f"refused: {e!r}")
+                        acked[s.cid] = ""
                 self._inbox_offsets[client] = line.end
         self._sync()
         return out
+
+    def _drain_one(self, client: str, actor: str, s: L.Submission, acked: dict[str, str]) -> list[Op]:
+        if s.kind == "ingest":
+            # A whole-text write from another process: the boundary diff runs
+            # here, in the applier. The ack names the first op.
+            res, ops = self.ingest(s.target["bid"], s.target.get("path", "text"), base_text=s.payload["base_text"],
+                                   new_md=s.payload["new_md"], actor=actor, plan=s.plan, caused_by=s.caused_by,
+                                   batch=s.batch or None)
+            L.ack(self.codoc_dir, client, s.cid, ops[0] if ops else None, error=res.refused or (None if ops else "unchanged"))
+            acked[s.cid] = ops[0].id if ops else ""
+            return ops
+        op = self._apply(self._mint(s.kind, s.target, _resolve_provisional(s.payload, acked), actor=actor,
+                                    batch=s.batch or new_batch_id(), plan=s.plan, base=s.base, caused_by=s.caused_by))
+        L.ack(self.codoc_dir, client, s.cid, op)
+        acked[s.cid] = op.id
+        return [op]
 
     # ── sessions ───────────────────────────────────────────────────────────
     def _sync(self) -> None:
@@ -286,7 +300,7 @@ def _resolve_provisional(payload: dict, minted: dict[str, str]) -> dict:
     out = dict(payload)
     for key in ("after", "from", "to", "start", "end", "at"):
         v = out.get(key)
-        if isinstance(v, list) and len(v) == 3 and v[0] == "$cid" and v[1] in minted:
+        if isinstance(v, list) and len(v) == 3 and v[0] == "$cid" and minted.get(v[1]):
             out[key] = [minted[v[1]], v[2]]
     if isinstance(out.get("segments"), list):
         out["segments"] = [[minted.get(seg[1], seg[0]) if isinstance(seg[0], str) and seg[0] == "$cid" else seg[0], *seg[1 + (seg[0] == "$cid"):]]

@@ -140,10 +140,18 @@ def _h_text_delete(store: Store, op: Op, touched: set[str]):
     if "segments" in op.payload:
         segs = [(str(o), int(k), int(n)) for o, k, n in op.payload["segments"]]
         work = _segment_holders(store, segs, (bid, path), live_only=True)
+        if not work:
+            # Nothing named is held anywhere (a replayed no-op): the block the
+            # canonical names is still the one this op is history of.
+            b0 = store.blocks.get(bid)
+            if b0 is None:
+                raise Conflict("no_block", bid)
+            work = [(b0, path)]
         killed: list[list] = []
         for block, p in work:
             killed.extend([list(k) for k in block.text(p).kill(segs, by=op.id)])
             touched.add(block.id)
+        bid, path = work[0][0].id, work[0][1]
         canonical = {"segments": killed, "bid": bid, "path": path}
         return canonical, [body(K.TEXT_RESTORE, {"bid": bid, "path": path}, {"segments": killed, "by": op.id})]
     start, end = _char(op.payload["from"]), _char(op.payload["to"])
@@ -408,6 +416,29 @@ def _h_block_move(store: Store, op: Op, touched: set[str]):
     return canonical, [body(K.BLOCK_MOVE, {"bid": bid}, {"restore": prev})]
 
 
+def _detach_dead(store: Store, fids: list[str], touched: set[str]) -> list[dict]:
+    """A dead heading owns no code (spec §3): drop its bindings and return them
+    so the inverse can re-attach."""
+    out = []
+    for fid in fids:
+        for key, b in list(store.bindings.items()):
+            if b.feature == fid:
+                out.append({"fid": fid, **b.to_json()})
+                del store.bindings[key]
+                touched.add(fid)
+    return out
+
+
+def _reattach(store: Store, entries: list[dict], touched: set[str]) -> None:
+    """Re-attach what a delete detached, unless the symbol has an owner now
+    (their attach stands)."""
+    for e in entries:
+        key = (e["file"], e["symbol"])
+        if key not in store.bindings and store.blocks.get(e["fid"]) is not None:
+            store.bindings[key] = Binding(e["fid"], e["file"], e["symbol"], e.get("fingerprint", ""), e.get("types_hash", ""))
+            touched.add(e["fid"])
+
+
 def _h_block_delete(store: Store, op: Op, touched: set[str]):
     if "ids" in op.payload:
         ids = [str(i) for i in op.payload["ids"]]
@@ -427,7 +458,9 @@ def _h_block_delete(store: Store, op: Op, touched: set[str]):
             b.dead = op.id
             killed.append(i)
         touched.add(i)
-    return {"ids": ids, "killed": killed}, [body(K.BLOCK_RESTORE, dict(op.target), {"ids": killed, "by": op.id})]
+    detached = _detach_dead(store, [i for i in killed if store.blocks[i].kind == HEADING], touched)
+    canonical = {"ids": ids, "killed": killed, "detached": detached}
+    return canonical, [body(K.BLOCK_RESTORE, dict(op.target), {"ids": killed, "by": op.id, "bindings": detached})]
 
 
 def _h_block_restore(store: Store, op: Op, touched: set[str]):
@@ -443,9 +476,13 @@ def _h_block_restore(store: Store, op: Op, touched: set[str]):
             b.dead = None
             revived.append(i)
         touched.add(i)
+    alive = set(revived)
+    _reattach(store, [e for e in op.payload.get("bindings") or [] if e.get("fid") in alive], touched)
     canonical = {"ids": ids, "revived": revived}
     if by:
         canonical["by"] = by
+    if op.payload.get("bindings"):
+        canonical["bindings"] = op.payload["bindings"]
     return canonical, [body(K.BLOCK_DELETE, dict(op.target), {"ids": revived})]
 
 
@@ -622,6 +659,12 @@ def _undo_plan_op(store: Store, o: Op, by: OpId, touched: set[str], record: dict
         if cur is None or cur.feature != fid:
             return                      # someone re-bound it since; their attach stands
         record.setdefault("binds", []).append({"fid": fid, **cur.to_json()})
+        if "prev_fingerprint" in o.payload:
+            # The plan only refreshed a binding the feature already had.
+            store.bindings[key] = replace(cur, fingerprint=o.payload.get("prev_fingerprint", ""),
+                                          types_hash=o.payload.get("prev_types_hash", ""))
+            touched.add(fid)
+            return
         displaced = o.payload.get("displaced")
         if displaced:
             store.bindings[key] = Binding(displaced["feature"], displaced["file"], displaced["symbol"],
@@ -661,6 +704,7 @@ def _h_plan_accept(store: Store, op: Op, touched: set[str]):
     if plan.status != "open":
         raise Conflict("plan_not_open", pid)
     pops = _plan_ops(store, plan)
+    _touch_plan(store, plan, pops, touched)
     subset = op.payload.get("subset")
     accepted = _closure(pops, [str(s) for s in subset]) if subset is not None else [o.id for o in pops]
     acc = set(accepted)
@@ -692,10 +736,11 @@ def _h_plan_accept(store: Store, op: Op, touched: set[str]):
             store.blocks[i].dead = op.id
             deleted.append(i)
             touched.add(i)
+        record["detached"] = _detach_dead(store, [plan.target], touched)
     plan.status = "accepted"
     canonical = {"subset": subset, "accepted": accepted, "rejected": rejected, "deleted_blocks": deleted, **record}
     return canonical, [body(K.PLAN_REOPEN, {"pid": pid},
-                            {"from": "accepted", "subset": accepted if subset is not None else None,
+                            {"from": "accepted", "closure": accepted if subset is not None else None,
                              "deleted_blocks": deleted, "by": op.id, **record})]
 
 
@@ -707,7 +752,9 @@ def _h_plan_reject(store: Store, op: Op, touched: set[str]):
     if plan.status != "open":
         raise Conflict("plan_not_open", pid)
     record: dict = {}
-    for o in reversed(_plan_ops(store, plan)):
+    pops = _plan_ops(store, plan)
+    _touch_plan(store, plan, pops, touched)
+    for o in reversed(pops):
         _undo_plan_op(store, o, op.id, touched, record)
     plan.status = "rejected"
     return dict(record), [body(K.PLAN_REOPEN, {"pid": pid}, {"from": "rejected", "by": op.id, **record})]
@@ -759,6 +806,7 @@ def _h_plan_reopen(store: Store, op: Op, touched: set[str]):
         if b.dead == by:
             b.dead = None
         touched.add(i)
+    _reattach(store, p.get("detached", []), touched)
     for entry in p.get("sets", []):
         b = store.blocks[entry["bid"]]
         if entry["path"] == "kind":
@@ -784,9 +832,25 @@ def _h_plan_reopen(store: Store, op: Op, touched: set[str]):
                                       entry.get("fingerprint", ""), entry.get("types_hash", ""))
         touched.add(entry["fid"])
     plan.status = "open"
+    _touch_plan(store, plan, _plan_ops(store, plan), touched)
     verdict = K.PLAN_ACCEPT if p.get("from") == "accepted" else K.PLAN_REJECT
-    vpayload = {"subset": p["subset"]} if verdict == K.PLAN_ACCEPT and p.get("subset") is not None else {}
+    vpayload = {"subset": p["closure"]} if verdict == K.PLAN_ACCEPT and p.get("closure") is not None else {}
     return dict(p), [body(verdict, {"pid": pid}, vpayload)]
+
+
+def _touch_plan(store: Store, plan: Plan, pops: list[Op], touched: set[str]) -> None:
+    """A verdict is history of the plan's target and of every block its ops
+    landed in, whether or not it changes them."""
+    if plan.target and plan.target in store.blocks:
+        touched.add(plan.target)
+    for o in pops:
+        for key in ("bid", "into", "fid"):
+            b = o.payload.get(key) if key == "bid" else o.target.get(key)
+            if b in store.blocks:
+                touched.add(b)
+        nb = o.payload.get("new") if o.kind == K.BLOCK_SPLIT else None
+        if nb in store.blocks:
+            touched.add(nb)
 
 
 # ── watermarks ───────────────────────────────────────────────────────────────

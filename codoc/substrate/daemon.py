@@ -30,7 +30,7 @@ from codoc.loop.gitref import head_sha
 from codoc.loops import realize as R
 from codoc.substrate import log as L
 from codoc.substrate.publish import publish, realizing_is_fresh
-from codoc.substrate.workspace import Workspace
+from codoc.substrate.workspace import Roles, Workspace
 
 CODE_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".rb", ".cpp", ".c", ".h"}
 SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", ".pytest_cache", ".mypy_cache", ".codoc"}
@@ -55,6 +55,13 @@ class Daemon:
         self.root = Path(root_dir)
         self.codoc_dir = Path(codoc_dir or self.root / ".codoc")
         self.ws = Workspace(self.codoc_dir, node=_node_name())
+        # A torn last line (a crash mid-write) is cut so every later rebuild
+        # agrees with this one; every other log problem is reported.
+        for f in self.ws.torn:
+            if L.truncate_torn(f):
+                printer(f"▸ cut a torn last line off {f.path.name}")
+        for p in self.ws.problems:
+            printer(f"▸ log problem: {p.path}:{p.line}: {p.reason}")
         self.graph = Graph.load(self.codoc_dir / GRAPH_CACHE)
         self.state = DaemonState(head=head_sha(self.root))
         self.say = printer
@@ -62,11 +69,7 @@ class Daemon:
         self._reflect = reflect
         self._changeset = changeset
         self._propose = propose
-        # Inbox file name → the actor the daemon stamps. Locally the file name
-        # is the identity (any process that writes ide.jsonl is the person at
-        # the keyboard); the hub stamps its own files from the session cookie
-        # before the daemon sees them.
-        self.identity = {"ide": "human:local", "cli": "human:local", "mcp": "agent:claude-code", "hub": "human:hub"}
+        self.identity = L.actor_for          # inbox file name → actor (log.CLIENT_IDENTITY, hub-<login>)
         self._published: tuple | None = None
 
     # ── routing ────────────────────────────────────────────────────────────
@@ -99,9 +102,12 @@ class Daemon:
             self.state.head = sha
             self.ws.rebuild()
             self.ws.rotate_session()
+            self._published = None
             notes.append("session rotated (HEAD moved)")
-        # 2. Client ops.
+        # 2. Client ops, under the roles the tracked config names right now
+        # (the hub adds a login's role when they sign in).
         if inbox:
+            self.ws.roles.table = Roles.load(self.codoc_dir).table
             done = self.ws.drain_inbox(self.identity)
             if done:
                 notes.append(f"{len(done)} client op(s)")
@@ -159,7 +165,10 @@ class Daemon:
                                           under_epoch=under_epoch)
         if under_epoch:
             R.settle(self.ws, res, sha=head_sha(self.root), files=sorted(files))
-        return f"reflect: {res.summary()}"
+        # Kind blocks that derive from code (a diagram) follow the bindings.
+        from codoc.kinds.lift import lift_pass
+        lifted = lift_pass(self.ws, self.graph, str(self.codoc_dir))
+        return f"reflect: {res.summary()}" + (f" · {lifted} block(s) lifted" if lifted else "")
 
     # ── lifecycle ──────────────────────────────────────────────────────────
     def run(self, *, debounce_ms: int = DEBOUNCE_MS) -> None:  # pragma: no cover - blocking loop

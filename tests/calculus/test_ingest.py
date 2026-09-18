@@ -31,7 +31,7 @@ def test_tokenize_is_lossless_and_script_aware():
 
 def run_ingest(store: Store, m: Mint, bid: str, new_md: str, actor="loop", plan=None, base=None):
     t = store.blocks[bid].text()
-    res = ingest(t, bid=bid, path="text", base_text=t.live_text(), new_md=new_md, actor=actor, plan=plan)
+    res = ingest(t, bid=bid, path="text", base_text=t.live_text(), new_md=new_md, actor=actor, trunk=plan is None)
     if res.refused:
         return res, []
     ops = []

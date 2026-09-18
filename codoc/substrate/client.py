@@ -22,7 +22,7 @@ from codoc.substrate.log import Submission
 from codoc.substrate.publish import publish
 from codoc.substrate.workspace import Workspace
 
-CLIENT_IDENTITY = {"ide": "human:local", "cli": "human:local", "mcp": "agent:claude-code", "hub": "human:hub"}
+CLIENT_IDENTITY = L.CLIENT_IDENTITY
 
 
 def write(codoc_dir: str | Path, *, client: str, bodies: list[dict], root_dir: str | None = None,
@@ -87,9 +87,9 @@ def ingest(codoc_dir: str | Path, *, client: str, bid: str, path: str, base_text
             publish(codoc_dir, ws.store, root_dir=root_dir or str(codoc_dir.parent))
         finally:
             ws.close()
-        return {"refused": res.refused, "demoted": res.demote_to_plan, "ops": [o.id for o in ops]}
+        return {"refused": res.refused, "ops": [o.id for o in ops]}
     sub = Submission(cid=f"{client}-{uuid.uuid4().hex[:12]}", kind="ingest", target={"bid": bid, "path": path},
                      payload={"base_text": base_text, "new_md": new_md}, plan=plan, caused_by=caused_by)
     L.submit(codoc_dir, client, [sub])
     ack = wait_for_acks(codoc_dir, client, [sub.cid], 3.0)[0]
-    return {"refused": ack.get("conflict"), "demoted": None, "ops": [ack["op"]] if ack.get("op") else []}
+    return {"refused": ack.get("conflict"), "ops": [ack["op"]] if ack.get("op") else []}

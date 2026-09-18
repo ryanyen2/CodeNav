@@ -43,9 +43,9 @@ def block_written_by(store: Store, bid: str) -> str:
 
 
 def written_by(store: Store, fid: str) -> str:
-    """``human`` when a person last wrote any block of the feature (the strict
-    amend gate then applies to the feature's prompt entry), else the newest
-    machine actor."""
+    """``human`` when a person last wrote any block of the feature, else the
+    newest machine actor. Feeds the prompt's ``written_by`` and translate's
+    plan-or-trunk choice; the amend gate itself is per block."""
     authors = [block_written_by(store, b.id) for b in store.feature_body(fid)]
     if "human" in authors:
         return "human"

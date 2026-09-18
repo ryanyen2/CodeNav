@@ -324,7 +324,7 @@ def test_roles_table_over_every_kind():
         assert allowed("agent:a", kind) == (kind not in K.VERDICTS)
         assert allowed("loop", kind) == (kind not in K.VERDICTS or kind == K.FEATURE_REALIZED)
         assert allowed("human:s", kind) == (kind == K.PLAN_OPEN)
-        assert allowed("human:s", kind, "p-mine") == (kind == K.PLAN_OPEN or kind in K.PLANNABLE or kind not in K.PLANNABLE)
+        assert allowed("human:s", kind, "p-mine")            # the policy allows; apply's not_plannable decides the rest
         assert not allowed("human:s", kind, "p-theirs") or kind == K.PLAN_OPEN
 
 
@@ -332,7 +332,7 @@ def test_roles_table_over_every_kind():
 
 def test_torn_and_malformed_inbox_lines(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
-    _para(ws, "p1", "")  if False else ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "p1"}, "payload": {"kind": PARAGRAPH, "after": START}}], actor="human:local")
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "p1"}, "payload": {"kind": PARAGRAPH, "after": START}}], actor="human:local")
     d = L.inbox_dir(tmp_path / ".codoc")
     d.mkdir(parents=True, exist_ok=True)
     line = json.dumps(Submission(cid="c1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"}, payload={"after": START, "text": "X"}).__dict__)

@@ -103,19 +103,3 @@ def settle(ws: Workspace, res, *, sha: str = "", files: list[str] | None = None,
                                "payload": {"covers": dict(w.handoff), "sha": sha, "files": files or [],
                                            "summary": summary}}], actor="loop", caused_by=did))
     return out
-
-
-def divergent(store: Store, did: str, target: str) -> list[str]:
-    """Features other than ``target`` that received intent-level ops citing
-    the hand-off ``did``: the realization did more than it was asked."""
-    others: set[str] = set()
-    for o in store.ops:
-        if o.caused_by != did or o.conflict:
-            continue
-        if o.kind.startswith("bind."):
-            continue
-        bid = o.target.get("bid") or o.payload.get("bid")
-        f = store.feature_of(bid) if bid else None
-        if f and f != target:
-            others.add(f)
-    return sorted(others)

@@ -89,19 +89,18 @@ def test_suggest_role_writes_only_plans(tmp_path):
     assert ws.store.blocks["p1"].text().segs[0].plan == pid
 
 
-def test_ingest_through_workspace_gates_to_plan(tmp_path):
+def test_ingest_through_workspace_lands_on_trunk_or_under_a_plan(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
     seed(ws)
     t = ws.store.blocks["p1"].text()
-    res, ops = ws.ingest("p1", "text", base_text=t.live_text(), new_md="Retries three times.", actor="loop", gate=0.5)
-    assert res.refused is None and res.demote_to_plan is None
+    res, ops = ws.ingest("p1", "text", base_text=t.live_text(), new_md="Retries three times.", actor="loop")
+    assert res.refused is None and all(o.plan is None for o in ops)
     assert ws.store.blocks["p1"].text().live_text() == "Retries three times."
+    pid = ws.open_plan(actor="loop", kind="edit", target="p1")
     t = ws.store.blocks["p1"].text()
-    res, ops = ws.ingest("p1", "text", base_text=t.live_text(), new_md="Completely new words here.", actor="loop", gate=0.5)
-    assert res.demote_to_plan == "over_gate"
-    assert any(o.plan for o in ops)
-    plan = ws.store.plans[ops[-1].plan]
-    assert plan.actor == "loop" and plan.status == "open"
+    res, ops = ws.ingest("p1", "text", base_text=t.live_text(), new_md="Completely new words here.", actor="loop", plan=pid)
+    assert ops and all(o.plan == pid for o in ops)
+    assert ws.store.plans[pid].status == "open" and "Retries three times." in ws.store.blocks["p1"].text().live_text()
 
 
 def test_clock_observes_every_replayed_stamp():

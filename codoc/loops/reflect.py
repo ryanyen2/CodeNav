@@ -39,7 +39,7 @@ from codoc.calculus.derive import phase
 from codoc.calculus.doc import HEADING, PARAGRAPH
 from codoc.calculus.ids import START, new_block_id
 from codoc.calculus.ingest import Ingest
-from codoc.calculus.ops import Op
+from codoc.calculus.ops import Op, covered
 from codoc.calculus.store import Store
 from codoc.calculus.text import SUGGEST_DEL
 from codoc.graph.graph import Graph
@@ -225,7 +225,7 @@ def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: s
                 fid = raw["feature_id"]
                 if allow_delete and fid in store.blocks and store.blocks[fid].live and phase(store, fid) not in HELD:
                     _delete_plan(p, fid, note=raw.get("rationale", ""))
-        except (KeyError, TypeError, ValueError) as e:   # a shape the validator did not foresee
+        except (KeyError, TypeError, ValueError) as e:   # unreachable after validate_raw; recorded, never swallowed
             res.refused.append((kind, repr(e)))
 
     # 4. Coverage net for what the model left unplaced.
@@ -299,12 +299,11 @@ def _bind(kind: str, fid: str, file: str, symbol: str, fingerprint: str = "", ty
 
 
 def _causes(store: Store) -> dict[str, str]:
-    """feature → its latest hand-off op id, for features with queued work."""
-    out = {}
-    for fid, w in store.watermarks_by_fid.items():
-        if w.handoffs and phase(store, fid) in ("queued", "planned"):
-            out[fid] = w.handoffs[-1]
-    return out
+    """feature → its latest hand-off op id, for every hand-off not yet covered
+    by a realization (whatever the person typed since; that ink is beyond the
+    frontier and stays unsent)."""
+    return {fid: w.handoffs[-1] for fid, w in store.watermarks_by_fid.items()
+            if w.handoffs and not covered(w.handoff, w.realized)}
 
 
 def _valid_binds(raw_binds, touched_keys) -> list[tuple[str, str]]:
@@ -403,7 +402,7 @@ def _add_plan(p: _Pass, raw: dict, binds: list[tuple[str, str]], fp: dict, th: d
     bodies.extend(_bind(K.BIND_ATTACH, fid, f, s, fp.get((f, s), ""), th.get((f, s), "")) for f, s in binds)
     p.submit(bodies, plan=pid, batch=pid)
     for bid, para in paragraphs:
-        ing = p.ws.plan_ingest(bid, "text", base_text="", new_md=para, actor=LOOP, plan=pid)
+        ing = p.ws.plan_ingest(bid, "text", base_text="", new_md=para, actor=LOOP, trunk=False)
         if ing.refused:
             p.res.refused.append((bid, ing.refused))
         else:
@@ -456,15 +455,20 @@ def _amend(p: _Pass, raw: dict) -> None:
         return
     held = phase(store, fid) in HELD
     need_plan = held
-    sentinel = "plan" if held else None      # the human-mark refusal applies only to trunk writes
     ingests: list[Ingest] = []
     adds: list[tuple[str, str, str]] = []    # (after, new bid, text)
     strikes: list[str] = []
 
     def consider(bid: str, new_md: str) -> None:
+        # Computed as a trunk write first; a repair the trunk refuses (it would
+        # drop a person's mark) or the gate demotes becomes part of the plan,
+        # where the person decides and nothing is refused.
         nonlocal need_plan
-        ing = p.ws.plan_ingest(bid, "text", base_text=store.blocks[bid].text().live_text(), new_md=new_md,
-                               actor=LOOP, plan=sentinel)
+        base = store.blocks[bid].text().live_text()
+        ing = p.ws.plan_ingest(bid, "text", base_text=base, new_md=new_md, actor=LOOP, trunk=not need_plan)
+        if ing.refused and ing.refused.startswith("would_drop_human_"):
+            need_plan = True
+            ing = p.ws.plan_ingest(bid, "text", base_text=base, new_md=new_md, actor=LOOP, trunk=False)
         if ing.refused:
             p.res.refused.append((bid, ing.refused))
             return
@@ -505,7 +509,7 @@ def _amend(p: _Pass, raw: dict) -> None:
     for after, nb, text in adds:
         p.submit([{"kind": K.BLOCK_ADD, "target": {"bid": nb}, "payload": {"kind": PARAGRAPH, "after": after}}],
                  plan=plan, batch=batch, caused_by=cause)
-        ing = p.ws.plan_ingest(nb, "text", base_text="", new_md=text, actor=LOOP, plan=plan)
+        ing = p.ws.plan_ingest(nb, "text", base_text="", new_md=text, actor=LOOP, trunk=plan is None)
         if ing.refused:
             p.res.refused.append((nb, ing.refused))
         else:

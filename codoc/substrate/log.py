@@ -32,6 +32,19 @@ INBOX_DIR = "inbox"
 ARCHIVE_DIR = "archive"
 SNAPSHOT_PREFIX = "snapshot-"
 
+# Inbox file name → the actor the daemon stamps. Locally the file name is the
+# identity (any process that writes ide.jsonl is the person at the keyboard);
+# the hub writes one file per GitHub login, stamped from its session cookie.
+CLIENT_IDENTITY = {"ide": "human:local", "cli": "human:local", "mcp": "agent:claude-code"}
+
+
+def actor_for(client: str) -> str | None:
+    if client in CLIENT_IDENTITY:
+        return CLIENT_IDENTITY[client]
+    if client.startswith("hub-") and len(client) > 4:
+        return f"human:{client[4:]}"
+    return None
+
 
 @dataclass
 class LogProblem:
@@ -47,10 +60,11 @@ class SessionFile:
     header: dict
     ops: list[Op]
     problems: list[LogProblem] = field(default_factory=list)
+    torn_tail: int | None = None       # byte offset of an unreadable last line; the prefix is kept
 
     @property
     def valid(self) -> bool:
-        return not self.problems
+        return not self.problems or (self.torn_tail is not None and len(self.problems) == 1)
 
 
 def log_dir(codoc_dir: str | Path) -> Path:
@@ -82,14 +96,18 @@ def read_session(path: str | Path) -> SessionFile:
     session = header["session"]
     expected_seq = 1
     last_at = ""
-    for n, line in enumerate(lines[1:], start=2):
-        if not line.strip():
-            continue
+    torn: int | None = None
+    body = [(n, line) for n, line in enumerate(lines[1:], start=2) if line.strip()]
+    for k, (n, line) in enumerate(body):
         try:
             d = json.loads(line)
             op = Op.from_json(d)
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             problems.append(LogProblem(str(path), n, f"unreadable op: {e}"))
+            if k == len(body) - 1:
+                # A crash mid-write left a torn last line: the prefix is a
+                # state the daemon was in, so it stays; the caller truncates.
+                torn = len("\n".join(lines[:n - 1]).encode("utf-8")) + (1 if n > 1 else 0)
             break
         sess, _, seq = op.id.rpartition(":")
         if sess != session or not seq.isdigit() or int(seq) != expected_seq:
@@ -101,9 +119,20 @@ def read_session(path: str | Path) -> SessionFile:
         expected_seq += 1
         last_at = op.at
         ops.append(op)
-    if problems:
+    if problems and torn is None:
         ops = []
-    return SessionFile(path, session, header, ops, problems)
+    return SessionFile(path, session, header, ops, problems, torn)
+
+
+def truncate_torn(f: SessionFile) -> bool:
+    """Cut a torn last line off a session file so every later rebuild agrees
+    with this one. Returns whether anything was cut."""
+    if f.torn_tail is None:
+        return False
+    with f.path.open("r+b") as fh:
+        fh.truncate(f.torn_tail)
+    f.torn_tail, f.problems = None, []
+    return True
 
 
 def list_sessions(codoc_dir: str | Path) -> list[Path]:
@@ -255,6 +284,12 @@ def _validate(d) -> str | None:
             return f"{key} must be a string"
     if d.get("base") is not None and not isinstance(d["base"], dict):
         return "base must be an object"
+    if d["kind"] == "ingest":
+        if not isinstance(d["target"].get("bid"), str):
+            return "ingest target.bid must be a string"
+        for key in ("base_text", "new_md"):
+            if not isinstance(d["payload"].get(key), str):
+                return f"ingest payload.{key} must be a string"
     return None
 
 
@@ -274,8 +309,10 @@ def ack(codoc_dir: str | Path, client: str, cid: str, op: Op | None = None, *, e
         fh.write(json.dumps({"cid": cid, "op": op.id if op else "", "conflict": op.conflict if op else error}) + "\n")
 
 
-def acked_cids(codoc_dir: str | Path) -> dict[str, set[str]]:
-    out: dict[str, set[str]] = {}
+def acked(codoc_dir: str | Path) -> dict[str, dict[str, str]]:
+    """Per client, every acked cid and the op it minted (``""`` when none):
+    what the drain skips, and what a later provisional anchor may name."""
+    out: dict[str, dict[str, str]] = {}
     d = inbox_dir(codoc_dir)
     if not d.exists():
         return out
@@ -284,7 +321,8 @@ def acked_cids(codoc_dir: str | Path) -> dict[str, set[str]]:
         with p.open("r", encoding="utf-8") as fh:
             for line in fh:
                 try:
-                    out.setdefault(client, set()).add(json.loads(line)["cid"])
-                except (json.JSONDecodeError, KeyError):
+                    a = json.loads(line)
+                    out.setdefault(client, {})[a["cid"]] = a.get("op") or ""
+                except (json.JSONDecodeError, KeyError, TypeError):
                     continue
     return out

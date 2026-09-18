@@ -78,6 +78,7 @@ def test_auth_gate_records_roles_and_a_suggester_cannot_set_the_language(tmp_pat
     c.cookies.set(COOKIE_NAME, r.cookies[COOKIE_NAME])
     assert c.get("/api/whoami").json() == {"authenticated": True, "login": "alice", "role": SUGGEST}
     assert read_roles(cd) == {"human:alice": SUGGEST}
+    assert json.loads((cd / "config.json").read_text())["roles"] == {"human:alice": SUGGEST}   # tracked, so every clone agrees
     assert c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "set-language", "tag": "ja"}).status_code == 403
     r = c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "submit", "subs": [
         {"cid": "s1", "kind": K.PLAN_OPEN, "target": {"pid": "p-1"}, "payload": {"kind": "edit"}}]})

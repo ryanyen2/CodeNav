@@ -131,13 +131,13 @@ client, present in the log only through undo.
 |---|---|---|---|---|
 | `text.insert` | (bid, path) | `after: CharRef \| START`, `text` | same | mark the minted segment dead |
 | `text.delete` | (bid, path) | `from: CharRef`, `to: CharRef` | the explicit live segments `[(op, k0, len)]` the range covered at apply | mark those segments live |
-| `text.mark` | (bid, path) | `kind, attrs, from, to, on` | same, plus the marks it displaced | restore displaced marks, remove the added one |
+| `text.mark` | (bid, path) | `kind, attrs, start, end, on` | same, plus `added` / `removed` (the marks it placed and displaced) and, on a restore, the original `actor` / `op` | turn the added marks off, put the removed ones back |
 | `block.add` | bid | `kind, level, after: BlockId \| START, content` | rank assigned | mark dead |
 | `block.set` | (bid, path) | `value` for a non-Text field (`kind`, `level`, an asset ref, a status) | same | previous value |
 | `block.split` | (bid, path) | `at: CharRef \| START`, `new: BlockId` | same | merge |
 | `block.merge` | (into: bid, bid) | | `at: CharRef \| END` (the survivor's last live char) | split at `at` |
 | `block.move` | bid | `after: BlockId \| START`, `level_delta` | the range `[bid…]` computed at apply, with each old `(rank, level)` | restore ranks and levels |
-| `block.delete` | bid | | the range computed at apply, with ranks | mark live again |
+| `block.delete` | bid | (or `ids`) | `ids, killed, detached` (the own body computed at apply; the bindings of every killed heading) | `block.restore` the killed ids and re-attach `detached` |
 | `bind.attach` | fid | `file, symbol, fingerprint, types_hash` | plus the prior owner it displaced | detach; re-attach the prior owner |
 | `bind.detach` | fid | `file, symbol` | plus the hashes | attach |
 | `bind.refresh` | fid | `file, symbol, fingerprint, types_hash` | plus previous hashes | previous hashes |
@@ -193,14 +193,20 @@ conflict, and the op is recorded with `conflict` and not applied.
   the following non-heading blocks. Descendant headings survive; a gesture
   deleting a subtree emits one `block.delete` per descendant heading, and one
   promoting children emits `block.set(level)` per child, all in one batch.
-  Bindings of a deleted heading are detached by ops in the same batch,
-  `caused_by` the delete. A dead heading that had bindings stays in the queue
-  view as a phantom until a `feature.realized` names it (§6, `directive`).
+  The applier detaches a dead heading's bindings and records them
+  (`detached`); `block.restore` and `plan.reopen` re-attach any whose symbol
+  is still free. A dead heading that had bindings stays in the queue view as a
+  phantom until a `feature.realized` names it (§6, `directive`). A plan whose
+  target heading is dead is not offered for a verdict.
 - `bind.attach` enforces I8: a symbol bound elsewhere is detached from its
   prior owner by this op, recorded in the inverse.
 - `plan.open` then ops carrying `plan=pid`. Plan ops apply to the live document
   immediately, tagged. A proposed node's `bind.attach` ops are part of its plan
-  (rejecting the plan detaches them; reopening restores them). A plan may not
+  (rejecting the plan detaches them; reopening restores them). A plan-tagged
+  `text.mark` is a proposal like a plan's words: the `rejected` read mode
+  (the export, the directive, the model's context) reverses every open plan's
+  mark toggles from their recorded `added`/`removed`, `plan_claims` reports
+  them as `marked`/`unmarked`, and the verdict decides. A plan may not
   contain `block.delete` or `block.merge`:
   a plan to delete a feature has `kind=delete`, marks `suggest_del` over all of
   the feature's Text, and its accept emits the delete batch. `plan.accept`
@@ -285,7 +291,11 @@ ingest(bid, path, base: Frontier, base_text: str, new_text: str, actor, plan?, c
    over no existing mark is minted by this call. A trunk call with
    `actor=loop` or `translator` that would remove a human-placed `bold`,
    `link` or `cite` from every character it covers is refused for that block;
-   under a plan the person decides.
+   under a plan the person decides, so nothing is refused. An insert whose
+   anchor sits inside an existing mark (in sequence order, a dead end
+   character included) would be swallowed by it; the call emits an `off` over
+   the inserted words `new_text` does not mark, so the fixed point holds for
+   every mark shape.
 6. An empty `new_text` deletes every live character and leaves the block; the
    caller decides whether to `block.delete`.
 7. The call records `deleted_fraction`, the share of the field's live
@@ -372,17 +382,22 @@ wall time is rejected, before the file is merged.
 
 ### 7.3 Authority
 
-Roles are decided outside the calculus (the hub's GitHub permission table; the
-local checkout is `owner`). The applier checks, per op and with the store in
-hand, that the actor's role allows it: `owner` and `maintainer` may write
-everything; `machine` (agents, the loop, translators, imports) may write the
-trunk and plans but no verdict and no hand-off, with one exception, the loop's
-own `feature.realized`, which is the daemon settling evidence; `suggest` may
-open plans and write ops tagged with a plan the same actor opened (riding
-someone else's open plan would land a stranger's words when the maintainer
-accepts it). A disallowed op is recorded with `conflict="authority"` and not
-applied, so a PR that carries a forged `plan.accept` in its session file has
-no effect on rebuild. The hub validates a PR's log files before merging.
+Roles are decided outside the calculus and recorded where every clone reads
+them: the tracked `config.json` (`roles: {actor: role}`; the hub writes a
+login's role there when they sign in; the local checkout's `human:local` and
+`human:import` are `owner` unless it says otherwise). Because the table is
+tracked, `replay(log)` gives the same store on every machine (I6). The
+applier checks, per op and with the store in hand, that the actor's role
+allows it: `owner` and `maintainer` may write everything; `machine` (agents,
+the loop, translators, imports) may write the trunk and plans but no verdict
+and no hand-off, with one exception, the loop's own `feature.realized`, which
+is the daemon settling evidence; `suggest` may open plans and write ops tagged
+with a plan the same actor opened (riding someone else's open plan would land
+a stranger's words when the maintainer accepts it). A machine may write into
+any open plan (an agent extending the loop's or a contributor's proposal is a
+proposal still). A disallowed op is recorded with `conflict="authority"` and
+not applied, so a PR that carries a forged `plan.accept` in its session file
+has no effect on rebuild. The hub validates a PR's log files before merging.
 
 ### 7.4 Idempotency and provisional anchors
 
@@ -393,7 +408,7 @@ acks with the assigned `OpId`. A resubmitted client id is acked with the same
 A client cannot know the `OpId` of characters it inserted a moment ago and has
 not yet seen acked, so a submission may anchor to them provisionally as
 `["$cid", "<client id>", k]`, the k-th character of the insert that submission
-minted. The daemon resolves these against the acks it issues in the same drain,
+minted. The daemon resolves these against every ack it has issued to that client,
 in order; an unresolvable one fails as an unknown anchor. This is what lets a
 burst of typing land as one chain of ops without a round trip per keystroke.
 

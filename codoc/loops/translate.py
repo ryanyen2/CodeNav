@@ -73,12 +73,12 @@ def _needs(ws: Workspace, fid: str, lang: DocLanguage) -> bool:
     return detect_prose_language(text, lang).code != lang.code
 
 
-def _has_translator_plan(ws: Workspace, fid: str, lang: DocLanguage) -> bool:
-    ids = {b.id for b in ws.store.feature_body(fid)}
-    for p in ws.store.plans.values():
-        if p.status == "open" and p.actor == f"translator:{lang.code}" and p.target in ids:
-            return True
-    return False
+def _has_open_plan(ws: Workspace, fid: str) -> bool:
+    """A feature with any open plan waits: the live text holds words the
+    person has not accepted, and translating around them would tombstone
+    them as the translator's own edit."""
+    from codoc.calculus.derive import open_plans_on
+    return bool(open_plans_on(ws.store, fid))
 
 
 def translate_tree(ws: Workspace, codoc_dir: str | Path, *, language: DocLanguage | None = None, dry_run: bool = False,
@@ -90,7 +90,7 @@ def translate_tree(ws: Workspace, codoc_dir: str | Path, *, language: DocLanguag
     res = TranslateResult()
     heads = ws.store.headings()
     res.considered = len(heads)
-    pending = [h.id for h in heads if _needs(ws, h.id, lang) and not _has_translator_plan(ws, h.id, lang)]
+    pending = [h.id for h in heads if _needs(ws, h.id, lang) and not _has_open_plan(ws, h.id)]
     res.already = len(heads) - len(pending)
     if limit > 0:
         pending = pending[:limit]

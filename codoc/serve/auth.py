@@ -21,7 +21,6 @@ from typing import Callable, Protocol
 
 COOKIE_NAME = "codoc_session"
 DEFAULT_TTL_SECONDS = 8 * 3600
-ROLES_FILE = "cache/roles.json"
 MAINTAINER, SUGGEST, NONE = "maintainer", "suggest", "none"
 
 _WRITE = frozenset({"admin", "write", "maintain"})
@@ -84,23 +83,16 @@ class AuthContext:
 
 
 def record_role(codoc_dir: str | Path, login: str, role: str) -> None:
-    """Remember a login's role where the daemon reads it: the actor
-    ``human:<login>`` gets that role in ``Roles`` (``cache/roles.json``)."""
-    path = Path(codoc_dir) / ROLES_FILE
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        table = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        table = {}
-    table[f"human:{login}"] = role
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(table, indent=2, sort_keys=True), encoding="utf-8")
-    tmp.replace(path)
+    """Remember a login's role where every clone reads it: the tracked
+    ``config.json`` (``roles: {actor: role}``, spec §7.3), so a rebuild on any
+    machine applies ``human:<login>``'s ops under the same authority."""
+    from codoc.doclang import read_config, write_config
+    roles = dict(read_config(codoc_dir).get("roles") or {})
+    roles[f"human:{login}"] = role
+    write_config(codoc_dir, roles=roles)
 
 
 def read_roles(codoc_dir: str | Path) -> dict[str, str]:
-    try:
-        d = json.loads((Path(codoc_dir) / ROLES_FILE).read_text(encoding="utf-8"))
-        return {str(k): str(v) for k, v in d.items()} if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    from codoc.doclang import read_config
+    d = read_config(codoc_dir).get("roles")
+    return {str(k): str(v) for k, v in d.items()} if isinstance(d, dict) else {}

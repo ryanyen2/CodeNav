@@ -45,16 +45,44 @@ def markdown(text: Text, mode: str = "live", store: Store | None = None) -> str:
     view = text.clone()
     open_plans = {p.id for p in store.plans.values() if p.status == "open"}
     if mode == "rejected":
+        # Open plans undone on the clone: their segments hidden (killed by a
+        # marker no op owns, so `_op` finds no killer), their suggest_del marks
+        # dropped, their mark toggles reversed (a proposed unbold is not an unbold).
         for s in view.segs:
             if s.live and s.plan in open_plans:
                 s.dead = "view"
         view.marks = [m for m in view.marks if not (m.kind == SUGGEST_DEL and m.attrs.get("plan") in open_plans)]
+        _unapply_plan_marks(view, store, open_plans)
     elif mode == "accepted":
         for m in list(view.marks):
             if m.kind == SUGGEST_DEL and m.attrs.get("plan") in open_plans:
                 view.delete(m.start, m.end, by="view")
                 view.marks.remove(m)
     return render(view.live_text(), live_spans(view))
+
+
+def plan_mark_ops(store: Store, plans: set[str]) -> list[Op]:
+    """The applied ``text.mark`` ops of ``plans``, in apply order."""
+    out: list[Op] = []
+    for pid in plans:
+        p = store.plans.get(pid)
+        if p is None:
+            continue
+        out.extend(o for i in p.ops if (o := store.by_id.get(i)) is not None and o.kind == K.TEXT_MARK and o.conflict is None)
+    out.sort(key=lambda o: store.position[o.id])
+    return out
+
+
+def _unapply_plan_marks(view: Text, store: Store, plans: set[str]) -> None:
+    for o in reversed(plan_mark_ops(store, plans)):
+        for mj in o.payload.get("added", []):
+            mk = Mark.from_json(mj)
+            if mk in view.marks:
+                view.marks.remove(mk)
+        for mj in o.payload.get("removed", []):
+            mk = Mark.from_json(mj)
+            if view.holds(mk.start) and view.holds(mk.end) and mk not in view.marks:
+                view.marks.append(mk)
 
 
 def title(store: Store, fid: str, mode: str = "live") -> str:
@@ -130,10 +158,6 @@ class Claim:
     text: str = ""
 
 
-def _blocks_of(store: Store, fid: str) -> list[Block]:
-    return store.feature_body(fid)
-
-
 def _body_ids(store: Store, fid: str) -> set[str]:
     return {b.id for b in store.feature_body(fid)}
 
@@ -145,7 +169,7 @@ def ink(store: Store, fid: str) -> list[Claim]:
     never reads as sent because it touches one typed before."""
     w = store.watermarks(fid)
     out: list[Claim] = []
-    for b in _blocks_of(store, fid):
+    for b in store.feature_body(fid):
         for f in text_fields(b.kind):
             t = b.text(f)
             lt = t.live_text()
@@ -181,7 +205,7 @@ def ground(store: Store, fid: str) -> list[Claim]:
         return not in_frontier(op_id, w.handoff) and store.position.get(op_id, -1) > since
 
     out: list[Claim] = []
-    for b in _blocks_of(store, fid):
+    for b in store.feature_body(fid):
         for f in text_fields(b.kind):
             t = b.text(f)
             i = 0
@@ -198,23 +222,36 @@ def ground(store: Store, fid: str) -> list[Claim]:
 
 
 def plan_claims(store: Store, fid: str) -> list[Claim]:
-    """Open plans' insertions (``open``) and suggested deletions (``removed``)
-    on this feature, plus accepted plans' words (``accepted``)."""
+    """Open plans' insertions (``open``), suggested deletions (``removed``) and
+    mark toggles (``marked`` / ``unmarked``) on this feature, plus accepted
+    plans' words (``accepted``)."""
     out: list[Claim] = []
-    for b in _blocks_of(store, fid):
+    open_plans = {p.id for p in store.plans.values() if p.status == "open"}
+    for b in store.feature_body(fid):
         for f in text_fields(b.kind):
             t = b.text(f)
+            lt = t.live_text()
             for r in attribution(t):
                 if not r.plan or r.plan not in store.plans:
                     continue
                 st = store.plans[r.plan].status
                 if st == "rejected":
                     continue
-                out.append(Claim(b.id, f, r.start, r.end, "plan", "open" if st == "open" else "accepted", r.actor,
-                                 t.live_text()[r.start:r.end]))
+                out.append(Claim(b.id, f, r.start, r.end, "plan", "open" if st == "open" else "accepted", r.actor, lt[r.start:r.end]))
             for sp in _suggest_spans(t, store):
-                out.append(Claim(b.id, f, sp.start, sp.end, "plan", "removed", store.plans[sp.attrs["plan"]].actor,
-                                 t.live_text()[sp.start:sp.end]))
+                out.append(Claim(b.id, f, sp.start, sp.end, "plan", "removed", store.plans[sp.attrs["plan"]].actor, lt[sp.start:sp.end]))
+            offsets = t.live_offsets()
+            for o in plan_mark_ops(store, open_plans):
+                if o.payload.get("bid") != b.id or o.payload.get("path", "text") != f or o.payload.get("kind") == SUGGEST_DEL:
+                    continue
+                stage = "marked" if o.payload.get("on", True) else "unmarked"
+                for mj in (o.payload.get("added") if stage == "marked" else o.payload.get("removed")) or []:
+                    mk = Mark.from_json(mj)
+                    if not (t.holds(mk.start) and t.holds(mk.end)):
+                        continue
+                    span = t.live_span(mk, offsets)
+                    if span:
+                        out.append(Claim(b.id, f, span[0], span[1], "plan", stage, o.actor, f"{mk.kind}:{lt[span[0]:span[1]]}"))
     return out
 
 
@@ -326,7 +363,7 @@ def _human_changes(store: Store, fid: str, w: Watermarks) -> list[str]:
     for c in ink(store, fid):
         if c.stage == "sent":
             out.append(f"added: \"{c.text}\"")
-    for b in _blocks_of(store, fid):
+    for b in store.feature_body(fid):
         for f in text_fields(b.kind):
             for s in b.text(f).segs:
                 if s.dead:
@@ -362,7 +399,7 @@ def _mark_text(store: Store, fid: str, m: Mark) -> str:
 
 def _all_links(store: Store, fid: str) -> list[tuple[str, str]]:
     out = []
-    for b in _blocks_of(store, fid):
+    for b in store.feature_body(fid):
         for f in text_fields(b.kind):
             t = b.text(f)
             lt = t.live_text()
@@ -421,5 +458,13 @@ def projection(store: Store, realizing: set[str] = frozenset(), phases: dict[str
     watermarks = {fid: {"handoff": w.handoff, "realized": w.realized}
                   for fid, w in store.watermarks_by_fid.items() if (w.handoff or w.realized) and fid in phases}
     return {"head": store.pos, "frontier": dict(store.frontier), "blocks": blocks, "phases": phases,
-            "plans": [p.to_json() for p in store.plans.values() if p.status != "rejected"],
+            "plans": [p.to_json() for p in open_plans(store)],
             "watermarks": watermarks}
+
+
+def open_plans(store: Store) -> list:
+    """Plans still awaiting a verdict whose target (when they have one) is
+    live: a proposal on a heading the person deleted is not decidable from
+    any surface, so it is not offered."""
+    return [p for p in store.plans.values()
+            if p.status == "open" and (p.target is None or (p.target in store.blocks and store.blocks[p.target].live))]

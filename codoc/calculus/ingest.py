@@ -25,10 +25,11 @@ one Text field. This module turns that into ops, once, under the rules:
    merges; a link or cite displaces and the inverse restores) and shrunk by an
    ``off`` over the surviving characters the new text no longer marks. A bold
    whose end an insert lands on would grow over the insert (I2's one growing
-   kind); when the new text does not bold those words, an ``off`` over them
-   follows the insert. A loop or translator call that would remove a
-   human-placed bold, link or cite from every character it covers, on the
-   trunk, refuses the block; under a plan the person decides.
+   kind), and any mark swallows an insert anchored inside it; when the new
+   text does not mark those words, an ``off`` over them follows the insert. A
+   loop or translator call that would remove a human-placed bold, link or cite
+   from every character it covers refuses the block when it writes the trunk
+   (``trunk=True``); under a plan the person decides, so nothing is refused.
 5. The result carries ``deleted_fraction``; the caller's gate decides trunk or
    plan from it before minting.
 
@@ -48,7 +49,7 @@ from codoc.calculus.inline_md import Span, parse
 from codoc.calculus.text import BOLD, CITE, GROWS_AFTER, LINK, Mark, Text, nfc
 
 VISIBLE_MARKS = frozenset({BOLD, LINK, CITE})     # the kinds Markdown can express
-MACHINE_KINDS = frozenset({"loop", "translator"})
+REFUSING_KINDS = frozenset({"loop", "translator"})  # actors that may not drop a person's mark on the trunk
 
 
 @dataclass
@@ -85,11 +86,12 @@ def _unspaced(word: str) -> bool:
 
 
 def ingest(text: Text, *, bid: str, path: str, base_text: str, new_md: str, actor: str,
-           plan: str | None = None, multiline: bool = False) -> Ingest:
+           trunk: bool = True, multiline: bool = False) -> Ingest:
     """Compute the ops that turn ``text`` (live: ``base_text``) into the prose
     and marks of ``new_md``. See the module docstring for the rules.
-    ``multiline`` is set for a kind's Text field whose newlines are content (a
-    diagram's source); prose refuses them."""
+    ``trunk`` says the ops will land on the trunk (the human-mark refusal
+    applies); ``multiline`` is set for a kind's Text field whose newlines are
+    content (a diagram's source); prose refuses them."""
     res = Ingest()
     new_plain, new_spans = parse(nfc(new_md))
     if "\n" in new_plain and not multiline:
@@ -137,8 +139,7 @@ def ingest(text: Text, *, bid: str, path: str, base_text: str, new_md: str, acto
         offs = sorted(to_new[r] for r in text.mark_refs(m) if r in to_new)
         existing.append((m, offs))
         kept = any(o in cover.get(_key(m.kind, m.attrs), ()) for o in offs)
-        if plan is None and actor_kind(actor) in MACHINE_KINDS and is_human(m.actor) and not kept \
-                and text.mark_refs(m):
+        if trunk and actor_kind(actor) in REFUSING_KINDS and is_human(m.actor) and not kept and text.mark_refs(m):
             res.refused = f"would_drop_human_{m.kind}"
             return res
 
@@ -159,14 +160,16 @@ def ingest(text: Text, *, bid: str, path: str, base_text: str, new_md: str, acto
         covered = cover.get(_key(m.kind, m.attrs), set())
         for lo, hi in _runs(o for o in offs if o not in covered):
             mark(m.kind, m.attrs, list(survivors[lo]), list(survivors[hi]), False)
-    # A growing mark that an insert lands on has grown over words the new text
-    # does not mark: take it off them.
+    # An insert anchored inside a mark (in sequence order, dead characters
+    # included) or at the end of a growing one is covered by that mark once it
+    # lands: take the mark off the inserted words the new text does not mark.
     for idx, (anchor, s, e) in enumerate(inserts):
         for m, _ in existing:
-            if m.kind in GROWS_AFTER and anchor == m.end:
-                covered = cover.get(_key(m.kind, m.attrs), set())
-                for lo, hi in _runs(o for o in range(s, e) if o not in covered):
-                    mark(m.kind, m.attrs, ["$ins", idx, lo - s], ["$ins", idx, hi - s], False)
+            if anchor == START or not _swallows(text, m, anchor):
+                continue
+            covered = cover.get(_key(m.kind, m.attrs), set())
+            for lo, hi in _runs(o for o in range(s, e) if o not in covered):
+                mark(m.kind, m.attrs, ["$ins", idx, lo - s], ["$ins", idx, hi - s], False)
     # Widen or mint: every new span not already wholly under a same mark.
     for sp in new_spans:
         if sp.end <= sp.start:
@@ -180,6 +183,15 @@ def ingest(text: Text, *, bid: str, path: str, base_text: str, new_md: str, acto
 
 def _key(kind: str, attrs: dict) -> tuple:
     return (kind, tuple(sorted(attrs.items())))
+
+
+def _swallows(text: Text, m: Mark, anchor: CharRef) -> bool:
+    """Would a segment inserted right after ``anchor`` sit under ``m``? Yes
+    when the anchor is inside the mark's range in sequence order (its end
+    character may be dead), or is the end of a mark that grows after."""
+    a = text.locate(anchor)
+    lo, hi = text.locate(m.start), text.locate(m.end)
+    return lo <= a < hi or (m.kind in GROWS_AFTER and a == hi)
 
 
 def _runs(offsets) -> list[tuple[int, int]]:
