@@ -80,6 +80,13 @@ def _posix(path: str, root: str | None = None) -> str:
     return "/".join(segs)
 
 
+def _static_prefix(pattern: str) -> str:
+    """The part of a glob before its first wildcard — the deepest directory it
+    is certainly rooted at. ``/Users/*/.ssh/*`` is a question about ``/Users``."""
+    head = pattern.split("*")[0].split("?")[0].split("[")[0]
+    return head if head.endswith("/") else head.rsplit("/", 1)[0] + "/"
+
+
 def under_root(path: str, root: str | None) -> bool:
     """Whether ``path`` resolves inside ``root``. Symlinks are followed first,
     so a link planted in the worktree does not lead out of it. Without a root
@@ -141,7 +148,16 @@ def can_use_tool(tool_name: str, tool_input: dict | None, *,
         return False, f"tool '{tool_name}' is not permitted for remote-originated realization"
     target = ""
     if tool_input:
+        # `pattern` too: a Glob takes its target there, and an absolute pattern
+        # lists files anywhere. `Read` still refuses them, so what leaks is
+        # names — which key files exist under `~/.ssh` — and a boundary that
+        # answers "no" to the contents has no business answering "yes" to the
+        # listing. Only its static prefix is a path; the glob part is not.
         target = tool_input.get("file_path") or tool_input.get("path") or ""
+        if not target:
+            pat = str(tool_input.get("pattern") or "")
+            if pat.startswith("/") or pat.startswith("~"):
+                target = _static_prefix(pat)
     # Every path a tool names is inside the worktree. A tool that names none
     # (a Glob or Grep with no `path`) runs from the worktree, which is the
     # boundary itself.

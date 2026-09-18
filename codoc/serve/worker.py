@@ -122,6 +122,14 @@ def realize_one(req: Request, worktree: str, *, run, agent, base: str = "main", 
                           transient=True, built=True)
         return _publish(req, worktree, branch, base, run)
     if run(["git", "worktree", "add", "-b", branch, worktree], cwd=root):
+        # The branch may be there already: a hub killed between the agent's
+        # commit and the ledger write left the work on it and no record of it.
+        # Building again would spend another model session on the same request
+        # and, worse, `_cleanup` would delete the commit first — this pass is
+        # classed not-built, so it does not keep the branch. The branch existing
+        # IS the record: resume at the push.
+        if run(["git", "rev-parse", "--verify", f"refs/heads/{branch}"], cwd=root) == 0:
+            return realize_one(req, worktree, run=run, agent=agent, base=base, root=root, resume=True)
         return Result(False, branch, "git refused to create the worktree or branch", transient=True)
     changed = agent({"text": req.text, "id": req.handoff, "title": req.title}, worktree, scope=req.scope)
     if changed is None:

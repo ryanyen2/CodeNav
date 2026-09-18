@@ -80,6 +80,45 @@ def test_the_sandbox_is_the_boundary(tmp_path):
     assert policy("WebFetch", {"url": "https://docs.example"})[0] is False      # allowlist empty: every fetch denied
 
 
+def test_a_branch_the_agent_already_built_is_published_not_rebuilt(tmp_path):
+    """Review 7: the `built:` ledger entry is written after the push and the PR
+    have both been tried, so a hub killed in between left the commit on the
+    branch and nothing in the ledger. The next pass's `worktree add -b` then
+    failed, was classed transient-and-not-built, and `_cleanup` ran `branch -D`
+    on the agent's work — after which the pass following paid for a fresh model
+    session. A branch by the hand-off's name IS the record: resume at the push."""
+    cd, ws, ho = ready(tmp_path)
+    ws.close()
+    branch = branch_name(ho.id)
+    branches = {branch}                                   # left behind by the crashed pass
+    calls: list[list[str]] = []
+
+    def run(argv, cwd=None):
+        calls.append(list(argv))
+        if argv[:3] == ["git", "worktree", "add"]:
+            if "-b" in argv:
+                b = argv[argv.index("-b") + 1]
+                if b in branches:
+                    return 128                            # fatal: a branch named '…' already exists
+                branches.add(b)
+                return 0
+            return 0 if argv[-1] in branches else 128
+        if argv[:2] == ["git", "branch"] and "-D" in argv:
+            branches.discard(argv[-1])
+            return 0
+        return 0
+
+    runs: list[str] = []
+    process_ready(str(tmp_path), str(cd), run=run, agent=lambda d, w, scope=None: runs.append(d["id"]) or ["c.py"],
+                  printer=lambda *_: None, retry=[])
+    assert runs == [], f"the agent ran again for work already committed: {runs}"
+    names = [" ".join(c[:3]) for c in calls]
+    assert "git push -u" in names, names
+    # The local branch goes only AFTER the push and the PR: the work is on the
+    # remote by then, which is what `_cleanup` is for.
+    assert names.index("git push -u") < names.index("git branch -D")
+
+
 def test_every_path_taking_tool_stays_inside_the_worktree():
     """Write is confined to the files the directive names, so an unconfined Read
     is an exfiltration path with a publisher attached: the agent reads the `gh`
@@ -92,6 +131,12 @@ def test_every_path_taking_tool_stays_inside_the_worktree():
         assert policy("Read", {"file_path": os.path.expanduser(outside)})[0] is False, outside
     assert policy("Grep", {"pattern": "oauth_token", "path": os.path.expanduser("~")})[0] is False
     assert policy("Glob", {"pattern": "**/hosts.yml", "path": "/"})[0] is False
+    # A Glob takes its target in `pattern` too, and an absolute one lists files
+    # anywhere. `Read` still refuses them, so what leaks is names — which is
+    # not a thing a boundary that refuses the contents should answer.
+    assert policy("Glob", {"pattern": os.path.expanduser("~/.ssh/*")})[0] is False
+    assert policy("Glob", {"pattern": "/Users/*/.config/gh/*"})[0] is False
+    assert policy("Glob", {"pattern": "**/*.py"}) == (True, "")            # relative: the worktree
     # No path named at all: the tool runs from the worktree, which is the boundary.
     assert policy("Grep", {"pattern": "send"}) == (True, "")
     # The worktree lives under the maintainer's own `.codoc/`, so the denylists

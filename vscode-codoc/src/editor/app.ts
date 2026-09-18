@@ -319,6 +319,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
                     build: buildThread,
                     newBid: () => `b-${Math.random().toString(16).slice(2, 14).padEnd(12, '0')}`,
                     featureOf: featureOfBlock,
+                    me: () => ({ actor, decides: decides() }),
                 });
             } else {
                 editor.adopt(m.proj, realizing);

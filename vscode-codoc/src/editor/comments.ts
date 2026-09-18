@@ -91,6 +91,10 @@ export interface MarginHost {
     build(thread: Thread): void;
     newBid(): string;
     featureOf(bid: string): string | null;
+    /** The viewer, and whether they answer for the tree. A contributor may
+     *  resolve only a thread they started — the applier refuses the rest, and a
+     *  button whose refusal reloads the card is worse than no button. */
+    me?(): { actor: string; decides: boolean };
 }
 
 /** The margin: one card per open thread, hung beside its anchor block. */
@@ -187,8 +191,9 @@ export class Margin {
             this.render();
         };
         if (t) {
+            const me = this.host.me?.() ?? { actor: '', decides: true };
             btn(actions, 'Reply', () => post(t.scope));
-            btn(actions, 'Resolve', () => { this.host.submit(resolveOps(t)); });
+            if (me.decides || t.messages[0]?.actor === me.actor) btn(actions, 'Resolve', () => { this.host.submit(resolveOps(t)); });
             if (t.scope === 'code' || t.scope === 'both') btn(actions, 'Build it', () => this.host.build(t), 'codoc-btn-human');
         } else {
             btn(actions, 'Comment', () => post('code'));

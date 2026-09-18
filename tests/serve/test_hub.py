@@ -236,3 +236,74 @@ def test_set_language_takes_a_tag_and_not_a_string(tmp_path):
     assert c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "set-language", "tag": "zh-Hans"}).json() == {"ok": True}
     assert json.loads((cd / "config.json").read_text())["doc_language"] == "zh-Hans"
 
+
+
+def hub_ws(tmp_path):
+    """A workspace whose tracked table names a contributor and a maintainer."""
+    cd = tmp_path / ".codoc"
+    cd.mkdir()
+    (cd / "config.json").write_text(json.dumps({"roles": {"human:gh:alice": SUGGEST, "human:gh:bob": MAINTAINER}}))
+    ws = Workspace(cd)
+    seed(ws)
+    return cd, ws
+
+
+def test_a_contributor_cannot_resolve_or_rewrite_somebody_elses_comment_thread(tmp_path):
+    """Review 7: a comment is writable untagged by anyone, because a thread is
+    something to answer rather than accept. But editing INSIDE somebody's
+    thread should mean replying in it: a `suggest` login could mark a
+    maintainer's request-for-work resolved — the state `Build it` and the margin
+    read — and delete the words of the request."""
+    cd, ws = hub_ws(tmp_path)
+    t = ws.store.blocks["p1"].text()
+    ws.submit([
+        {"kind": K.BLOCK_ADD, "target": {"bid": "c1"},
+         "payload": {"kind": "comment", "after": "p1", "content": {"thread": "c1", "anchor": "p1",
+                                                                   "anchor_text": "Retries", "scope": "code", "status": "open"}}},
+        {"kind": K.TEXT_INSERT, "target": {"bid": "c1", "path": "body"}, "payload": {"after": "START", "text": "make it retry twice"}},
+    ], actor="human:gh:bob")
+    body = ws.store.blocks["c1"].content["body"]
+    L.submit(cd, client_name("alice"), [
+        Submission(cid="r1", kind=K.BLOCK_SET, target={"bid": "c1", "path": "status"}, payload={"value": "resolved"}, batch="b"),
+        Submission(cid="r2", kind=K.TEXT_DELETE, target={"bid": "c1", "path": "body"},
+                   payload={"from": list(body.ref_at(0)), "to": list(body.last_live_ref())}, batch="b"),
+    ])
+    assert [o.conflict for o in ws.drain_inbox()] == ["authority", "authority"]
+    assert ws.store.blocks["c1"].content.get("status") == "open"
+    # …while a reply of their own, and closing a thread they started, both stand.
+    L.submit(cd, client_name("alice"), [
+        Submission(cid="r3", kind=K.BLOCK_ADD, target={"bid": "c2"},
+                   payload={"kind": "comment", "after": "c1", "content": {"thread": "c1", "anchor": "p1",
+                                                                          "anchor_text": "Retries", "scope": "code", "status": "open"}}, batch="b2"),
+        Submission(cid="r4", kind=K.TEXT_INSERT, target={"bid": "c2", "path": "body"},
+                   payload={"after": "START", "text": "on it"}, batch="b2"),
+        Submission(cid="r5", kind=K.BLOCK_ADD, target={"bid": "c3"},
+                   payload={"kind": "comment", "after": "p1", "content": {"thread": "c3", "anchor": "p1",
+                                                                          "anchor_text": "Retries", "scope": "code", "status": "open"}}, batch="b3"),
+        Submission(cid="r6", kind=K.BLOCK_SET, target={"bid": "c3", "path": "status"}, payload={"value": "resolved"}, batch="b3"),
+    ])
+    assert [o.conflict for o in ws.drain_inbox()] == [None, None, None, None]
+    ws.close()
+
+
+def test_a_revoked_collaborator_recorded_as_none_is_not_a_suggester(tmp_path):
+    """`auth.session` writes `none` to the tracked table on revocation.
+    `Roles.policy` knew owner, maintainer, machine and "everyone else" — and
+    `none` was everyone else, so the record that says a person was REMOVED
+    granted exactly what a contributor has. Their session is gone, but an inbox
+    line drained after the revocation, and a clone validating their pull
+    request's logs, both come through the policy."""
+    cd = tmp_path / ".codoc"
+    cd.mkdir()
+    (cd / "config.json").write_text(json.dumps({"roles": {"human:gh:eve": "none"}}))
+    ws = Workspace(cd)
+    seed(ws)
+    L.submit(cd, client_name("eve"), [
+        Submission(cid="e1", kind=K.PLAN_OPEN, target={"pid": "pl-eve"},
+                   payload={"kind": "edit", "target": "p1", "note": "hi"}, batch="pl-eve"),
+        Submission(cid="e2", kind=K.BLOCK_ADD, target={"bid": "ce"},
+                   payload={"kind": "comment", "after": "p1", "content": {"thread": "ce", "anchor": "p1",
+                                                                          "anchor_text": "", "scope": "code", "status": "open"}}, batch="b"),
+    ])
+    assert all(o.conflict == "authority" for o in ws.drain_inbox())
+    ws.close()

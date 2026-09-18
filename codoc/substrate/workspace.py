@@ -33,6 +33,7 @@ from codoc.substrate.clock import Clock
 
 OWNER = "owner"
 SUGGEST = "suggest"
+NONE = "none"                  # recorded on revocation: not a role, the absence of one
 COMMENT = "comment"
 # The ops a comment is made of, besides the `block.add` that mints it.
 _COMMENT_EDITS = frozenset({K.TEXT_INSERT, K.TEXT_DELETE, K.TEXT_MARK, K.BLOCK_SET})
@@ -116,6 +117,36 @@ def is_comment_op(store: Store, kind: str, target: dict, payload: dict) -> bool:
     return b is not None and b.kind == COMMENT
 
 
+def minted_by(store: Store, bid: str) -> str:
+    """The actor whose ``block.add`` put this block there."""
+    for o in store.ops_on([bid]):
+        if o.kind == K.BLOCK_ADD and o.conflict is None:
+            return o.actor
+    return ""
+
+
+def _own_comment(store: Store, op: Op) -> bool:
+    """Whether a contributor writing inside a comment is writing their own.
+
+    Editing INSIDE somebody's thread should mean replying in it. A reply is a
+    new comment block, so adding one is always free, and so is writing into one
+    they minted — the words they are still typing. Deleting another person's
+    words is not, and neither is resolving a thread they did not start:
+    ``status`` is what the margin and ``Build it`` read, so marking a
+    maintainer's request-for-work done is answering it on their behalf."""
+    if op.kind == K.BLOCK_ADD:
+        return True
+    bid = str(op.target.get("bid") or "")
+    if op.kind == K.TEXT_MARK and op.payload.get("kind") == COMMENT:
+        return True            # the anchor mark on the prose, which is theirs to place
+    b = store.blocks.get(bid)
+    if b is None:
+        return False
+    if op.kind == K.BLOCK_SET and op.target.get("path") == "status":
+        return minted_by(store, str(b.content.get("thread") or bid)) == op.actor
+    return minted_by(store, bid) == op.actor
+
+
 @dataclass
 class Roles:
     """Actor → role, and the policy the applier runs (spec §7.3).
@@ -138,9 +169,10 @@ class Roles:
       ``text.delete`` of their own (``_own_plan_text``).
 
     A comment is writable untagged by anyone: it hangs off words rather than
-    standing among them, and there is nothing for a maintainer to accept. On a
-    hub that means a contributor can edit inside another person's comment
-    thread; the log says who did, under their GitHub identity.
+    standing among them, and there is nothing for a maintainer to accept. What
+    a contributor may write there is their OWN — a new comment (which is what a
+    reply is) and the words of one they minted. Deleting somebody else's words,
+    or resolving a thread they did not start, is answering for them.
     """
     table: dict[str, str] = field(default_factory=dict)
     default: str = "suggest"
@@ -172,6 +204,13 @@ class Roles:
 
     def policy(self, store: Store, op: Op) -> str | None:
         role = self.role(op.actor)
+        if role == NONE:
+            # The table says this person was REMOVED. Their session is gone, but
+            # an inbox line drained after the revocation and a clone validating
+            # their pull request's logs both come through here, and "everyone
+            # else" is a suggester — which would make the record of removal
+            # grant exactly what a contributor has.
+            return f"{op.actor} has no access"
         if role in (OWNER, "maintainer"):
             return None
         if role == "machine":
@@ -184,7 +223,7 @@ class Roles:
         if _withdrawing_own_empty_plan(store, op) or _own_plan_text(store, op):
             return None
         if is_comment_op(store, op.kind, op.target, op.payload):
-            return None
+            return None if _own_comment(store, op) else f"{role} may not change another person's comment"
         if op.plan:
             plan = store.plans.get(op.plan)
             if plan is not None and plan.actor == op.actor:
