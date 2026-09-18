@@ -273,9 +273,23 @@ def _h_text_mark(store: Store, op: Op, touched: set[str]):
     if not text.holds(end):
         raise Conflict("range_spans_blocks")
     if kind in PROPOSALS and on:
-        if not op.plan:
+        # A new proposal must CARRY its plan. An op that only names one in
+        # `attrs` is allowed in exactly one case: it restores a record that was
+        # already placed, and says which op placed it (`payload["op"]`) — the
+        # inverse of a plan mark's inverse, which 01 §9 requires to apply. Even
+        # then the plan must still be open.
+        pid = op.plan or (str(attrs.get("plan") or "") if op.payload.get("op") else "")
+        plan = store.plans.get(pid)
+        if plan is None or plan.status != "open":
             raise Conflict("suggest_needs_plan")
-        attrs["plan"] = op.plan
+        attrs["plan"] = pid
+    if kind == SUGGEST_DEL and on and "chars" not in attrs:
+        # WHICH characters this proposes to cut, by identity, recorded when it
+        # is placed. `text.delete` has stored its explicit segments since round
+        # 3 for exactly this reason (01 §3): a range struck later would take
+        # whatever had since been typed between the ends with it — including
+        # the person's own answer to the proposal.
+        attrs["chars"] = ",".join(f"{o}:{k}" for o, k in text.ops_between_refs(start, end))
     # A restored mark keeps its original placer and actor: only an inverse says
     # so, and an inverse is the person's own op. Both ride in the canonical
     # payload so a replay restores the same mark (I6).
@@ -693,7 +707,8 @@ def _h_plan_open(store: Store, op: Op, touched: set[str]):
     # now live in the archive; an ordinary plan.open sends neither.
     ops = [str(i) for i in op.payload.get("ops") or []]
     opened_by = op.payload.get("opened_by") or op.id
-    store.plans[pid] = Plan(pid, op.actor, kind, target, op.payload.get("note", ""), "open", ops, opened_by)
+    store.plans[pid] = store.open_plans[pid] = Plan(
+        pid, op.actor, kind, target, op.payload.get("note", ""), "open", ops, opened_by)
     canonical = {"kind": kind, "target": target, "note": op.payload.get("note", "")}
     if ops:
         canonical["ops"] = ops
@@ -833,6 +848,18 @@ def _proposed_marks(store: Store, pid: str, accepted: set[str]) -> list[tuple[Bl
 
 
 
+def _struck_chars(m: Mark) -> list[tuple[str, int, int]]:
+    """The characters a `suggest_del` proposed to cut, as segments. Recorded at
+    placement, so accepting kills exactly those and nothing typed between them
+    since — the same rule `text.delete` has followed since round 3 (01 §3)."""
+    out = []
+    for ref in (m.attrs.get("chars") or "").split(","):
+        op_id, _, k = ref.rpartition(":")
+        if op_id and k.isdigit():
+            out.append((op_id, int(k), 1))
+    return out
+
+
 def _mark_holder(store: Store, mk: Mark, hint: tuple[str, str]) -> list[tuple[Block, str]]:
     """The one Text holding both ends of a mark, if any (a split may have
     moved them apart, in which case the mark is two marks and neither is this one)."""
@@ -872,7 +899,7 @@ def _h_plan_accept(store: Store, op: Op, touched: set[str]):
         t = block.text(p)
         if m not in t.marks:
             continue
-        got = t.delete(m.start, m.end, by=op.id, by_actor=op.actor, by_at=op.at)
+        got = t.kill(_struck_chars(m), by=op.id, by_actor=op.actor, by_at=op.at)
         t.marks.remove(m)
         record.setdefault("struck", []).append({"bid": block.id, "path": p, "mark": m.to_json(),
                                                 "segments": [list(k) for k in got]})
@@ -883,8 +910,22 @@ def _h_plan_accept(store: Store, op: Op, touched: set[str]):
     for block, p, m in _proposed_marks(store, plan.id, acc):
         t = block.text(p)
         want = {k[2:]: v for k, v in m.attrs.items() if k.startswith("a:")}
-        was_removed, was_added = t.set_mark(m.attrs.get("mark", ""), want, m.start, m.end,
-                                            bool(m.attrs.get("on")), actor=m.actor, op=m.op, at=m.at)
+        try:
+            was_removed, was_added = t.set_mark(m.attrs.get("mark", ""), want, m.start, m.end,
+                                                bool(m.attrs.get("on")), actor=m.actor, op=m.op, at=m.at)
+        except MarkError:
+            # A proposal to turn a WHOLE mark off whose mark the person has
+            # already removed asks for a state the document is in. Agreeing
+            # costs nothing; raising here would leave the strike above applied,
+            # the plan open, and every later accept failing the same way — the
+            # two-phase rule (see this module's header) broken in the one
+            # handler that mutates most.
+            t.marks.remove(m)
+            store.index_text(block.id, p, t)
+            record.setdefault("applied", []).append({"bid": block.id, "path": p, "mark": m.to_json(),
+                                                     "removed": [], "added": []})
+            touched.add(block.id)
+            continue
         t.marks.remove(m)
         store.index_text(block.id, p, t)
         record.setdefault("applied", []).append(
@@ -901,6 +942,7 @@ def _h_plan_accept(store: Store, op: Op, touched: set[str]):
             touched.add(i)
         record["detached"] = _detach_dead(store, [plan.target], touched)
     plan.status, plan.decided_by = "accepted", op.actor
+    store.open_plans.pop(pid, None)
     canonical = {"subset": subset, "accepted": accepted, "rejected": rejected, "deleted_blocks": deleted, **record}
     return canonical, [body(K.PLAN_REOPEN, {"pid": pid},
                             {"from": "accepted", "closure": accepted if subset is not None else None,
@@ -920,6 +962,7 @@ def _h_plan_reject(store: Store, op: Op, touched: set[str]):
     for o in reversed(pops):
         _undo_plan_op(store, o, op.id, touched, record, op.actor, op.at)
     plan.status, plan.decided_by = "rejected", op.actor
+    store.open_plans.pop(pid, None)
     return dict(record), [body(K.PLAN_REOPEN, {"pid": pid}, {"from": "rejected", "by": op.id, **record})]
 
 
@@ -1016,6 +1059,7 @@ def _h_plan_reopen(store: Store, op: Op, touched: set[str]):
                                       entry.get("fingerprint", ""), entry.get("types_hash", ""))
         touched.add(entry["fid"])
     plan.status, plan.decided_by = "open", ""
+    store.open_plans[pid] = plan
     _touch_plan(store, plan, _plan_ops(store, plan), touched)
     verdict = K.PLAN_ACCEPT if p.get("from") == "accepted" else K.PLAN_REJECT
     vpayload = {"subset": p["closure"]} if verdict == K.PLAN_ACCEPT and p.get("closure") is not None else {}

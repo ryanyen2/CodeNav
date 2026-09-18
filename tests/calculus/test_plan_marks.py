@@ -9,7 +9,7 @@ import random
 from codoc.calculus import ops as K
 from codoc.calculus.derive import block_entry, live_spans, markdown, plan_claims
 from codoc.calculus.inline_md import parse
-from codoc.calculus.text import BOLD, CITE, LINK, PROPOSALS, SUGGEST_DEL
+from codoc.calculus.text import BOLD, CITE, COMMENT, LINK, PROPOSALS, SUGGEST_DEL
 from codoc.substrate.workspace import Workspace
 from tests.substrate.test_review5 import H, T, bold_chars, ins, mark, refs, seed
 
@@ -307,3 +307,49 @@ def test_rejecting_one_of_two_plans_that_bold_the_same_words_keeps_the_other_pro
     assert acc.conflict is None
     t = ws.store.blocks["p1"].text()
     assert bold_chars(t) == set(r[0:7]), ("plan B was accepted and its bold is gone:", markdown(t))
+
+
+def test_accepting_a_strike_kills_what_it_proposed_and_not_what_was_typed_inside(tmp_path):
+    """Review 8: a `suggest_del` was a Mark over two anchors, struck with a
+    RANGE delete, so a word the person typed inside the proposal died with it.
+    `text.delete` has recorded its explicit segments since round 3 for exactly
+    this reason (01 §3); the proposal form records them at placement now, and
+    the accept kills by identity."""
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws)
+    r = refs(ws, "p1")
+    pid = ws.open_plan(actor="loop", kind="edit", target="p1")
+    mark(ws, "p1", SUGGEST_DEL, r[8], r[11], actor="loop", plan=pid)     # "once"
+    ins(ws, "p1", list(r[9]), "X", actor=H)                              # the person answers inside it
+    assert T(ws.store, "p1") == "Retries onXce."
+    ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor=H)
+    assert T(ws.store, "p1") == "Retries X."
+
+
+def test_a_verdict_on_a_mark_the_person_already_removed_leaves_the_plan_decided(tmp_path):
+    """`plan.accept` struck first and applied the mark records after, so a
+    proposal to turn a WHOLE mark off whose mark the person had already removed
+    raised midway: the strike stood, the accept was recorded `mark_partial`,
+    the plan stayed open, and every later accept failed the same way. A
+    proposal for a state the document is already in is satisfied."""
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws)
+    r = refs(ws, "p1")
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "c1"},
+                "payload": {"kind": "comment", "after": "p1",
+                            "content": {"thread": "c1", "anchor": "p1", "anchor_text": "Retries",
+                                        "scope": "code", "status": "open"}}},
+               {"kind": K.TEXT_MARK, "target": {"bid": "p1", "path": "text"},
+                "payload": {"kind": COMMENT, "attrs": {"block": "c1"},
+                            "start": list(r[0]), "end": list(r[6]), "on": True}}], actor=H)
+    pid = ws.open_plan(actor="loop", kind="edit", target="p1")
+    mark(ws, "p1", COMMENT, r[0], r[6], on=False, actor="loop", plan=pid, attrs={"block": "c1"})   # proposes closing the thread
+    mark(ws, "p1", SUGGEST_DEL, r[8], r[11], actor="loop", plan=pid)        # …and striking "once"
+    # The person resolves the thread themselves before answering.
+    ws.submit([{"kind": K.TEXT_MARK, "target": {"bid": "p1", "path": "text"},
+                "payload": {"kind": COMMENT, "attrs": {"block": "c1"},
+                            "start": list(r[0]), "end": list(r[6]), "on": False}}], actor=H)
+    acc = ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor=H)[0]
+    assert acc.conflict is None, acc.conflict
+    assert ws.store.plans[pid].status == "accepted"
+    assert T(ws.store, "p1") == "Retries ."

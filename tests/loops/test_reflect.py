@@ -149,3 +149,28 @@ def test_a_feature_emptied_while_the_person_typed_is_proposed_on_the_next_pass(t
     ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": pid}, "payload": {}}], actor="human:local")
     r = reflect(ws, ChangeSet(added=[chunk("n.py", "n.py::y", "fy", "ty")]), Graph(), propose=lambda *a, **k: [])
     assert not any(ws.store.plans[p].target == "h1" for p in r.plans)   # answered once, not asked again
+
+
+def test_a_symbol_an_open_plan_borrowed_does_not_make_its_owner_look_emptied(tmp_path):
+    """Review 8: a plan's `bind.attach` applies live and displaces the prior
+    owner (I8), so an agent proposing a new feature that takes h1's only symbol
+    left h1 bound to nothing — and the next pass proposed deleting it, asking
+    the person the same question twice, in the wrong order. Rejecting the
+    agent's plan gives the symbol back."""
+    from codoc.loops.reflect import _emptied
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws)
+    assert _emptied(ws.store) == []
+    pid = ws.open_plan(actor="agent:claude-code", kind="add", note="split the client")
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "h2"},
+                "payload": {"kind": HEADING, "level": 1, "after": "p1"}},
+               {"kind": K.TEXT_INSERT, "target": {"bid": "h2", "path": "text"},
+                "payload": {"after": START, "text": "Sender"}},
+               {"kind": K.BIND_ATTACH, "target": {"fid": "h2"},
+                "payload": {"file": "c.py", "symbol": "c.py::send"}}],
+              actor="agent:claude-code", plan=pid)
+    assert ws.store.bindings[("c.py", "c.py::send")].feature == "h2"
+    assert _emptied(ws.store) == [], "h1 is empty only while a proposal nobody answered says so"
+    ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": pid}, "payload": {}}], actor="human:local")
+    assert ws.store.bindings[("c.py", "c.py::send")].feature == "h1"
+    assert _emptied(ws.store) == []

@@ -300,6 +300,18 @@ def _emptied(store: Store) -> list[str]:
     plan (of any verdict: a rejected one is an answer, not an invitation)."""
     bound = {b.feature for b in store.bindings.values()}
     proposed = {pl.target for pl in store.plans.values() if pl.kind == "delete"}
+    # A symbol an OPEN plan borrowed is not a symbol the feature lost: a plan's
+    # `bind.attach` applies live and displaces the prior owner (I8), and
+    # rejecting it gives the symbol back. Asking whether to delete the owner
+    # before the person has answered the proposal that emptied it is asking
+    # them the same question twice, in the wrong order.
+    for o in store.ops:
+        if o.kind != K.BIND_ATTACH or o.conflict or not o.plan:
+            continue
+        pl = store.plans.get(o.plan)
+        displaced = o.payload.get("displaced")
+        if pl is not None and pl.status == "open" and displaced:
+            bound.add(displaced["feature"])
     out = []
     for h in store.headings():
         if h.id in bound or h.id in proposed:

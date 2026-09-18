@@ -62,12 +62,11 @@ def settled_prefix(store: Store) -> int:
         if b.kind == "heading" and reads_its_ops(store, b.id):
             live.update(x.id for x in store.feature_body(b.id))
             live.add(b.id)
-    for p in store.plans.values():
-        if p.status == "open":
-            live.update(p.ops)
-            live.add(p.id)
-            if p.target:
-                live.add(p.target)
+    for p in store.open_plans.values():
+        live.update(p.ops)
+        live.add(p.id)
+        if p.target:
+            live.add(p.target)
     for i, op in enumerate(store.ops):
         named = {op.target.get("bid"), op.target.get("fid"), op.target.get("into"),
                  op.target.get("pid"), op.payload.get("bid"), op.payload.get("new"), op.id}

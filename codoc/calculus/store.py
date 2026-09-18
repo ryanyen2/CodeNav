@@ -101,6 +101,10 @@ class Store:
         self.order: list[tuple[str, str]] = []
         self.bindings: dict[tuple[str, str], Binding] = {}
         self.plans: dict[str, Plan] = {}
+        # The open ones, kept as they open and close. Every reader that asks
+        # "is anything in flight" asks per feature, and a tree accumulates
+        # decided plans for ever.
+        self.open_plans: dict[str, Plan] = {}
         self.watermarks_by_fid: dict[str, Watermarks] = {}
         self.ops: list[Op] = []
         self.by_id: dict[OpId, Op] = {}

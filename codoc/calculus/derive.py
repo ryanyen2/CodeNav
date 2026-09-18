@@ -61,7 +61,7 @@ def markdown(text: Text, mode: str = "live", store: Store | None = None) -> str:
             any(s.live and s.plan for s in text.segs) if mode == "rejected" else text.proposals()):
         return render(text.live_text(), live_spans(text))
     view = text.clone()
-    open_plans = {p.id for p in store.plans.values() if p.status == "open"}
+    open_plans = store.open_plans
     if mode == "rejected":
         # An open plan's words are not the document's; its proposal records are
         # not marks at all, and `live_spans` already leaves them out.
@@ -143,7 +143,7 @@ def block_written_by(store: Store, bid: str) -> str:
         for s in b.text(f).segs:
             if not s.live or s.at <= newest[0]:
                 continue
-            if s.plan and (p := store.plans.get(s.plan)) is not None and p.status == "open":
+            if s.plan in store.open_plans:
                 continue
             newest = (s.at, s.actor)
     actor = newest[1]
@@ -264,18 +264,21 @@ def plan_claims(store: Store, fid: str) -> list[Claim]:
 
 
 def _suggest_spans(t: Text, store: Store) -> list[Span]:
-    spans = live_spans(t, frozenset({SUGGEST_DEL}))
-    if not spans:
-        return []            # nothing proposed here: no reason to scan the plans
-    open_plans = {p.id for p in store.plans.values() if p.status == "open"}
-    return [sp for sp in spans if sp.attrs.get("plan") in open_plans]
+    return [sp for sp in live_spans(t, frozenset({SUGGEST_DEL}))
+            if sp.attrs.get("plan") in store.open_plans]
 
 
 def open_plans_on(store: Store, fid: str) -> list[str]:
+    """The open plans this feature is waiting on: one targeting a block of
+    hers, or one whose ops landed in her.
+
+    Over `store.open_plans`, not every plan the tree ever had: a decided plan
+    is answered, and walking all of them per feature made `phases()` cost
+    O(features × plans) — 41 → 195 ms as a tree accumulated 3,000 verdicts."""
     ids = _body_ids(store, fid)
-    out = {p.id for p in store.plans.values() if p.status == "open" and p.target in ids}
-    out.update(o.plan for o in store.ops_on(ids) if o.plan and not o.conflict
-               and store.plans.get(o.plan) is not None and store.plans[o.plan].status == "open")
+    out = {pid for pid, p in store.open_plans.items() if p.target in ids}
+    out.update(o.plan for o in store.ops_on(ids)
+               if o.plan and not o.conflict and o.plan in store.open_plans)
     return sorted(out)
 
 
@@ -599,5 +602,5 @@ def open_plans(store: Store) -> list:
     """Plans still awaiting a verdict whose target (when they have one) is
     live: a proposal on a heading the person deleted is not decidable from
     any surface, so it is not offered."""
-    return [p for p in store.plans.values()
-            if p.status == "open" and (p.target is None or (p.target in store.blocks and store.blocks[p.target].live))]
+    return [p for p in store.open_plans.values()
+            if p.target is None or (p.target in store.blocks and store.blocks[p.target].live)]

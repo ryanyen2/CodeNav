@@ -290,9 +290,20 @@ class Workspace:
 
     def _replay_one(self, op: Op) -> None:
         """Replay one recorded op, advancing the clock past it.
-        ``apply.replay_recorded`` is the rule, and says why."""
+        ``apply.replay_recorded`` is the rule, and says why.
+
+        An op whose record says it applied and which conflicts HERE is the one
+        thing replay cannot make true again: two clones forked, one accepted
+        the plan the other went on writing into, and the merge has to choose.
+        It chooses the earlier op, which is right — and says so, because the
+        loser's own log says those words landed and their tree will not have
+        them. `codoc rebuild` and the daemon both print `problems`."""
         self.clock.observe(op.at)
-        replay_recorded(self.store, op)
+        got = replay_recorded(self.store, op)
+        if op.conflict is None and got.conflict is not None:
+            self.problems.append(L.LogProblem(
+                op.id, 0, f"{op.kind} by {op.actor} applied when it was written and "
+                          f"conflicts on this merge ({got.conflict}); those words are not in this tree"))
 
     # ── writing ────────────────────────────────────────────────────────────
     def _mint(self, kind: str, target: dict, payload: dict, *, actor: str, batch: str,
@@ -468,8 +479,8 @@ class Workspace:
     def _withdraw_if_empty(self, pid: str | None) -> None:
         """Take back a plan this workspace opened that nothing landed under: the
         editor would offer a verdict on nothing."""
-        plan = self.store.plans.get(pid or "")
-        if plan is None or plan.status != "open" or plan.ops:
+        plan = self.store.open_plans.get(pid or "")
+        if plan is None or plan.ops:
             return
         self._apply(self._mint(K.PLAN_REJECT, {"pid": plan.id}, {}, actor=plan.actor, batch=plan.id))
         self._opened_plans = {k: v for k, v in self._opened_plans.items() if v != plan.id}
@@ -508,8 +519,8 @@ class Workspace:
             # An `edit` plan only: a proposal to DELETE or MOVE this feature is
             # a different question, and filing a repair under it means accepting
             # the deletion accepts the repair and rejecting it drops it.
-            for p in reversed(list(self.store.plans.values())):
-                if p.status == "open" and p.actor == actor and p.target == bid and p.kind == "edit":
+            for p in reversed(list(self.store.open_plans.values())):
+                if p.actor == actor and p.target == bid and p.kind == "edit":
                     self._opened_plans[key] = p.id
                     return p.id
         pid = new_plan_id()
