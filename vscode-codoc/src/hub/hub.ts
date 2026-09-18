@@ -19,8 +19,10 @@
                 headers: { 'content-type': 'application/json', 'x-codoc-csrf': '1' },
                 body: JSON.stringify(m),
             }).then(async r => {
-                if (r.status === 401) location.href = '/auth/login';
-                else if (!r.ok && r.status !== 202) console.warn('codoc hub refused', m, await r.text());
+                if (r.status === 401) { location.href = '/auth/login'; return; }
+                const body = await r.json().catch(() => null) as { kind?: string } | null;
+                if (r.ok && body && typeof body.kind === 'string') window.postMessage(body, '*');   // a reply the app reads as a host message
+                else if (!r.ok && r.status !== 202) console.warn('codoc hub refused', m, body);
             }).catch(err => console.warn('codoc hub unreachable', err));
         },
         getState: () => state,

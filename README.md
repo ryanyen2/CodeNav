@@ -107,7 +107,7 @@ agent as the author of its words; rejecting it removes exactly what it added.
 | `log/<session>.jsonl` | the truth: one append-only file per daemon session | tracked |
 | `tree.codoc` | the Markdown export (`## Title {#b-id}`), for review and for people without codoc; derived, regenerate on conflict | tracked |
 | `config.json` | the authoring language and other settings that travel with the repo | tracked |
-| `projection.json`, `status.json`, `realize.md`, `activity.json` | derived and ephemeral | ignored |
+| `projection.json`, `history.json`, `status.json`, `realize.md`, `activity.json` | derived and ephemeral | ignored |
 | `inbox/` | client submissions and the daemon's acks | ignored |
 | `cache/`, `lancedb/`, `cocoindex.db` | the code index and graph | ignored |
 

@@ -32,7 +32,7 @@ codoc lang [tag] | translate     # authoring language; convert existing prose
 codoc rebuild | snapshot         # replay the logs; fold them
 codoc import-v1                  # bring a v1 codoc.db into the log
 
-python3.11 -m pytest tests/      # Python tests (229)
+python3.11 -m pytest tests/      # Python tests (231)
 cd vscode-codoc && npx vitest run && npx tsc --noEmit && node esbuild.config.mjs
 ```
 
@@ -77,7 +77,7 @@ vscode-codoc/src/ calc/ (projection types, shadow, recorder, adopt, claims),
 | `log/snapshot-*.jsonl`, `log/archive/` | folded logs; tracked |
 | `tree.codoc` | Markdown export (`## Title {#b-id}`); tracked, derived, never parsed |
 | `config.json` | authoring language etc.; tracked |
-| `projection.json`, `status.json`, `realize.md`, `activity.json`, `ask.json` | derived or ephemeral; ignored |
+| `projection.json`, `history.json`, `status.json`, `realize.md`, `activity.json`, `ask.json` | derived or ephemeral; ignored |
 | `inbox/<client>.jsonl`, `inbox/<client>.ack.jsonl` | client submissions and the daemon's acks; ignored |
 | `cache/` | SQLite/graph/index caches; ignored |
 

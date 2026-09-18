@@ -11,8 +11,10 @@ import './app.css';
 import { PHASE_CHANNEL, PHASE_LABEL } from '../calc/claims';
 import type { Ack, Phase, Projection, Submission } from '../calc/projection';
 import type { HostToWebview, WebviewToHost } from '../host/provider';
+import { nextUndo, type HistoryWindow } from '../calc/window';
 import { Margin, type Thread } from './comments';
 import { mountEditor, type EditorHandle } from './editor';
+import { Timeline } from './timeline';
 
 interface VsCodeApi { postMessage(m: unknown): void; getState(): unknown; setState(s: unknown): void }
 declare function acquireVsCodeApi(): VsCodeApi;
@@ -26,6 +28,9 @@ const send = (m: WebviewToHost) => api.postMessage(m);
 const root = document.getElementById('app')!;
 let editor: EditorHandle | null = null;
 let margin: Margin | null = null;
+let timeline: Timeline | null = null;
+let actor = 'human:local';
+let pendingUndo: 'undo' | 'redo' | null = null;
 let projection: Projection | null = null;
 let status: Record<string, unknown> = {};
 let history = false;
@@ -86,7 +91,14 @@ function renderToolbar(proj: Projection): void {
     toolbar.append(title, chip, el('span', 'codoc-spacer'));
     const hist = el('button', `codoc-btn${history ? ' is-on' : ''}`, 'History');
     hist.title = 'who wrote which words, and when';
-    hist.addEventListener('click', () => { history = !history; page.classList.toggle('is-history', history); editor?.setHistory(history); renderToolbar(projection!); });
+    hist.addEventListener('click', () => {
+        history = !history;
+        page.classList.toggle('is-history', history);
+        editor?.setHistory(history);
+        timeline?.toggle(history);
+        if (history) send({ kind: 'history' });
+        renderToolbar(projection!);
+    });
     toolbar.append(hist);
     const lang = el('select', 'codoc-lang');
     lang.title = 'the language the tree is written in';
@@ -188,10 +200,26 @@ function reveal(fid: string): void {
     tree.querySelectorAll('.codoc-row').forEach(r => r.classList.toggle('is-selected', (r as HTMLElement).dataset.fid === fid));
 }
 
+function undo(redo: boolean): void {
+    editor?.flush();
+    pendingUndo = redo ? 'redo' : 'undo';
+    send({ kind: 'history' });
+}
+
+function applyUndo(w: HistoryWindow): void {
+    if (!pendingUndo) return;
+    const next = nextUndo(w, actor, pendingUndo === 'redo');
+    pendingUndo = null;
+    if (!next) { notify('nothing to undo'); return; }
+    submit(next.ops.map(op => ({ cid: cid(), batch: next.batch, ...op })));
+}
+
 document.addEventListener('keydown', ev => {
     const mac = navigator.platform.toUpperCase().includes('MAC');
     const mod = mac ? ev.metaKey : ev.ctrlKey;
     if (mod && ev.key.toLowerCase() === 's') { ev.preventDefault(); handoffAll(); }
+    else if (mod && ev.key.toLowerCase() === 'z') { ev.preventDefault(); undo(ev.shiftKey); }
+    else if (mod && ev.key.toLowerCase() === 'y') { ev.preventDefault(); undo(true); }
     else if (mod && ev.key.toLowerCase() === 'f') { ev.preventDefault(); editor?.find(ev.altKey); }
     else if (mod && ev.key.toLowerCase() === 'h') { ev.preventDefault(); editor?.find(true); }
 });
@@ -211,6 +239,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
                     openCite: (file, symbol) => send({ kind: 'open-cite', file, symbol }),
                     onConflict: (_bid, conflict) => notify(`an edit could not apply (${conflict}); the paragraph was reloaded`),
                 });
+                timeline = new Timeline(page, () => editor?.view.dom ?? null);
                 margin = new Margin(page, () => editor?.view ?? null, {
                     submit: ops => { const b = batch(); submit(ops.map(op => ({ cid: cid(), batch: b, ...op }))); },
                     build: buildThread,
@@ -224,14 +253,22 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
             renderToolbar(m.proj);
             renderStatus();
             margin?.update(m.proj);
+            if (history) send({ kind: 'history' });
             return;
         }
+        case 'history':
+            if (m.history) {
+                if (projection) timeline?.setWindow(m.history as HistoryWindow, projection);
+                applyUndo(m.history as HistoryWindow);
+            }
+            return;
         case 'acks':
             if (m.acks) editor?.ack(m.acks as Ack[]);
             return;
         case 'status':
             status = m.status ?? {};
             if (typeof m.status?.doc_language === 'string') language = m.status.doc_language;
+            if (typeof m.status?.actor === 'string') actor = m.status.actor;
             if (projection) renderToolbar(projection);
             renderStatus();
             return;

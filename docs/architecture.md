@@ -150,7 +150,7 @@ take the same path as the daemon's drain).
 | `log.py` | `log/<session>.jsonl` (header line, then ops as recorded), validated at load (monotone `seq`, well-formed non-decreasing `at`); `replay_order` merges files by `(at, session, seq)`; the inbox: `inbox/<client>.jsonl` submissions and `inbox/<client>.ack.jsonl` acks, whole lines only, malformed lines acked with an error |
 | `workspace.py` | the façade: `rebuild()` (snapshot, then every op outside its frontier), `submit(bodies)`, `plan_ingest` / `commit_ingest` / `ingest` (the gate that turns a large trunk write into a plan), `drain_inbox(identity)` (provisional `["$cid", cid, k]` anchors resolved against acks in the same drain), `rotate_session`. `Roles.policy(store, op)` is the authority check: owner/maintainer everything; machines the trunk and plans but no verdicts (the loop's own `feature.realized` excepted); suggesters `plan.open` and their own plans |
 | `daemon.py` | per debounced batch: rebuild + rotate the session when `HEAD` moved; drain inboxes; read the agent epoch (`activity.json`: while a session is open, code changes are held; when it closes, one scoped reflect pass runs and settles the hand-offs it cited); else reflect the changed files; publish unless nothing changed |
-| `publish.py` | `projection.json`, `tree.codoc`, `realize.md`, `status.json`, phases computed once; the realizing lease lives in `status.json` and decays by mtime |
+| `publish.py` | `projection.json`, `history.json` (the timeline window: the last 200 ops with each touched block's text after them and their recorded inverses), `tree.codoc`, `realize.md`, `status.json`, phases computed once; the realizing lease lives in `status.json` and decays by mtime |
 | `snapshot.py` | fold the logs into `log/snapshot-<hlc>.jsonl` recording the frontier it folded; older files move to `log/archive/` |
 | `import_v1.py` | a v1 `codoc.db` becomes one import session in the person's name |
 
@@ -161,7 +161,7 @@ take the same path as the daemon's drain).
 | `log/<session>.jsonl`, `log/snapshot-*.jsonl`, `log/archive/` | the truth | tracked |
 | `tree.codoc` | Markdown export, rejected mode; a merge conflict in it is meaningless (regenerate) | tracked |
 | `config.json` | `doc_language` and other settings that must travel with the repo | tracked |
-| `projection.json` `status.json` `realize.md` `activity.json` `ask.json` | derived or ephemeral | ignored |
+| `projection.json` `history.json` `status.json` `realize.md` `activity.json` `ask.json` | derived or ephemeral | ignored |
 | `inbox/*.jsonl` | client channels | ignored |
 | `cache/graph.json`, `cocoindex.db`, `lancedb/`, `index.meta.json` | the code index and graph | ignored |
 

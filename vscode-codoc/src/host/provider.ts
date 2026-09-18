@@ -16,8 +16,9 @@ import * as vscode from 'vscode';
 import type { Ack, Projection, Submission } from '../calc/projection';
 
 export interface HostToWebview {
-    kind: 'projection' | 'acks' | 'status' | 'reveal' | 'find';
+    kind: 'projection' | 'acks' | 'status' | 'reveal' | 'find' | 'history';
     proj?: Projection;
+    history?: unknown;
     realizing?: string[];
     acks?: Ack[];
     status?: Record<string, unknown>;
@@ -26,7 +27,7 @@ export interface HostToWebview {
 }
 
 export interface WebviewToHost {
-    kind: 'ready' | 'submit' | 'open-cite' | 'realize' | 'sync' | 'open-file' | 'set-language';
+    kind: 'ready' | 'submit' | 'open-cite' | 'realize' | 'sync' | 'open-file' | 'set-language' | 'history';
     subs?: Submission[];
     file?: string;
     symbol?: string;
@@ -64,7 +65,7 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
         const postStatus = async () => {
             const st = await readJson<Record<string, unknown>>(path.join(codocDir, 'status.json'));
             const cfg = await readJson<{ doc_language?: string }>(path.join(codocDir, 'config.json'));
-            if (st) post({ kind: 'status', status: { ...st, doc_language: cfg?.doc_language ?? 'en' } });
+            if (st) post({ kind: 'status', status: { ...st, doc_language: cfg?.doc_language ?? 'en', actor: 'human:local' } });
         };
 
         // Acks: tail the ack file from its current end.
@@ -108,6 +109,11 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
                 case 'open-file':
                     if (msg.file) await vscode.window.showTextDocument(vscode.Uri.file(path.join(root, msg.file)), { preview: true });
                     return;
+                case 'history': {
+                    const h = await readJson<unknown>(path.join(codocDir, 'history.json'));
+                    if (h) post({ kind: 'history', history: h });
+                    return;
+                }
                 case 'set-language': {
                     // `.codoc/config.json` is the one tracked setting file; the daemon and
                     // every prompt read `doc_language` from it (codoc lang does the same).

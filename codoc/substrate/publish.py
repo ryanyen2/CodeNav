@@ -26,6 +26,8 @@ from codoc.loops.realize import queued, write_queue
 PROJECTION_FILE = "projection.json"
 STATUS_FILE = "status.json"
 EXPORT_FILE = "tree.codoc"
+HISTORY_FILE = "history.json"
+HISTORY_WINDOW = 200
 REALIZING_LEASE_SECONDS = 300
 
 
@@ -57,6 +59,13 @@ def write_projection(codoc_dir: str | Path, store: Store, phases: dict[str, str]
             p["claims"][fid] = [c.__dict__ for c in claims]
     path = Path(codoc_dir) / PROJECTION_FILE
     atomic_write(path, json.dumps(p, ensure_ascii=False))
+    return path
+
+
+def write_history(codoc_dir: str | Path, store: Store) -> Path:
+    from codoc.calculus.window import history_window
+    path = Path(codoc_dir) / HISTORY_FILE
+    atomic_write(path, json.dumps(history_window(store, HISTORY_WINDOW), ensure_ascii=False))
     return path
 
 
@@ -116,6 +125,7 @@ def publish(codoc_dir: str | Path, store: Store, *, root_dir: str = ".", realizi
             doc_language=None) -> dict:
     phases = phases_of(store, realizing)
     write_projection(codoc_dir, store, phases)
+    write_history(codoc_dir, store)
     write_export(codoc_dir, store)
     write_queue(codoc_dir, store, root_dir, doc_language)
     return write_status(codoc_dir, store, phases=phases)

@@ -157,6 +157,9 @@ def handle_message(cd: Path, s: Session, m: dict) -> JSONResponse:
     kind = m.get("kind") if isinstance(m, dict) else None
     if kind == "ready":
         return JSONResponse({"ok": True})
+    if kind == "history":
+        from codoc.serve.push import history_message
+        return JSONResponse(history_message(cd) or {"ok": False, "error": "no history yet"})
     if kind == "submit":
         subs = m.get("subs") or []
         if not isinstance(subs, list) or not all(isinstance(x, dict) for x in subs):
@@ -179,7 +182,7 @@ def handle_message(cd: Path, s: Session, m: dict) -> JSONResponse:
             cfg = {}
         p.write_text(json.dumps({**cfg, "doc_language": tag}, indent=2) + "\n", encoding="utf-8")
         return JSONResponse({"ok": True})
-    if kind in ("realize", "sync", "open-cite", "open-file"):
+    if kind in ("realize", "sync", "open-cite", "open-file", "find"):
         return JSONResponse({"ok": False, "error": "the hub has no terminal; a maintainer's daemon builds hand-offs"}, status_code=202)
     return JSONResponse({"error": f"unknown message kind {kind!r}"}, status_code=400)
 

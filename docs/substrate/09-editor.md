@@ -18,7 +18,7 @@ cited baseline to recover commands; six decoration families each re-derived
 | settlement's three baselines and the two-hop diff | runs in the projection: ink, ground and opacity are read, not computed |
 | `known-store`, `edit-baseline`, `doc-gate` per feature HLC | per-block `head` and the set of unacked local ops |
 | `inline-blame` word-diff replay | runs |
-| `revision-model` un-apply from `revisions.json` | un-apply of the projection's per-block op window, whose inverses the daemon recorded |
+| `revision-model` un-apply from `revisions.json` | the daemon publishes `history.json` (the window un-applied on clones of the live fields, `calculus/window.py`); the editor reads it for the scrubber and for undo |
 | `commands-from-doc` absence taxonomy | impossible gestures (heading merge, heading vanish) are refused at the keymap; the rest are explicit commands |
 
 Lines deleted from `vscode-codoc/src/state/`: roughly 8k of 10k.
@@ -108,10 +108,12 @@ IME composition emits nothing between `compositionstart` and `compositionend`
 (F3 in the design review); the composed text lands as one insert.
 
 Batches: one debounced settle of typing is one batch; each command gesture is
-one batch. Batches are the undo unit. Undo emits the recorded inverses as new
-ops (the projection carries the inverse of each op in the window), and the
-editor's own ProseMirror history is disabled: two histories of one document
-is how a deleted heading resurrects.
+one batch. Batches are the undo unit. Undo emits the recorded inverses of the
+viewer's newest un-undone batch, newest op first, as a new batch `u-<batch>`;
+redo undoes that (`u-u-<batch>`), so the store holds the whole story and two
+clients never disagree about it (`calc/window.ts`). ProseMirror's own history
+is disabled: two histories of one document is how a deleted heading
+resurrects.
 
 ## 5. Submitting and acking
 
@@ -154,7 +156,7 @@ data plus the shadow; nothing is stored in the doc.
 | opacity (gray) | `plan` marks; `suggest_del` marks as strike |
 | margin marker, tree rows, rail | `phases[fid]` |
 | comment cards | comment blocks whose anchor mark resolves |
-| History stance | `attribution` runs per block; the timeline un-applies the block's op window locally |
+| History stance | `attribution` runs per block (`authorPaints`); the scrubber renders `history.json`'s snapshots read-only, marking that moment's change with a word diff (`editor/timeline.ts`) |
 | Catch up | a viewer-local read cursor (`localStorage`) over loop batches newer than it |
 
 One palette on every surface, as in v1: blue is the person, gray a plan, green

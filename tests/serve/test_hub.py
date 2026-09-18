@@ -60,6 +60,8 @@ def test_local_hub_treats_its_viewer_as_the_owner_and_routes_submissions(tmp_pat
     assert c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "set-language", "tag": "ja"}).json() == {"ok": True}
     assert json.loads((cd / "config.json").read_text())["doc_language"] == "ja"
     assert c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "realize"}).status_code == 202
+    h = c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "history"}).json()
+    assert h["kind"] == "history" and h["history"]["head"] == len(L.read_session(L.list_sessions(cd)[0]).ops)
 
 
 def test_auth_gate_records_roles_and_a_suggester_cannot_set_the_language(tmp_path):
@@ -95,7 +97,7 @@ def test_feed_sends_a_snapshot_then_only_changes_and_this_viewers_acks(tmp_path)
     feed = Feed(cd, "hub-local")
     first = feed.pending()
     assert [m["kind"] for m in first] == ["projection", "status"]
-    assert first[1]["status"]["doc_language"] == "en"
+    assert first[1]["status"]["doc_language"] == "en" and first[1]["status"]["actor"] == "human:local"
     assert feed.pending() == []
     L.ack(cd, "hub-local", "c1", None, error="unknown_anchor")
     L.ack(cd, "hub-other", "c9", None)

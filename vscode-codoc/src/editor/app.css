@@ -119,3 +119,11 @@ pre.codoc-kind-value { font-family: ui-monospace, SFMono-Regular, Menlo, monospa
 .codoc-card-actions { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
 .codoc-card-actions .codoc-btn { font-size: 11.5px; padding: 1px 7px; }
 .is-commented { background: color-mix(in srgb, #e6b800 12%, transparent); }
+
+/* the timeline */
+.codoc-timeline { display: flex; align-items: center; gap: 10px; padding: 6px 0 10px; font-size: 12px; color: var(--codoc-muted); }
+.codoc-timeline input[type=range] { flex: 1; max-width: 72ch; }
+.codoc-past { max-width: 72ch; background: color-mix(in srgb, #e6b800 6%, var(--codoc-bg)); padding: 4px 12px; border-radius: 6px; }
+.codoc-past ins { text-decoration: none; background: color-mix(in srgb, var(--codoc-added) 22%, transparent); }
+.codoc-past del { color: var(--codoc-removed); background: color-mix(in srgb, var(--codoc-removed) 14%, transparent); }
+.is-history .codoc-tree { opacity: .6; }

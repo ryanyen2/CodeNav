@@ -10,7 +10,7 @@ from pathlib import Path
 
 from codoc.substrate import log as L
 
-PROJECTION, STATUS, CONFIG = "projection.json", "status.json", "config.json"
+PROJECTION, STATUS, CONFIG, HISTORY = "projection.json", "status.json", "config.json", "history.json"
 
 
 def _read(path: Path) -> str | None:
@@ -20,7 +20,9 @@ def _read(path: Path) -> str | None:
         return None
 
 
-def status_message(codoc_dir: Path) -> dict | None:
+def status_message(codoc_dir: Path, actor: str = "") -> dict | None:
+    """The status the editor reads, plus the two facts only the host knows:
+    the tree's language and who this viewer is (undo inverts their batches)."""
     st = _read(codoc_dir / STATUS)
     if st is None:
         return None
@@ -29,7 +31,15 @@ def status_message(codoc_dir: Path) -> dict | None:
         cfg = json.loads(_read(codoc_dir / CONFIG) or "{}")
     except ValueError:
         return None
-    return {"kind": "status", "status": {**status, "doc_language": cfg.get("doc_language", "en")}}
+    return {"kind": "status", "status": {**status, "doc_language": cfg.get("doc_language", "en"), "actor": actor}}
+
+
+def history_message(codoc_dir: str | Path) -> dict | None:
+    raw = _read(Path(codoc_dir) / HISTORY)
+    try:
+        return {"kind": "history", "history": json.loads(raw)} if raw else None
+    except ValueError:
+        return None
 
 
 class Feed:
@@ -39,6 +49,7 @@ class Feed:
     def __init__(self, codoc_dir: str | Path, client: str) -> None:
         self.dir = Path(codoc_dir)
         self.client = client
+        self.actor = L.actor_for(client) or ""
         self.sent: dict[str, str] = {}
         ack = L.inbox_dir(self.dir) / f"{client}.ack.jsonl"
         self.ack_offset = ack.stat().st_size if ack.exists() else 0
@@ -52,7 +63,7 @@ class Feed:
                 out.append({"kind": "projection", "proj": json.loads(proj), "realizing": []})
             except ValueError:
                 pass
-        st = status_message(self.dir)
+        st = status_message(self.dir, self.actor)
         key = json.dumps(st, sort_keys=True) if st else ""
         if st and key != self.sent.get(STATUS):
             self.sent[STATUS] = key
