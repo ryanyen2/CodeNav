@@ -450,10 +450,6 @@ def install_hooks_cmd(root: str = ROOT):
     typer.echo(f"✓ installed {', '.join(cmds)} and the codoc MCP server")
 
 
-if __name__ == "__main__":
-    app()
-
-
 @app.command()
 def serve(root: str = ROOT,
           host: str = typer.Option("127.0.0.1", "--host", help="Bind address; remote reach is the tunnel, never 0.0.0.0."),
@@ -500,3 +496,7 @@ def serve(root: str = ROOT,
             worker.stop()
         if tun is not None:
             tun.terminate()
+
+
+if __name__ == "__main__":
+    app()
