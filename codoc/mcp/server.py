@@ -83,12 +83,25 @@ def codoc_reflect(ops: list[dict], rationale: str = "", caused_by: str | None = 
 def codoc_propose(ops: list[dict], note: str = "", caused_by: str | None = None) -> dict:
     """Propose a plan the person accepts or rejects in the editor. Ops:
     `{"kind": "add_node", "id": "n1", "parent_id"?, "title", "description", "binds"?}`,
-    `{"kind": "amend", "feature_id", "title"?, "blocks": [{"id", "text"} | {"text"}]}`
-    (paragraphs you omit are proposed for removal), `{"kind": "move_node",
+    `{"kind": "amend", "feature_id", "title"?, "blocks": [{"id", "text"} | {"id", "delete": true} | {"text"}]}`
+    (a paragraph you do not mention is unchanged), `{"kind": "move_node",
     "feature_id", "parent_id"}`, `{"kind": "retire_node", "feature_id"}`.
     Accepting a plan hands the feature off to you: a plan is a request to build."""
     cd, err = _need_dir()
     return err or tools.propose(cd, ops=ops, note=note, caused_by=caused_by, root_dir=_root(cd))
+
+
+@mcp.tool
+def codoc_write_block(content: dict, bid: str | None = None, kind: str | None = None, feature_id: str | None = None,
+                      plan: str | None = None, caused_by: str | None = None) -> dict:
+    """Write content to a media block (diagram, image, url, pdf, screenshot,
+    comment) or add one at the end of a feature (`kind` + `feature_id`). Fields
+    typed Text (a diagram's `source`, an image's `alt`/`caption`) are Markdown
+    and are attributed to you word by word; the rest is replaced whole. Pass
+    `plan` to propose instead of write."""
+    cd, err = _need_dir()
+    return err or tools.write_block(cd, content=content, bid=bid, kind=kind, feature_id=feature_id, plan=plan,
+                                    caused_by=caused_by, root_dir=_root(cd))
 
 
 @mcp.tool

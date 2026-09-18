@@ -99,3 +99,11 @@ html, body { margin: 0; height: 100%; background: var(--codoc-bg); color: var(--
 /* toolbar extras */
 .codoc-lang { font: inherit; font-size: 12px; border: 1px solid var(--codoc-faint); border-radius: 6px; background: transparent; color: var(--codoc-fg); padding: 1px 4px; }
 .codoc-status.is-notice { color: var(--codoc-removed); }
+
+/* plugin kinds: read-only in this editor */
+.codoc-kind { position: relative; margin: 0 0 0.75em; padding: 8px 12px; border: 1px solid var(--codoc-faint); border-radius: 6px; font-size: 12.5px; }
+.codoc-kind-label { color: var(--codoc-muted); text-transform: uppercase; letter-spacing: .04em; font-size: 10.5px; margin-bottom: 4px; }
+.codoc-kind-field { display: flex; gap: 8px; align-items: baseline; }
+.codoc-kind-key { color: var(--codoc-muted); min-width: 6ch; }
+.codoc-kind-value { white-space: pre-wrap; word-break: break-word; margin: 0; font: inherit; }
+pre.codoc-kind-value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }

@@ -21,8 +21,8 @@ accepts the plan.**
 One call: `codoc_propose(ops=[…], note="<why, in one line>")`.
 - To change what an existing feature does: `{"kind": "amend", "feature_id",
   "blocks": [{"id": "<block id>", "text": "<the paragraph as it should read once the
-  work lands>"}, {"text": "<a new paragraph>"}]}`. Repeat the paragraphs you keep
-  with their ids; a paragraph you leave out is proposed for removal. Write
+  work lands>"}, {"id": "<block id>", "delete": true}, {"text": "<a new paragraph>"}]}`.
+  Name only the paragraphs you change; one you do not mention is unchanged. Write
   descriptions as they should read AFTER the change, never as notes about it.
 - To add intent no feature covers: `{"kind": "add_node", "id": "n1", "parent_id"?,
   "title", "description", "binds"?: ["file.py::symbol"]}`. Titles are 3–6 words.

@@ -10,11 +10,12 @@ one Text field. This module turns that into ops, once, under the rules:
    at on every op it mints.)
 2. Text is NFC. A paragraph break inside the new text is refused: the caller
    addresses blocks, not descriptions (the LLM prompt is block-keyed).
-3. Tokens are script-aware: words and whitespace runs for spaced scripts, one
-   character per token for unspaced ones. The diff is a longest-common-
-   subsequence over tokens in which whitespace never anchors a match on its
-   own (it survives only beside a surviving word), so a rewritten sentence is
-   one hunk and an appended word re-authors nothing. Each hunk is one
+3. Tokens are script-aware: words, punctuation runs and whitespace runs for
+   spaced scripts, one character per token for unspaced ones. The diff is a
+   longest-common-subsequence over tokens in which whitespace never anchors a
+   match on its own (it survives only beside a surviving word), so a rewritten
+   sentence is one hunk, an appended word re-authors nothing, and a changed
+   comma leaves the word before it with its author. Each hunk is one
    ``text.delete`` over the base characters it drops and one ``text.insert``
    anchored after the last surviving base character before it (or START).
 4. Marks survive by identity and the result is a fixed point: after the ops
@@ -65,12 +66,12 @@ class Ingest:
 
 
 def tokenize(text: str) -> list[str]:
-    """Lossless script-aware tokens: ``"".join(tokenize(t)) == t``. Words and
-    whitespace runs are separate tokens; each character of an unspaced script
-    (Han, Kana, Thai …) is its own token, so a rewrite of one character does
-    not re-author a sentence."""
+    """Lossless script-aware tokens: ``"".join(tokenize(t)) == t``. Words,
+    punctuation runs and whitespace runs are separate tokens; each character
+    of an unspaced script (Han, Kana, Thai …) is its own token, so a rewrite of
+    one character does not re-author a sentence."""
     out: list[str] = []
-    for m in re.finditer(r"\s+|\S+", text):
+    for m in re.finditer(r"\s+|\w+|[^\w\s]+", text):
         tok = m.group(0)
         if not tok.isspace() and _unspaced(tok):
             out.extend(tok)
@@ -84,12 +85,14 @@ def _unspaced(word: str) -> bool:
 
 
 def ingest(text: Text, *, bid: str, path: str, base_text: str, new_md: str, actor: str,
-           plan: str | None = None) -> Ingest:
+           plan: str | None = None, multiline: bool = False) -> Ingest:
     """Compute the ops that turn ``text`` (live: ``base_text``) into the prose
-    and marks of ``new_md``. See the module docstring for the rules."""
+    and marks of ``new_md``. See the module docstring for the rules.
+    ``multiline`` is set for a kind's Text field whose newlines are content (a
+    diagram's source); prose refuses them."""
     res = Ingest()
     new_plain, new_spans = parse(nfc(new_md))
-    if "\n" in new_plain:
+    if "\n" in new_plain and not multiline:
         res.refused = "multi_paragraph"
         return res
     live = text.live_text()

@@ -22,11 +22,19 @@ HEADING = "heading"
 PARAGRAPH = "paragraph"
 
 _TEXT_FIELDS: dict[str, tuple[str, ...]] = {HEADING: ("text",), PARAGRAPH: ("text",)}
+_UNEXPORTED: set[str] = set()
 MAX_LEVEL = 6
 
 
-def register_kind(kind: str, text_fields: tuple[str, ...]) -> None:
+def register_kind(kind: str, text_fields: tuple[str, ...], *, exported: bool = True) -> None:
+    """Declare a plugin kind's attributed fields, and whether its blocks appear
+    in the Markdown export (a comment thread does not)."""
     _TEXT_FIELDS[kind] = tuple(text_fields)
+    (_UNEXPORTED.discard if exported else _UNEXPORTED.add)(kind)
+
+
+def is_exported(kind: str) -> bool:
+    return kind not in _UNEXPORTED
 
 
 def text_fields(kind: str) -> tuple[str, ...]:

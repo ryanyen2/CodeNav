@@ -17,6 +17,10 @@ interface Boundary { at: number; open: Array<[string, Record<string, string>]>; 
 
 /** One block's node with its marks, and the shadow that matches it. */
 export function blockNode(schema: Schema, b: ProjectedBlock): { node: PMNode; shadow: Shadow | null } {
+    if (b.kind !== 'heading' && b.kind !== 'paragraph') {
+        // A plugin kind: read-only in this editor, no shadow, no ops from here.
+        return { node: schema.nodes.kindBlock.create({ bid: b.id, head: b.head, kind: b.kind, fields: b.fields }), shadow: null };
+    }
     const f = textField(b);
     const type = schema.nodes[b.kind === 'heading' ? 'heading' : 'paragraph'];
     const attrs = b.kind === 'heading' ? { bid: b.id, head: b.head, level: b.level } : { bid: b.id, head: b.head };

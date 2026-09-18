@@ -44,8 +44,7 @@ Exponential, capped.
 
 
 def test_export_import_export_is_a_fixed_point():
-    from codoc.calculus.doc import register_kind
-    register_kind("diagram", ("source",))
+    import codoc.kinds  # noqa: F401  (the shipped kinds register themselves)
     m, s = Mint(), Store()
     build(s, m, import_markdown(SAMPLE))
     out = export_markdown(s)

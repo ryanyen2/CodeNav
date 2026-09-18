@@ -240,6 +240,10 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         doc,
         plugins: [
             new Plugin({ props: { handleKeyDown: (_v, ev) => menus?.handleKeyDown(ev) ?? false } }),
+            // A kind block leaves the document only through a recorded gesture
+            // (delete feature, adoption); a stray keystroke that would drop
+            // one is refused rather than silently un-recorded.
+            new Plugin({ filterTransaction: (tr, st) => !!tr.getMeta(RECORDED) || !tr.docChanged || kindCount(tr.doc) >= kindCount(st.doc) }),
             keys, inputRules({ rules: [headingRule] }), keymap(baseKeymap), decoPlugin, findPlugin(),
             dragPlugin((bid, after) => { const g = moveBlock(view.state, env, bid, after); if (g) view.dispatch(g.tr); }),
         ],
@@ -247,6 +251,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
 
     const view = new EditorView(container, {
         state,
+        nodeViews: { kindBlock: node => kindView(node) },
         dispatchTransaction(tr) {
             record(tr);
             const next = view.state.apply(tr);
@@ -344,3 +349,40 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
 }
 
 export type { Shadow, Schema };
+
+function kindCount(doc: PMNode): number {
+    let n = 0;
+    doc.forEach(b => { if (b.type.name === 'kindBlock') n++; });
+    return n;
+}
+
+/** A plugin kind rendered read-only from its projected fields: the kind name,
+ *  each Text field's words, and the rest as `key: value`. */
+function kindView(node: PMNode): { dom: HTMLElement } {
+    const dom = document.createElement('div');
+    dom.className = `codoc-kind codoc-kind-${node.attrs.kind}`;
+    dom.dataset.bid = node.attrs.bid;
+    dom.dataset.kind = node.attrs.kind;
+    dom.contentEditable = 'false';
+    const label = document.createElement('div');
+    label.className = 'codoc-kind-label';
+    label.textContent = String(node.attrs.kind);
+    dom.append(label);
+    const fields = (node.attrs.fields ?? {}) as Record<string, unknown>;
+    for (const [k, v] of Object.entries(fields)) {
+        const row = document.createElement('div');
+        row.className = 'codoc-kind-field';
+        const isText = v && typeof v === 'object' && 'runs' in (v as object);
+        const value = isText ? String((v as { text: string }).text) : typeof v === 'string' ? v : JSON.stringify(v);
+        if (!value) continue;
+        const key = document.createElement('span');
+        key.className = 'codoc-kind-key';
+        key.textContent = k;
+        const val = document.createElement(isText && k === 'source' ? 'pre' : 'span');
+        val.className = 'codoc-kind-value';
+        val.textContent = value;
+        row.append(key, val);
+        dom.append(row);
+    }
+    return { dom };
+}

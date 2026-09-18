@@ -92,6 +92,35 @@ never breaks a new tree and never authors ops against content it cannot
 display. The projection carries `kind` and the content; the editor does not
 need the schema to render Text fields, only to render the rest.
 
+## 5.1 As built (`codoc/kinds/`)
+
+- `Kind(name, text_fields, schema, lift, lower, consult, text_view, write_back, exported)`.
+  `lower(old_content, new_content, LowerContext) -> str | None` returns the
+  directive text or nothing; `lift(LiftContext) -> content | None` returns
+  only the fields that changed. Both see content with Text fields rendered as
+  Markdown in the `rejected` read mode (`kinds.plain`).
+- The schema is a per-field `{type, enum?, required?}` table checked by
+  `Kind.validate`; a partial write (fields not named are left alone) skips
+  `required`. Text fields arrive as Markdown strings.
+- `kinds.write.plan_write` is the pure boundary (content → `block.set` bodies
+  + ingest requests); `write_block` / `add_block` run it on a workspace; the
+  MCP tool `codoc_write_block` runs it against a read-only replay and submits
+  through the inbox. A Text field of a kind block may hold newlines (a
+  diagram's source): `ingest(multiline=True)`; prose still refuses them.
+- `kinds.lift.lift_pass(ws, graph, codoc_dir)` re-derives every live kind block
+  with a `lift` after a reflect pass, skipping held features (doc wins), and
+  writes the delta with `actor=loop` on the trunk.
+- The export fences a kind as `codoc:<kind> {#b-id}` + JSON with Text fields
+  as Markdown and empty Text fields left out; a kind registered with
+  `exported=False` (comment) is omitted from `tree.codoc`.
+- A comment is one message per block (`thread`, `anchor`, `anchor_text`,
+  `scope`, `status`, `body: Text`); a reply is another block with the same
+  `thread`. Per-message attribution is then the block's own, and the schema
+  stays flat (the calculus attributes named fields, not items of a list).
+- The editor renders any plugin kind read-only from the projection
+  (`kindBlock`) and refuses a keystroke that would drop one; a kind's editing
+  surface writes content through the daemon.
+
 ## 6. Trade-offs
 
 - **Schema in the plugin, attribution in the substrate.** The alternative,

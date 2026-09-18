@@ -31,7 +31,7 @@ import re
 
 from codoc.calculus import ops as K
 from codoc.calculus.derive import markdown
-from codoc.calculus.doc import HEADING, PARAGRAPH, text_fields
+from codoc.calculus.doc import HEADING, PARAGRAPH, is_exported, text_fields
 from codoc.calculus.ids import START, new_block_id
 from codoc.calculus.inline_md import parse
 from codoc.calculus.store import Store
@@ -56,10 +56,17 @@ def export_markdown(store: Store) -> str:
             if md.strip():
                 out.append(md)
                 out.append("")
-        else:
+        elif is_exported(b.kind):
+            # Text fields as Markdown, empty ones left out (an import recreates
+            # them empty), so the fence is a function of what the block says.
             content = {}
             for k, v in b.content.items():
-                content[k] = markdown(v, MODE, store) if k in text_fields(b.kind) else v
+                if k in text_fields(b.kind):
+                    md_field = markdown(v, MODE, store)
+                    if md_field:
+                        content[k] = md_field
+                else:
+                    content[k] = v
             out.append(f"```codoc:{b.kind} {{#{b.id}}}")
             out.append(json.dumps(content, ensure_ascii=False, sort_keys=True))
             out.append("```")

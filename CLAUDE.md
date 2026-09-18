@@ -32,7 +32,7 @@ codoc lang [tag] | translate     # authoring language; convert existing prose
 codoc rebuild | snapshot         # replay the logs; fold them
 codoc import-v1                  # bring a v1 codoc.db into the log
 
-python3.11 -m pytest tests/      # Python tests (202)
+python3.11 -m pytest tests/      # Python tests (206)
 cd vscode-codoc && npx vitest run && npx tsc --noEmit && node esbuild.config.mjs
 ```
 
@@ -49,11 +49,16 @@ codoc/substrate/  clock (HLC), log (session files, inbox, acks), workspace (the
                   (write through the inbox or apply when no daemon), publish
                   (tree.codoc, projection.json, realize.md, status.json),
                   daemon, snapshot, import_v1
+codoc/kinds/      block kinds on the extension interface: Kind (text fields,
+                  schema, lift/lower/consult/text_view/write_back), the shipped
+                  kinds (diagram, image, url, pdf, screenshot, comment), write
+                  (the one boundary turning content into block.set + ingest),
+                  lift (the loop's pass), fetch_guard
 codoc/loops/      context (ego-graph selection), reflect (code → document),
                   realize (hand-off, queue, settle), bootstrap, translate
 codoc/graph/      the code dependency graph (in memory, JSON cache) + flows
 codoc/mcp/        the agent's tools: context, tree, status, history, reflect,
-                  propose, realize_progress, walkthrough*
+                  propose, write_block, realize_progress, walkthrough*
 codoc/cli/main.py, codoc/agent/ (hooks, installer, prompts wrappers),
 codoc/prompts/, codoc/doclang.py, codoc/lang/ (tree-sitter), codoc/pipelines/
 codoc/loop/       KEPT v1 leaves: diff (the index change set), activity (epochs),

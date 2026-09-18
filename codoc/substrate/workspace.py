@@ -21,7 +21,7 @@ from pathlib import Path
 
 from codoc.calculus import ops as K
 from codoc.calculus.apply import apply
-from codoc.calculus.doc import is_text_field
+from codoc.calculus.doc import HEADING, PARAGRAPH, is_text_field
 from codoc.calculus.ids import actor_kind, new_batch_id, new_plan_id, new_session_id, op_id
 from codoc.calculus.ingest import Ingest, as_plan_bodies, ingest, resolve_pending_refs
 from codoc.calculus.ops import Op
@@ -171,7 +171,8 @@ class Workspace:
             return Ingest(refused="dead_block")
         if not is_text_field(block.kind, path):
             return Ingest(refused="not_text")
-        return ingest(block.text(path), bid=bid, path=path, base_text=base_text, new_md=new_md, actor=actor, plan=plan)
+        return ingest(block.text(path), bid=bid, path=path, base_text=base_text, new_md=new_md, actor=actor, plan=plan,
+                      multiline=block.kind not in (HEADING, PARAGRAPH))
 
     def commit_ingest(self, res: Ingest, *, actor: str, plan: str | None = None, batch: str | None = None,
                       base: dict | None = None, caused_by: str | None = None) -> list[Op]:

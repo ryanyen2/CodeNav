@@ -308,23 +308,23 @@ def propose(codoc_dir: str, *, ops: list[dict], note: str = "", caused_by: str |
                 return _err(f"unknown feature_id {fid!r}")
             if raw.get("title"):
                 ingests.append({"bid": fid, "new_md": raw["title"], "base": None})
-            seen: set[str] = set()
+            # The amend contract (prompts/tree_update.txt): a listed id is
+            # repaired, `delete: true` strikes it, no id adds a paragraph after
+            # the previous entry, and a paragraph not mentioned is unchanged.
             prev = fid
             for entry in raw.get("blocks", []):
                 bid = entry.get("id")
                 if bid in store.blocks:
-                    seen.add(bid)
-                    ingests.append({"bid": bid, "new_md": entry.get("text", ""), "base": None})
+                    if entry.get("delete"):
+                        strike(store.blocks[bid])
+                    else:
+                        ingests.append({"bid": bid, "new_md": entry.get("text", ""), "base": None})
                     prev = bid
                 elif entry.get("text"):
                     nb = new_block_id()
                     bodies.append({"kind": K.BLOCK_ADD, "target": {"bid": nb}, "payload": {"kind": PARAGRAPH, "after": prev}, "plan": pid})
                     ingests.append({"bid": nb, "new_md": entry["text"], "base": ""})
                     prev = nb
-            if "blocks" in raw:
-                for b in store.feature_body(fid)[1:]:
-                    if b.kind == PARAGRAPH and b.id not in seen:
-                        strike(b)
         elif kind == "move_node":
             if fid not in store.blocks:
                 return _err(f"unknown feature_id {fid!r}")
@@ -350,6 +350,56 @@ def propose(codoc_dir: str, *, ops: list[dict], note: str = "", caused_by: str |
                       plan=pid, caused_by=caused_by, root_dir=root_dir)
     return {"ok": True, "plan_id": pid, "ops": len(written),
             "note": "The person accepts or rejects this plan in the editor; accepting hands the feature off to you."}
+
+
+def write_block(codoc_dir: str, *, content: dict, bid: str | None = None, kind: str | None = None,
+                feature_id: str | None = None, plan: str | None = None, caused_by: str | None = None,
+                root_dir: str | None = None) -> dict:
+    """An agent writes content to a kind block (or adds one at the end of a
+    feature's body). Content in, ops out: non-Text fields become ``block.set``,
+    Text fields go through ``ingest``, all as the agent, all under ``plan``
+    when the agent is proposing rather than reflecting."""
+    from codoc.kinds import get, kinds
+    from codoc.kinds.write import add_body, plan_write
+    ws, _ = _open(codoc_dir)
+    store = ws.store
+    if not isinstance(content, dict):
+        return _err("content must be an object")
+    if bid is None:
+        if not kind or get(kind) is None:
+            return _err(f"unknown kind {kind!r}; known: {sorted(k.name for k in kinds())}")
+        if feature_id not in store.blocks or not store.blocks[feature_id].live:
+            return _err(f"unknown feature_id {feature_id!r}")
+        after = store.feature_body(feature_id)[-1].id
+        bid, body, err = add_body(kind, content, after=after)
+        if err:
+            return _err(err)
+        added = client.write(codoc_dir, client=AGENT, bodies=[body], plan=plan, caused_by=caused_by, root_dir=root_dir)
+        if added[0].get("conflict"):
+            return _err(f"block.add refused: {added[0]['conflict']}")
+        texts = {k: v for k, v in content.items() if k in get(kind).text_fields and v}
+        p = plan_write(_fresh_block(codoc_dir, bid), texts) if texts else None
+    else:
+        current = store.blocks.get(bid)
+        if current is None:
+            return _err(f"unknown block {bid!r}")
+        p = plan_write(current, content)
+        if p.refused:
+            return _err(p.refused)
+    results: dict = {"ok": True, "bid": bid, "applied": [], "ingested": []}
+    if p is None:
+        return results
+    if p.sets:
+        results["applied"] = client.write(codoc_dir, client=AGENT, bodies=p.sets, plan=plan, caused_by=caused_by, root_dir=root_dir)
+    for f, base, new_md in p.ingests:
+        results["ingested"].append({"field": f, **client.ingest(codoc_dir, client=AGENT, bid=bid, path=f, base_text=base,
+                                                                 new_md=new_md, plan=plan, caused_by=caused_by, root_dir=root_dir)})
+    return results
+
+
+def _fresh_block(codoc_dir: str, bid: str):
+    """The block as the applier now has it (after a just-acked add)."""
+    return client.read(codoc_dir).store.blocks.get(bid)
 
 
 def realize_progress(codoc_dir: str, *, done: int, total: int, current: str = "") -> dict:

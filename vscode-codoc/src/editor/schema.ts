@@ -73,6 +73,29 @@ export const Paragraph = Node.create({
     },
 });
 
+/** Any plugin kind (diagram, image, url, pdf, screenshot, comment): an atom the
+ *  editor renders read-only from the projection and never authors ops
+ *  against. Its Text fields are edited through the kind's own surface, which
+ *  writes content through the daemon (`03-extensions.md` §5). */
+export const KindBlock = Node.create({
+    name: 'kindBlock',
+    group: 'block',
+    atom: true,
+    selectable: false,
+    draggable: false,
+    addAttributes() {
+        return {
+            ...idAttrs(),
+            kind: { default: '', renderHTML: (attrs: Record<string, unknown>) => ({ 'data-kind': String(attrs.kind ?? '') }) },
+            fields: { default: {}, renderHTML: () => ({}) },
+        };
+    },
+    parseHTML() { return [{ tag: 'div[data-kind]' }]; },
+    renderHTML({ node, HTMLAttributes }) {
+        return ['div', mergeAttributes(HTMLAttributes, { class: 'codoc-kind', 'data-kind': node.attrs.kind }), 0];
+    },
+});
+
 export const Bold = Mark.create({
     name: 'bold',
     inclusive: true,
@@ -139,7 +162,7 @@ export const Plan = Mark.create({
 export const RECORDED_MARKS = new Set(['bold', 'link', 'cite']);
 
 export function codocExtensions(): Extensions {
-    return [Document, Text, HardBreak, Heading, Paragraph, Bold, Link, Cite, Comment, SuggestDel, Plan];
+    return [Document, Text, HardBreak, Heading, Paragraph, KindBlock, Bold, Link, Cite, Comment, SuggestDel, Plan];
 }
 
 export function codocSchema() {

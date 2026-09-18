@@ -262,11 +262,12 @@ ingest(bid, path, base: Frontier, base_text: str, new_text: str, actor, plan?, c
    block-keyed (each paragraph it may change is named by id, and new
    paragraphs are `block.add` ops it requests by position). This keeps every
    structural decision an op and keeps `ingest` a function of one field.
-3. Tokens are script-aware: words and whitespace runs for spaced scripts, one
-   character per token for unspaced ones. The diff is a longest common
-   subsequence over tokens in which whitespace never anchors a match on its
-   own (it survives only beside a surviving word), so a rewritten sentence is
-   one hunk and a word appended after the last word re-authors nothing. Equal
+3. Tokens are script-aware: words, punctuation runs and whitespace runs for
+   spaced scripts, one character per token for unspaced ones. The diff is a
+   longest common subsequence over tokens in which whitespace never anchors a
+   match on its own (it survives only beside a surviving word), so a rewritten
+   sentence is one hunk, a word appended after the last word re-authors
+   nothing, and a changed comma leaves the word before it its author. Equal
    tokens keep their characters, deleted tokens become `text.delete`, inserted
    tokens become `text.insert` anchored after the preceding surviving
    character, all with this call's actor.
