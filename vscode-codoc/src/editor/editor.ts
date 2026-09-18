@@ -19,10 +19,10 @@ import { InputRule, inputRules } from '@tiptap/pm/inputrules';
 
 import { adoptionPlan, blockNode, docFrom, flowBlocks } from '../calc/adopt';
 import { paintsFor, type Paint } from '../calc/claims';
-import { NO_WATERMARKS, type Ack, type OpBody, type Projection, type Submission } from '../calc/projection';
+import { NO_WATERMARKS, nfc, type Ack, type OpBody, type Projection, type Submission } from '../calc/projection';
 import { Recorder, reconcile, scalarOffset } from '../calc/recorder';
 import type { Shadow } from '../calc/shadow';
-import { RECORDED, deleteFeature, deleteSelection, headingFromRule, mergeBackward, mergeForward, moveBlock, pasteBlocks, relevel, selectedBlocks, splitBlock, type Env } from './commands';
+import { GESTURE_CIDS, RECORDED, deleteFeature, deleteSelection, headingFromRule, mergeBackward, mergeForward, moveBlock, pasteBlocks, relevel, selectedBlocks, splitBlock, type Env } from './commands';
 import { buildDecorations, unitOffset } from './decorations';
 import { dragPlugin } from './drag';
 import { FindWidget, findPlugin } from './find';
@@ -132,7 +132,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
     // ── recording ──────────────────────────────────────────────────────────
     function record(tr: Transaction): void {
         const tagged = tr.getMeta(RECORDED) as OpBody[] | undefined;
-        if (tagged) { queue(tagged, []); return; }
+        if (tagged) { queue(tagged, (tr.getMeta(GESTURE_CIDS) as string[]) ?? [], bornOrGone(tr)); return; }
         if (!tr.docChanged) return;
         const rec = recorder.record(tr.steps, tr.docs);
         if (rec.unhandled.length) {
@@ -159,14 +159,33 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         queue(rec.ops, rec.cids);
     }
 
-    function queue(ops: OpBody[], cids: string[]): void {
+    /** The blocks a gesture changed the existence of on the page: there before
+     *  and gone after, or new after. They are held with everything the ops
+     *  name, because a projection that predates the gesture still lists what it
+     *  removed and still lacks what it added (09-editor §5). */
+    function bornOrGone(tr: Transaction): string[] {
+        const before = new Set<string>(), after = new Set<string>();
+        tr.before.forEach(n => { if (n.attrs.bid) before.add(n.attrs.bid as string); });
+        tr.doc.forEach(n => { if (n.attrs.bid) after.add(n.attrs.bid as string); });
+        return [...before, ...after].filter(b => before.has(b) !== after.has(b));
+    }
+
+    function queue(ops: OpBody[], cids: string[], holds: string[] = []): void {
         let ci = 0;
+        let first = '';
+        const hold = (bid: unknown, cid: string) => {
+            if (typeof bid === 'string' && bid) unacked.set(bid, (unacked.get(bid) ?? new Set()).add(cid));
+        };
         for (const op of ops) {
             const cid = op.kind === 'text.insert' ? (cids[ci++] ?? newCid()) : newCid();
-            const bid = (op.target.bid ?? op.target.into ?? op.target.fid) as string | undefined;
-            if (bid) unacked.set(bid, (unacked.get(bid) ?? new Set()).add(cid));
+            first ||= cid;
+            // Every block the op names, not just its target: a merge is about
+            // the block that dies as much as the one that survives, and a split
+            // about the one it mints.
+            for (const bid of [op.target.bid, op.target.into, op.target.fid, op.payload?.new]) hold(bid, cid);
             pending.push({ cid, batch, ...op });
         }
+        for (const bid of holds) hold(bid, first || newCid());
         if (settleTimer) window.clearTimeout(settleTimer);
         settleTimer = window.setTimeout(flush, SETTLE_MS);
     }
@@ -212,9 +231,15 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
      *  selected, so the caret gestures run as usual. */
     const cutSelection = (state: EditorState): boolean | 'refused' => {
         if (state.selection.empty) return false;
-        if (selectedBlocks(state).length < 2) return false;      // one block: the recorder handles it
+        const parts = selectedBlocks(state);
+        if (parts.length < 2) return false;                      // one block: the recorder handles it
         const g = deleteSelection(state, env);
-        if (!g) { host.onConflict?.('', 'a selection across a heading is not a delete; use Delete feature'); return 'refused'; }
+        if (!g) {
+            host.onConflict?.('', parts.some(p => p.node.type.name === 'heading')
+                ? 'a selection across a heading is not a delete; use Delete feature'
+                : 'a selection across a block that is not prose is not a delete');
+            return 'refused';
+        }
         view.dispatch(g.tr);
         return true;
     };
@@ -224,7 +249,13 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             const cut = cutSelection(state);
             if (cut === 'refused') return true;
             if (cut) return run(splitBlock(view.state, env)) || true;
-            return run(splitBlock(state, env));
+            if (state.selection.empty) return run(splitBlock(state, env));
+            // One block with something selected: the delete is ordinary text the
+            // recorder speaks for, the split is a gesture. Two dispatches in that
+            // order, because together they are a structural change no single
+            // gesture describes and the guard would refuse the pair.
+            view.dispatch(state.tr.deleteSelection());
+            return run(splitBlock(view.state, env)) || true;
         },
         Backspace: state => {
             const cut = cutSelection(state);
@@ -285,6 +316,14 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             // inside blocks it knows, so anything else would leave the store
             // and the page saying different things (09-editor §4 rule 1).
             new Plugin({ filterTransaction: (tr, st) => !!tr.getMeta(RECORDED) || !tr.docChanged || sameStructure(st.doc, tr.doc) }),
+            // The store keeps NFC and so does the shadow, so the document must
+            // too. A decomposed keystroke (some IMEs, a macOS paste) otherwise
+            // leaves the page one scalar longer than the shadow and every
+            // anchor after it off by one — `anchorBefore` then throws inside
+            // `dispatch`, the DOM keeps the character and the state does not.
+            // The ops already said NFC, so this composes the page and records
+            // nothing.
+            new Plugin({ appendTransaction: composeNFC }),
             keys, inputRules({ rules: [headingRule] }), keymap(baseKeymap), decoPlugin, findPlugin(),
             dragPlugin((bid, after) => { const g = moveBlock(view.state, env, bid, after); if (g) view.dispatch(g.tr); }),
         ],
@@ -294,8 +333,14 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         state,
         nodeViews: { kindBlock: node => kindView(node) },
         dispatchTransaction(tr) {
-            record(tr);
-            const next = view.state.apply(tr);
+            // Record what the page actually took, never what it was asked to
+            // take. `filterTransaction` refuses a structural change no gesture
+            // spoke for, and a refused transaction must leave no trace: the
+            // recorder used to run first, so a refused gesture still advanced
+            // the shadows and queued deletes for words still on screen, and the
+            // next projection took them away (09-editor §4 rule 1).
+            const { state: next, transactions } = view.state.applyTransaction(tr);
+            for (const applied of transactions) record(applied);
             view.updateState(next);
             if (tr.selectionSet || tr.docChanged) { host.onFeature?.(featureAt(next.selection.from)); menus?.update(); }
         },
@@ -328,6 +373,31 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         return null;
     }
 
+    /** Compose any decomposed run these transactions put on the page. The check
+     *  is over what they inserted, so an ordinary keystroke pays one NFC of one
+     *  character and the whole-document scan happens only when one arrives. */
+    function composeNFC(trs: readonly Transaction[], _old: EditorState, next: EditorState): Transaction | null {
+        let suspect = false;
+        for (const t of trs) {
+            for (const step of t.steps) {
+                const slice = (step as unknown as { slice?: { content: { descendants: (f: (n: PMNode) => boolean) => void } } }).slice;
+                slice?.content.descendants(n => { suspect ||= n.isText && nfc(n.text ?? '') !== n.text; return !suspect; });
+            }
+        }
+        if (!suspect) return null;
+        const fixes: Array<{ from: number; to: number; node: PMNode }> = [];
+        next.doc.descendants((n, pos) => {
+            if (!n.isText) return true;
+            const composed = nfc(n.text ?? '');
+            if (composed !== n.text) fixes.push({ from: pos, to: pos + (n.text ?? '').length, node: next.schema.text(composed, n.marks) });
+            return false;
+        });
+        if (!fixes.length) return null;
+        let tr = next.tr;
+        for (const f of fixes.reverse()) tr = tr.replaceWith(f.from, f.to, f.node);
+        return tr.setMeta(RECORDED, []).setMeta('addToHistory', false);
+    }
+
     // ── adoption ───────────────────────────────────────────────────────────
     function adopt(next: Projection, nowRealizing: ReadonlySet<string> = new Set(), force: ReadonlySet<string> = new Set()): void {
         flush();
@@ -348,22 +418,33 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         // Rebuild the document in the projection's order, keeping held blocks' nodes.
         const currentNodes = new Map<string, PMNode>();
         view.state.doc.forEach(n => currentNodes.set(n.attrs.bid as string, n));
-        const nodes: PMNode[] = [];
-        // A block the person is holding stays even if the projection dropped
-        // it: their unacked ops are about to arrive, and the daemon's answer
-        // decides, not a projection that predates them.
-        for (const [bid, node] of currentNodes) {
-            if (held.has(bid) && !byId.has(bid)) nodes.push(node);
-        }
+        // Held means: the page is right about this block, both that it is there
+        // and what it says. A projection older than the person's own gesture
+        // still lists the paragraph they merged away and still lacks the one
+        // they split off, so adopting it wholesale would undo the gesture under
+        // their hands and then undo the undo on the next publish.
+        const order: string[] = [];
+        const nodeFor = new Map<string, PMNode>();
         for (const b of flowBlocks(next)) {
-            if (held.has(b.id) && currentNodes.has(b.id)) { nodes.push(currentNodes.get(b.id)!); continue; }
             const cur = currentNodes.get(b.id);
-            if (cur && cur.attrs.head === b.head && !force.has(b.id)) { nodes.push(cur); continue; }
+            if (held.has(b.id) && !cur) continue;                        // the page removed it
+            order.push(b.id);
+            if (cur && (held.has(b.id) || (cur.attrs.head === b.head && !force.has(b.id)))) { nodeFor.set(b.id, cur); continue; }
             const { node, shadow } = blockNode(schema, b);
             if (shadow) shadows.set(b.id, shadow);
-            nodes.push(node);
+            nodeFor.set(b.id, node);
         }
-        for (const bid of currentNodes.keys()) if (!byId.has(bid) && !held.has(bid)) shadows.delete(bid);
+        // A held block the projection does not know about keeps the place the
+        // page gave it, after the block it currently follows — not the top.
+        const page = [...currentNodes.keys()];
+        page.forEach((bid, i) => {
+            if (nodeFor.has(bid) || !held.has(bid)) return;
+            nodeFor.set(bid, currentNodes.get(bid)!);
+            const at = i > 0 ? order.indexOf(page[i - 1]) : -1;
+            order.splice(at >= 0 ? at + 1 : 0, 0, bid);
+        });
+        const nodes = order.map(id => nodeFor.get(id)!);
+        for (const bid of currentNodes.keys()) if (!nodeFor.has(bid)) shadows.delete(bid);
         const newDoc = schema.nodes.doc.create(null, nodes);
         let tr = view.state.tr.replaceWith(0, view.state.doc.content.size, newDoc.content).setMeta(RECORDED, []).setMeta(decoKey, true);
         // Restore the caret by block and scalar offset.

@@ -10,8 +10,14 @@ instruction. This module is the pure, fully-tested policy:
     .mcp.json, the package manifest/lockfiles) — the paths a malicious suggestion
     would use to persist (workflow injection, hook/MCP registration, dependency
     confusion) past PR review.
-  • ``is_secret_path`` — a Read target that looks like a secret (.env, *.key, a
-    token cache) is refused, so secrets can't be exfiltrated into a PR.
+  • ``under_root`` — every path-taking tool (Read, Edit, Write, Glob, Grep)
+    stays inside the worktree. A Read of ``~/.config/gh/hosts.yml`` is one hop
+    from the token that opens the PR, and Write is confined to files the
+    directive already names, so an unconfined Read is an exfiltration path with
+    a publisher attached.
+  • ``is_secret_path`` — a Read target inside the worktree that still looks like
+    a secret (.env, *.key, a token cache) is refused, so the repo's own secrets
+    can't be exfiltrated into a PR either.
   • ``can_use_tool`` — the predicate the SDK PreToolUse/canUseTool hook calls;
     ``out_of_scope_changes`` is the post-run gate that fails PR creation when the
     agent wrote outside scope.
@@ -23,6 +29,7 @@ is the policy it enforces.
 from __future__ import annotations
 
 import fnmatch
+import os
 
 # Read/Edit/Write/Glob/Grep only — no Bash. WebFetch is allowed only through the
 # SSRF-hardened Consult path (U8), gated separately.
@@ -40,8 +47,16 @@ _DENY_EDIT_FILES = frozenset({
     ".npmrc", ".yarnrc", ".yarnrc.yml", "requirements.txt", "requirements-dev.txt",
 })
 
-_SECRET_GLOBS = (".env", ".env.*", "*.pem", "*.key", "*.keystore", "id_rsa", "id_ed25519")
-_SECRET_SUBSTRINGS = ("token", "secret", "credential", "password")
+# Names secrets actually have, not words that appear in a source file's name.
+# The rule used to be a substring test, which refused `tokenizer.py` and
+# `auth/password_reset.py` — a feature bound to a file named after what it
+# implements was then un-buildable for ever, and the agent could not even read
+# it. Confinement to the worktree (``under_root``) is what keeps the machine's
+# own credentials out of reach; this list is for the repo's own.
+_SECRET_GLOBS = (".env", ".env.*", "*.pem", "*.key", "*.keystore", "id_rsa", "id_ed25519",
+                 "hosts.yml", ".netrc", ".npmrc", ".pypirc", ".pgpass", ".htpasswd",
+                 "credentials", "credentials.*", "secrets", "secrets.*", "*.secrets",
+                 "token", "token.*", "*.token", "*.jks", "*.p12", "service-account*.json")
 # `.codoc` (the control dir, dot kept) holds the App/token caches → never readable
 # by the agent. NOT `codoc` (the source package), which the agent legitimately edits.
 _SECRET_DIRS = (".codoc",)
@@ -62,27 +77,41 @@ def _posix(path: str, root: str | None = None) -> str:
     return "/".join(segs)
 
 
-def is_secret_path(path: str) -> bool:
-    """True if ``path`` looks like a secret the agent must not read."""
-    segs = _segments(path)
+def under_root(path: str, root: str | None) -> bool:
+    """Whether ``path`` resolves inside ``root``. Symlinks are followed first,
+    so a link planted in the worktree does not lead out of it. Without a root
+    there is no boundary to be inside, and nothing is."""
+    if not root or not path:
+        return False
+    try:
+        base = os.path.realpath(root)
+        target = os.path.realpath(path if os.path.isabs(path) else os.path.join(base, path))
+    except (OSError, ValueError):
+        return False
+    return target == base or target.startswith(base + os.sep)
+
+
+def is_secret_path(path: str, root: str | None = None) -> bool:
+    """True if ``path`` looks like a secret the agent must not read. Read
+    repo-relative: the worktree lives under the maintainer's own ``.codoc/``, so
+    the absolute path is inside a secret directory by construction and it is the
+    worktree's *own* ``.codoc/`` that must stay denied."""
+    segs = _segments(_posix(path, root))
     base = segs[-1].lower() if segs else ""
     if any(fnmatch.fnmatch(base, g) for g in _SECRET_GLOBS):
-        return True
-    lowered = _posix(path).lower()
-    if any(s in lowered for s in _SECRET_SUBSTRINGS):
         return True
     return any(d in segs for d in _SECRET_DIRS)  # exact segment, dots kept
 
 
-def is_denied_edit(path: str) -> bool:
+def is_denied_edit(path: str, root: str | None = None) -> bool:
     """True if ``path`` is in the never-edit denylist (CI/settings/manifest/secrets)."""
-    segs = _segments(path)
+    segs = _segments(_posix(path, root))
     base = segs[-1] if segs else ""
     if base in _DENY_EDIT_FILES:
         return True
     if any(d in segs for d in _DENY_EDIT_DIRS):  # exact segment, dots kept
         return True
-    return is_secret_path(path)
+    return is_secret_path(path, root)
 
 
 def edit_allowed(path: str, scope: list[str] | None = None, root: str | None = None) -> bool:
@@ -91,7 +120,7 @@ def edit_allowed(path: str, scope: list[str] | None = None, root: str | None = N
     files its feature is bound to, and the path must be one of them. An empty
     scope permits nothing: a run the server cannot bound is not run at all
     (``worker.pending`` never queues one)."""
-    if is_denied_edit(path):
+    if is_denied_edit(path, root):
         return False
     return _posix(path, root) in {_posix(s) for s in (scope or ())}
 
@@ -110,14 +139,18 @@ def can_use_tool(tool_name: str, tool_input: dict | None, *,
     target = ""
     if tool_input:
         target = tool_input.get("file_path") or tool_input.get("path") or ""
+    # Every path a tool names is inside the worktree. A tool that names none
+    # (a Glob or Grep with no `path`) runs from the worktree, which is the
+    # boundary itself.
+    if target and not under_root(target, root):
+        return False, f"{tool_name} outside the worktree is not permitted"
     if tool_name == "Read":
-        if target and is_secret_path(target):
+        if target and is_secret_path(target, root):
             return False, "reading secrets is not permitted"
         return True, ""
     if tool_name in ("Edit", "Write"):
         if not edit_allowed(target, scope, root):
             return False, f"editing {target!r} is out of the directive's scope"
-        return True, ""
     return True, ""
 
 

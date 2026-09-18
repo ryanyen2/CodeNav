@@ -84,7 +84,9 @@ export function adoptionPlan(current: Array<{ bid: string; head: number }>, proj
     }
     target.forEach((b, i) => {
         const c = have.get(b.id);
-        if (!c) steps.push({ kind: 'insert', bid: b.id, index: i });
+        // A held block the page does not have is one the person just removed:
+        // the projection predates the gesture and does not get to bring it back.
+        if (!c) { if (!held.has(b.id)) steps.push({ kind: 'insert', bid: b.id, index: i }); }
         else if (!held.has(b.id) && c.head !== b.head) steps.push({ kind: 'replace', bid: b.id, index: i });
     });
     // Order: any block whose relative position changed moves.

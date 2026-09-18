@@ -20,6 +20,11 @@ import { Shadow } from '../calc/shadow';
 import { MAX_LEVEL } from './schema';
 
 export const RECORDED = 'codoc:recorded';
+/** The client ids a gesture minted for its own inserts, carried on the
+ *  transaction so the submitted ops keep them. Without it the shadow's
+ *  provisional refs name cids nobody ever submitted, and the next keystroke
+ *  after pasted text anchors on one the daemon has never seen. */
+export const GESTURE_CIDS = 'codoc:cids';
 
 export interface Gesture { tr: Transaction; ops: OpBody[]; cids: string[] }
 
@@ -35,9 +40,17 @@ function blockAt(state: EditorState, pos: number): { node: PMNode; pos: number; 
     return { node: $p.node(1), pos: $p.before(1), index: $p.index(0) };
 }
 
-function tag(tr: Transaction, ops: OpBody[]): Transaction {
-    return tr.setMeta(RECORDED, ops).setMeta('addToHistory', false);
+function tag(tr: Transaction, ops: OpBody[], cids: string[] = []): Transaction {
+    return tr.setMeta(RECORDED, ops).setMeta(GESTURE_CIDS, cids).setMeta('addToHistory', false);
 }
+
+/** The position just past the top-level block with this id. */
+function blockEnd(doc: PMNode, bid: string): number {
+    let end = doc.content.size;
+    doc.forEach((n, p) => { if (n.attrs.bid === bid) end = p + n.nodeSize; });
+    return end;
+}
+
 
 /** The top-level blocks a selection touches, with the part of each it covers. */
 export function selectedBlocks(state: EditorState): Array<{ node: PMNode; pos: number; index: number; from: number; to: number }> {
@@ -63,12 +76,16 @@ export function deleteSelection(state: EditorState, env: Env): Gesture | null {
     const parts = selectedBlocks(state);
     if (!parts.length) return null;
     if (parts.length > 1 && parts.some(p => p.node.type.name === 'heading')) return null;
+    // Every refusal is known before the first shadow moves: this used to walk
+    // the parts, advance each shadow, and give up on a later one that had none
+    // (a kind block in the middle of the selection), leaving the earlier blocks
+    // saying one thing to the page and another to the store.
+    if (parts.some(p => !env.shadows.get(p.node.attrs.bid as string))) return null;
     const ops: OpBody[] = [];
     // Text first, by identity, before any position moves.
     for (const part of parts) {
         const bid = part.node.attrs.bid as string;
-        const shadow = env.shadows.get(bid);
-        if (!shadow) return null;
+        const shadow = env.shadows.get(bid)!;
         const a = scalarOffset(part.node, part.from), z = scalarOffset(part.node, part.to);
         if (z <= a) continue;
         const refs = shadow.delete(a, z);
@@ -299,10 +316,13 @@ export function deleteFeature(state: EditorState, env: Env, fid: string): Gestur
     let idx = -1;
     doc.forEach((n, _p, i) => { if (n.attrs.bid === fid) idx = i; });
     if (idx < 0 || doc.child(idx).type.name !== 'heading') return null;
-    const level = doc.child(idx).attrs.level as number;
     // Own body: heading + following paragraphs.
     let end = idx + 1;
     while (end < doc.childCount && doc.child(end).type.name !== 'heading') end++;
+    // Never empty the tree by one gesture. The check is on the range, not on
+    // the result: the schema says a document is `block+`, so ProseMirror refills
+    // an emptied one with a default block and `childCount === 0` is never true.
+    if (end - idx >= doc.childCount) return null;
     const [, domEnd] = dominatedRange(doc, idx);
     const ops: OpBody[] = [{ kind: 'block.delete', target: { bid: fid }, payload: {} }];
     let tr = state.tr;
@@ -319,9 +339,7 @@ export function deleteFeature(state: EditorState, env: Env, fid: string): Gestur
     let start = 0, stop = 0;
     doc.forEach((n, pos, i) => { if (i === idx) start = pos; if (i === end - 1) stop = pos + n.nodeSize; });
     tr = tr.delete(start, stop);
-    if (tr.doc.childCount === 0) return null;   // never empty the tree by one gesture
     for (let i = idx; i < end; i++) env.shadows.delete(doc.child(i).attrs.bid as string);
-    void level;
     return { tr: tag(tr, ops), ops, cids: [] };
 }
 
@@ -358,14 +376,18 @@ export function pasteBlocks(state: EditorState, env: Env, slice: Slice): Gesture
         shadow.insert(off, paras[0], cid);
         tr = tr.insertText(paras[0], tr.selection.from);
     }
-    // The rest arrive as blocks after it.
+    // The rest arrive as blocks after it. Each position is read from the
+    // document as it stands, never mapped: a position computed before the cut
+    // and mapped through a mapping that includes the cut is shifted twice, and
+    // the paragraph then lands INSIDE the host, which ProseMirror fits by
+    // splitting it into two nodes carrying one bid.
     let after = bid;
-    let pos = $at.after(1) + (paras[0] ? 0 : 0);
+    let pos = blockEnd(tr.doc, bid);
     for (const text of paras.slice(1)) {
         const nb = env.nextBid();
         ops.push({ kind: 'block.add', target: { bid: nb }, payload: { kind: 'paragraph', after } });
         const node = state.schema.nodes.paragraph.create({ bid: nb, head: 0 }, text ? state.schema.text(text) : undefined);
-        pos = tr.mapping.map(pos, 1);
+        pos = blockEnd(tr.doc, after);
         tr = tr.insert(pos, node);
         pos += node.nodeSize;
         const sh = new Shadow();
@@ -379,5 +401,5 @@ export function pasteBlocks(state: EditorState, env: Env, slice: Slice): Gesture
         after = nb;
     }
     tr = tr.setSelection(TextSelection.create(tr.doc, Math.min(pos - 1, tr.doc.content.size)));
-    return { tr: tag(tr, ops), ops, cids };
+    return { tr: tag(tr, ops, cids), ops, cids };
 }

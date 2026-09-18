@@ -31,10 +31,21 @@ let margin: Margin | null = null;
 let timeline: Timeline | null = null;
 let actor = 'human:local';
 let pendingUndo: 'undo' | 'redo' | null = null;
-/** Batches submitted and not yet seen in a published window. Undo waits for
- *  them: inverting an older batch because the newest has not been drained yet
- *  would undo something the person did not ask about. */
-const inFlight = new Set<string>();
+/** Batch → the client ids it submitted that the daemon has not answered. Undo
+ *  waits for these, because it must choose from a window that already carries
+ *  the person's newest work. A batch is retired by its ACKS, not by the window:
+ *  the window drops conflicted ops and is only 200 ops wide, so waiting for one
+ *  to appear there left ⌘Z dead for the rest of the session after a single
+ *  refusal. */
+const inFlight = new Map<string, Set<string>>();
+
+function retire(acks: Ack[]): void {
+    for (const a of acks) {
+        for (const [b, cids] of inFlight) {
+            if (cids.delete(a.cid) && !cids.size) inFlight.delete(b);
+        }
+    }
+}
 let projection: Projection | null = null;
 let status: Record<string, unknown> = {};
 let history = false;
@@ -119,25 +130,34 @@ function renderToolbar(proj: Projection): void {
         margin?.compose(a.bid, a.text, a.start, a.end);
     });
     toolbar.append(comment);
-    if (openPlans.length) {
+    if (openPlans.length && decides()) {
         const acceptAll = el('button', 'codoc-btn codoc-btn-plan', `Accept all (${openPlans.length})`);
         acceptAll.addEventListener('click', () => verdicts(openPlans.map(p => p.id), true));
         const rejectAll = el('button', 'codoc-btn', `Reject all (${openPlans.length})`);
         rejectAll.addEventListener('click', () => verdicts(openPlans.map(p => p.id), false));
         toolbar.append(acceptAll, rejectAll);
     }
-    if (edited) {
+    if (edited && decides()) {
         const hand = el('button', 'codoc-btn codoc-btn-human', `Hand off (${edited})`);
         hand.title = 'send your edits to the agent (⌘S)';
         hand.addEventListener('click', handoffAll);
         toolbar.append(hand);
     }
-    if (queued) {
+    if (queued && decides()) {
         const run = el('button', 'codoc-btn', 'Build now');
         run.title = 'run codoc realize in a terminal';
         run.addEventListener('click', () => send({ kind: 'realize' }));
         toolbar.append(run);
     }
+}
+
+/** Whether this viewer may answer a proposal or ask for a build. A contributor
+ *  signed in with `suggest` writes plans of their own (02 §3.6) and the daemon
+ *  wraps their typing in one; a verdict or a hand-off from them is refused, so
+ *  the page must not offer it (the button would be a lie, and its refusal would
+ *  reload the paragraph under their hands). */
+function decides(): boolean {
+    return (typeof status.role === 'string' ? status.role : 'owner') !== 'suggest';
 }
 
 function renderStatus(): void {
@@ -159,7 +179,11 @@ const cid = () => `ide-${Date.now().toString(36)}-${(seq++).toString(36)}`;
 const batch = () => `t-${Math.random().toString(16).slice(2, 14)}`;
 
 function submit(subs: Submission[]): void {
-    for (const s of subs) inFlight.add(s.batch);
+    for (const s of subs) {
+        const cids = inFlight.get(s.batch) ?? new Set<string>();
+        cids.add(s.cid);
+        inFlight.set(s.batch, cids);
+    }
     send({ kind: 'submit', subs });
 }
 
@@ -174,6 +198,7 @@ function buildThread(t: Thread): void {
     editor?.flush();
     const fid = featureOfBlock(t.anchor);
     if (!fid) return;
+    if (!decides()) { notify('your note is saved; a maintainer hands the feature off'); return; }
     const asked = t.messages.map(m => m.body).join(' ');
     submit([{ cid: cid(), batch: batch(), kind: 'feature.handoff', target: { fid }, payload: { asked } }]);
     send({ kind: 'realize' });
@@ -216,7 +241,7 @@ function undo(redo: boolean): void {
 function applyUndo(w: HistoryWindow): void {
     if (!pendingUndo) return;
     for (const e of w.ops) inFlight.delete(e.batch);
-    if (inFlight.size) return;                    // the window has not caught up; ask again on the next one
+    if (inFlight.size) return;                    // something we sent is still unanswered; the ack will ask again
     const redo = pendingUndo === 'redo';
     const next = nextUndo(w, actor, redo);
     pendingUndo = null;
@@ -236,6 +261,12 @@ document.addEventListener('keydown', ev => {
 
 // ── messages ─────────────────────────────────────────────────────────────────
 window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
+    // On the hub this is an ordinary browser tab, and an opener can post into
+    // it: a crafted `history` with `pendingUndo` set would make the page submit
+    // the sender's ops under the viewer's own session. Our own messages come
+    // from this window (the hub relays them with `window.postMessage`) or, in a
+    // VS Code webview, from the frame that hosts it.
+    if (ev.origin && ev.origin !== window.location.origin && ev.source !== window.parent) return;
     const m = ev.data;
     switch (m.kind) {
         case 'projection': {
@@ -273,7 +304,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
             }
             return;
         case 'acks':
-            if (m.acks) editor?.ack(m.acks as Ack[]);
+            if (m.acks) { retire(m.acks as Ack[]); editor?.ack(m.acks as Ack[]); }
             if (pendingUndo) send({ kind: 'history' });
             return;
         case 'status':

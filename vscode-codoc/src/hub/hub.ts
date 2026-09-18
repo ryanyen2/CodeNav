@@ -21,7 +21,7 @@
             }).then(async r => {
                 if (r.status === 401) { location.href = '/auth/login'; return; }
                 const body = await r.json().catch(() => null) as { kind?: string } | null;
-                if (r.ok && body && typeof body.kind === 'string') window.postMessage(body, '*');   // a reply the app reads as a host message
+                if (r.ok && body && typeof body.kind === 'string') window.postMessage(body, window.location.origin);   // a reply the app reads as a host message
                 else if (!r.ok && r.status !== 202) console.warn('codoc hub refused', m, body);
             }).catch(err => console.warn('codoc hub unreachable', err));
         },
@@ -31,7 +31,7 @@
     const es = new EventSource('/api/events', { withCredentials: true });
     for (const kind of ['projection', 'status', 'acks']) {
         es.addEventListener(kind, ev => {
-            try { window.postMessage(JSON.parse((ev as MessageEvent).data), '*'); } catch { /* torn event */ }
+            try { window.postMessage(JSON.parse((ev as MessageEvent).data), window.location.origin); } catch { /* torn event */ }
         });
     }
     es.onerror = () => { /* EventSource reconnects on its own; a 401 shows the sign-in page on reload */ };

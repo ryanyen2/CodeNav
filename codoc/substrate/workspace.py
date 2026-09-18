@@ -31,6 +31,25 @@ from codoc.substrate import log as L
 from codoc.substrate.clock import Clock
 
 OWNER = "owner"
+SUGGEST = "suggest"
+COMMENT = "comment"
+# The ops a comment is made of, besides the `block.add` that mints it.
+_COMMENT_EDITS = frozenset({K.TEXT_INSERT, K.TEXT_DELETE, K.TEXT_MARK, K.BLOCK_SET})
+
+
+def is_comment_op(store: Store, kind: str, target: dict, payload: dict) -> bool:
+    """Whether this op is part of writing a comment. A comment hangs off words
+    rather than standing among them, so 02 §3.6 lets a suggester write one on
+    the trunk: there is nothing for a maintainer to accept, only a thread to
+    answer. Everything else they write becomes a plan of theirs."""
+    if kind == K.BLOCK_ADD:
+        return payload.get("kind") == COMMENT
+    if kind not in _COMMENT_EDITS:
+        return False
+    if kind == K.TEXT_MARK and payload.get("kind") == COMMENT:
+        return True            # the anchor mark, which lives on the prose
+    b = store.blocks.get(str(target.get("bid") or ""))
+    return b is not None and b.kind == COMMENT
 
 
 @dataclass
@@ -56,10 +75,16 @@ class Roles:
         ``config.json`` (``roles: {actor: role}``); the local person and a v1
         import are owners unless it says otherwise."""
         from codoc.doclang import read_config
-        cfg = read_config(codoc_dir).get("roles")
+        return cls.from_config(read_config(codoc_dir))
+
+    @classmethod
+    def from_config(cls, cfg: dict) -> "Roles":
+        """The same table from a ``config.json`` already in hand, so a caller
+        that has read it does not read it twice or build the defaults again."""
         table = {"human:local": OWNER, "human:import": OWNER}
-        if isinstance(cfg, dict):
-            table.update({str(k): str(v) for k, v in cfg.items()})
+        roles = cfg.get("roles")
+        if isinstance(roles, dict):
+            table.update({str(k): str(v) for k, v in roles.items()})
         return cls(table)
 
     def role(self, actor: str) -> str:
@@ -79,6 +104,8 @@ class Roles:
             return None
         if op.kind == K.PLAN_OPEN:
             return None
+        if is_comment_op(store, op.kind, op.target, op.payload):
+            return None
         if op.plan:
             plan = store.plans.get(op.plan)
             if plan is not None and plan.actor == op.actor:
@@ -97,6 +124,7 @@ class Workspace:
         self.store = Store(policy=self.roles.policy)
         self.problems: list[L.LogProblem] = []
         self.torn: list[L.SessionFile] = []
+        self._suggest_plans: dict[tuple[str, str], str] = {}   # (actor, batch) → the plan the drain opened
         self._inbox_offsets: dict[str, int] = L.read_offsets(self.codoc_dir)
         if not readonly:
             L.rotate_acks(self.codoc_dir)
@@ -282,20 +310,48 @@ class Workspace:
         self._sync()
         return out
 
+    def _suggester_plan(self, actor: str, kind: str, target: dict, payload: dict, batch: str) -> str | None:
+        """The plan a contributor's trunk edit rides in (02 §3.6: "a
+        contributor's edit on the trunk is applied as a plan with that actor").
+        The daemon opens it, because the browser has no way to know it needs
+        one, and one per submitted batch, because a plan per keystroke would be
+        a verdict per keystroke. A comment needs none; anything the calculus
+        cannot carry under a plan is left untagged for the policy to refuse."""
+        if self.roles.role(actor) != SUGGEST or kind not in K.PLANNABLE:
+            return None
+        if is_comment_op(self.store, kind, target, payload):
+            return None
+        key = (actor, batch)
+        pid = self._suggest_plans.get(key)
+        plan = self.store.plans.get(pid or "")
+        if plan is None or plan.status != "open":
+            pid = new_plan_id()
+            bid = str(target.get("bid") or target.get("into") or "")
+            opened = self._apply(self._mint(K.PLAN_OPEN, {"pid": pid},
+                                            {"kind": "edit", "target": bid if bid in self.store.blocks else None,
+                                             "note": "suggested from the hub"}, actor=actor, batch=pid))
+            if opened.conflict:
+                return None
+            self._suggest_plans[key] = pid
+        return pid
+
     def _drain_one(self, client: str, actor: str, s: L.Submission, acked: dict[str, str]) -> list[Op]:
+        batch = s.batch or new_batch_id()
+        plan = s.plan or self._suggester_plan(actor, s.kind if s.kind != "ingest" else K.TEXT_INSERT,
+                                              s.target, s.payload, batch)
         if s.kind == "ingest":
             # A whole-text write from another process: the boundary diff runs
             # here, in the applier. The ack names the first op.
             res, ops = self.ingest(s.target["bid"], s.target.get("path", "text"), base_text=s.payload["base_text"],
-                                   new_md=s.payload["new_md"], actor=actor, plan=s.plan, caused_by=s.caused_by,
+                                   new_md=s.payload["new_md"], actor=actor, plan=plan, caused_by=s.caused_by,
                                    batch=s.batch or None)
             L.ack(self.codoc_dir, client, s.cid, ops[0] if ops else None, error=res.refused,
                   status=None if ops or res.refused else "unchanged")
             acked[s.cid] = ops[0].id if ops else ""
             return ops
         payload = _resolve_provisional(s.payload, acked, self._sent_text)
-        op = self._apply(self._mint(s.kind, s.target, payload, actor=actor, batch=s.batch or new_batch_id(),
-                                    plan=s.plan, base=s.base, caused_by=s.caused_by))
+        op = self._apply(self._mint(s.kind, s.target, payload, actor=actor, batch=batch,
+                                    plan=plan, base=s.base, caused_by=s.caused_by))
         if s.kind == K.TEXT_INSERT and isinstance(s.payload.get("text"), str):
             self._sent_text[s.cid] = s.payload["text"]
         L.ack(self.codoc_dir, client, s.cid, op)

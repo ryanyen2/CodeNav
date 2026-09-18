@@ -25,12 +25,17 @@ class RateLimiter:
     Each key (a GitHub login, or ``"anon"``) gets ``capacity`` tokens that refill at
     ``refill_per_sec``. ``allow(key)`` consumes one token and returns True; when the
     bucket is empty it returns False. A burst up to ``capacity`` is permitted; the
-    sustained rate is bounded by ``refill_per_sec``. ``clock`` is injectable for tests."""
+    sustained rate is bounded by ``refill_per_sec``. ``clock`` is injectable for tests.
+
+    The defaults are the hub's policy, and they live here rather than at the
+    call site so no caller can build one without one: a burst of a minute's
+    editing, then five writes a second, which is far above what a person types
+    through a settle timer and far below what a loop can wake a daemon with."""
 
     def __init__(
         self,
-        capacity: float,
-        refill_per_sec: float,
+        capacity: float = 60.0,
+        refill_per_sec: float = 5.0,
         *,
         clock: Callable[[], float] = time.monotonic,
     ):

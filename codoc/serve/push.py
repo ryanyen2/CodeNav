@@ -31,8 +31,10 @@ def _stamp(path: Path) -> tuple[float, int] | None:
 
 
 def status_message(codoc_dir: Path, actor: str = "") -> dict | None:
-    """The status the editor reads, plus the two facts only the host knows:
-    the tree's language and who this viewer is (undo inverts their batches)."""
+    """The status the editor reads, plus the three facts only the host knows:
+    the tree's language, who this viewer is (undo inverts their batches), and
+    what they may write — a contributor's edits ride as a plan of theirs, so
+    the page must not offer them a verdict or a hand-off on somebody else's."""
     st = _read(codoc_dir / STATUS)
     if st is None:
         return None
@@ -41,7 +43,10 @@ def status_message(codoc_dir: Path, actor: str = "") -> dict | None:
         cfg = json.loads(_read(codoc_dir / CONFIG) or "{}")
     except ValueError:
         return None
-    return {"kind": "status", "status": {**status, "doc_language": cfg.get("doc_language", "en"), "actor": actor}}
+    from codoc.substrate.workspace import OWNER, Roles
+    role = Roles.from_config(cfg).role(actor) if actor else OWNER
+    return {"kind": "status", "status": {**status, "doc_language": cfg.get("doc_language", "en"),
+                                         "actor": actor, "role": role}}
 
 
 def history_message(codoc_dir: str | Path) -> dict | None:

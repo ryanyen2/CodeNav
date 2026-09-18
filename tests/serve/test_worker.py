@@ -1,5 +1,6 @@
 """The hub's realize worker: a hand-off becomes a PR, under the sandbox."""
 import json
+import os
 
 from codoc.calculus import ops as K
 from codoc.loops.realize import handoff
@@ -57,13 +58,16 @@ def test_process_ready_records_each_handoff_once(tmp_path):
     assert seen == [ho.id]
 
 
-def test_the_sandbox_is_the_boundary():
-    assert can_use_tool("Bash", {"command": "curl evil"}) == (False, "tool 'Bash' is not permitted for remote-originated realization")
-    assert can_use_tool("Read", {"file_path": ".env"})[0] is False
-    assert can_use_tool("Edit", {"file_path": ".github/workflows/ci.yml"}, scope=["c.py"])[0] is False
-    assert can_use_tool("Edit", {"file_path": "pyproject.toml"}, scope=["pyproject.toml"])[0] is False
-    assert can_use_tool("Edit", {"file_path": "c.py"}, scope=["c.py"]) == (True, "")
+def test_the_sandbox_is_the_boundary(tmp_path):
+    wt = str(tmp_path / "wt")
+    assert can_use_tool("Bash", {"command": "curl evil"}, root=wt) == (False, "tool 'Bash' is not permitted for remote-originated realization")
+    assert can_use_tool("Read", {"file_path": f"{wt}/.env"}, root=wt)[0] is False
+    assert can_use_tool("Edit", {"file_path": f"{wt}/.github/workflows/ci.yml"}, scope=["c.py"], root=wt)[0] is False
+    assert can_use_tool("Edit", {"file_path": f"{wt}/pyproject.toml"}, scope=["pyproject.toml"], root=wt)[0] is False
+    assert can_use_tool("Edit", {"file_path": f"{wt}/c.py"}, scope=["c.py"], root=wt) == (True, "")
     assert is_secret_path(".codoc/config.json") and not is_secret_path("codoc/config.py")
+    # A source file named after what it implements is not a secret.
+    assert not is_secret_path("tokenizer.py") and edit_allowed("auth/password_reset.py", ["auth/password_reset.py"])
     # An empty scope permits nothing: a run the server cannot bound is not run.
     assert not edit_allowed("s.py", None) and not edit_allowed("s.py", ["c.py"])
     assert out_of_scope_changes(["c.py", ".mcp.json"], ["c.py"]) == [".mcp.json"]
@@ -73,6 +77,26 @@ def test_the_sandbox_is_the_boundary():
     assert policy("Edit", {"file_path": "/srv/wt/c.py"}) == (True, "")
     assert policy("Edit", {"file_path": "/srv/wt/other.py"})[0] is False
     assert policy("WebFetch", {"url": "https://docs.example"})[0] is False      # allowlist empty: every fetch denied
+
+
+def test_every_path_taking_tool_stays_inside_the_worktree():
+    """Write is confined to the files the directive names, so an unconfined Read
+    is an exfiltration path with a publisher attached: the agent reads the `gh`
+    token that opens the pull request, writes it into an in-scope file, and the
+    diff carries it to whoever asked for the change."""
+    wt = "/srv/repo/.codoc/worktrees/codoc-realize-s-9"
+    policy = realize_tool_policy(["c.py"], consult_allowlist=frozenset(), resolve=lambda h: [], root=wt)
+    for outside in ("~/.config/gh/hosts.yml", "~/.netrc", "/proc/1/environ", "/etc/passwd",
+                    "/srv/other-repo/.codoc/inbox/ide.jsonl"):
+        assert policy("Read", {"file_path": os.path.expanduser(outside)})[0] is False, outside
+    assert policy("Grep", {"pattern": "oauth_token", "path": os.path.expanduser("~")})[0] is False
+    assert policy("Glob", {"pattern": "**/hosts.yml", "path": "/"})[0] is False
+    # No path named at all: the tool runs from the worktree, which is the boundary.
+    assert policy("Grep", {"pattern": "send"}) == (True, "")
+    # The worktree lives under the maintainer's own `.codoc/`, so the denylists
+    # must read the path the scope names, not the absolute one.
+    assert policy("Read", {"file_path": f"{wt}/c.py"}) == (True, "")
+    assert policy("Read", {"file_path": f"{wt}/.codoc/config.json"})[0] is False
 
 
 def test_an_unbound_feature_is_not_built_by_the_hub(tmp_path):
