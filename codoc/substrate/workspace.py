@@ -132,6 +132,10 @@ class Roles:
       have to tag anything themselves: the drain opens the plan and tags their
       ops, turning a deletion into the plan's ``suggest_del`` (02 §3.6). What
       it cannot carry under a plan — a merge, a block delete — stays refused.
+      Two untagged writes are allowed, because no plan can carry them and both
+      are about their OWN words: a ``text.delete`` covering only characters an
+      open plan of theirs minted, and a ``text.restore`` undoing a
+      ``text.delete`` of their own (``_own_plan_text``).
 
     A comment is writable untagged by anyone: it hangs off words rather than
     standing among them, and there is nothing for a maintainer to accept. On a
@@ -199,7 +203,9 @@ class Workspace:
         self.store = Store(policy=self.roles.policy)
         self.problems: list[L.LogProblem] = []
         self.torn: list[L.SessionFile] = []
-        self._suggest_plans: dict[tuple[str, str], str] = {}   # (actor, batch) → the plan the drain opened
+        # (actor, batch) → the plan this workspace opened for it: a
+        # contributor's trunk edit AND a machine write the gate demoted.
+        self._opened_plans: dict[tuple[str, str], str] = {}
         self._inbox_offsets: dict[str, int] = L.read_offsets(self.codoc_dir)
         if not readonly:
             L.rotate_acks(self.codoc_dir)
@@ -368,7 +374,7 @@ class Workspace:
         picture most needs to follow."""
         res = self.plan_ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, trunk=plan is None)
         opened = None
-        if plan is None and not derived and (why := self._must_propose(bid, actor, res)):
+        if plan is None and not derived and (why := self.must_propose(bid, actor, res)):
             plan = opened = self._plan_for(actor, batch or bid, bid, why)
             if plan is not None:
                 batch = batch or plan
@@ -381,8 +387,13 @@ class Workspace:
             self._withdraw_if_empty(opened)
         return res, ops
 
-    def _must_propose(self, bid: str, actor: str, res: Ingest) -> str | None:
-        """Why this machine write may not land on the trunk, or None."""
+    def must_propose(self, bid: str, actor: str, res: Ingest) -> str | None:
+        """Why this machine write may not land on the trunk, or None.
+
+        Public because a caller that sees a whole repair asks it per block and
+        opens ONE plan for all of them (``reflect._amend``). It is the only
+        implementation of the rule: 01 §4 rule 7 puts the gate at one boundary,
+        and a second copy is how two of them came to differ."""
         if actor_kind(actor) not in MACHINE_KINDS:
             return None
         if res.refused:
@@ -445,7 +456,7 @@ class Workspace:
         if plan is None or plan.status != "open" or plan.ops:
             return
         self._apply(self._mint(K.PLAN_REJECT, {"pid": plan.id}, {}, actor=plan.actor, batch=plan.id))
-        self._suggest_plans = {k: v for k, v in self._suggest_plans.items() if v != plan.id}
+        self._opened_plans = {k: v for k, v in self._opened_plans.items() if v != plan.id}
 
     def _as_proposal(self, actor: str, s: L.Submission) -> L.Submission:
         """A suggester's Backspace, as a proposal. A plan proposes and never
@@ -473,7 +484,7 @@ class Workspace:
         typing a sentence would otherwise leave the maintainer four proposals to
         answer. An open plan of theirs on the same block is that edit."""
         key = (actor, batch)
-        pid = self._suggest_plans.get(key)
+        pid = self._opened_plans.get(key)
         plan = self.store.plans.get(pid or "")
         if plan is not None and plan.status == "open":
             return pid
@@ -483,7 +494,7 @@ class Workspace:
             # the deletion accepts the repair and rejecting it drops it.
             for p in reversed(list(self.store.plans.values())):
                 if p.status == "open" and p.actor == actor and p.target == bid and p.kind == "edit":
-                    self._suggest_plans[key] = p.id
+                    self._opened_plans[key] = p.id
                     return p.id
         pid = new_plan_id()
         opened = self._apply(self._mint(K.PLAN_OPEN, {"pid": pid},
@@ -491,7 +502,7 @@ class Workspace:
                                          "note": note}, actor=actor, batch=pid))
         if opened.conflict:
             return None
-        self._suggest_plans[key] = pid
+        self._opened_plans[key] = pid
         return pid
 
     def _suggester_plan(self, actor: str, kind: str, target: dict, payload: dict, batch: str) -> str | None:

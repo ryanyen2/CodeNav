@@ -23,8 +23,10 @@ true entering it and what each op changed:
   deletion, and a merged-away one as an empty phantom, because their text is
   still in the store.
 - ``ranks`` and each entry's ``ranks``: the rank each op displaced, from a move
-  or from a verdict that undid one. What never moved keeps today's rank, which
-  is what it had; a reader folds the two together.
+  or from a verdict that undid one — including a ``plan.reopen``, which applies
+  the verdict's own record and so reports what it displaced separately
+  (``undid``). What never moved keeps today's rank, which is what it had; a
+  reader folds the two together.
 
 Each entry carries ``batch_first``: where its batch began, so an undo can tell
 a batch it holds whole from one that reaches back past the window.

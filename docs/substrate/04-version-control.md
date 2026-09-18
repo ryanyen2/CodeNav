@@ -95,18 +95,27 @@ Scrubbing by commit ("what did the tree say at v0.3") would need a marker op a
 
 A log grows by one op per settle, LLM write or verdict. At a few hundred bytes
 per op, a year of daily editing is tens of megabytes: acceptable in a
-repository, and compactable. `codoc snapshot` writes the store as a single
+repository. `codoc snapshot` folds the **settled prefix** of it — everything
+before the oldest op any unfinished feature was written by — into a single
 `log/snapshot-<hlc>.jsonl` (one `block.add` per live or dead block with its
-segments, actors and marks preserved, plus bindings, plans and frontiers) and
-records the frontier of ops it folded; earlier logs move under `log/archive/`.
-A rebuild applies the snapshot first and then every op outside its frontier
-regardless of HLC, so a branch forked before the snapshot merges correctly and
-its inserts after pre-snapshot tombstones still land, because the snapshot
-keeps dead segments. Attribution survives because segments carry their actor,
-and the ops of every unsettled feature ride in the snapshot so the views that
-read history answer the same before and after a fold (`01` §7.5). The archive
-keeps the rest, readable but unread: no view opens it today. Snapshots and
-logs should not be in git-lfs: the merge driver would receive pointer files.
+segments, actors and marks preserved, plus bindings, plans and frontiers),
+records the frontier of ops it folded, and moves the session files that
+frontier covers WHOLE under `log/archive/`. Everything after the cut stays an
+ordinary log, because the directive, `ground` and a phantom's evidence are
+read from the ops themselves (`01` §7.5). A rebuild applies the snapshot first
+and then every op outside its frontier regardless of HLC, so a branch forked
+before the snapshot merges correctly and its inserts after pre-snapshot
+tombstones still land, because the snapshot keeps dead segments. Attribution
+survives because segments carry their actor.
+
+**How much it compacts depends on the tree's state, and a tree in flight
+compacts by nothing.** After a reflect pass every feature is drifted, so the
+oldest unsettled op is near the start of the log and the fold writes nothing
+(it returns None rather than a file). That is the honest answer, not a defect
+to tune around: the alternative is a snapshot that silently drops what the
+reads need. Fold when the tree is settled — in practice on the integration
+branch, after a sync. Snapshots and logs should not be in git-lfs: the merge
+driver would receive pointer files.
 
 ## 6. What the hub adds
 

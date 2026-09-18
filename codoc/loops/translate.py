@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from codoc.agent.translate import propose_translations
-from codoc.calculus.derive import markdown
+from codoc.calculus.derive import HELD, markdown, phase
 from codoc.calculus.doc import PARAGRAPH
 from codoc.doclang import DocLanguage, detect_prose_language, norm_key, prose_letters, workspace_doc_language
 from codoc.loops.context import written_by
@@ -154,7 +154,12 @@ def translate_tree(ws: Workspace, codoc_dir: str | Path, *, language: DocLanguag
                 # Every refusal is known before the plan exists. A plan opened
                 # and then abandoned is a verdict the editor offers on nothing,
                 # and a translator has no authority to withdraw one.
-                human = written_by(ws.store, fid) == "human"
+                # Not `must_propose`: a translation replaces every word by
+                # design, so the fraction says nothing, and the question is
+                # whose words they were. The one clause it shares with the
+                # gate is 01 §4 rule 8 — while a feature has pending intent the
+                # document wins, whoever wrote it.
+                human = written_by(ws.store, fid) == "human" or phase(ws.store, fid) in HELD
                 base = dict(ws.store.frontier)
                 computed, refused = [], None
                 for bid, new_md in [(fid, new_title)] + [(b, md) for (b, _o), md in zip(old_paras, new_paras)]:

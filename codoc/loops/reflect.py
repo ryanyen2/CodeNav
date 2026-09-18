@@ -35,7 +35,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from codoc.calculus import ops as K
-from codoc.calculus.derive import GATE_HUMAN, GATE_MACHINE, HELD, LOOP, block_written_by, phase
+from codoc.calculus.derive import HELD, LOOP, phase
 from codoc.calculus.doc import HEADING, PARAGRAPH, text_fields
 from codoc.calculus.ids import START, new_block_id
 from codoc.calculus.ingest import Ingest
@@ -475,21 +475,21 @@ def _amend(p: _Pass, raw: dict) -> None:
     def consider(bid: str, new_md: str) -> None:
         # Computed as a trunk write first; a repair the trunk refuses (it would
         # drop a person's mark) or the gate demotes becomes part of the plan,
-        # where the person decides and nothing is refused.
+        # where the person decides and nothing is refused. The gate itself is
+        # `Workspace.must_propose` and only there — this pass asks it per block
+        # because one amend is one plan, not because it has a rule of its own.
         nonlocal need_plan
         base = store.blocks[bid].text().live_text()
         ing = p.ws.plan_ingest(bid, "text", base_text=base, new_md=new_md, actor=LOOP, trunk=not need_plan)
-        if ing.refused and ing.refused.startswith("would_drop_human_"):
+        if p.ws.must_propose(bid, LOOP, ing):
             need_plan = True
-            ing = p.ws.plan_ingest(bid, "text", base_text=base, new_md=new_md, actor=LOOP, trunk=False)
+            if ing.refused:
+                ing = p.ws.plan_ingest(bid, "text", base_text=base, new_md=new_md, actor=LOOP, trunk=False)
         if ing.refused:
             p.res.refused.append((bid, ing.refused))
             return
         if ing.unchanged:
             return
-        gate = GATE_HUMAN if block_written_by(store, bid) == "human" else GATE_MACHINE
-        if ing.deleted_fraction > gate:
-            need_plan = True
         ingests.append(ing)
 
     if raw.get("title"):

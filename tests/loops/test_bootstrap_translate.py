@@ -102,6 +102,29 @@ def test_translate_ingests_per_block_and_plans_human_prose(tmp_path):
     assert res2.translated == 0
 
 
+def test_translating_a_queued_feature_is_a_plan_even_when_the_loop_wrote_it(tmp_path):
+    """Review 7: translate had its own copy of the machine gate and the copies
+    had drifted — it asked only whose prose this is. 01 §4 rule 8 holds for
+    every machine write: while a feature has pending intent the document wins,
+    so the translation waits for a verdict like anything else."""
+    from codoc.calculus import ops as K
+    ws = Workspace(tmp_path / ".codoc")
+    bootstrap(ws, ROWS[:2], Graph(), propose_file=fake_file, propose_org=lambda *a, **k: [],
+              propose_the_brief=lambda *a, **k: {}, concurrency=1)
+    client = next(h.id for h in ws.store.headings() if title(ws.store, h.id) == "HTTP client")
+    ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": client}, "payload": {"asked": "wire the retry"}}],
+              actor="human:local")                       # queued, and every word of it is the loop's
+
+    def fake(features, language, **kw):
+        return {f["id"]: ("译", "\n\n".join("译文。" for _ in f["description"].split("\n\n"))) for f in features}
+
+    res = translate_tree(ws, tmp_path / ".codoc", language=resolve("zh-Hans"), propose=fake)
+    assert res.translated == 2 and res.planned == 1, res           # only the queued one waits
+    assert title(ws.store, client) != "译" and title(ws.store, client, "accepted") == "译"
+    other = next(h.id for h in ws.store.headings() if h.id != client and "译" in title(ws.store, h.id, "accepted"))
+    assert title(ws.store, other) == "译"                          # nothing pending there: the trunk
+
+
 def test_snapshot_folds_and_rebuilds_identically(tmp_path):
     """A fold is the state, re-expressed: blocks, bindings, plans with their
     verdicts, and the watermarks (with what the person asked) all survive it."""

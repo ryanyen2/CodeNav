@@ -1,9 +1,11 @@
 """The loop's lift pass: every live kind block with a ``lift`` is re-derived
 from the code after a reflect pass. Content that did not change writes
 nothing; content that did goes through ``write_block`` with ``actor=loop`` on
-the trunk (a lift is attribution, like a binding refresh, never intent). A
-block on a held feature (unsent ink or queued work) is left alone: the
-document wins.
+the trunk (a lift is attribution, like a binding refresh, never intent). It
+passes ``derived=True``, which is what keeps it on the trunk however much of
+the picture changed: the machine gate protects words somebody meant, and a
+field read off the code holds none. A block on a held feature (unsent ink or
+queued work) is left alone: the document wins.
 """
 from __future__ import annotations
 
