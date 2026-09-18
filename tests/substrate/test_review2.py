@@ -299,6 +299,7 @@ def test_agents_write_no_verdicts_and_suggesters_ride_only_their_own_plans(tmp_p
                         {"kind": K.FEATURE_REALIZED, "target": {"fid": "h1"}, "payload": {}},
                         {"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {}}], actor="agent:claude-code")
     assert [o.conflict for o in denied] == ["authority"] * 3
+    ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {}}], actor="human:local")
     assert ws.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": "h1"}, "payload": {}}], actor="loop")[0].conflict is None
     smuggled = ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "x"}}],
                          actor="human:contrib", plan=pid)[0]

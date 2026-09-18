@@ -38,7 +38,7 @@ def test_session_log_is_written_validated_and_rebuilt(tmp_path):
     ws2.close()
     ws3 = Workspace(tmp_path / ".codoc")
     assert ws3.store.blocks["p1"].text().live_text() == "Retries once. Then gives up."
-    assert len(L.list_sessions(tmp_path / ".codoc")) == 3   # ws3 opened its own
+    assert len(L.list_sessions(tmp_path / ".codoc")) == 2   # ws3 wrote nothing, so it left no file
 
 
 def test_tampered_log_is_skipped_whole_and_reported(tmp_path):
@@ -74,6 +74,29 @@ def test_inbox_drain_is_idempotent_and_stamps_actor(tmp_path):
     L.submit(tmp_path / ".codoc", "stranger", [Submission(cid="z", kind=K.BLOCK_DELETE, target={"bid": "h1"}, payload={})])
     assert ws.drain_inbox({"ide": "human:local"}) == []
     assert ws.store.blocks["h1"].live
+    ws.close()
+
+
+def test_a_new_session_reads_the_inbox_where_the_last_one_stopped(tmp_path):
+    """The consumed offset is remembered, so a restart does not re-read every
+    submission ever made — which is what lets the ack file be trimmed at all."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed(ws)
+    L.submit(cd, "ide", [Submission(cid="c1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                                    payload={"after": list(ws.store.blocks["p1"].text().last_live_ref()), "text": " More."})])
+    assert len(ws.drain_inbox({"ide": "human:local"})) == 1
+    ws.close()
+    # The ack that made the drain idempotent is gone; the offset stands in for it.
+    (cd / "inbox" / "ide.ack.jsonl").write_text("", encoding="utf-8")
+    ws2 = Workspace(cd)
+    assert ws2.drain_inbox({"ide": "human:local"}) == []
+    assert ws2.store.blocks["p1"].text().live_text() == "Retries once. More."
+    L.submit(cd, "ide", [Submission(cid="c2", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                                    payload={"after": "START", "text": "New. "})])
+    assert len(ws2.drain_inbox({"ide": "human:local"})) == 1
+    assert ws2.store.blocks["p1"].text().live_text() == "New. Retries once. More."
+    ws2.close()
 
 
 def test_suggest_role_writes_only_plans(tmp_path):

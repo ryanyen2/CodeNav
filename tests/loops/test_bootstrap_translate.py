@@ -129,7 +129,8 @@ def test_snapshot_folds_and_rebuilds_identically(tmp_path):
     ws2 = Workspace(tmp_path / ".codoc")
     write_snapshot(tmp_path / ".codoc", ws2.store, ws2.clock)
     assert len(L.list_snapshots(tmp_path / ".codoc")) == 1
-    assert L.list_sessions(tmp_path / ".codoc") and all("archive" not in str(p) for p in L.list_sessions(tmp_path / ".codoc"))
+    assert all("archive" not in str(p) for p in L.list_sessions(tmp_path / ".codoc"))
+    assert list((tmp_path / ".codoc" / "log" / L.ARCHIVE_DIR).glob("*.jsonl")), "the folded logs were not archived"
     ws2.close()
     ws3 = Workspace(tmp_path / ".codoc")
     assert not ws3.problems

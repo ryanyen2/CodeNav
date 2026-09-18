@@ -44,10 +44,12 @@ class BootstrapResult:
     features: int = 0
     calls: int = 0
     skipped: list[str] = field(default_factory=list)
+    refused: list[tuple[str, str]] = field(default_factory=list)   # (bid, why) a title or paragraph did not land
 
     def summary(self) -> str:
         base = f"{self.chunks} chunks → {self.features} features ({self.calls} LLM calls)"
-        return base + (f", {len(self.skipped)} file(s) skipped" if self.skipped else "")
+        base += f", {len(self.skipped)} file(s) skipped" if self.skipped else ""
+        return base + (f", {len(self.refused)} block(s) refused" if self.refused else "")
 
 
 def bootstrap(ws: Workspace, rows: list, graph: Graph, *, repo_name: str = "codebase", root_dir: str | None = None,
@@ -109,7 +111,7 @@ def bootstrap(ws: Workspace, rows: list, graph: Graph, *, repo_name: str = "code
                 say(f"  · [{idx}/{len(files)}] {file}")
             res.calls += 1
             ops = _ensure_file_coverage(ops, frows, file)
-            minted = _apply_add_ops(ws, ops, frows, batch)
+            minted = _apply_add_ops(ws, res, ops, frows, batch)
             titles.extend(minted)
     if failures and len(failures) == len(files):
         raise RuntimeError(f"every bootstrap call failed ({len(files)}/{len(files)}); last error: {failures[-1][1]}")
@@ -126,7 +128,7 @@ def bootstrap(ws: Workspace, rows: list, graph: Graph, *, repo_name: str = "code
             ops = propose_org(feats, _feature_coupling(ws.store, graph), repo_name=repo_name, config=config,
                               brief=brief, flows=flow_lines(graph, exported), doc_language=doc_language)
             res.calls += 1
-            _apply_org_ops(ws, ops, batch)
+            _apply_org_ops(ws, res, ops, batch)
         except Exception as exc:  # noqa: BLE001 — a flat tree is still usable
             say(f"  ⚠ organization pass failed ({exc}); the tree stays flat")
     elif organize and len(top) > ORG_FEATURE_CAP:
@@ -137,18 +139,29 @@ def bootstrap(ws: Workspace, rows: list, graph: Graph, *, repo_name: str = "code
 
 # ── applying the model's ops ─────────────────────────────────────────────────
 
-def _add_feature(ws: Workspace, *, title_md: str, description_md: str, after: str, level: int, batch: str,
-                 binds: list[tuple[str, str]], fps: dict, ths: dict) -> str:
+def _one_line(md: str) -> str:
+    """A heading and a paragraph are each one line: a model title carrying a
+    newline, or a hand-wrapped paragraph, is refused ``multi_paragraph`` and
+    the tree would keep a block with no words in it at all."""
+    return " ".join((md or "").split())
+
+
+def _add_feature(ws: Workspace, res: BootstrapResult, *, title_md: str, description_md: str, after: str,
+                 level: int, batch: str, binds: list[tuple[str, str]], fps: dict, ths: dict) -> str:
     fid = new_block_id()
     ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": fid}, "payload": {"kind": HEADING, "level": level, "after": after}}],
               actor=LOOP, batch=batch)
-    ws.ingest(fid, "text", base_text="", new_md=title_md.strip() or "Untitled", actor=LOOP, batch=batch)
+    got, _ = ws.ingest(fid, "text", base_text="", new_md=_one_line(title_md) or "Untitled", actor=LOOP, batch=batch)
+    if got.refused:
+        res.refused.append((fid, f"title: {got.refused}"))
     last = fid
-    for para in [p.strip() for p in (description_md or "").split("\n\n") if p.strip()]:
+    for para in [_one_line(p) for p in (description_md or "").split("\n\n") if p.strip()]:
         bid = new_block_id()
         ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": bid}, "payload": {"kind": PARAGRAPH, "after": last}}],
                   actor=LOOP, batch=batch)
-        ws.ingest(bid, "text", base_text="", new_md=para, actor=LOOP, batch=batch)
+        got, _ = ws.ingest(bid, "text", base_text="", new_md=para, actor=LOOP, batch=batch)
+        if got.refused:
+            res.refused.append((bid, got.refused))
         last = bid
     if binds:
         ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": fid},
@@ -162,7 +175,7 @@ def _last_block(ws: Workspace) -> str:
     return live[-1].id if live else START
 
 
-def _apply_add_ops(ws: Workspace, ops: list[dict], frows: list, batch: str) -> list[str]:
+def _apply_add_ops(ws: Workspace, res: BootstrapResult, ops: list[dict], frows: list, batch: str) -> list[str]:
     """Apply one file's ``add_node`` ops. Temporary ids (``n1``) resolve to the
     minted heading; a child lands right after its parent's body one level deeper;
     an unknown parent means top level. Returns the titles minted."""
@@ -180,7 +193,7 @@ def _apply_add_ops(ws: Workspace, ops: list[dict], frows: list, batch: str) -> l
         else:
             after, level = _last_block(ws), 1
         binds = [(str(b[0]), str(b[1])) for b in o.get("bindings", []) if isinstance(b, (list, tuple)) and len(b) == 2]
-        fid = _add_feature(ws, title_md=o["title"], description_md=o.get("description", ""), after=after,
+        fid = _add_feature(ws, res, title_md=o["title"], description_md=o.get("description", ""), after=after,
                            level=level, batch=batch, binds=binds, fps=fps, ths=ths)
         if o.get("id"):
             local[str(o["id"])] = fid
@@ -188,14 +201,14 @@ def _apply_add_ops(ws: Workspace, ops: list[dict], frows: list, batch: str) -> l
     return minted
 
 
-def _apply_org_ops(ws: Workspace, ops: list[dict], batch: str) -> None:
+def _apply_org_ops(ws: Workspace, res: BootstrapResult, ops: list[dict], batch: str) -> None:
     """Theme headings (``add_node`` with temporary ids) then ``move_node`` of
     existing features under them: one ``block.move`` per feature, deeper by one."""
     local: dict[str, str] = {}
     for o in ops:
         if o.get("kind") == "add_node" and (o.get("title") or "").strip():
-            fid = _add_feature(ws, title_md=o["title"], description_md=o.get("description", ""), after=_last_block(ws),
-                               level=1, batch=batch, binds=[], fps={}, ths={})
+            fid = _add_feature(ws, res, title_md=o["title"], description_md=o.get("description", ""),
+                               after=_last_block(ws), level=1, batch=batch, binds=[], fps={}, ths={})
             if o.get("id"):
                 local[str(o["id"])] = fid
     for o in ops:

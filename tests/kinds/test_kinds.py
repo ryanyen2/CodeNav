@@ -111,7 +111,9 @@ def test_a_feature_carrying_media_survives_every_whole_feature_pass(tmp_path):
     c = add_block(ws, "comment", {"thread": "t1", "anchor": "p1", "anchor_text": "once", "body": "Twice?"},
                   after=d.bid, actor="human:local")
     assert block_written_by(ws.store, d.bid) == "loop" and block_written_by(ws.store, c.bid) == "human"
-    assert written_by(ws.store, "h1") == "human"
+    # The comment is a request about the prose, not the prose: the feature is
+    # still machine-written, which is what the amend gate and translate read.
+    assert written_by(ws.store, "h1") == "loop"
     assert description(ws.store, "h1") == "Retries once before giving up."       # prose only
     ws.close()
     blame = tools.read_history(str(tmp_path / ".codoc"), "h1")["attribution"]
@@ -123,3 +125,25 @@ def test_a_feature_carrying_media_survives_every_whole_feature_pass(tmp_path):
     res = translate_tree(ws, tmp_path / ".codoc", language=resolve("zh-Hans"), propose=propose)
     assert res.translated == 1 and ws.store.blocks[c.bid].text("body").live_text() == "Twice?"
     assert ws.store.blocks[d.bid].text("source").live_text().startswith("flowchart")
+
+
+def test_the_directive_speaks_through_the_kind_codecs(tmp_path):
+    """03 §5.1: `consult` is what the realizing agent reads and `lower` runs
+    when a hand-off renders. A diagram reaches the prompt as a diagram, not as
+    raw mermaid in the person's ink; an open comment thread reaches it once, as
+    the request its codec words."""
+    from codoc.calculus.derive import directive
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws)
+    ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": "c.py::send"}}], actor="loop")
+    add_block(ws, "diagram", {"source": "flowchart TB\n  send --> recv"}, after="p1", actor="human:local")
+    add_block(ws, "comment", {"thread": "t1", "anchor": "p1", "anchor_text": "once", "body": "Twice?", "scope": "code"},
+              after="p1", actor="human:local")
+    handoff(ws, "h1", actor="human:local")
+    d = directive(ws.store, "h1")
+    assert "Diagram of this feature's code (mermaid):\nflowchart TB\n  send --> recv" in d, d
+    assert "Add a dependency or call from `send` to `recv` (the author drew that edge)." in d, d
+    assert d.count('Comment on "once": Twice?') == 1, d
+    # the comment's words are a request, never the feature's prose changing
+    assert 'added: "Twice?"' not in d, d
+    ws.close()

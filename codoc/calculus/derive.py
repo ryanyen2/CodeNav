@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from codoc.calculus import ops as K
-from codoc.calculus.doc import HEADING, PARAGRAPH, Block, TreeNode, fold_tree, text_fields
+from codoc.calculus.doc import HEADING, PARAGRAPH, Block, TreeNode, fold_tree, in_flow, text_fields
 from codoc.calculus.ids import OpId, is_human
 from codoc.calculus.inline_md import Span, render
 from codoc.calculus.ops import Op, covered, in_frontier
@@ -62,7 +62,12 @@ def markdown(text: Text, mode: str = "live", store: Store | None = None) -> str:
 
 
 def plan_mark_ops(store: Store, plans: set[str]) -> list[Op]:
-    """The applied ``text.mark`` ops of ``plans``, in apply order."""
+    """The applied ``text.mark`` ops of ``plans``, in apply order. Memoized on
+    the store's own length, so a publish that renders every field in the
+    rejected read mode walks the open plans once and not once per field."""
+    key = (store.pos, frozenset(plans))
+    if store.mark_ops_memo is not None and store.mark_ops_memo[0] == key:
+        return store.mark_ops_memo[1]
     out: list[Op] = []
     for pid in plans:
         p = store.plans.get(pid)
@@ -70,19 +75,29 @@ def plan_mark_ops(store: Store, plans: set[str]) -> list[Op]:
             continue
         out.extend(o for i in p.ops if (o := store.by_id.get(i)) is not None and o.kind == K.TEXT_MARK and o.conflict is None)
     out.sort(key=lambda o: store.position[o.id])
+    store.mark_ops_memo = (key, out)
     return out
 
 
-def _unapply_plan_marks(view: Text, store: Store, plans: set[str]) -> None:
-    for o in reversed(plan_mark_ops(store, plans)):
-        for mj in o.payload.get("added", []):
-            mk = Mark.from_json(mj)
-            if mk in view.marks:
-                view.marks.remove(mk)
+def _unapply_plan_marks(view: Text, store: Store, plans: set[str], ops: list[Op] | None = None) -> None:
+    """Undo the open plans' mark toggles on a clone, newest first: a mark this
+    op placed is found by its placer (it may have grown over text typed at its
+    edge), and a mark it displaced comes back unless a plan the person already
+    rejected had placed it."""
+    for o in reversed(ops if ops is not None else plan_mark_ops(store, plans)):
+        view.remove_marks(op=o.id)
         for mj in o.payload.get("removed", []):
             mk = Mark.from_json(mj)
+            if _rejected_mark(store, mk):
+                continue
             if view.holds(mk.start) and view.holds(mk.end) and mk not in view.marks:
                 view.marks.append(mk)
+
+
+def _rejected_mark(store: Store, mk: Mark) -> bool:
+    placer = store.by_id.get(mk.op)
+    plan = store.plans.get(placer.plan) if placer is not None and placer.plan else None
+    return plan is not None and plan.status == "rejected"
 
 
 def title(store: Store, fid: str, mode: str = "live") -> str:
@@ -227,6 +242,7 @@ def plan_claims(store: Store, fid: str) -> list[Claim]:
     plans' words (``accepted``)."""
     out: list[Claim] = []
     open_plans = {p.id for p in store.plans.values() if p.status == "open"}
+    mark_ops = plan_mark_ops(store, open_plans)
     for b in store.feature_body(fid):
         for f in text_fields(b.kind):
             t = b.text(f)
@@ -241,7 +257,7 @@ def plan_claims(store: Store, fid: str) -> list[Claim]:
             for sp in _suggest_spans(t, store):
                 out.append(Claim(b.id, f, sp.start, sp.end, "plan", "removed", store.plans[sp.attrs["plan"]].actor, lt[sp.start:sp.end]))
             offsets = t.live_offsets()
-            for o in plan_mark_ops(store, open_plans):
+            for o in mark_ops:
                 if o.payload.get("bid") != b.id or o.payload.get("path", "text") != f or o.payload.get("kind") == SUGGEST_DEL:
                     continue
                 stage = "marked" if o.payload.get("on", True) else "unmarked"
@@ -352,18 +368,70 @@ def directive(store: Store, fid: str) -> str:
     if consult:
         lines.append("")
         lines.append("Consult: " + ", ".join(f"{t} <{u}>" for t, u in consult))
+    reads, asks = _kind_lines(store, fid, w)
+    for line in reads + asks:
+        lines.append("")
+        lines.append(line)
     if ho and ho.payload.get("asked"):
         lines.append("")
         lines.append(f"Author asked: {ho.payload['asked']}")
     return "\n".join(lines)
 
 
+def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[str]]:
+    """What this feature's plugin-kind blocks put in front of the agent (03
+    §5.1): every in-flow block's ``consult``, then the directive each block's
+    ``lower`` codec derives from what changed since the last realization. An
+    out-of-flow block (a comment) is not prose the agent reads — only a
+    request, which its own codec words."""
+    from codoc import kinds as registry
+    reads: list[str] = []
+    asks: list[str] = []
+    ctx: object | None = None
+    for b in store.feature_body(fid):
+        kind = registry.get(b.kind)
+        if kind is None:
+            continue
+        new = registry.plain(b, store)
+        if in_flow(b.kind) and (said := kind.consult(new)):
+            reads.append(said)
+        if kind.lower is None:
+            continue
+        old = {k: (markdown(_at_realized(v, w.realized), "rejected", store)
+                   if isinstance(v, Text) and k in text_fields(b.kind) else v)
+               for k, v in b.content.items()}
+        for o in reversed(store.ops_on([b.id])):
+            if o.conflict or o.kind != K.BLOCK_SET or in_frontier(o.id, w.realized):
+                continue
+            prev = o.payload.get("prev")
+            old.pop(o.target["path"], None) if prev is None else old.update({o.target["path"]: prev})
+        if ctx is None:
+            ctx = registry.LowerContext(fid, [x for x in store.bindings.values() if x.feature == fid])
+        if ask := kind.lower(old, new, ctx):
+            asks.append(ask)
+    return reads, asks
+
+
+def _at_realized(text: Text, realized: dict) -> Text:
+    """The field as the last realization read it: characters minted since are
+    not there yet, and a kill since has not happened. By identity — no diff."""
+    t = text.clone()
+    t.segs = [s for s in t.segs if in_frontier(s.op, realized)]
+    for s in t.segs:
+        if s.dead and not in_frontier(s.dead, realized):
+            s.dead = None
+    t.marks = [m for m in t.marks if t.holds(m.start) and t.holds(m.end)]
+    return t
+
+
 def _human_changes(store: Store, fid: str, w: Watermarks) -> list[str]:
     out = []
     for c in ink(store, fid):
-        if c.stage == "sent":
+        if c.stage == "sent" and in_flow(store.blocks[c.bid].kind):
             out.append(f"added: \"{c.text}\"")
     for b in store.feature_body(fid):
+        if not in_flow(b.kind):
+            continue
         for f in text_fields(b.kind):
             for s in b.text(f).segs:
                 if s.dead:

@@ -14,9 +14,10 @@ trunk. What this module does is small:
   log is the truth.
 - ``settle``: after a reflect pass ran under a closed agent epoch and cited a
   hand-off in ``caused_by``, record ``feature.realized`` for each feature
-  whose bindings that pass touched. The daemon emits this, never the agent; the
-  owner may also write it by hand (``codoc done``) for a request whose
-  implementation moved no bound symbol.
+  whose bindings that pass touched, and for each phantom whose code the pass
+  saw go. The daemon emits this, never the agent; the owner may also write it
+  by hand (``codoc done``) for a request whose implementation moved no bound
+  symbol.
 """
 from __future__ import annotations
 
@@ -93,15 +94,36 @@ def write_queue(codoc_dir: str | Path, store: Store, root_dir: str = ".", doc_la
 
 def settle(ws: Workspace, res, *, sha: str = "", files: list[str] | None = None, summary: str = "") -> list[Op]:
     """Record ``feature.realized`` for each feature whose latest hand-off the
-    reflect pass ``res`` cited and whose bindings one of its ops touched."""
+    reflect pass ``res`` cited and whose bindings one of its ops touched — or,
+    for a phantom, whose code the pass saw go."""
     out = []
     for fid, did in res.caused.items():
         w = ws.store.watermarks_by_fid.get(fid)
         if not w or not w.handoffs or w.handoffs[-1] != did:
             continue
-        if not any(o.caused_by == did and o.kind.startswith("bind.") and o.conflict is None for o in res.ops):
+        if not (any(o.caused_by == did and o.kind.startswith("bind.") and o.conflict is None for o in res.ops)
+                or _phantom_done(ws.store, fid, did, res.removed)):
             continue
         out.extend(ws.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": fid},
                                "payload": {"covers": dict(w.handoff), "sha": sha, "files": files or [],
                                            "summary": summary}}], actor="loop", caused_by=did))
     return out
+
+
+def _phantom_done(store: Store, fid: str, did: str, removed: set[tuple[str, str]]) -> bool:
+    """A deleted feature settles on its code going away, never on a binding op:
+    the delete already detached its bindings (spec §3), so no ``bind.*`` op can
+    cite the hand-off and the phantom would queue forever. What it owned is
+    what the delete recorded as detached. A hand-off that did not ask for the
+    code to go has nothing to build, so the pass that ran under the epoch
+    settles it."""
+    b = store.blocks.get(fid)
+    ho = store.by_id.get(did)
+    if b is None or b.live or ho is None:
+        return False
+    if not ho.payload.get("delete_code"):
+        return True
+    owned = {(e["file"], e["symbol"]) for o in store.ops_on([fid])
+             if o.kind == K.BLOCK_DELETE and o.conflict is None
+             for e in o.payload.get("detached", []) if e.get("fid") == fid}
+    return bool(owned) and owned <= removed

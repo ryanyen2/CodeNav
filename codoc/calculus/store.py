@@ -99,6 +99,10 @@ class Store:
         self.structural_head: int = 0
         self.plans_head: int = 0
         self.policy: Policy | None = policy
+        # One slot for the open plans' mark ops, keyed on this store's own
+        # length: a publish renders a thousand fields in the rejected read mode
+        # and each one asks for the same list (``derive.plan_mark_ops``).
+        self.mark_ops_memo: tuple[tuple, list] | None = None
 
     @property
     def pos(self) -> int:
@@ -106,8 +110,16 @@ class Store:
 
     # ── blocks and order ───────────────────────────────────────────────────
     def add_block(self, block: Block) -> None:
+        """Place a new block. A rank another block already holds is not reused:
+        two clones that each appended after the same paragraph compute the same
+        key, and the merge must still give them an order (a rank is derived;
+        the position is the intent)."""
         if block.id in self.blocks:
             raise KeyError(block.id)
+        i = bisect.bisect_left(self.order, (block.rank, ""))
+        if i < len(self.order) and self.order[i][0] == block.rank:
+            lo = self.order[i - 1][0] if i > 0 else ""
+            block.rank = R.between(lo, block.rank)
         self.blocks[block.id] = block
         bisect.insort(self.order, (block.rank, block.id))
         self.rank_head[block.id] = self.pos + 1

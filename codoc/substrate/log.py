@@ -36,6 +36,8 @@ SNAPSHOT_PREFIX = "snapshot-"
 # identity (any process that writes ide.jsonl is the person at the keyboard);
 # the hub writes one file per GitHub login, stamped from its session cookie.
 CLIENT_IDENTITY = {"ide": "human:local", "cli": "human:local", "mcp": "agent:claude-code"}
+OFFSETS_FILE = "offsets.json"      # how far each client's inbox has been drained
+ACK_KEEP = 2000                    # ack lines kept when a session opens
 
 
 def hub_actor(login: str) -> str:
@@ -68,6 +70,7 @@ class SessionFile:
     ops: list[Op]
     problems: list[LogProblem] = field(default_factory=list)
     torn_tail: int | None = None       # byte offset of an unreadable last line; the prefix is kept
+    archived: list[Op] = field(default_factory=list)   # snapshot only: ops to remember, not to apply
 
     @property
     def valid(self) -> bool:
@@ -104,6 +107,7 @@ def read_session(path: str | Path) -> SessionFile:
     expected_seq = 1
     last_at = ""
     torn: int | None = None
+    archived: list[Op] = []
     body = [(n, line) for n, line in enumerate(lines[1:], start=2) if line.strip()]
     for k, (n, line) in enumerate(body):
         try:
@@ -116,6 +120,11 @@ def read_session(path: str | Path) -> SessionFile:
                 # state the daemon was in, so it stays; the caller truncates.
                 torn = len("\n".join(lines[:n - 1]).encode("utf-8")) + (1 if n > 1 else 0)
             break
+        if d.get("archived"):
+            # A snapshot's record of an op it folded: the store remembers it
+            # (a verdict on an open plan needs it) and never applies it again.
+            archived.append(op)
+            continue
         sess, _, seq = op.id.rpartition(":")
         if sess != session or not seq.isdigit() or int(seq) != expected_seq:
             problems.append(LogProblem(str(path), n, f"id {op.id!r} out of sequence (expected {session}:{expected_seq})"))
@@ -128,7 +137,7 @@ def read_session(path: str | Path) -> SessionFile:
         ops.append(op)
     if problems and torn is None:
         ops = []
-    return SessionFile(path, session, header, ops, problems, torn)
+    return SessionFile(path, session, header, ops, problems, torn, archived)
 
 
 def truncate_torn(f: SessionFile) -> bool:
@@ -174,24 +183,34 @@ def replay_order(files: list[SessionFile], exclude: dict | None = None) -> list[
 
 class SessionWriter:
     """Append-only writer for one session log. Opened by the daemon; closed on
-    exit, commit, or HEAD change."""
+    exit, commit, or HEAD change.
+
+    The file appears on the first op, not on open: log files are tracked, and
+    ``codoc rebuild``, ``codoc snapshot`` and ``import-v1`` each open a writing
+    workspace and write nothing. Three such runs used to leave three
+    header-only files for git to carry."""
 
     def __init__(self, codoc_dir: str | Path, session: str, node: str, opened: str) -> None:
         self.dir = log_dir(codoc_dir)
-        self.dir.mkdir(parents=True, exist_ok=True)
         self.path = self.dir / f"{session}.jsonl"
         self.session = session
+        self._header = {"header": 1, "session": session, "opened": opened, "node": node}
         self._fh = None
-        if not self.path.exists():
-            with self.path.open("w", encoding="utf-8") as fh:
-                fh.write(json.dumps({"header": 1, "session": session, "opened": opened, "node": node}) + "\n")
-        self._fh = self.path.open("a", encoding="utf-8")
+
+    def _open(self):
+        if self._fh is None:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            fresh = not self.path.exists()
+            self._fh = self.path.open("a", encoding="utf-8")
+            if fresh:
+                self._fh.write(json.dumps(self._header) + "\n")
+        return self._fh
 
     def append(self, op: Op) -> None:
         """Write one op to the OS; ``sync`` makes a batch durable."""
-        assert self._fh is not None
-        self._fh.write(json.dumps(op.to_json(), ensure_ascii=False) + "\n")
-        self._fh.flush()
+        fh = self._open()
+        fh.write(json.dumps(op.to_json(), ensure_ascii=False) + "\n")
+        fh.flush()
 
     def sync(self) -> None:
         if self._fh is not None:
@@ -252,7 +271,9 @@ def read_inbox(codoc_dir: str | Path, client: str, offset: int = 0) -> list[Inbo
     if not path.exists():
         return []
     with path.open("rb") as fh:
-        fh.seek(offset)
+        # A client only ever appends; a file shorter than the remembered offset
+        # is a new one under the same name, and it is read whole.
+        fh.seek(offset if offset <= path.stat().st_size else 0)
         data = fh.read()
     out: list[InboxLine] = []
     pos = 0
@@ -307,13 +328,56 @@ def clients(codoc_dir: str | Path) -> list[str]:
     return sorted(p.stem for p in d.glob("*.jsonl") if not p.name.endswith(".ack.jsonl"))
 
 
-def ack(codoc_dir: str | Path, client: str, cid: str, op: Op | None = None, *, error: str | None = None) -> None:
+def ack(codoc_dir: str | Path, client: str, cid: str, op: Op | None = None, *, error: str | None = None,
+        status: str | None = None) -> None:
     """Tell the client what became of ``cid``: the op it minted (and its
-    conflict, if any), or the error that kept it from minting one."""
+    conflict, if any), or the error that kept it from minting one. ``status``
+    is for an outcome that is not a refusal — a whole-text write that asked for
+    nothing mints no op and conflicts with nothing."""
     path = inbox_dir(codoc_dir) / f"{client}.ack.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
+    rec = {"cid": cid, "op": op.id if op else "", "conflict": op.conflict if op else error}
+    if status:
+        rec["status"] = status
     with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps({"cid": cid, "op": op.id if op else "", "conflict": op.conflict if op else error}) + "\n")
+        fh.write(json.dumps(rec) + "\n")
+
+
+def read_offsets(codoc_dir: str | Path) -> dict[str, int]:
+    """How far into each client's inbox the last session read. Without it a
+    daemon re-reads every submission ever made and leans on the ack file to
+    recognise them, so neither file may ever be trimmed."""
+    p = inbox_dir(codoc_dir) / OFFSETS_FILE
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {str(k): int(v) for k, v in d.items() if isinstance(v, int)} if isinstance(d, dict) else {}
+
+
+def write_offsets(codoc_dir: str | Path, offsets: dict[str, int]) -> None:
+    d = inbox_dir(codoc_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / (OFFSETS_FILE + ".tmp")
+    tmp.write_text(json.dumps(offsets, sort_keys=True), encoding="utf-8")
+    tmp.replace(d / OFFSETS_FILE)
+
+
+def rotate_acks(codoc_dir: str | Path, keep: int = ACK_KEEP) -> None:
+    """Trim each client's ack file to its newest lines. An ack answers one
+    submission; once the remembered offset is past it nothing can resubmit that
+    cid, and the only cost left is the read at every daemon start. Called at
+    session open, while this process holds the workspace."""
+    d = inbox_dir(codoc_dir)
+    if not d.exists():
+        return
+    for p in d.glob("*.ack.jsonl"):
+        lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
+        if len(lines) <= keep:
+            continue
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text("".join(lines[-keep:]), encoding="utf-8")
+        tmp.replace(p)
 
 
 def acked(codoc_dir: str | Path) -> dict[str, dict[str, str]]:

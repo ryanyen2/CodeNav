@@ -13,7 +13,7 @@ paragraph it changes (spec §4, rule 2).
 from __future__ import annotations
 
 from codoc.calculus.derive import markdown, phase
-from codoc.calculus.doc import PARAGRAPH, parent_of, text_fields
+from codoc.calculus.doc import PARAGRAPH, in_flow, parent_of, text_fields
 from codoc.calculus.ids import is_human
 from codoc.calculus.store import Store
 from codoc.graph.graph import Graph
@@ -46,10 +46,13 @@ def block_written_by(store: Store, bid: str) -> str:
 
 
 def written_by(store: Store, fid: str) -> str:
-    """``human`` when a person last wrote any block of the feature, else the
-    newest machine actor. Feeds the prompt's ``written_by`` and translate's
-    plan-or-trunk choice; the amend gate itself is per block."""
-    authors = [block_written_by(store, b.id) for b in store.feature_body(fid)]
+    """``human`` when a person last wrote any block of the feature's prose,
+    else the newest machine actor. Feeds the prompt's ``written_by`` and
+    translate's plan-or-trunk choice; the amend gate itself is per block. A
+    block out of the reading flow (a margin comment) is a request about the
+    prose, not the prose: a person's note on a loop-written feature does not
+    make the feature theirs."""
+    authors = [block_written_by(store, b.id) for b in store.feature_body(fid) if in_flow(b.kind)]
     if "human" in authors:
         return "human"
     return next((a for a in reversed(authors) if a), "")

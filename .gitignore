@@ -43,7 +43,7 @@ uv.lock
 
 .hypothesis/
 
-node_modules/
+node_modules
 dist/
 
 # Bundled Python wheel — a build artifact produced by scripts/bundle-wheel.mjs

@@ -129,7 +129,8 @@ def translate_tree(ws: Workspace, codoc_dir: str | Path, *, language: DocLanguag
                 res.calls += 1
             except Exception as exc:  # noqa: BLE001 — one bad batch must not sink the run
                 for fid in batch:
-                    res.skipped.append(Skipped(fid, payload[0]["title"], f"batch failed: {exc}"))
+                    res.skipped.append(Skipped(fid, next(p["title"] for p in payload if p["id"] == fid),
+                                               f"batch failed: {exc}"))
                 got = {}
             for fid in batch:
                 t_old = next(p["title"] for p in payload if p["id"] == fid)
@@ -145,28 +146,33 @@ def translate_tree(ws: Workspace, codoc_dir: str | Path, *, language: DocLanguag
                 if dry_run:
                     res.translated += 1
                     continue
-                human = written_by(ws.store, fid) == "human"
-                plan = ws.open_plan(actor=actor, kind="edit", target=fid, note=f"translation to {lang.name}") if human else None
                 new_paras = [p.strip() for p in new_desc.split("\n\n") if p.strip()]
                 old_paras = paras_by_fid[fid]
                 if len(new_paras) != len(old_paras):
                     res.skipped.append(Skipped(fid, t_old, "paragraph count changed"))
                     continue
-                r, _ = ws.ingest(fid, "text", base_text=ws.store.blocks[fid].text().live_text(), new_md=new_title,
-                                 actor=actor, plan=plan, batch=plan)
-                if r.refused:
-                    res.skipped.append(Skipped(fid, t_old, r.refused))
-                    continue
-                for (bid, _old), new_md in zip(old_paras, new_paras):
-                    r, _ = ws.ingest(bid, "text", base_text=ws.store.blocks[bid].text().live_text(), new_md=new_md,
-                                     actor=actor, plan=plan, batch=plan)
+                # Every refusal is known before the plan exists. A plan opened
+                # and then abandoned is a verdict the editor offers on nothing,
+                # and a translator has no authority to withdraw one.
+                human = written_by(ws.store, fid) == "human"
+                base = dict(ws.store.frontier)
+                computed, refused = [], None
+                for bid, new_md in [(fid, new_title)] + [(b, md) for (b, _o), md in zip(old_paras, new_paras)]:
+                    r = ws.plan_ingest(bid, "text", base_text=ws.store.blocks[bid].text().live_text(),
+                                       new_md=new_md, actor=actor, trunk=not human)
                     if r.refused:
-                        res.skipped.append(Skipped(fid, t_old, f"{bid}: {r.refused}"))
+                        refused = r.refused if bid == fid else f"{bid}: {r.refused}"
                         break
-                else:
-                    res.translated += 1
-                    if plan:
-                        res.planned += 1
+                    computed.append(r)
+                if refused:
+                    res.skipped.append(Skipped(fid, t_old, refused))
+                    continue
+                plan = ws.open_plan(actor=actor, kind="edit", target=fid, note=f"translation to {lang.name}") if human else None
+                for r in computed:
+                    ws.commit_ingest(r, actor=actor, plan=plan, batch=plan, base=base)
+                res.translated += 1
+                if plan:
+                    res.planned += 1
             remaining = [f for f in remaining if f not in batch]
             progress(True)
             say(f"  · translated {res.translated}/{len(pending)}")

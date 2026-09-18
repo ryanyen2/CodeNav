@@ -6,6 +6,13 @@ reconstruction is exact — a fuzz checks it against a prefix replay — and the
 editor's scrubber never pushes old prose through the recorder. Each entry
 carries the op's recorded inverse, which is what undo submits.
 
+Characters are found **by identity, in the clones**, never by the block an op
+named: a split or a merge since then moved them, and the walk has already put
+them back where they were. Today's store answers only when no clone holds
+them. That is also what makes the un-apply unconditional: by the time an op is
+reversed, every later effect on its characters is already gone, so whatever
+state they are in is the one this op left.
+
 A block born inside the window is absent from ``before`` and named in ``born``,
 so a reader never shows it before it existed. ``ranks`` orders every block the
 window names, live or not, so the scrubber can render a page that held a
@@ -17,13 +24,13 @@ from __future__ import annotations
 
 from codoc.calculus import ops as K
 from codoc.calculus.doc import text_fields
-from codoc.calculus.ids import ref_from_json
+from codoc.calculus.ids import END, ref_from_json
 from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
-from codoc.calculus.text import END, START, Mark, Text
+from codoc.calculus.text import START, Mark, Segment, Text
 
-TEXT_KINDS = frozenset({K.TEXT_INSERT, K.TEXT_DELETE, K.TEXT_RESTORE, K.TEXT_MARK})
 VERDICTS = frozenset({K.PLAN_ACCEPT, K.PLAN_REJECT, K.PLAN_REOPEN})
+WHOLE_OP = -1          # a character range standing for "everything this op minted"
 
 
 def history_window(store: Store, limit: int = 200) -> dict:
@@ -39,15 +46,113 @@ def history_window(store: Store, limit: int = 200) -> dict:
             clones[key] = b.content[path].clone()
         return clones[key]
 
+    def holders(path: str, chars: list[Segment], default: str | None = None) -> list[tuple[str, str]]:
+        """Every field holding any of these characters as the walk has them
+        now: the clones first, today's store when none of them does, and the
+        block the op named when the store has lost them too."""
+        hit = [k for k, t in clones.items() if k[1] == path and _holds_any(t, chars)]
+        if not hit:
+            for op, _, _ in chars:
+                for b, p in store.holders(op):
+                    if p == path and (b.id, p) not in hit:
+                        hit.append((b.id, p))
+        if not hit and default and default in store.blocks:
+            hit.append((default, path))
+        return hit
+
+    def touched(o: Op) -> list[tuple[str, str]]:
+        p, t = o.payload, o.target
+        path = p.get("path") or t.get("path", "text")
+        bid = p.get("bid") or t.get("bid")
+        if o.kind in (K.TEXT_DELETE, K.TEXT_RESTORE) and p.get("segments"):
+            return holders(path, _segs(p["segments"]), bid)
+        if o.kind == K.TEXT_INSERT:
+            return holders(path, [(o.id, 0, WHOLE_OP)], bid)
+        if o.kind == K.TEXT_MARK:
+            return holders(path, [_one(m["start"]) for m in p.get("added", []) + p.get("removed", [])], bid)
+        if o.kind in (K.TEXT_DELETE, K.TEXT_RESTORE):
+            return [(bid, path)] if bid in store.blocks else []
+        if o.kind == K.BLOCK_SPLIT:
+            return [(bid or t["bid"], path), (p["new"], path)]
+        if o.kind == K.BLOCK_MERGE:
+            return [(t["into"], path), (t["bid"], path)]
+        if o.kind == K.BLOCK_ADD:
+            return [(t["bid"], f) for f in text_fields(p.get("kind", ""))]
+        if o.kind in (K.BLOCK_DELETE, K.BLOCK_RESTORE):
+            key = "killed" if o.kind == K.BLOCK_DELETE else "revived"
+            return [(i, "text") for i in p.get(key, []) if i in store.blocks]
+        if o.kind in VERDICTS:
+            out: list[tuple[str, str]] = []
+            for e in _verdict_entries(p):
+                for h in holders(e.get("path", "text"), _segs(e["segments"]), e.get("bid")):
+                    if h not in out:
+                        out.append(h)
+            return out
+        return []
+
+    def unapply(o: Op) -> None:
+        """Reverse one op on the clones. Anything not listed leaves text alone."""
+        p, t = o.payload, o.target
+        path = p.get("path") or t.get("path", "text")
+        if o.kind in (K.TEXT_DELETE, K.TEXT_RESTORE) and p.get("segments"):
+            segs = _segs(p["segments"])
+            for text in _each(clone, touched(o)):
+                text.revive(segs) if o.kind == K.TEXT_DELETE else text.kill(segs, by="view")
+        elif o.kind == K.TEXT_INSERT:
+            for text in _each(clone, touched(o)):
+                text.kill_op(o.id, by="view")
+        elif o.kind == K.TEXT_MARK:
+            for mj in p.get("added", []):
+                mk = Mark.from_json(mj)
+                for text in _each(clone, holders(path, [_one(mj["start"])], p.get("bid") or t.get("bid"))):
+                    if mk in text.marks:
+                        text.marks.remove(mk)
+            for mj in p.get("removed", []):
+                mk = Mark.from_json(mj)
+                for text in _each(clone, holders(path, [_one(mj["start"])], p.get("bid") or t.get("bid"))):
+                    if mk not in text.marks and text.holds(mk.start) and text.holds(mk.end):
+                        text.marks.append(mk)
+        elif o.kind == K.BLOCK_SPLIT:
+            head, tail = clone(p.get("bid") or t["bid"], path), clone(p["new"], path)
+            if head is None or tail is None:
+                return
+            # The half that kept the text is `head` unless the new block came first.
+            first, second = (tail, head) if p.get("new_first") else (head, tail)
+            first.merge(second)
+            if p.get("new_first"):
+                head.segs, head.marks, tail.segs, tail.marks = tail.segs, tail.marks, [], []
+        elif o.kind == K.BLOCK_MERGE:
+            into, dead = clone(t["into"], path), clone(t["bid"], path)
+            if into is None or dead is None:
+                return
+            at = ref_from_json(p["at"]) if "at" in p else END
+            if p.get("order") == "before":
+                # The dying block's words were put in front: they are the head.
+                tail = into.split(at if at != END else START)
+                dead.segs, dead.marks, into.segs, into.marks = into.segs, into.marks, tail.segs, tail.marks
+            else:
+                tail = into.split(START if at == END else at)
+                dead.segs, dead.marks = tail.segs, tail.marks
+        elif o.kind in VERDICTS:
+            # An accept tombstones the words it struck and the ops it did not take;
+            # a reject tombstones the whole proposal; a reopen brings them back.
+            revive = o.kind != K.PLAN_REOPEN
+            for e in _verdict_entries(p):
+                segs = _segs(e["segments"])
+                for text in _each(clone, holders(e.get("path", "text"), segs, e.get("bid"))):
+                    text.revive(segs) if revive else text.kill(segs, by="view")
+
     entries: list[dict] = []
     born: set[str] = set()
     for o in reversed(ops):
-        touched = _touched(store, o)
-        after = {bid: t.live_text() for bid, path in touched if (t := clone(bid, path)) is not None and path == "text"}
+        # A block born after this op did not exist then, and `born` holds
+        # exactly those, since we are walking newest first.
+        after = {bid: t.live_text() for bid, path in touched(o)
+                 if bid not in born and path == "text" and (t := clone(bid, path)) is not None}
         entries.append({"pos": store.position[o.id], "id": o.id, "at": o.at, "actor": o.actor, "kind": o.kind,
                         "batch": o.batch, "batch_first": store.batch_first.get(o.batch, store.position[o.id]),
                         "plan": o.plan, "caused_by": o.caused_by, "blocks": after, "inverse": list(o.inverse)})
-        _unapply(o, clone)
+        unapply(o)
         if o.kind == K.BLOCK_ADD:
             born.add(o.target["bid"])
         elif o.kind == K.BLOCK_SPLIT and not o.payload.get("new_takes"):
@@ -59,83 +164,28 @@ def history_window(store: Store, limit: int = 200) -> dict:
             "born": sorted(born), "ranks": ranks, "ops": entries}
 
 
-def _touched(store: Store, o: Op) -> list[tuple[str, str]]:
-    p, t = o.payload, o.target
-    if o.kind in TEXT_KINDS:
-        return [(p.get("bid") or t.get("bid"), p.get("path") or t.get("path", "text"))]
-    if o.kind == K.BLOCK_SPLIT:
-        return [(p.get("bid") or t["bid"], p.get("path", "text")), (p["new"], p.get("path", "text"))]
-    if o.kind == K.BLOCK_MERGE:
-        return [(t["into"], p.get("path", "text")), (t["bid"], p.get("path", "text"))]
-    if o.kind == K.BLOCK_ADD:
-        return [(t["bid"], f) for f in text_fields(p.get("kind", ""))]
-    if o.kind in (K.BLOCK_DELETE, K.BLOCK_RESTORE):
-        return [(i, "text") for i in p.get("killed" if o.kind == K.BLOCK_DELETE else "revived", []) if i in store.blocks]
-    if o.kind in VERDICTS:
-        return [(e["bid"], e.get("path", "text")) for e in _verdict_entries(p) if e["bid"] in store.blocks]
-    return []
+def _segs(segments) -> list[Segment]:
+    return [(str(s[0]), int(s[1]), int(s[2])) for s in segments or ()]
+
+
+def _one(ref) -> Segment:
+    """A single character, as a one-long segment."""
+    return (str(ref[0]), int(ref[1]), 1)
+
+
+def _holds_any(t: Text, chars: list[Segment]) -> bool:
+    return any(s.op == op and (ln == WHOLE_OP or (s.k0 < k0 + ln and s.k0 + len(s.chars) > k0))
+               for s in t.segs for op, k0, ln in chars)
+
+
+def _each(clone, keys):
+    for bid, path in keys:
+        text = clone(bid, path)
+        if text is not None:
+            yield text
 
 
 def _verdict_entries(payload: dict) -> list[dict]:
     """The records a verdict (or its inverse) made that moved text: segments it
     tombstoned when it struck or undid, or revived when it reopened."""
     return [e for e in payload.get("killed", []) + payload.get("struck", []) if e.get("segments")]
-
-
-def _unapply(o: Op, clone) -> None:
-    """Reverse one op on the clones. Anything not listed leaves text alone."""
-    p, t = o.payload, o.target
-    if o.kind in TEXT_KINDS:
-        text = clone(p.get("bid") or t.get("bid"), p.get("path") or t.get("path", "text"))
-        if text is None:
-            return
-        if o.kind == K.TEXT_INSERT:
-            text.kill_op(o.id, by="view")
-        elif o.kind == K.TEXT_DELETE:
-            # Whatever killed these characters last is this op, since every
-            # later kill has already been un-applied: revive them unconditionally.
-            text.revive([tuple(s) for s in p.get("segments", [])])
-        elif o.kind == K.TEXT_RESTORE:
-            text.kill([tuple(s) for s in p.get("segments", [])], by="view")
-        elif o.kind == K.TEXT_MARK:
-            for mj in p.get("added", []):
-                mk = Mark.from_json(mj)
-                if mk in text.marks:
-                    text.marks.remove(mk)
-            for mj in p.get("removed", []):
-                mk = Mark.from_json(mj)
-                if text.holds(mk.start) and text.holds(mk.end) and mk not in text.marks:
-                    text.marks.append(mk)
-    elif o.kind == K.BLOCK_SPLIT:
-        path = p.get("path", "text")
-        head, tail = clone(p.get("bid") or t["bid"], path), clone(p["new"], path)
-        if head is None or tail is None:
-            return
-        # The half that kept the text is `head` unless the new block came first.
-        first, second = (tail, head) if p.get("new_first") else (head, tail)
-        first.merge(second)
-        if p.get("new_first"):
-            head.segs, head.marks, tail.segs, tail.marks = tail.segs, tail.marks, [], []
-    elif o.kind in VERDICTS:
-        # An accept tombstones the words it struck and the ops it did not take;
-        # a reject tombstones the whole proposal; a reopen brings them back.
-        revive = o.kind != K.PLAN_REOPEN
-        for e in _verdict_entries(p):
-            text = clone(e["bid"], e.get("path", "text"))
-            if text is None:
-                continue
-            segs = [tuple(s) for s in e["segments"]]
-            text.revive(segs) if revive else text.kill(segs, by="view")
-    elif o.kind == K.BLOCK_MERGE:
-        path = p.get("path", "text")
-        into, dead = clone(t["into"], path), clone(t["bid"], path)
-        if into is None or dead is None:
-            return
-        at = ref_from_json(p["at"]) if "at" in p else END
-        if p.get("order") == "before":
-            # The dying block's words were put in front: they are the head.
-            tail = into.split(at if at != END else START)
-            dead.segs, dead.marks, into.segs, into.marks = into.segs, into.marks, tail.segs, tail.marks
-        else:
-            tail = into.split(START if at == END else at)
-            dead.segs, dead.marks = tail.segs, tail.marks

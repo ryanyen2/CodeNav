@@ -25,7 +25,15 @@ from codoc.substrate.log import Submission
 from codoc.substrate.publish import publish
 from codoc.substrate.workspace import Workspace
 
-CLIENT_IDENTITY = L.CLIENT_IDENTITY
+def _actor(client: str) -> str:
+    """One identity function for both paths. Without it a daemonless
+    ``hub-alice`` wrote as ``human:hub-alice`` while the daemon stamped the same
+    submissions ``human:gh:alice`` — two actors for one contributor, and a
+    roles table that answers for neither."""
+    actor = L.actor_for(client)
+    if actor is None:
+        raise ValueError(f"no identity for client {client!r}")
+    return actor
 
 _OWNED: dict[Path, Workspace] = {}
 
@@ -57,7 +65,7 @@ def write(codoc_dir: str | Path, *, client: str, bodies: list[dict], root_dir: s
     ``{"cid", "op", "conflict"}`` with ``op``/``conflict`` filled when the
     result is known (applied directly, or acked within ``wait_s``)."""
     codoc_dir = Path(codoc_dir)
-    actor = CLIENT_IDENTITY.get(client, f"human:{client}")
+    actor = _actor(client)
     if not daemon_running(codoc_dir):
         ws = _applier(codoc_dir)
         ops = ws.submit(bodies, actor=actor, batch=batch, plan=plan, caused_by=caused_by)
@@ -87,7 +95,8 @@ def wait_for_acks(codoc_dir: Path, client: str, cids: list[str], wait_s: float) 
                         acks[d["cid"]] = d
         if len(acks) < len(cids):
             time.sleep(0.1)
-    return [{"cid": c, "op": acks.get(c, {}).get("op"), "conflict": acks.get(c, {}).get("conflict")} for c in cids]
+    return [{"cid": c, "op": acks.get(c, {}).get("op"), "conflict": acks.get(c, {}).get("conflict"),
+             "status": acks.get(c, {}).get("status")} for c in cids]
 
 
 def read(codoc_dir: str | Path) -> Workspace:
@@ -104,15 +113,17 @@ def ingest(codoc_dir: str | Path, *, client: str, bid: str, path: str, base_text
     boundary diff still has to run in the applier, so the request is submitted
     as an ``ingest`` submission the daemon expands; without one, run it here."""
     codoc_dir = Path(codoc_dir)
-    actor = CLIENT_IDENTITY.get(client, f"human:{client}")
+    actor = _actor(client)
     if not daemon_running(codoc_dir):
         ws = _applier(codoc_dir)
         res, ops = ws.ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, plan=plan, caused_by=caused_by)
         publish(codoc_dir, ws.store, root_dir=root_dir or str(codoc_dir.parent))
-        return {"refused": res.refused, "ops": [o.id for o in ops]}
+        return {"refused": res.refused, "ops": [o.id for o in ops],
+                "status": None if ops or res.refused else "unchanged"}
     release(codoc_dir)
     sub = Submission(cid=f"{client}-{uuid.uuid4().hex[:12]}", kind="ingest", target={"bid": bid, "path": path},
                      payload={"base_text": base_text, "new_md": new_md}, plan=plan, caused_by=caused_by)
     L.submit(codoc_dir, client, [sub])
     ack = wait_for_acks(codoc_dir, client, [sub.cid], 3.0)[0]
-    return {"refused": ack.get("conflict"), "ops": [ack["op"]] if ack.get("op") else []}
+    return {"refused": ack.get("conflict"), "ops": [ack["op"]] if ack.get("op") else [],
+            "status": ack.get("status")}

@@ -17,7 +17,8 @@ from dataclasses import replace
 from codoc.calculus import ops as K
 from codoc.calculus.doc import HEADING, PARAGRAPH, Block, clamp_level, empty_content, is_text_field, text_fields
 from codoc.calculus.ids import END, START, CharRef, OpId, ref_from_json, ref_to_json
-from codoc.calculus.ops import Op, OpBody, body, frontier_union
+from codoc.calculus.ops import Op, OpBody, body, covered, frontier_union
+from codoc.calculus.rank import RankError
 from codoc.calculus.store import Binding, Plan, Store
 from codoc.calculus.text import SUGGEST_DEL, AnchorError, Mark, MarkError, Text, nfc
 
@@ -78,6 +79,8 @@ def apply(store: Store, op: Op) -> Op:
         op.conflict, op.inverse, touched = "mark_partial", [], set()
     except KeyError as e:
         op.conflict, op.inverse, touched = f"missing:{e.args[0] if e.args else ''}", [], set()
+    except RankError:
+        op.conflict, op.inverse, touched = "bad_rank", [], set()
     except (ValueError, TypeError):
         op.conflict, op.inverse, touched = "malformed", [], set()
     store.record(op, touched, structural and op.conflict is None)
@@ -248,6 +251,8 @@ def _h_block_add(store: Store, op: Op, touched: set[str]):
             content[f] = Text.from_json(tj)
     rank = op.payload.get("rank") or store.rank_after(anchor)
     block = Block(bid, kind, rank, level, content)
+    if op.payload.get("dead"):
+        block.dead = op.payload["dead"]      # a snapshot restoring a block with its killer
     store.add_block(block)
     for f in text_fields(kind):
         store.index_text(bid, f, content[f])
@@ -256,6 +261,8 @@ def _h_block_add(store: Store, op: Op, touched: set[str]):
                  "content": {k: v for k, v in content.items() if not isinstance(v, Text)}}
     if op.payload.get("texts"):
         canonical["texts"] = op.payload["texts"]
+    if block.dead:
+        canonical["dead"] = block.dead
     return canonical, [body(K.BLOCK_DELETE, {"bid": bid}, {"ids": [bid]})]
 
 
@@ -556,7 +563,9 @@ def _h_plan_open(store: Store, op: Op, touched: set[str]):
         raise Conflict("duplicate_plan", pid)
     kind = op.payload.get("kind", "edit")
     target = op.payload.get("target")
-    if kind == "delete":
+    if kind == "delete" and not op.payload.get("opened_by"):
+        # A snapshot restoring an accepted delete plan names a heading that is
+        # dead by now; only a fresh proposal has to name a live one.
         if not target:
             raise Conflict("delete_plan_needs_target")
         _live_feature(store, target)
@@ -617,19 +626,18 @@ def _undo_plan_op(store: Store, o: Op, by: OpId, touched: set[str], record: dict
                 record.setdefault("killed", []).append({"bid": block.id, "path": p, "segments": [list(k) for k in got]})
                 touched.add(block.id)
     elif o.kind == K.TEXT_MARK:
-        # Exactly what the toggle recorded: its added marks go, the marks it
-        # displaced, merged or turned off come back.
+        # A mark is undone by its placer, not by its value: the one this op put
+        # there may have grown over text typed at its edge (I2's one growing
+        # kind), and two plans over one span record the same value.
+        for block, p in store.mark_holders(o.id):
+            for m in block.text(p).remove_marks(op=o.id):
+                record.setdefault("marks", []).append({"bid": block.id, "path": p, "mark": m.to_json()})
+                touched.add(block.id)
         hint = (o.payload.get("bid", ""), o.payload.get("path", "text"))
-        for mj in o.payload.get("added", []):
-            mk = Mark.from_json(mj)
-            for block, p in _mark_holder(store, mk, hint):
-                t = block.text(p)
-                if mk in t.marks:
-                    t.marks.remove(mk)
-                    record.setdefault("marks", []).append({"bid": block.id, "path": p, "mark": mj})
-                    touched.add(block.id)
         for mj in o.payload.get("removed", []):
             mk = Mark.from_json(mj)
+            if _rejected_plan_mark(store, mk):
+                continue        # it belonged to a proposal the person has already refused
             for block, p in _mark_holder(store, mk, hint):
                 t = block.text(p)
                 if mk not in t.marks:
@@ -683,16 +691,27 @@ def _undo_plan_op(store: Store, o: Op, by: OpId, touched: set[str], record: dict
             del store.bindings[key]
         touched.add(fid)
     elif o.kind == K.BLOCK_MOVE:
-        pos_of_move = store.position[o.id] + 1
+        # An archived op (position -1) predates every re-rank this store knows,
+        # so "did someone move it since?" cannot be asked of the ranks here.
+        pos = store.position.get(o.id, -1)
+        pos_of_move = pos + 1 if pos >= 0 else None
         for bid, rank, level in o.payload.get("prev", []):
             b = store.blocks.get(bid)
-            if b is None or store.rank_head.get(bid, 0) > pos_of_move:
+            if b is None or (pos_of_move is not None and store.rank_head.get(bid, 0) > pos_of_move):
                 continue
             record.setdefault("moved", []).append([bid, b.rank, b.level])
             store.set_rank(bid, rank)
             if b.kind == HEADING:
                 b.level = clamp_level(level)
             touched.add(bid)
+
+
+def _rejected_plan_mark(store: Store, mk: Mark) -> bool:
+    """Was this mark placed by an op of a plan the person rejected? Putting it
+    back would return a refused proposal to the page."""
+    placer = store.by_id.get(mk.op)
+    plan = store.plans.get(placer.plan) if placer is not None and placer.plan else None
+    return plan is not None and plan.status == "rejected"
 
 
 def _mark_holder(store: Store, mk: Mark, hint: tuple[str, str]) -> list[tuple[Block, str]]:
@@ -718,8 +737,8 @@ def _h_plan_accept(store: Store, op: Op, touched: set[str]):
     accepted = _closure(pops, [str(s) for s in subset]) if subset is not None else [o.id for o in pops]
     acc = set(accepted)
     rejected = [o.id for o in pops if o.id not in acc]
-    if plan.kind == "delete" and plan.target:
-        _live_feature(store, plan.target)
+    if plan.kind == "delete" and plan.target and plan.target not in store.blocks:
+        raise Conflict("no_feature", plan.target)
     # Resolve every mark to strike before mutating anything.
     strike: list[tuple[Block, str, Mark]] = []
     for o in pops:
@@ -740,7 +759,9 @@ def _h_plan_accept(store: Store, op: Op, touched: set[str]):
                                                 "segments": [list(k) for k in got]})
         touched.add(block.id)
     deleted: list[str] = []
-    if plan.kind == "delete" and plan.target:
+    # A feature the person deleted by hand before answering the proposal is
+    # already gone: the verdict agrees with them rather than conflicting.
+    if plan.kind == "delete" and plan.target and store.blocks[plan.target].live:
         for i in store.body_ids(plan.target):
             store.blocks[i].dead = op.id
             deleted.append(i)
@@ -897,6 +918,10 @@ def _h_feature_realized(store: Store, op: Op, touched: set[str]):
     if b is None or b.kind != HEADING:
         raise Conflict("no_feature", fid)
     w = store.watermarks(fid)
+    if covered(w.handoff, w.realized):
+        # Realization settles a request (spec §3). With none there is nothing
+        # to settle, and recording a no-op would report it as done.
+        raise Conflict("nothing_queued", fid)
     covers = dict(op.payload.get("covers") or w.handoff)
     w.realized = frontier_union(w.realized, covers)
     touched.add(fid)

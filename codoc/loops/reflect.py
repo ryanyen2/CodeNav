@@ -62,6 +62,7 @@ class ReflectResult:
     refused: list[tuple[str, str]] = field(default_factory=list)   # (bid or kind, reason)
     impacted: list[str] = field(default_factory=list)
     caused: dict[str, str] = field(default_factory=dict)            # fid -> handoff op cited
+    removed: set[tuple[str, str]] = field(default_factory=set)      # (file, symbol) the code no longer has
     ops: list[Op] = field(default_factory=list)                     # everything this pass wrote
 
     def summary(self) -> str:
@@ -114,6 +115,7 @@ def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: s
     th = cs.types_hashes()
     caused_by = _causes(store) if under_epoch else {}
     res.caused = dict(caused_by)
+    res.removed = {(r.file, r.symbol_path) for r in cs.removed}
     p = _Pass(ws, res, caused_by)
 
     # 1. Deterministic binding maintenance.
@@ -305,7 +307,10 @@ def _emptied(store: Store) -> list[str]:
     for h in store.headings():
         if h.id in bound or h.id in proposed:
             continue
-        if any(o.kind == K.BIND_DETACH and o.target.get("fid") == h.id and not o.conflict
+        # "Once had code" is any attach it ever held, not a detach: a feature
+        # whose only symbol was re-attached elsewhere (I8 displacement) has no
+        # detach of its own and is just as empty.
+        if any(o.kind == K.BIND_ATTACH and o.target.get("fid") == h.id and not o.conflict
                for o in store.ops_on([h.id])):
             out.append(h.id)
     return out

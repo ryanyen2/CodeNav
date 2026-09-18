@@ -95,7 +95,9 @@ class Workspace:
         self.store = Store(policy=self.roles.policy)
         self.problems: list[L.LogProblem] = []
         self.torn: list[L.SessionFile] = []
-        self._inbox_offsets: dict[str, int] = {}
+        self._inbox_offsets: dict[str, int] = L.read_offsets(self.codoc_dir)
+        if not readonly:
+            L.rotate_acks(self.codoc_dir)
         self._acked: dict[str, dict[str, str]] = L.acked(self.codoc_dir)   # client → cid → op id
         self._sent_text: dict[str, str] = {}      # cid → the insert's text as the client counted it
         self.rebuild()
@@ -128,6 +130,13 @@ class Workspace:
             self.problems.extend(snap.problems)
             if snap.valid:
                 exclude = snap.header.get("frontier") or {}
+                for op in snap.archived:
+                    # Folded ops a still-open plan's verdict will need. They are
+                    # remembered, never applied: their effect is in the text the
+                    # snapshot restores. Position -1 marks them as older than
+                    # anything in this store.
+                    self.store.by_id[op.id] = op
+                    self.store.position[op.id] = -1
                 for op in snap.ops:
                     self._replay_one(op)
         for op in L.replay_order(files, exclude):
@@ -267,6 +276,7 @@ class Workspace:
                         L.ack(self.codoc_dir, client, s.cid, error=f"refused: {e!r}")
                         acked[s.cid] = ""
                 self._inbox_offsets[client] = line.end
+        L.write_offsets(self.codoc_dir, self._inbox_offsets)
         self._sync()
         return out
 
@@ -277,7 +287,8 @@ class Workspace:
             res, ops = self.ingest(s.target["bid"], s.target.get("path", "text"), base_text=s.payload["base_text"],
                                    new_md=s.payload["new_md"], actor=actor, plan=s.plan, caused_by=s.caused_by,
                                    batch=s.batch or None)
-            L.ack(self.codoc_dir, client, s.cid, ops[0] if ops else None, error=res.refused or (None if ops else "unchanged"))
+            L.ack(self.codoc_dir, client, s.cid, ops[0] if ops else None, error=res.refused,
+                  status=None if ops or res.refused else "unchanged")
             acked[s.cid] = ops[0].id if ops else ""
             return ops
         payload = _resolve_provisional(s.payload, acked, self._sent_text)
