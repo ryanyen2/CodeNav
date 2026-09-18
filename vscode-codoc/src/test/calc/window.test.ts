@@ -42,3 +42,20 @@ describe('text at a position', () => {
         expect(wordDiff('a b c', 'a x c')).toEqual([['eq', 'a '], ['del', 'b'], ['ins', 'x'], ['eq', ' c']]);
     });
 });
+
+describe('proposed mark toggles', () => {
+    it('are painted as dashed plan marks, not as the mark itself', async () => {
+        const { markPaints } = await import('../../calc/claims');
+        const claims = [
+            { bid: 'p', path: 'text', start: 8, end: 12, channel: 'plan', stage: 'unmarked', actor: 'loop', text: 'bold:once' },
+            { bid: 'p', path: 'text', start: 0, end: 7, channel: 'plan', stage: 'marked', actor: 'agent:x', text: 'bold:Retries' },
+            { bid: 'p', path: 'text', start: 0, end: 3, channel: 'plan', stage: 'open', actor: 'loop', text: 'new' },
+            { bid: 'p', path: 'text', start: 0, end: 3, channel: 'code', stage: 'added', actor: 'loop', text: 'x' },
+        ];
+        expect(markPaints(claims as never).map(p => [p.cls, p.start, p.end, p.text, p.title])).toEqual([
+            ['plan-unmark', 8, 12, 'once', 'loop proposes unmarking this as bold'],
+            ['plan-mark', 0, 7, 'Retries', 'agent:x proposes marking this as bold'],
+        ]);
+        expect(markPaints(undefined)).toEqual([]);
+    });
+});

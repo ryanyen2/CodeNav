@@ -153,7 +153,7 @@ data plus the shadow; nothing is stored in the doc.
 |---|---|
 | ink (blue, pulsing unsent / steady sent) | runs with a human actor whose op is outside the realized frontier; unacked local ops are unsent by definition |
 | ground (green added, red removed) | loop runs since the viewer's cursor; removed text drawn as a widget at the tombstone's live offset (`claims` in the projection) |
-| opacity (gray) | `plan` marks; `suggest_del` marks as strike |
+| opacity (gray) | `plan` marks; `suggest_del` marks as strike; a plan's proposed mark toggles as a dashed gray underline (the prose itself shows what it says today, the rejected read mode) |
 | margin marker, tree rows, rail | `phases[fid]` |
 | comment cards | comment blocks whose anchor mark resolves |
 | History stance | `attribution` runs per block (`authorPaints`); the scrubber renders `history.json`'s snapshots read-only, marking that moment's change with a word diff (`editor/timeline.ts`) |

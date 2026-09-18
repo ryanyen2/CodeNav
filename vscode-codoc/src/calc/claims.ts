@@ -10,8 +10,8 @@
  */
 import type { Claim, Phase, ProjectedBlock, Projection, Run, TextField } from './projection';
 
-export type Ink = 'ink-unsent' | 'ink-sent' | 'plan-open' | 'plan-accepted' | 'plan-cut' | 'code-added' | 'code-removed'
-    | 'author-human' | 'author-loop' | 'author-agent' | 'author-other';
+export type Ink = 'ink-unsent' | 'ink-sent' | 'plan-open' | 'plan-accepted' | 'plan-cut' | 'plan-mark' | 'plan-unmark'
+    | 'code-added' | 'code-removed' | 'author-human' | 'author-loop' | 'author-agent' | 'author-other';
 
 export interface Paint {
     bid: string;
@@ -64,6 +64,22 @@ export function planPaints(b: ProjectedBlock, f: TextField, plans: Projection['p
     return out;
 }
 
+/** A plan's proposed mark changes on words that are already there: the
+ *  document shows what it says today (the rejected read mode), and these say
+ *  what the verdict would do to it. */
+export function markPaints(claims: Claim[] | undefined): Paint[] {
+    if (!claims) return [];
+    return claims.filter(c => c.channel === 'plan' && (c.stage === 'marked' || c.stage === 'unmarked')).map(c => {
+        const [kind, ...rest] = c.text.split(':');
+        return {
+            bid: c.bid, start: c.start, end: c.end,
+            cls: (c.stage === 'marked' ? 'plan-mark' : 'plan-unmark') as Ink,
+            title: `${c.actor} proposes ${c.stage === 'marked' ? 'marking' : 'unmarking'} this as ${kind}`,
+            text: rest.join(':'),
+        };
+    });
+}
+
 /** What the code loop added (green) or removed (red) since the viewer's cursor. */
 export function groundPaints(claims: Claim[] | undefined): Paint[] {
     if (!claims) return [];
@@ -84,9 +100,9 @@ export function paintsFor(b: ProjectedBlock, proj: Projection, fid: string | nul
     if (!f || !('runs' in f)) return [];
     const ink = inkPaints(b, f, watermarks.realized, watermarks.handoff, unacked);
     const plan = planPaints(b, f, proj.plans);
-    const ground = groundPaints(fid ? proj.claims[fid]?.filter(c => c.bid === b.id) : undefined)
-        .filter(g => !ink.some(i => i.start < g.end && g.start < i.end));
-    return [...(history ? authorPaints(b, f) : []), ...ground, ...plan, ...ink];
+    const mine = fid ? proj.claims[fid]?.filter(c => c.bid === b.id) : undefined;
+    const ground = groundPaints(mine).filter(g => !ink.some(i => i.start < g.end && g.start < i.end));
+    return [...(history ? authorPaints(b, f) : []), ...ground, ...plan, ...markPaints(mine), ...ink];
 }
 
 /** The margin marker and row glyph for a feature's phase: one palette. */
