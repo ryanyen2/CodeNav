@@ -15,16 +15,19 @@ instruction. This module is the pure, fully-tested policy:
     from the token that opens the PR, and Write is confined to files the
     directive already names, so an unconfined Read is an exfiltration path with
     a publisher attached.
-  • ``is_secret_path`` — a Read target inside the worktree that still looks like
-    a secret (.env, *.key, a token cache) is refused, so the repo's own secrets
-    can't be exfiltrated into a PR either.
-  • ``can_use_tool`` — the predicate the SDK PreToolUse/canUseTool hook calls;
-    ``out_of_scope_changes`` is the post-run gate that fails PR creation when the
-    agent wrote outside scope.
+  • ``is_secret_path`` — a Read, Grep or Glob target inside the worktree that
+    still looks like a secret (.env, *.key, a token cache) is refused, so the
+    repo's own secrets can't be exfiltrated into a PR either. A Grep or Glob
+    that names no path searches the worktree, which is the repository the agent
+    is here to change.
+  • ``can_use_tool`` — the decision itself; ``out_of_scope_changes`` is the
+    post-run gate that fails PR creation when the agent wrote outside scope.
 
-The live wiring (passing the predicate + ``ALLOWED_TOOLS`` + a server-owned
-settings allowlist to the Claude Agent SDK) lives in the realize flow (U7); this
-is the policy it enforces.
+This is the policy. The live wiring installs it as the SDK's **PreToolUse
+hook** (``realize_agent._run_sandboxed_sdk``), not as ``can_use_tool``: an
+``allowed_tools`` entry naming a whole tool auto-approves it before the
+permission callback runs, so listing the tools this module guards is what would
+stop it from ever being asked about them.
 """
 from __future__ import annotations
 

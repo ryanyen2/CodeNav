@@ -13,6 +13,7 @@
 import { Fragment, Slice, type Node as PMNode } from '@tiptap/pm/model';
 import { AllSelection, TextSelection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
+import * as fs from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 
 
@@ -60,13 +61,20 @@ const proj = (blocks: ProjectedBlock[], extra: Partial<Projection> = {}): Projec
 
 interface Mounted { handle: EditorHandle; view: EditorView; shadows: Map<string, Shadow>; submitted: Submission[]; conflicts: string[]; proj: Projection }
 
-function mount(blocks: ProjectedBlock[], extra: Partial<Projection> = {}): Mounted {
+const mount = (blocks: ProjectedBlock[], extra: Partial<Projection> = {}) => mountProj(proj(blocks, extra));
+
+/** A deterministic pseudo-random source, so a failing seed is reproducible. */
+function rng(seed: number): () => number {
+    let x = seed * 1103515245 + 12345;
+    return () => { x = (x * 1103515245 + 12345) & 0x7fffffff; return x / 0x7fffffff; };
+}
+
+function mountProj(p: Projection): Mounted {
     captured = null;
     const container = document.createElement('div');
     document.body.append(container);
     const submitted: Submission[] = [];
     const conflicts: string[] = [];
-    const p = proj(blocks, extra);
     const handle = mountEditor(container, p, { submit: s => submitted.push(...s), onConflict: (_b, c) => conflicts.push(c) });
     if (!captured) throw new Error('docFrom mock did not capture the shadows');
     return { handle, view: handle.view, shadows: captured, submitted, conflicts, proj: p };
@@ -467,5 +475,56 @@ describe('H. review-12 fixes', () => {
     });
 });
 
-
+// ── R. round trip: the real editor's ops → replayed by the real applier ─────
+// Driven by `tests/loops/test_roundtrip.py`, which writes the base projection,
+// sets CODOC_ROUNDTRIP and replays what this writes through the daemon. It is
+// the one check that says the page and the store agree about the same edits;
+// on its own, vitest skips it.
+describe.runIf(process.env.CODOC_ROUNDTRIP)('R. the round trip', () => {
+    const dir = process.env.CODOC_ROUNDTRIP ?? '';
+    const SEEDS = 24, STEPS = 14;
+    it(`R1: ${SEEDS} seeds × ${STEPS} gestures through the real view keep every shadow honest, and their ops are written out for the applier`, () => {
+        const p0 = JSON.parse(fs.readFileSync(`${dir}/projection.json`, 'utf8')) as Projection;
+        const failures: string[] = [];
+        for (let seed = 1; seed <= SEEDS; seed++) {
+            const r = rng(seed);
+            const m = mountProj(JSON.parse(JSON.stringify(p0)));
+            const log: string[] = [];
+            let ok = true;
+            for (let step = 0; step < STEPS && ok; step++) {
+                const doc = m.view.state.doc;
+                const blocks: Array<{ bid: string; kind: string; start: number; len: number; index: number }> = [];
+                doc.forEach((n, pos, i) => blocks.push({ bid: n.attrs.bid, kind: n.type.name, start: pos + 1, len: n.content.size, index: i }));
+                const a = blocks[Math.floor(r() * blocks.length)], b = blocks[Math.floor(r() * blocks.length)];
+                const pa = a.start + Math.floor(r() * (a.len + 1)), pb = b.start + Math.floor(r() * (b.len + 1));
+                const from = Math.min(pa, pb), to = Math.max(pa, pb);
+                const heads = blocks.filter(x => x.kind === 'heading');
+                const g = Math.floor(r() * 11);
+                let name = '';
+                try {
+                    if (g === 0) { select(m.view, from); typeText(m.view, `x${step}`); name = `type@${from}`; }
+                    else if (g === 1) { select(m.view, from, to); typeText(m.view, 'y'); name = `type over ${from}-${to}`; }
+                    else if (g === 2) { select(m.view, from, to); key(m.view, 'Backspace', 8); name = `bs ${from}-${to}`; }
+                    else if (g === 3) { select(m.view, from, to); key(m.view, 'Delete', 46); name = `del ${from}-${to}`; }
+                    else if (g === 4) { select(m.view, r() < 0.5 ? from : to, to); key(m.view, 'Enter', 13); name = `enter ${from}-${to}`; }
+                    else if (g === 5) { select(m.view, from, r() < 0.5 ? from : to); paste(m, [`P${step}`, `Q${step}`]); name = `paste ${from}-${to}`; }
+                    else if (g === 6 && heads.length > 1) { const h = heads[Math.floor(r() * heads.length)]; m.handle.deleteFeature(h.bid); name = `deleteFeature ${h.bid}`; }
+                    else if (g === 7 && heads.length > 1) { const h = heads[Math.floor(r() * heads.length)]; const after = r() < 0.3 ? 'START' : blocks[Math.floor(r() * blocks.length)].bid; m.handle.moveBlock(h.bid, after as 'START'); name = `move ${h.bid} after ${after}`; }
+                    else if (g === 8 && heads.length) { const h = heads[Math.floor(r() * heads.length)]; select(m.view, h.start); key(m.view, 'Tab', 9, { shiftKey: r() < 0.5 }); name = `relevel ${h.bid}`; }
+                    else if (g === 9) { const paras = blocks.filter(x => x.kind === 'paragraph'); if (!paras.length) continue; const pp = paras[Math.floor(r() * paras.length)]; select(m.view, pp.start); typeText(m.view, '##'); const at = posIn(m.view, pp.bid, 2); m.view.someProp('handleTextInput', f => f(m.view, at, at, ' ', () => m.view.state.tr)); name = `## ${pp.bid}`; }
+                    else { select(m.view, from); paste(m, [`S${step}`]); name = `paste1@${from}`; }
+                } catch (e) { name += ` THREW ${(e as Error).message}`; ok = false; }
+                m.handle.flush();
+                log.push(name);
+                const faults = shadowFaults(m);
+                if (faults.length) { failures.push(`seed ${seed} step ${step}: ${log.join(' → ')}\n    ${faults.join('\n    ')}`); ok = false; }
+                if (m.conflicts.length) { m.conflicts.length = 0; }
+            }
+            const expect_: Array<[string, string, number, string]> = [];
+            m.view.state.doc.forEach(n => expect_.push([n.attrs.bid, n.type.name, n.type.name === 'heading' ? n.attrs.level : 0, n.textBetween(0, n.content.size, '\n')]));
+            fs.writeFileSync(`${dir}/seed${String(seed).padStart(2, '0')}.json`, JSON.stringify({ seed, log, subs: m.submitted, expect: expect_ }));
+        }
+        expect(failures).toEqual([]);
+    });
+});
 

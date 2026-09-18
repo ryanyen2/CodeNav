@@ -5,7 +5,8 @@
 wiring that binds BOTH onto a Claude-Agent-SDK run so a remote-authored directive can
 only touch what it is allowed to:
 
-  • tool use goes through ``realize_tool_policy`` — ``sandbox.can_use_tool`` for
+  • tool use goes through ``realize_tool_policy``, installed as the SDK's
+    PreToolUse hook — ``sandbox.can_use_tool`` for
     everything, plus a WebFetch branch that defers to ``consult_url_allowed`` (default
     allowlist EMPTY → every WebFetch denied) so a Consult link cannot reach the LAN or a
     cloud metadata endpoint;

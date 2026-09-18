@@ -81,18 +81,34 @@ function titleOf(proj: Projection, fid: string): string {
     return f?.text?.trim() || 'Untitled';
 }
 
+/** Each row's rendered state, so a projection that changed one feature does not
+ *  rebuild a thousand rows while the person is typing (every settle publishes
+ *  one). */
+const rows = new Map<string, { key: string; row: HTMLElement }>();
+
 function renderTree(proj: Projection): void {
-    tree.replaceChildren();
     const heads = proj.blocks.filter(b => b.kind === 'heading');
+    const want = new Set(heads.map(h => h.id));
+    for (const [fid, r] of rows) if (!want.has(fid)) { r.row.remove(); rows.delete(fid); }
+    let at: Element | null = tree.firstElementChild;
     for (const h of heads) {
         const phase: Phase = proj.phases[h.id] ?? 'synced';
-        const row = el('div', `codoc-row codoc-l${h.level} codoc-ch-${PHASE_CHANNEL[phase]}${selected === h.id ? ' is-selected' : ''}`);
-        row.dataset.fid = h.id;
-        const dot = el('span', `codoc-dot codoc-dot-${phase}`);
-        dot.title = PHASE_LABEL[phase];
-        row.append(dot, el('span', 'codoc-row-title', titleOf(proj, h.id)));
-        row.addEventListener('click', () => reveal(h.id));
-        tree.append(row);
+        const title = titleOf(proj, h.id);
+        const key = `${h.level}|${phase}|${title}|${selected === h.id}`;
+        let hit = rows.get(h.id);
+        if (!hit || hit.key !== key) {
+            const row = el('div', `codoc-row codoc-l${h.level} codoc-ch-${PHASE_CHANNEL[phase]}${selected === h.id ? ' is-selected' : ''}`);
+            row.dataset.fid = h.id;
+            const dot = el('span', `codoc-dot codoc-dot-${phase}`);
+            dot.title = PHASE_LABEL[phase];
+            row.append(dot, el('span', 'codoc-row-title', title));
+            row.addEventListener('click', () => reveal(h.id));
+            hit?.row.remove();
+            hit = { key, row };
+            rows.set(h.id, hit);
+        }
+        if (hit.row !== at) tree.insertBefore(hit.row, at);
+        else at = at.nextElementSibling;
     }
 }
 

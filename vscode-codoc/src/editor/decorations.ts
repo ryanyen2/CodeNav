@@ -33,10 +33,21 @@ export function unitOffset(block: PMNode, scalar: number): number {
 }
 
 export function buildDecorations(doc: PMNode, paints: Map<string, Paint[]>, phases: Record<string, Phase>,
-                                 realizing: ReadonlySet<string>): DecorationSet {
+                                 realizing: ReadonlySet<string>, only?: ReadonlySet<string>): DecorationSet {
+    return DecorationSet.create(doc, decorationsFor(doc, paints, phases, realizing, only));
+}
+
+
+/** The decorations for ``only`` blocks, or for every block. Separate from the
+ *  set so a redraw can replace one block's decorations in the set it already
+ *  has: building three thousand of them on every keystroke, ack and adopt was
+ *  most of what typing in a large tree cost. */
+export function decorationsFor(doc: PMNode, paints: Map<string, Paint[]>, phases: Record<string, Phase>,
+                               realizing: ReadonlySet<string>, only?: ReadonlySet<string>): Decoration[] {
     const decos: Decoration[] = [];
     doc.forEach((block, pos) => {
         const bid = block.attrs.bid as string | null;
+        if (only && (!bid || !only.has(bid))) return;
         if (!bid) return;
         if (block.type.name === 'heading') {
             const phase: Phase = realizing.has(bid) ? 'realizing' : (phases[bid] ?? 'synced');
@@ -69,5 +80,15 @@ export function buildDecorations(doc: PMNode, paints: Map<string, Paint[]>, phas
             }
         }
     });
-    return DecorationSet.create(doc, decos);
+    return decos;
+}
+
+
+/** Where each of ``bids`` sits in the document, as a `[from, to)` range. */
+export function blockRanges(doc: PMNode, bids: ReadonlySet<string>): Array<{ from: number; to: number }> {
+    const out: Array<{ from: number; to: number }> = [];
+    doc.forEach((block, pos) => {
+        if (bids.has(block.attrs.bid as string)) out.push({ from: pos, to: pos + block.nodeSize });
+    });
+    return out;
 }

@@ -146,3 +146,42 @@ def test_the_worker_comes_back_to_an_unanswered_request_before_the_tree_moves(tm
     time.sleep(0.2)
     w.stop()
     assert len(passes) == 3, f"{len(passes)} pass(es): the retry stopped early or never stopped"
+
+
+def test_the_live_sdk_run_gates_every_tool_through_a_hook(monkeypatch):
+    """The predicate is only a boundary if the SDK asks it. An `allowed_tools`
+    entry naming a whole tool auto-approves that tool BEFORE `can_use_tool`
+    runs — the SDK warns about exactly this — so the five tools the sandbox
+    guards were the five it was never consulted about. A PreToolUse hook runs
+    whatever the allow rules say."""
+    from codoc.serve import realize_agent as R
+    captured = {}
+
+    def fake_query(*, prompt, options):
+        captured["options"] = options
+
+        async def none():
+            return
+            yield
+        return none()
+
+    import claude_agent_sdk
+    monkeypatch.setattr(claude_agent_sdk, "query", fake_query)
+    assert R._run_sandboxed_sdk(prompt="do it", worktree_path="/tmp/wt",
+                                policy=lambda *_a: (False, "no")) is True
+    opts = captured["options"]
+    assert getattr(opts, "hooks", None), "no PreToolUse hook: the policy is never consulted"
+    hook = opts.hooks["PreToolUse"][0].hooks[0]
+    import asyncio
+    out = asyncio.run(hook({"tool_name": "Read", "tool_input": {"file_path": "/etc/passwd"}}, None, None))
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "Bash" in (opts.disallowed_tools or [])
+    # …and the SDK itself agrees the callback would have been shadowed, which is
+    # why the hook and not the callback is the boundary.
+    from claude_agent_sdk.types import _get_can_use_tool_shadowed_warning as shadowed
+    assert shadowed(opts.permission_mode, list(opts.allowed_tools)) is not None
+
+
+def test_every_github_credential_is_scrubbed_from_the_agents_environment():
+    from codoc.serve.realize_agent import _GH_TOKEN_KEYS
+    assert {"CODOC_GITHUB_TOKEN", "CODOC_GITHUB_CLIENT_SECRET", "GITHUB_TOKEN", "GH_TOKEN"} <= set(_GH_TOKEN_KEYS)

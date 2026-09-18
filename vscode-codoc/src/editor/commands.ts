@@ -25,6 +25,10 @@ export const RECORDED = 'codoc:recorded';
  *  provisional refs name cids nobody ever submitted, and the next keystroke
  *  after pasted text anchors on one the daemon has never seen. */
 export const GESTURE_CIDS = 'codoc:cids';
+/** The document was rebuilt wholesale (an adoption). Mapping a decoration set
+ *  of three thousand widgets through a replace of the whole document costs far
+ *  more than building it again, so a plugin that keeps one rebuilds on this. */
+export const REPLACED = 'codoc:replaced';
 
 export interface Gesture { tr: Transaction; ops: OpBody[]; cids: string[] }
 
@@ -144,8 +148,9 @@ export function splitBlock(state: EditorState, env: Env): Gesture | null {
     } else {
         tr = tr.setNodeMarkup(tailStart, undefined, { ...tr.doc.nodeAt(tailStart)!.attrs, bid: nid, head: 0 });
     }
-    // Headings split into heading + paragraph; when the new block is first it is the paragraph? No:
-    // spec: splitting a heading yields heading + paragraph, the heading keeps its text.
+    // Splitting a heading yields a heading and a paragraph, and the heading is
+    // the half that keeps its text — so when the new block comes first, it is
+    // the new one that is the paragraph.
     if (isHeading && newFirst) {
         // Empty head before a heading's text: the new empty block is a paragraph BEFORE the heading.
         tr = tr.setNodeMarkup(headPos, state.schema.nodes.paragraph, { bid: nid, head: 0 });

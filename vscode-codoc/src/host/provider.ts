@@ -122,7 +122,11 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
                     if (!msg.tag) return;
                     const p = path.join(codocDir, 'config.json');
                     const cfg = (await readJson<Record<string, unknown>>(p)) ?? {};
-                    await fsp.writeFile(p, JSON.stringify({ ...cfg, doc_language: msg.tag }, null, 2) + '\n', 'utf8');
+                    // Atomically: this file is tracked, the daemon reads it on
+                    // every inbox pass, and a torn read drops every role in it.
+                    const tmp = `${p}.tmp`;
+                    await fsp.writeFile(tmp, JSON.stringify({ ...cfg, doc_language: msg.tag }, null, 2) + '\n', 'utf8');
+                    await fsp.rename(tmp, p);
                     await postStatus();
                     return;
                 }

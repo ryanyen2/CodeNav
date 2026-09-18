@@ -12,7 +12,7 @@
  */
 import { type Node as PMNode, type Schema } from '@tiptap/pm/model';
 import { EditorState, Plugin, PluginKey, TextSelection, type Transaction } from '@tiptap/pm/state';
-import { EditorView } from '@tiptap/pm/view';
+import { EditorView, type DecorationSet } from '@tiptap/pm/view';
 import { keymap } from '@tiptap/pm/keymap';
 import { baseKeymap } from '@tiptap/pm/commands';
 import { InputRule, inputRules } from '@tiptap/pm/inputrules';
@@ -22,8 +22,8 @@ import { paintsFor, type Paint } from '../calc/claims';
 import { NO_WATERMARKS, nfc, type Ack, type OpBody, type Projection, type Submission } from '../calc/projection';
 import { Recorder, reconcile, scalarOffset } from '../calc/recorder';
 import type { Shadow } from '../calc/shadow';
-import { GESTURE_CIDS, RECORDED, deleteFeature, deleteSelection, headingFromRule, mergeBackward, mergeForward, moveBlock, pasteBlocks, relevel, selectedBlocks, splitBlock, type Env } from './commands';
-import { buildDecorations, unitOffset } from './decorations';
+import { GESTURE_CIDS, RECORDED, REPLACED, deleteFeature, deleteSelection, headingFromRule, mergeBackward, mergeForward, moveBlock, pasteBlocks, relevel, selectedBlocks, splitBlock, type Env } from './commands';
+import { blockRanges, buildDecorations, decorationsFor, unitOffset } from './decorations';
 import { dragPlugin } from './drag';
 import { FindWidget, findPlugin } from './find';
 import { Menus } from './menus';
@@ -85,15 +85,30 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
     const recorder = new Recorder(shadows, newCid);
 
     const paints = new PluginKey<DecorationsState>('codoc-decos');
-    interface DecorationsState { set: ReturnType<typeof buildDecorations> }
+    interface DecorationsState { set: DecorationSet }
 
+    // The set is KEPT, mapped through each change, and patched where the paints
+    // moved. A keystroke changes one block; rebuilding three thousand inline
+    // decorations for it — and again for the ack, and again for the projection
+    // that follows — was most of what typing in a large tree cost.
     const decoPlugin = new Plugin<DecorationsState>({
         key: paints,
         state: {
             init: (_c, state) => ({ set: buildDecorations(state.doc, paintMap(state.doc), projection.phases, realizing) }),
-            apply: (tr, prev, _old, state) => tr.docChanged || tr.getMeta(decoKey)
-                ? { set: buildDecorations(state.doc, paintMap(state.doc), projection.phases, realizing) }
-                : prev,
+            apply(tr, prev, _old, state) {
+                if (!tr.docChanged && !tr.getMeta(decoKey)) return prev;
+                const dirty = paintsAll ? null : new Set(paintsDirty);
+                const map = paintMap(state.doc);          // clears the dirty set
+                if (dirty === null) {
+                    return { set: buildDecorations(state.doc, map, projection.phases, realizing) };
+                }
+                let set = prev.set.map(tr.mapping, state.doc);
+                if (dirty.size) {
+                    for (const r of blockRanges(state.doc, dirty)) set = set.remove(set.find(r.from, r.to));
+                    set = set.add(state.doc, decorationsFor(state.doc, map, projection.phases, realizing, dirty));
+                }
+                return { set };
+            },
         },
         props: { decorations: state => paints.getState(state)?.set ?? null },
     });
@@ -463,7 +478,6 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         const held = new Set([...unacked.keys()].filter(b => (unacked.get(b)?.size ?? 0) > 0 && !force.has(b)));
         const plan = adoptionPlan(current, next, held);
         if (!plan.length) { view.dispatch(view.state.tr.setMeta(decoKey, true)); return; }
-        const byId = new Map(next.blocks.map(b => [b.id, b]));
         const sel = view.state.selection;
         const caretBid = featureBlockAt(sel.from);
         const caretOff = caretBid ? scalarCaret(sel.from) : 0;
@@ -501,7 +515,8 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         const nodes = order.map(id => nodeFor.get(id)!);
         for (const bid of currentNodes.keys()) if (!nodeFor.has(bid)) shadows.delete(bid);
         const newDoc = schema.nodes.doc.create(null, nodes);
-        let tr = view.state.tr.replaceWith(0, view.state.doc.content.size, newDoc.content).setMeta(RECORDED, []).setMeta(decoKey, true);
+        let tr = view.state.tr.replaceWith(0, view.state.doc.content.size, newDoc.content)
+            .setMeta(RECORDED, []).setMeta(REPLACED, true).setMeta(decoKey, true);
         // Restore the caret by block and scalar offset.
         if (caretBid) {
             const moved = caretRef ? shadows.get(caretBid)?.indexOf(caretRef) ?? -1 : -1;
