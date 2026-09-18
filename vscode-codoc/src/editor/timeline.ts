@@ -66,10 +66,16 @@ export class Timeline {
         for (const entry of w.ops) for (const bid of Object.keys(entry.blocks)) if (!live.has(bid)) gone.add(bid);
         const shape = shapeAt(w, p);
         const rankOf = (id: string) => shape.rank.get(id) ?? live.get(id)?.rank ?? id;
-        const order = [...live.keys(), ...gone].sort((a, b2) => rankOf(a).localeCompare(rankOf(b2)));
+        // Ranks are base-62 in ASCII order (`rank.py`), so they compare by code
+        // point. `localeCompare` collates case-insensitively — 'a' before 'V' —
+        // and the sixth appended block and every one after it would sort above
+        // the first five on every past page.
+        const order = [...live.keys(), ...gone].sort((a, b2) => (rankOf(a) < rankOf(b2) ? -1 : rankOf(a) > rankOf(b2) ? 1 : 0));
         for (const bid of order) {
             if (shape.dead.has(bid)) continue;              // not on the page then
-            const b = live.get(bid) ?? { id: bid, kind: 'paragraph', level: 0, rank: '', head: 0, fields: {} };
+            const was = shape.shape.get(bid);
+            const b = live.get(bid) ?? { id: bid, kind: was?.kind ?? 'paragraph', level: was?.level ?? 0,
+                                         rank: '', head: 0, fields: {} };
             const f = b.fields.text as { text?: string } | undefined;
             const now = textAt(w, bid, p, f?.text ?? '');
             if (now === null) continue;

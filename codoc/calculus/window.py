@@ -155,6 +155,7 @@ def history_window(store: Store, limit: int = 200) -> dict:
     born: set[str] = set()
     dead = {b.id for b in store.blocks.values() if not b.live}
     rank = {b.id: b.rank for b in store.blocks.values()}
+    shape = {b.id: {"kind": b.kind, "level": b.level} for b in store.blocks.values()}
     for o in reversed(ops):
         # A block born after this op did not exist then, and `born` holds
         # exactly those, since we are walking newest first.
@@ -170,11 +171,15 @@ def history_window(store: Store, limit: int = 200) -> dict:
                         "batch": o.batch, "batch_first": store.batch_first.get(o.batch, store.position[o.id]),
                         "plan": o.plan, "caused_by": o.caused_by, "blocks": after, "inverse": list(o.inverse),
                         "live": {**{i: False for i in gone}, **{i: True for i in back}},
-                        "ranks": {i: rank[i] for i, _ in moved if i in rank}})
+                        "ranks": {i: rank[i] for i, _ in moved if i in rank},
+                        "shape": {i: dict(shape[i]) for i, _ in _shape_rows(o) if i in shape}})
         unapply(o)
         dead.difference_update(gone)
         dead.update(back)
         rank.update(moved)
+        for i, was in _shape_rows(o):
+            if i in shape:
+                shape[i].update(was)
         if o.kind == K.BLOCK_ADD:
             born.add(o.target["bid"])
         elif o.kind == K.BLOCK_SPLIT and not o.payload.get("new_takes"):
@@ -185,7 +190,12 @@ def history_window(store: Store, limit: int = 200) -> dict:
     named = {bid for bid, _ in clones} | born | {i for e in entries for i in e["live"]} | {i for e in entries for i in e["ranks"]}
     return {"start": (store.position[ops[0].id] if ops else store.pos), "head": store.pos, "before": before,
             "born": sorted(born), "dead": sorted(dead & named),
-            "ranks": {b: r for b, r in rank.items() if b in named}, "ops": entries}
+            "ranks": {b: r for b, r in rank.items() if b in named},
+            # A block the window names but the projection does not — one deleted
+            # inside it, or one whose kind has changed since — has nowhere else
+            # to say what it was. Folded forward like the ranks.
+            "shape": {b: shape[b] for b in sorted(named) if b in shape},
+            "ops": entries}
 
 
 def _liveness(o: Op) -> tuple[list[str], list[str]]:
@@ -205,6 +215,25 @@ def _liveness(o: Op) -> tuple[list[str], list[str]]:
     if o.kind == K.PLAN_REOPEN:
         return [], struck
     return [], []
+
+
+def _shape_rows(o: Op) -> list[tuple[str, dict]]:
+    """(block, what its kind and level were before this op). Only ``block.set``
+    and a verdict undoing one change either."""
+    p = o.payload
+    if o.kind == K.BLOCK_SET and o.target.get("path") == "kind":
+        return [(str(o.target["bid"]), {"kind": str(p.get("prev")), "level": int(p.get("prev_level") or 0)})]
+    if o.kind == K.BLOCK_SET and o.target.get("path") == "level":
+        return [(str(o.target["bid"]), {"level": int(p.get("prev") or 0)})]
+    if o.kind in VERDICTS:
+        out: list[tuple[str, dict]] = []
+        for e in p.get("sets", []):
+            if e.get("path") == "kind":
+                out.append((str(e["bid"]), {"kind": str(e["value"]), "level": int(e.get("level") or 0)}))
+            elif e.get("path") == "level":
+                out.append((str(e["bid"]), {"level": int(e["value"] or 0)}))
+        return out
+    return []
 
 
 def _rank_rows(o: Op) -> list[tuple[str, str]]:

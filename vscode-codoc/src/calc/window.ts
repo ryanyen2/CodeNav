@@ -29,6 +29,8 @@ export interface WindowEntry {
     live?: Record<string, boolean>;
     /** Blocks whose rank this op set: id → the rank it took. */
     ranks?: Record<string, string>;
+    /** Blocks whose kind or level this op set: id → what it took. */
+    shape?: Record<string, { kind?: string; level?: number }>;
 }
 
 export interface HistoryWindow {
@@ -42,6 +44,10 @@ export interface HistoryWindow {
     /** Rank per block entering the window, so a past page can be rendered in
      *  the order it had rather than today's. */
     ranks?: Record<string, string>;
+    /** Kind and level per block the window names, ENTERING it, so a heading
+     *  deleted inside the window — or since turned into a paragraph — is still
+     *  drawn as a heading on the pages before that happened. */
+    shape?: Record<string, { kind: string; level: number }>;
     ops: WindowEntry[];
 }
 
@@ -50,14 +56,18 @@ export interface HistoryWindow {
  *  entering it, the way `before` is — a deleted paragraph keeps its words in the
  *  store, so without this it reads as present on every page after its deletion,
  *  and a merged-away one as an empty phantom. */
-export function shapeAt(w: HistoryWindow, pos: number): { dead: Set<string>; rank: Map<string, string> } {
+export function shapeAt(w: HistoryWindow, pos: number): {
+    dead: Set<string>; rank: Map<string, string>; shape: Map<string, { kind: string; level: number }>;
+} {
     const dead = new Set(w.dead ?? []);
     const rank = new Map(Object.entries(w.ranks ?? {}));
+    const shape = new Map(Object.entries(w.shape ?? {}));
     for (let i = 0; i <= Math.min(pos, w.ops.length - 1); i++) {
         for (const [bid, there] of Object.entries(w.ops[i].live ?? {})) { if (there) dead.delete(bid); else dead.add(bid); }
         for (const [bid, r] of Object.entries(w.ops[i].ranks ?? {})) rank.set(bid, r);
+        for (const [bid, s] of Object.entries(w.ops[i].shape ?? {})) shape.set(bid, { ...shape.get(bid), ...s } as { kind: string; level: number });
     }
-    return { dead, rank };
+    return { dead, rank, shape };
 }
 
 function depth(batch: string): number {

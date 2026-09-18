@@ -407,28 +407,48 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         return null;
     }
 
-    /** Compose any decomposed run these transactions put on the page. The check
-     *  is over what they inserted, so an ordinary keystroke pays one NFC of one
-     *  character and the whole-document scan happens only when one arrives. */
+    /** Compose any decomposed run these transactions INSERTED. Only what they
+     *  inserted: the store records NFC per insert, so `e` and U+0301 typed as
+     *  two ops are two characters everywhere — in the store, the projection and
+     *  the shadow — and composing them because a paste elsewhere happened to
+     *  carry a decomposed run would shorten a paragraph the transaction never
+     *  touched and record nothing. The scan is over the changed ranges, so an
+     *  ordinary keystroke pays one NFC of one character. */
     function composeNFC(trs: readonly Transaction[], _old: EditorState, next: EditorState): Transaction | null {
-        let suspect = false;
-        for (const t of trs) {
-            for (const step of t.steps) {
-                const slice = (step as unknown as { slice?: { content: { descendants: (f: (n: PMNode) => boolean) => void } } }).slice;
-                slice?.content.descendants(n => { suspect ||= n.isText && nfc(n.text ?? '') !== n.text; return !suspect; });
-            }
-        }
-        if (!suspect) return null;
-        const fixes: Array<{ from: number; to: number; node: PMNode }> = [];
-        next.doc.descendants((n, pos) => {
-            if (!n.isText) return true;
-            const composed = nfc(n.text ?? '');
-            if (composed !== n.text) fixes.push({ from: pos, to: pos + (n.text ?? '').length, node: next.schema.text(composed, n.marks) });
-            return false;
+        const ranges: Array<[number, number]> = [];
+        trs.forEach((t, i) => {
+            t.steps.forEach((step, j) => {
+                step.getMap().forEach((_a, _b, fromB, toB) => {
+                    let from = fromB, to = toB;
+                    const rest = t.mapping.slice(j + 1);
+                    from = rest.map(from, -1);
+                    to = rest.map(to, 1);
+                    for (const later of trs.slice(i + 1)) { from = later.mapping.map(from, -1); to = later.mapping.map(to, 1); }
+                    if (to > from) ranges.push([from, to]);
+                });
+            });
         });
+        if (!ranges.length) return null;
+        // The unit is the inserted RUN, composed on its own — the same unit the
+        // shadow and the store use. Composing the text node it landed in would
+        // fold a neighbour the transaction never touched: `e` and U+0301 typed
+        // as two keystrokes are two characters everywhere, on purpose.
+        const size = next.doc.content.size;
+        const fixes: Array<{ from: number; to: number; node: PMNode }> = [];
+        for (const [from, to] of ranges) {
+            const a = Math.max(0, from), b = Math.min(size, to);
+            if (b <= a) continue;
+            const $a = next.doc.resolve(a), $b = next.doc.resolve(b);
+            if (!$a.parent.isTextblock || $a.parent !== $b.parent) continue;   // not one run of text
+            const raw = next.doc.textBetween(a, b);
+            const composed = nfc(raw);
+            if (composed === raw) continue;
+            const marks = next.doc.nodeAt(a)?.marks ?? [];
+            fixes.push({ from: a, to: b, node: next.schema.text(composed, marks) });
+        }
         if (!fixes.length) return null;
         let tr = next.tr;
-        for (const f of fixes.reverse()) tr = tr.replaceWith(f.from, f.to, f.node);
+        for (const f of fixes.sort((x, y) => y.from - x.from)) tr = tr.replaceWith(f.from, f.to, f.node);
         return tr.setMeta(RECORDED, []).setMeta('addToHistory', false);
     }
 
