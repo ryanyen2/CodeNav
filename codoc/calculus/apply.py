@@ -21,7 +21,7 @@ from codoc.calculus.ids import END, START, CharRef, OpId, ref_from_json, ref_to_
 from codoc.calculus.ops import Op, OpBody, body, covered, frontier_union
 from codoc.calculus.rank import RankError
 from codoc.calculus.store import Binding, Plan, Store
-from codoc.calculus.text import SUGGEST_DEL, AnchorError, Mark, MarkError, Text, nfc, placed_keys
+from codoc.calculus.text import PROPOSALS, SUGGEST_DEL, SUGGEST_MARK, AnchorError, Mark, MarkError, Text, nfc
 
 RESERVED_PATHS = frozenset({"id", "rank", "dead"})
 
@@ -215,15 +215,31 @@ def _h_text_mark(store: Store, op: Op, touched: set[str]):
     text = block.text(p)
     if not text.holds(end):
         raise Conflict("range_spans_blocks")
-    if kind == SUGGEST_DEL and on:
+    if kind in PROPOSALS and on:
         if not op.plan:
-            raise Conflict("suggest_del_needs_plan")
+            raise Conflict("suggest_needs_plan")
         attrs["plan"] = op.plan
     # A restored mark keeps its original placer and actor: only an inverse says
     # so, and an inverse is the person's own op. Both ride in the canonical
     # payload so a replay restores the same mark (I6).
     actor = op.payload.get("actor") or op.actor
     placer = op.payload.get("op") or op.id
+    if op.plan and kind not in PROPOSALS:
+        # A plan proposes; it does not edit the trunk's marks. The toggle is
+        # recorded beside them and a verdict is what applies or drops it, so
+        # nothing later has to find a mark that a merge, a split or another
+        # plan has moved since (01 §3).
+        record = Mark(SUGGEST_MARK, {"plan": op.plan, "mark": kind, "on": "1" if on else "",
+                                     **{f"a:{k}": v for k, v in attrs.items()}}, start, end, actor, placer)
+        if record not in text.marks:
+            text.marks.append(record)
+        store.index_text(block.id, p, text)
+        touched.add(block.id)
+        canonical = {"kind": kind, "attrs": attrs, "start": ref_to_json(start), "end": ref_to_json(end), "on": on,
+                     "bid": block.id, "path": p, "proposed": record.to_json(), "removed": [], "added": []}
+        return canonical, [body(K.TEXT_MARK, {"bid": block.id, "path": p},
+                                {"kind": SUGGEST_MARK, "attrs": dict(record.attrs), "start": list(start),
+                                 "end": list(end), "on": False})]
     removed, added = text.set_mark(kind, attrs, start, end, on, actor=actor, op=placer)
     store.index_text(block.id, p, text)
     touched.add(block.id)
@@ -651,31 +667,16 @@ def _undo_plan_op(store: Store, o: Op, by: OpId, touched: set[str], record: dict
                 record.setdefault("killed", []).append({"bid": block.id, "path": p, "segments": [list(k) for k in got]})
                 touched.add(block.id)
     elif o.kind == K.TEXT_MARK:
-        # A mark is undone by what this op PUT there, not by its value: the one
-        # it placed may have grown over text typed at its edge (I2's one growing
-        # kind), and two plans over one span record the same value — but it may
-        # also carry another op's placer, because `set_mark` keeps the
-        # neighbour's when it widens a mark and the displaced one's on the
-        # pieces it cuts. `Text.marks_placed_by` is that rule.
-        hint = (o.payload.get("bid", ""), o.payload.get("path", "text"))
-        added = o.payload.get("added", [])
-        for block, p in _mark_targets(store, o, added, hint):
+        # A plan's mark toggle never touched the trunk: it is a record beside
+        # it, and undoing the op is dropping the record. Found by the plan it
+        # names, so a merge, a split or another plan moving the trunk's marks
+        # cannot hide it (01 §3).
+        for block, p in store.mark_holders(o.id):
             t = block.text(p)
-            for m in t.marks_placed_by(o.id, placed_keys(added)):
+            for m in [x for x in t.proposals(o.plan) if x.op == o.id]:
                 t.marks.remove(m)
                 record.setdefault("marks", []).append({"bid": block.id, "path": p, "mark": m.to_json()})
                 touched.add(block.id)
-        for mj in o.payload.get("removed", []):
-            mk = Mark.from_json(mj)
-            if _rejected_plan_mark(store, mk):
-                continue        # it belonged to a proposal the person has already refused
-            for block, p in _mark_holder(store, mk, hint):
-                t = block.text(p)
-                if mk not in t.marks:
-                    t.marks.append(mk)
-                    store.index_text(block.id, p, t)
-                    record.setdefault("marks_back", []).append({"bid": block.id, "path": p, "mark": mj})
-                    touched.add(block.id)
     elif o.kind in (K.BLOCK_ADD, K.BLOCK_SPLIT):
         bid = o.target["bid"] if o.kind == K.BLOCK_ADD else o.payload["new"]
         b = store.blocks.get(bid)
@@ -737,26 +738,19 @@ def _undo_plan_op(store: Store, o: Op, by: OpId, touched: set[str], record: dict
             touched.add(bid)
 
 
-def _rejected_plan_mark(store: Store, mk: Mark) -> bool:
-    """Was this mark placed by an op of a plan the person rejected? Putting it
-    back would return a refused proposal to the page."""
-    placer = store.by_id.get(mk.op)
-    plan = store.plans.get(placer.plan) if placer is not None and placer.plan else None
-    return plan is not None and plan.status == "rejected"
+def _proposed_marks(store: Store, pid: str, accepted: set[str]) -> list[tuple[Block, str, Mark]]:
+    """This plan's ``suggest_mark`` records, in the order they were placed. A
+    subset accept takes only the ones whose op it took."""
+    out: list[tuple[Block, str, Mark, int]] = []
+    for block in store.blocks.values():
+        for p in text_fields(block.kind):
+            for m in block.text(p).proposals(pid, SUGGEST_MARK):
+                if m.op in accepted:
+                    out.append((block, p, m, store.position.get(m.op, 0)))
+    out.sort(key=lambda t: t[3])
+    return [(b, p, m) for b, p, m, _ in out]
 
 
-def _mark_targets(store: Store, o: Op, added: list[dict], hint: tuple[str, str]) -> list[tuple[Block, str]]:
-    """Every field a mark op's marks can be in: the ones indexed under its own
-    id, and the holder of each ``added`` entry — a mark it recorded under
-    another placer is indexed under that one."""
-    out = list(store.mark_holders(o.id))
-    seen = {(b.id, p) for b, p in out}
-    for a in added:
-        for b, p in _mark_holder(store, Mark.from_json(a), hint):
-            if (b.id, p) not in seen:
-                seen.add((b.id, p))
-                out.append((b, p))
-    return out
 
 
 def _mark_holder(store: Store, mk: Mark, hint: tuple[str, str]) -> list[tuple[Block, str]]:
@@ -803,6 +797,20 @@ def _h_plan_accept(store: Store, op: Op, touched: set[str]):
         record.setdefault("struck", []).append({"bid": block.id, "path": p, "mark": m.to_json(),
                                                 "segments": [list(k) for k in got]})
         touched.add(block.id)
+    # The accepted mark proposals become trunk marks now, under the actor who
+    # proposed them and the op that did. This is the only moment a plan's mark
+    # toggle touches the trunk, which is why nothing has to find it again later.
+    for block, p, m in _proposed_marks(store, plan.id, acc):
+        t = block.text(p)
+        want = {k[2:]: v for k, v in m.attrs.items() if k.startswith("a:")}
+        was_removed, was_added = t.set_mark(m.attrs.get("mark", ""), want, m.start, m.end,
+                                            bool(m.attrs.get("on")), actor=m.actor, op=m.op)
+        t.marks.remove(m)
+        store.index_text(block.id, p, t)
+        record.setdefault("applied", []).append(
+            {"bid": block.id, "path": p, "mark": m.to_json(),
+             "removed": [x.to_json() for x in was_removed], "added": [x.to_json() for x in was_added]})
+        touched.add(block.id)
     deleted: list[str] = []
     # A feature the person deleted by hand before answering the proposal is
     # already gone: the verdict agrees with them rather than conflicting.
@@ -845,7 +853,7 @@ def _h_plan_reopen(store: Store, op: Op, touched: set[str]):
         raise Conflict("plan_open", pid)
     p = op.payload
     by = p.get("by")
-    for entry in p.get("killed", []) + p.get("struck", []) + p.get("marks", []) + p.get("sets", []) + p.get("marks_back", []):
+    for entry in p.get("killed", []) + p.get("struck", []) + p.get("marks", []) + p.get("sets", []) + p.get("applied", []):
         if entry["bid"] not in store.blocks:
             raise Conflict("no_block", entry["bid"])
     for i in p.get("blocks", []) + p.get("deleted_blocks", []) + [m[0] for m in p.get("moved", [])]:
@@ -869,12 +877,23 @@ def _h_plan_reopen(store: Store, op: Op, touched: set[str]):
             t.marks.append(mk)
             store.index_text(block.id, f, t)
         touched.add(block.id)
-    for entry in p.get("marks_back", []):
-        mk = Mark.from_json(entry["mark"])
+    for entry in p.get("applied", []):
+        # An accept turned this proposal into trunk marks; the reopen puts the
+        # trunk back as it was and the proposal beside it again.
         b = store.blocks[entry["bid"]]
         t = b.text(entry["path"])
-        if mk in t.marks:
-            t.marks.remove(mk)
+        for mj in entry.get("added", []):
+            mk = Mark.from_json(mj)
+            if mk in t.marks:
+                t.marks.remove(mk)
+        for mj in entry.get("removed", []):
+            mk = Mark.from_json(mj)
+            if mk not in t.marks and t.holds(mk.start) and t.holds(mk.end):
+                t.marks.append(mk)
+        proposal = Mark.from_json(entry["mark"])
+        if proposal not in t.marks and t.holds(proposal.start) and t.holds(proposal.end):
+            t.marks.append(proposal)
+        store.index_text(b.id, entry["path"], t)
         touched.add(b.id)
     for i in p.get("blocks", []) + p.get("deleted_blocks", []):
         b = store.blocks[i]

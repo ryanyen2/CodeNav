@@ -103,10 +103,6 @@ class Store:
         # and has none now is proposed for deletion; after a fold there is no
         # `bind.attach` op left to read, so it is state and not history.
         self.bound_once: set[str] = set()
-        # One slot for the open plans' mark ops, keyed on this store's own
-        # length: a publish renders a thousand fields in the rejected read mode
-        # and each one asks for the same list (``derive.plan_mark_ops``).
-        self.mark_ops_memo: tuple[tuple, list] | None = None
 
     @property
     def pos(self) -> int:

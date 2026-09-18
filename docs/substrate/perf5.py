@@ -95,8 +95,7 @@ keys = cold._feature_keys(s, set())
 bench("  of which phases() COLD", lambda: Publisher(tmp / ".codoc", str(tmp)).phases(s, set(), keys))
 c2 = Publisher(tmp / ".codoc", str(tmp)); ph = c2.phases(s, set(), keys)
 bench("  of which projection() COLD (entries+claims)", lambda: c2.projection(s, ph, set(), keys))
-from codoc.calculus.derive import plan_claims, plan_mark_ops
-bench("  plan_mark_ops(all open) once", lambda: plan_mark_ops(s, {p.id for p in s.plans.values() if p.status == "open"}), 20)
+from codoc.calculus.derive import plan_claims
 bench("  plan_claims(h1400) once", lambda: plan_claims(s, "h1400"), 20)
 pub.publish(s, force=True)                      # warm the memo under the plans
 insert(702)()

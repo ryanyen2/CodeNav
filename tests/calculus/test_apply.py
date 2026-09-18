@@ -197,7 +197,7 @@ def test_plan_cannot_delete_blocks_and_suggest_del_needs_plan():
     t = s.blocks["h1"].text()
     bad2 = apply(s, m.op(K.TEXT_MARK, {"bid": "h1", "path": "text"},
                          {"kind": SUGGEST_DEL, "attrs": {"plan": "p"}, "start": t.ref_at(0), "end": t.ref_at(1), "on": True}))
-    assert bad2.conflict == "suggest_del_needs_plan"
+    assert bad2.conflict == "suggest_needs_plan"
 
 
 def test_authority_policy_records_conflict():
@@ -329,9 +329,9 @@ def test_a_reopen_naming_an_unknown_block_in_marks_back_is_a_conflict_not_a_cras
     apply(s, m.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit", "target": "p1"}))
     rej = apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {}))
     assert rej.conflict is None
-    bad = m.op(K.PLAN_REOPEN, {"pid": "P"}, {"from": "rejected", "by": rej.id,
-                                             "marks_back": [{"bid": "no-such-block", "path": "text",
-                                                             "mark": {"kind": BOLD, "attrs": {}, "start": ["s:1", 0], "end": ["s:1", 0]}}]})
+    bad = m.op(K.PLAN_REOPEN, {"pid": "P"}, {"from": "accepted", "by": rej.id,
+                                             "applied": [{"bid": "no-such-block", "path": "text",
+                                                          "mark": {"kind": BOLD, "attrs": {}, "start": ["s:1", 0], "end": ["s:1", 0]}}]})
     try:
         out = apply(s, bad)
     except Exception as e:  # noqa: BLE001

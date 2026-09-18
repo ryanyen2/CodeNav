@@ -220,12 +220,16 @@ conflict, and the op is recorded with `conflict` and not applied.
   three refinements: an insertion is killed by identity wherever its
   characters now sit (a split or merge may have moved them); a block the plan
   added or split off dies when it is now empty; a move is not undone when
-  someone re-ranked the block since (their move stands). Marks are removed by
-  what the op RECORDED putting there — its own `added` entries, matched on
-  kind, attrs, start and placer — because the mark a toggle leaves behind does
-  not always carry that toggle's id: widening a mark keeps the neighbour's
-  placer, and displacing one keeps the displaced mark's on the pieces. Both
-  verdicts record exactly what they changed so
+  someone re-ranked the block since (their move stands). A plan's **mark
+  toggle never touched the trunk's marks**, so there is nothing to undo: under
+  a plan, `text.mark` records a `suggest_mark{plan, mark, on, attrs}` beside
+  them and `plan.accept` is the one thing that applies it, as an ordinary
+  toggle under the actor and op that proposed it. That is why a verdict does
+  not have to find a mark that a merge, a split or another plan has moved
+  since — three matching rules in three reviews were the cost of asking it to.
+  A proposal also does not grow over text typed at its edge: I2's growth is a
+  rule about the document's own marks. Both verdicts record exactly what they
+  changed so
   their inverse, `plan.reopen`, restores it, subset included.
 - `feature.handoff` records the `Frontier` of ops it drained. A feature's
   queued work is the set difference between its latest handoff frontier and

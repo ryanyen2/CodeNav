@@ -15,7 +15,7 @@ from codoc.calculus.ids import OpId, is_human
 from codoc.calculus.inline_md import Span, render
 from codoc.calculus.ops import Op, covered, in_frontier
 from codoc.calculus.store import Store, Watermarks
-from codoc.calculus.text import BOLD, CITE, LINK, SUGGEST_DEL, Mark, Text, placed_keys
+from codoc.calculus.text import BOLD, CITE, LINK, PROPOSALS, SUGGEST_DEL, SUGGEST_MARK, Mark, Text
 
 LOOP = "loop"
 # A feature with pending intent: the document wins over a machine's repair
@@ -35,7 +35,7 @@ def live_spans(text: Text, kinds: frozenset | None = None) -> list[Span]:
     offsets = text.live_offsets()
     out: list[Span] = []
     for m in text.marks:
-        if (kinds is None and m.kind == SUGGEST_DEL) or (kinds is not None and m.kind not in kinds):
+        if (kinds is None and m.kind in PROPOSALS) or (kinds is not None and m.kind not in kinds):
             continue
         span = text.live_span(m, offsets)
         if span:
@@ -44,86 +44,38 @@ def live_spans(text: Text, kinds: frozenset | None = None) -> list[Span]:
 
 
 def markdown(text: Text, mode: str = "live", store: Store | None = None) -> str:
-    """The field as Markdown. ``mode``: ``live`` (what is on screen),
-    ``accepted`` (every open plan taken), ``rejected`` (every open plan
-    dropped, which is what a directive is rendered from)."""
+    """The field as Markdown. ``mode``: ``live`` (what the trunk says, which is
+    what the page shows under the proposals drawn over it), ``accepted`` (every
+    open plan taken), ``rejected`` (every open plan dropped, which is what a
+    directive is rendered from).
+
+    A plan's mark toggle is a record beside the trunk's marks, never a change to
+    them (01 §3), so ``live`` and ``rejected`` agree about marks and only
+    ``accepted`` has anything to apply. What differs between live and rejected
+    is the words: a plan's insertions are on the page and not in the document
+    without it."""
     if mode == "live" or store is None:
         return render(text.live_text(), live_spans(text))
     view = text.clone()
     open_plans = {p.id for p in store.plans.values() if p.status == "open"}
     if mode == "rejected":
-        # Open plans undone on the clone: their segments hidden (killed by a
-        # marker no op owns, so `_op` finds no killer), their suggest_del marks
-        # dropped, their mark toggles reversed (a proposed unbold is not an unbold).
+        # An open plan's words are not the document's; its proposal records are
+        # not marks at all, and `live_spans` already leaves them out.
         for s in view.segs:
             if s.live and s.plan in open_plans:
                 s.dead = "view"
-        view.marks = [m for m in view.marks if not (m.kind == SUGGEST_DEL and m.attrs.get("plan") in open_plans)]
-        _unapply_plan_marks(view, store, open_plans)
     elif mode == "accepted":
-        for m in list(view.marks):
-            if m.kind == SUGGEST_DEL and m.attrs.get("plan") in open_plans:
+        for m in view.proposals():
+            if m.attrs.get("plan") not in open_plans:
+                continue
+            if m.kind == SUGGEST_DEL:
                 view.delete(m.start, m.end, by="view")
-                view.marks.remove(m)
+            else:
+                view.set_mark(m.attrs.get("mark", ""), {k[2:]: v for k, v in m.attrs.items() if k.startswith("a:")},
+                              m.start, m.end, bool(m.attrs.get("on")), actor=m.actor, op=m.op)
+            view.marks.remove(m)
     return render(view.live_text(), live_spans(view))
 
-
-def plan_mark_ops(store: Store, plans: set[str]) -> list[Op]:
-    """The applied ``text.mark`` ops of ``plans``, in apply order. Memoized on
-    the store's own length, so a publish that renders every field in the
-    rejected read mode walks the open plans once and not once per field."""
-    key = (store.pos, frozenset(plans))
-    if store.mark_ops_memo is not None and store.mark_ops_memo[0] == key:
-        return store.mark_ops_memo[1]
-    out: list[Op] = []
-    for pid in plans:
-        p = store.plans.get(pid)
-        if p is None:
-            continue
-        out.extend(o for i in p.ops if (o := store.by_id.get(i)) is not None and o.kind == K.TEXT_MARK and o.conflict is None)
-    out.sort(key=lambda o: store.position[o.id])
-    store.mark_ops_memo = (key, out)
-    return out
-
-
-def _unapply_plan_marks(view: Text, store: Store, plans: set[str], ops: list[Op] | None = None) -> None:
-    """Undo the open plans' mark toggles on a clone, newest first: a mark this
-    op put there is found by ``Text.marks_placed_by`` (its own id, or an
-    ``added`` entry it recorded under another placer), and a mark it displaced
-    comes back unless a plan the person already rejected had placed it."""
-    here = {s.op for s in view.segs}
-    for o in reversed(ops if ops is not None else plan_mark_ops(store, plans)):
-        keys, named = _placed(o)
-        if here.isdisjoint(named):
-            continue          # this op marked characters no part of which is in this field
-        for m in view.marks_placed_by(o.id, keys):
-            view.marks.remove(m)
-        for mj in o.payload.get("removed", []):
-            mk = Mark.from_json(mj)
-            if _rejected_mark(store, mk):
-                continue
-            if view.holds(mk.start) and view.holds(mk.end) and mk not in view.marks:
-                view.marks.append(mk)
-
-
-def _placed(o: Op) -> tuple[frozenset, frozenset]:
-    """``(match keys, the ops whose characters it marked)`` for one mark op,
-    computed once and kept on the op. ``_unapply_plan_marks`` runs per field and
-    a tree has thousands of fields, so this is the difference between reading
-    every open plan's marks per field and reading the ones that touch it."""
-    got = getattr(o, "_placed_cache", None)
-    if got is None:
-        entries = (o.payload.get("added") or []) + (o.payload.get("removed") or [])
-        got = (placed_keys(o.payload.get("added") or []),
-               frozenset(str(a["start"][0]) for a in entries))
-        o._placed_cache = got          # type: ignore[attr-defined]  (a recorded op never changes)
-    return got
-
-
-def _rejected_mark(store: Store, mk: Mark) -> bool:
-    placer = store.by_id.get(mk.op)
-    plan = store.plans.get(placer.plan) if placer is not None and placer.plan else None
-    return plan is not None and plan.status == "rejected"
 
 
 def title(store: Store, fid: str, mode: str = "live") -> str:
@@ -284,8 +236,6 @@ def plan_claims(store: Store, fid: str) -> list[Claim]:
     mark toggles (``marked`` / ``unmarked``) on this feature, plus accepted
     plans' words (``accepted``)."""
     out: list[Claim] = []
-    open_plans = {p.id for p in store.plans.values() if p.status == "open"}
-    mark_ops = plan_mark_ops(store, open_plans)
     for b in prose_blocks(store, fid):
         for f in text_fields(b.kind):
             t = b.text(f)
@@ -300,41 +250,15 @@ def plan_claims(store: Store, fid: str) -> list[Claim]:
             for sp in _suggest_spans(t, store):
                 out.append(Claim(b.id, f, sp.start, sp.end, "plan", "removed", store.plans[sp.attrs["plan"]].actor, lt[sp.start:sp.end]))
             offsets = t.live_offsets()
-            for o in mark_ops:
-                if o.payload.get("bid") != b.id or o.payload.get("path", "text") != f or o.payload.get("kind") == SUGGEST_DEL:
+            for m in t.proposals(kind=SUGGEST_MARK):
+                plan = store.plans.get(str(m.attrs.get("plan") or ""))
+                if plan is None or plan.status != "open":
                     continue
-                stage = "marked" if o.payload.get("on", True) else "unmarked"
-                gone = [Mark.from_json(rj) for rj in o.payload.get("removed") or []]
-                for mj in (o.payload.get("added") if stage == "marked" else o.payload.get("removed")) or []:
-                    mk = Mark.from_json(mj)
-                    if not (t.holds(mk.start) and t.holds(mk.end)):
-                        continue
-                    span = t.live_span(mk, offsets)
-                    if not span:
-                        continue
-                    # Widening a mark records the WHOLE merged one; what the plan
-                    # proposed is the part that was not marked already.
-                    holes = [s for g in gone if stage == "marked" and g.same(mk)
-                             and t.holds(g.start) and t.holds(g.end) and (s := t.live_span(g, offsets))]
-                    for lo, hi in _minus(span, holes):
-                        out.append(Claim(b.id, f, lo, hi, "plan", stage, o.actor, f"{mk.kind}:{lt[lo:hi]}"))
-    return out
-
-
-def _minus(span: tuple[int, int], holes: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """``span`` with ``holes`` cut out of it, in order."""
-    out = [span]
-    for lo, hi in holes:
-        nxt: list[tuple[int, int]] = []
-        for a, b in out:
-            if hi <= a or lo >= b:
-                nxt.append((a, b))
-                continue
-            if a < lo:
-                nxt.append((a, lo))
-            if hi < b:
-                nxt.append((hi, b))
-        out = nxt
+                span = t.live_span(m, offsets)
+                if span:
+                    out.append(Claim(b.id, f, span[0], span[1], "plan",
+                                     "marked" if m.attrs.get("on") else "unmarked", plan.actor,
+                                     f"{m.attrs.get('mark', '')}:{lt[span[0]:span[1]]}"))
     return out
 
 
@@ -606,24 +530,19 @@ def block_entry(store: Store, b: Block) -> dict:
     own state plus which plans are open, so a caller may memoize it on
     ``(block_head[b.id], plans_head)`` (spec §6, ``projection``).
 
-    The spans are the marks the document has *without* the open plans' toggles:
-    a proposal to unbold a word leaves the word bold on the page, the way a
-    proposal to delete words leaves them struck rather than gone, and the
-    proposal itself is drawn over it from ``plan_claims``. The words a plan
-    inserted are in ``runs`` and shown as the plan's, as before."""
-    open_ids = {p.id for p in store.plans.values() if p.status == "open"}
+    The spans are the document's own marks, and nothing else: a plan never
+    changes them, so a proposal to unbold a word leaves the word bold, the way
+    a proposal to delete words leaves them struck rather than gone. What the
+    plan proposes is drawn over them from ``plan_claims`` (``marked`` /
+    ``unmarked``), and the words it inserted are in ``runs``, as before."""
     entry = {"id": b.id, "kind": b.kind, "level": b.level, "rank": b.rank, "head": store.block_head.get(b.id, 0),
              "fields": {}}
     for f in text_fields(b.kind):
         t = b.text(f)
-        marked = t
-        if open_ids:
-            marked = t.clone()                      # same characters, the plans' mark toggles undone
-            _unapply_plan_marks(marked, store, open_ids)
         entry["fields"][f] = {
             "text": t.live_text(),
             "runs": [r.__dict__ for r in attribution(t, merge=False)],
-            "spans": [{"kind": s.kind, "attrs": s.attrs, "start": s.start, "end": s.end} for s in live_spans(marked)],
+            "spans": [{"kind": s.kind, "attrs": s.attrs, "start": s.start, "end": s.end} for s in live_spans(t)],
             "suggest_del": [{"plan": s.attrs["plan"], "start": s.start, "end": s.end} for s in _suggest_spans(t, store)],
         }
     for k, v in b.content.items():

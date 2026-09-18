@@ -38,9 +38,18 @@ from codoc.calculus.ids import END, START, CharRef, OpId
 # a half-resolved comment has no meaning. Every kind merges with an adjacent
 # mark of the same kind and attrs.
 BOLD, LINK, CITE, COMMENT, SUGGEST_DEL = "bold", "link", "cite", "comment", "suggest_del"
+# A plan's mark toggle, recorded BESIDE the trunk's marks rather than applied to
+# them: `attrs` carries the plan, the kind it proposes, the attrs that kind
+# needs, and whether it proposes turning the mark on or off. A verdict is then
+# the only thing that ever touches a trunk mark on the plan's behalf — accept
+# applies the toggle, reject drops the record — and neither has to find a mark
+# that a merge, a split or another plan has moved since. (Google Docs keeps a
+# style suggestion beside the style for the same reason.)
+SUGGEST_MARK = "suggest_mark"
 GROWS_AFTER = frozenset({BOLD})
 EXCLUSIVE = frozenset({LINK, CITE})
-WHOLE = frozenset({COMMENT, SUGGEST_DEL})
+WHOLE = frozenset({COMMENT, SUGGEST_DEL, SUGGEST_MARK})
+PROPOSALS = frozenset({SUGGEST_DEL, SUGGEST_MARK})
 
 Segment = tuple[OpId, int, int]   # (op, k0, len)
 
@@ -131,14 +140,6 @@ class Mark:
 Pos = tuple[int, int]   # (segment index, offset); comparable
 
 
-def _attr_key(attrs: dict | None) -> tuple:
-    return tuple(sorted((attrs or {}).items()))
-
-
-def placed_keys(added: list[dict]) -> frozenset:
-    """What a mark op recorded putting on the page, as match keys for
-    :meth:`Text.marks_placed_by`."""
-    return frozenset((a["kind"], _attr_key(a.get("attrs")), tuple(a["start"]), a.get("op", "")) for a in added)
 
 
 @dataclass
@@ -447,17 +448,13 @@ class Text:
     def marks_of(self, op: OpId) -> list[Mark]:
         return [m for m in self.marks if m.op == op]
 
-    def marks_placed_by(self, op: OpId, keys: frozenset) -> list[Mark]:
-        """The live marks one ``text.mark`` op put here — which is not always a
-        mark carrying its id. ``set_mark`` keeps the NEIGHBOUR's placer when it
-        widens a mark ("widening a person's cite does not make it the loop's")
-        and the DISPLACED mark's placer on the pieces it cuts, so a plan that
-        widens a person's bold, or cites inside their link, places nothing its
-        own id can find. ``keys`` is ``placed_keys(op)``: what the op recorded
-        putting there, matched on kind, attrs, start and placer — not end, so
-        one grown over text typed at its edge (I2) still matches."""
+    def proposals(self, plan: str | None = None, kind: str | None = None) -> list[Mark]:
+        """The proposal records here: every ``suggest_del`` and ``suggest_mark``,
+        or only one plan's, or only one of the two kinds. A verdict acts on
+        these and never has to search the trunk's marks for what it placed."""
         return [m for m in self.marks
-                if m.op == op or (m.kind, _attr_key(m.attrs), m.start, m.op) in keys]
+                if m.kind in (PROPOSALS if kind is None else {kind})
+                and (plan is None or m.attrs.get("plan") == plan)]
 
     def _before(self, a: CharRef, b: CharRef) -> bool:
         return self.locate(a) < self.locate(b)
