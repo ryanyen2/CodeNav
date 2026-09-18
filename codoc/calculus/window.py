@@ -217,6 +217,13 @@ def _liveness(o: Op) -> tuple[list[str], list[str]]:
     return [], []
 
 
+def _displaced(o: Op) -> dict:
+    """What a verdict's rows record. A reject or accept records what it
+    DISPLACED; a reopen re-applies that same record, so its own rows are what
+    it SET and the thing a reader of the page before it needs is in ``undid``."""
+    return (o.payload.get("undid") or {}) if o.kind == K.PLAN_REOPEN else o.payload
+
+
 def _shape_rows(o: Op) -> list[tuple[str, dict]]:
     """(block, what its kind and level were before this op). Only ``block.set``
     and a verdict undoing one change either."""
@@ -227,7 +234,7 @@ def _shape_rows(o: Op) -> list[tuple[str, dict]]:
         return [(str(o.target["bid"]), {"level": int(p.get("prev") or 0)})]
     if o.kind in VERDICTS:
         out: list[tuple[str, dict]] = []
-        for e in p.get("sets", []):
+        for e in _displaced(o).get("sets", []):
             if e.get("path") == "kind":
                 out.append((str(e["bid"]), {"kind": str(e["value"]), "level": int(e.get("level") or 0)}))
             elif e.get("path") == "level":
@@ -246,7 +253,7 @@ def _rank_rows(o: Op) -> list[tuple[str, str]]:
         if rows is None and o.inverse:
             rows = (o.inverse[0].get("payload") or {}).get("restore")
     elif o.kind in VERDICTS:
-        rows = o.payload.get("moved")
+        rows = _displaced(o).get("moved")
     else:
         return []
     return [(str(r[0]), str(r[1])) for r in (rows or [])]

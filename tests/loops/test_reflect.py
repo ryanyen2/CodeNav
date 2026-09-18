@@ -20,6 +20,22 @@ def seed(ws: Workspace):
     ], actor="loop")
 
 
+def test_a_malformed_attach_does_not_make_a_feature_one_that_lost_its_code(tmp_path):
+    """`reflect._emptied` proposes deleting a feature that HAD code and has
+    none now. `_h_bind_attach` added to `bound_once` before reading the payload
+    it then conflicted on, so a bad attach proposed deleting a feature that
+    never had any."""
+    from codoc.loops.reflect import _emptied
+    ws = Workspace(tmp_path / ".codoc")
+    ws.submit([
+        {"kind": K.BLOCK_ADD, "target": {"bid": "h1"}, "payload": {"kind": HEADING, "level": 1, "after": START}},
+        {"kind": K.TEXT_INSERT, "target": {"bid": "h1", "path": "text"}, "payload": {"after": START, "text": "Client"}},
+    ], actor="loop")
+    bad = ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "d.py"}}], actor="loop")[0]
+    assert bad.conflict == "missing:symbol"
+    assert _emptied(ws.store) == [], ("never had code, proposed for deletion:", ws.store.bound_once)
+
+
 def chunk(file, sym, fp="", th="", src=""):
     return ChunkRef(file=file, symbol_path=sym, fingerprint=fp, types_hash=th, source=src)
 

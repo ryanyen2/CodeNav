@@ -547,9 +547,12 @@ def _live_feature(store: Store, fid: str) -> Block:
 def _h_bind_attach(store: Store, op: Op, touched: set[str]):
     fid = op.target["fid"]
     _live_feature(store, fid)
-    store.bound_once.add(fid)
     p = op.payload
     key = (p["file"], p["symbol"])
+    # After the payload is read, not before: a malformed attach conflicts, and
+    # a feature that never had code must not be remembered as one that lost it
+    # (`reflect._emptied` proposes deleting exactly those).
+    store.bound_once.add(fid)
     fp, th = p.get("fingerprint", ""), p.get("types_hash", "")
     prior = store.bindings.get(key)
     touched.add(fid)
@@ -901,18 +904,25 @@ def _h_plan_reopen(store: Store, op: Op, touched: set[str]):
             b.dead = None
         touched.add(i)
     _reattach(store, p.get("detached", []), touched)
+    # A reopen re-applies the verdict's own record, so its `moved` and `sets`
+    # are the values it SETS. What it DISPLACED — which is what a reader of the
+    # page before it needs — has nowhere else to come from, so record it.
+    undid: dict = {"moved": [], "sets": []}
     for entry in p.get("sets", []):
         b = store.blocks[entry["bid"]]
         if entry["path"] == "kind":
+            undid["sets"].append({"bid": b.id, "path": "kind", "value": b.kind, "level": b.level})
             b.kind = entry["value"]
             b.level = int(entry.get("level", 0)) if entry["value"] == HEADING else 0
         elif entry["path"] == "level":
+            undid["sets"].append({"bid": b.id, "path": "level", "value": b.level})
             b.level = clamp_level(entry["value"])
         else:
             b.content[entry["path"]] = entry["value"]
         touched.add(b.id)
     for bid, rank, level in p.get("moved", []):
         b = store.blocks[bid]
+        undid["moved"].append([bid, b.rank, b.level])
         store.set_rank(bid, rank)
         if b.kind == HEADING:
             b.level = clamp_level(level)
@@ -932,7 +942,7 @@ def _h_plan_reopen(store: Store, op: Op, touched: set[str]):
     _touch_plan(store, plan, _plan_ops(store, plan), touched)
     verdict = K.PLAN_ACCEPT if p.get("from") == "accepted" else K.PLAN_REJECT
     vpayload = {"subset": p["closure"]} if verdict == K.PLAN_ACCEPT and p.get("closure") is not None else {}
-    return dict(p), [body(verdict, {"pid": pid}, vpayload)]
+    return {**p, "undid": undid}, [body(verdict, {"pid": pid}, vpayload)]
 
 
 def _touch_plan(store: Store, plan: Plan, pops: list[Op], touched: set[str]) -> None:

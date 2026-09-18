@@ -172,3 +172,25 @@ def test_the_window_carries_the_order_a_verdict_undid():
     w = history_window(s, limit=1)
     # Entering the window h2 sat before h1; today it sits after it.
     assert w["ranks"]["h2"] < s.blocks["h1"].rank < s.blocks["h2"].rank, (w["ranks"], s.blocks["h2"].rank)
+
+
+def test_the_window_carries_the_order_a_reopen_undid():
+    """Review 7: the same for the other direction. A reopen re-applies the
+    verdict's own record, so its `moved` rows are the ranks it SET; reading
+    them as the ranks it displaced put the page before a reopen in the order
+    the reopen produced. The reopen records what it displaced, as `undid`."""
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "A")
+    paragraph(m, s, "p1", "a", after="h1")
+    heading(m, s, "h2", "B", after="p1")
+    paragraph(m, s, "p2", "b", after="h2")
+    apply(s, m.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "move", "target": "h2"}))
+    apply(s, m.op(K.BLOCK_MOVE, {"bid": "h2"}, {"after": "START", "level_delta": 0}, plan="P"))
+    rej = apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {}))
+    assert rej.conflict is None and [b.id for b in s.ordered()] == ["h1", "p1", "h2", "p2"]
+    was = s.blocks["h2"].rank                                  # h2 sat last, where the reject put it
+    re = apply(s, m.op(K.PLAN_REOPEN, {"pid": "P"}, dict(rej.inverse[0]["payload"])))
+    assert re.conflict is None and [b.id for b in s.ordered()] == ["h2", "p2", "h1", "p1"]
+    w = history_window(s, limit=1)
+    assert w["ops"][0]["kind"] == K.PLAN_REOPEN
+    assert w["ranks"].get("h2") == was, (w["ranks"], was)
