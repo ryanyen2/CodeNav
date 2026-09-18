@@ -115,3 +115,23 @@ def test_focus_from_human_bold_only():
     apply(s, m.op(K.FEATURE_HANDOFF, {"fid": "h1"}, {}))
     d = directive(s, "h1")
     assert 'Focus: "once"' in d and "logs" not in d.split("Focus:")[1].splitlines()[0]
+
+
+def test_a_person_who_only_deleted_words_has_something_to_hand_off(tmp_path):
+    """02 §2: "empty a title by deleting characters → a feature with an empty
+    title, flagged". `ink` is what the person WROTE — 09-editor §7 draws
+    removals not at all, because they are the one who removed them — so a
+    delete-only edit left the phase `synced`, the status bar silent and the
+    hand-off unoffered, while the directive was already carrying a `removed:`
+    line for it."""
+    m, s = Mint(), Store()
+    loop = Mint("l", "loop")
+    heading(loop, s, "h1", "Client")
+    ins = paragraph(loop, s, "p1", "Retries once.", after="h1")
+    assert phase(s, "h1") == "synced"
+    apply(s, m.op(K.TEXT_DELETE, {"bid": "p1", "path": "text"},
+                  {"from": [ins.id, 8], "to": [ins.id, 11]}))
+    assert phase(s, "h1") == "edited"
+    apply(s, m.op(K.FEATURE_HANDOFF, {"fid": "h1"}, {"asked": "drop the retry"}))
+    assert phase(s, "h1") in ("queued", "planned")
+    assert 'removed: "once"' in directive(s, "h1")

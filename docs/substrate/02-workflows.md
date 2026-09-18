@@ -45,7 +45,7 @@ it repairs block-id uniqueness after paste and split, and nothing else.
 | type a paragraph, then insert a heading above it | `block.split` (empty first half gets the new id), `block.set(kind=heading)` | the paragraph now reads under the new feature; nothing about it changed |
 | Backspace at paragraph start | `block.merge` | one paragraph; attribution follows the characters |
 | Backspace/Delete across a heading boundary | none; the caret moves | the boundary refuses to merge title into prose (kept from today) |
-| empty a title by deleting characters | `text.delete` | a feature with an empty title, flagged; not a deletion |
+| empty a title by deleting characters | `text.delete` | a feature with an empty title, flagged (`phase` is `edited`: a removal is pending intent, and the hand-off carries it as `removed:`); not a deletion |
 | Delete feature (command, ⌘⌫ on a heading) | `block.delete` (its range is the heading and its own body, computed at apply; the applier detaches its bindings and records them), `block.set(level)` per promoted child | the feature and its prose are gone; History has them; a bound feature stays in the queue as a phantom and its removal directive is held until a hand-off with `delete_code` |
 | select-all, Delete | the same per feature, one batch | reversible with one undo; refused only if it would empty the whole tree |
 | Tab / Shift-Tab, drag a feature | `block.move(level_delta)` (the subtree range is computed at apply) | the subtree moves as one |

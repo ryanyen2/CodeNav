@@ -4,10 +4,19 @@ blocks it touches), plus the ordered insert a structural op pays (spec §5).
 Every op is recorded: applied, or stored with ``conflict`` set and the state
 untouched. Handlers are two-phase: they RESOLVE every anchor, block and mark
 they will touch before the first mutation, so a conflict discovered midway
-never leaves a partial change behind. On success the op leaves with its
-canonical payload (what it actually did) and its inverse (op bodies that undo
-it). The inverse of an inverse is the original, which is what makes undo a
-new op and the timeline an un-apply through the same code.
+never leaves a partial change behind. A verdict is the handler where this is
+hardest and has been got wrong twice: it undoes, strikes and applies mark
+records in turn, and a proposal it cannot apply is one the document has
+already satisfied, not a reason to stop half way.
+
+On success the op leaves with its canonical payload (what it actually did) and
+its inverse (op bodies that undo it). The inverse of an inverse is the
+original — including a plan's mark toggle, whose redo names the record it is
+restoring rather than carrying the plan tag — which is what makes undo a new op
+and the timeline an un-apply through the same code.
+
+``replay_recorded`` is how a RECORDED op comes back: as the record says, never
+re-judged. Rebuild and the fold both go through it.
 
 Conflict strings are stable identifiers, not prose; the UI maps them.
 """
@@ -858,16 +867,6 @@ def _struck_chars(m: Mark) -> list[tuple[str, int, int]]:
         if op_id and k.isdigit():
             out.append((op_id, int(k), 1))
     return out
-
-
-def _mark_holder(store: Store, mk: Mark, hint: tuple[str, str]) -> list[tuple[Block, str]]:
-    """The one Text holding both ends of a mark, if any (a split may have
-    moved them apart, in which case the mark is two marks and neither is this one)."""
-    try:
-        block, p = store.locate_char(mk.start, hint)
-    except AnchorError:
-        return []
-    return [(block, p)] if block.text(p).holds(mk.end) else []
 
 
 def _h_plan_accept(store: Store, op: Op, touched: set[str]):

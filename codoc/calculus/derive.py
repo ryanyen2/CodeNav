@@ -293,12 +293,31 @@ def _op(store: Store, op_id: OpId) -> Op | None:
 PHASES = ("edited", "realizing", "queued", "planned", "proposed", "drifted", "synced")
 
 
+def unsent_removal(store: Store, fid: str) -> bool:
+    """Whether the person has removed words here that no hand-off has carried.
+
+    Not part of `ink`, which is INK: 09-editor §7 draws what the person wrote
+    and deliberately not what they removed, because they are the one who
+    removed it. But a removal is pending intent all the same — 02 §2's "empty a
+    title by deleting characters → flagged", and the directive already carries
+    it as a `removed:` line — so the phase has to see it or the person is told
+    there is nothing to hand off while there is."""
+    w = store.watermarks(fid)
+    for b in prose_blocks(store, fid):
+        for f in text_fields(b.kind):
+            for sg in b.text(f).segs:
+                if sg.dead and is_human(sg.dead_actor) and not in_frontier(sg.dead, w.handoff) \
+                        and not in_frontier(sg.dead, w.realized):
+                    return True
+    return False
+
+
 def phase(store: Store, fid: str, realizing: set[str] = frozenset()) -> str:
     """The single lifecycle state of a feature. Doc wins: a person's pending
     intent outranks anything the code side has to say. ``realizing`` is the
     one ephemeral input (a lease outside the store)."""
     w = store.watermarks(fid)
-    if any(c.stage == "unsent" for c in ink(store, fid)):
+    if any(c.stage == "unsent" for c in ink(store, fid)) or unsent_removal(store, fid):
         return "edited"
     if fid in realizing:
         return "realizing"

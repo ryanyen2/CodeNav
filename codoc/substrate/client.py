@@ -12,9 +12,11 @@ at the next call, and the held workspace is closed.
 
 Two daemonless writers are not forbidden — the MCP server holds its workspace
 while the person runs `codoc accept` — so ``applying()`` wraps apply-and-publish
-in an exclusive lock and, when the log grew by a hand that is not ours since
-our last turn, rebuilds before writing. Without it each held a store the other
-had moved on from and the derived files described whichever published last.
+in an exclusive lock, and both writes AND reads rebuild when the log grew by a
+hand that is not ours since our last turn. Without the lock each held a store
+the other had moved on from and the derived files described whichever published
+last; without the read half, the agent's `codoc_read_tree` and the `base_text`
+its next amend cites describe the tree before the person's `codoc accept`.
 The lock is per CALL, never for the life of the process: a lease would leave
 the other writer submitting into an inbox with no daemon to drain it.
 """

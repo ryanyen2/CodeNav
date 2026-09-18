@@ -26,8 +26,10 @@ op outside its frontier with the check on.
 
 Dead blocks are kept because anchors may still name their characters from a
 branch forked before the snapshot. Attribution survives because segments carry
-their actor. ``state_fingerprint`` is equal across a fold, and so is every
-derived view — a view that reads ops reads ops the fold left alone.
+their actor — and so do the directive, drift, `ground` and a phantom's settle,
+because what each reads is on the document now (01 §7.5). ``state_fingerprint``
+is equal across a fold and so is every derived view OF THE DOCUMENT; `history`
+and the timeline are views of the log, and a fold is the log ending.
 """
 from __future__ import annotations
 
@@ -51,11 +53,14 @@ def settled_prefix(store: Store) -> int:
     """How many of ``store.ops`` may be folded: everything before the oldest op
     that something still unsettled was written by.
 
-    A feature nobody is waiting on, whose code has not moved and whose
-    proposals are all decided, is finished: its ops are history and the state
-    they produced is enough. ``derive.reads_its_ops`` names the three that are
-    not, and why. Stopping at the oldest op of any of them is exact and linear;
-    replaying forward to test each prefix would be quadratic.
+    A feature with no proposal open on it is finished: its ops are history and
+    the state they produced is enough, because every other reader reads state
+    (``derive.reads_its_ops`` says which and why). Stopping at the oldest op of
+    any feature that is NOT is conservative, not exact — the cut lands at that
+    feature's creation rather than at the oldest op its verdict will need — and
+    it is linear, where replaying forward to test each prefix would be
+    quadratic. An exact cut would be worth having only if a tree commonly had
+    an old open plan and much newer work; it does not.
     """
     live: set[str] = set()
     for b in list(store.blocks.values()):
