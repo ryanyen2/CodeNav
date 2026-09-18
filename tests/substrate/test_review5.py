@@ -513,3 +513,135 @@ def test_a_contributor_typing_over_several_settles_leaves_one_proposal(tmp_path)
     assert len(open_plans) == 1, [(p.id, p.ops) for p in open_plans]
     assert len(open_plans[0].ops) == 3
     ws.close()
+
+
+def _folded(cd) -> tuple[int, int]:
+    """(ops still in the log, ops the snapshot folded)."""
+    return (sum(len(L.read_session(p).ops) for p in L.list_sessions(cd)),
+            sum(len(L.read_session(p).ops) for p in L.list_snapshots(cd)))
+
+
+def test_a_settled_tree_folds_whole_and_its_log_is_archived(tmp_path):
+    """The fold is Eg-walker's critical version: a point with nothing in flight
+    across it. A tree nobody is waiting on is entirely behind such a point."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed(ws)
+    ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {}}], actor=H)
+    ws.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": "h1"}, "payload": {}}], actor="loop")
+    fp = ws.store.state_fingerprint()
+    ws.close()
+    fold(cd)
+    assert not L.list_sessions(cd), "a settled tree's log was not archived"
+    ws2 = Workspace(cd, readonly=True)
+    assert ws2.store.state_fingerprint() == fp and not ws2.problems
+
+
+def test_the_fold_stops_where_the_work_in_flight_begins(tmp_path):
+    """A queued feature's directive, an open plan's verdict and drift all read
+    the ops. The fold folds what is behind them and leaves the rest as log,
+    rather than persisting a derived copy of it."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed(ws)
+    ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {}}], actor=H)
+    ws.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": "h1"}, "payload": {}}], actor="loop")
+    # A second feature, and a proposal on it that nobody has answered.
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "h2"}, "payload": {"kind": HEADING, "level": 1, "after": "p1"}},
+               {"kind": K.TEXT_INSERT, "target": {"bid": "h2", "path": "text"}, "payload": {"after": START, "text": "Server"}}], actor=H)
+    pid = ws.open_plan(actor="loop", kind="edit", target="h2")
+    ins(ws, "h2", list(refs(ws, "h2")[-1]), " (proposed)", actor="loop", plan=pid)
+    before = directive(ws.store, "h1")
+    ws.close()
+    fold(cd)
+    log, snap = _folded(cd)
+    assert log and snap, f"folded {snap} ops, left {log} — one of the two halves is empty"
+    ws2 = Workspace(cd)
+    assert not ws2.problems
+    # The proposal is still answerable, and answering it takes its own ops.
+    assert ws2.store.plans[pid].status == "open"
+    rej = ws2.submit([{"kind": K.PLAN_REJECT, "target": {"pid": pid}, "payload": {}}], actor=H)[0]
+    assert rej.conflict is None and "(proposed)" not in T(ws2.store, "h2")
+    assert directive(ws2.store, "h1") == before
+    ws2.close()
+
+
+def test_a_fold_never_folds_a_fold(tmp_path):
+    """Two folds in a row must not carry the first fold's own ops into the
+    second: an archive that grows by a copy of the state per fold is not a
+    compaction."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed(ws)
+    ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {}}], actor=H)
+    ws.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": "h1"}, "payload": {}}], actor="loop")
+    ws.close()
+    fold(cd)
+    first = _folded(cd)[1]
+    fold(cd)
+    assert _folded(cd)[1] == first, "the second fold grew"
+    assert len(L.list_snapshots(cd)) == 1
+
+
+def test_drift_reads_op_order_and_a_fold_does_not_reorder_it(tmp_path):
+    """`_drifted` compares the position of the newest binding op with the newest
+    prose op, so a fold that kept ops out of order would make a feature read
+    `synced` — or not — by the hash of its block ids. Forty of them, so a
+    reordering cannot pass by luck."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    for i in range(40):
+        ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": f"h{i}"},
+                    "payload": {"kind": HEADING, "level": 1, "after": f"p{i - 1}" if i else START}},
+                   {"kind": K.TEXT_INSERT, "target": {"bid": f"h{i}", "path": "text"},
+                    "payload": {"after": START, "text": f"Feature {i}"}},
+                   {"kind": K.BLOCK_ADD, "target": {"bid": f"p{i}"}, "payload": {"kind": PARAGRAPH, "after": f"h{i}"}},
+                   {"kind": K.TEXT_INSERT, "target": {"bid": f"p{i}", "path": "text"},
+                    "payload": {"after": START, "text": f"Body {i}."}}], actor="loop")
+        ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": f"h{i}"},
+                    "payload": {"file": f"m{i}.py", "symbol": f"m{i}.py::f", "fingerprint": "a"}}], actor="loop")
+        ws.submit([{"kind": K.BIND_REFRESH, "target": {"fid": f"h{i}"},
+                    "payload": {"file": f"m{i}.py", "symbol": f"m{i}.py::f", "fingerprint": "b"}}], actor="loop")
+    before = {h.id: phase(ws.store, h.id) for h in ws.store.headings()}
+    assert set(before.values()) == {"drifted"}, before
+    ws.close()
+    fold(cd)
+    ws2 = Workspace(cd, readonly=True)
+    assert {h.id: phase(ws2.store, h.id) for h in ws2.store.headings()} == before
+    ws2.close()
+
+
+def test_two_clones_that_each_folded_do_not_lose_one_clones_work(tmp_path):
+    """04 §5: a branch forked before a snapshot merges correctly. Two clones
+    that each fold is not that case — only one state can be the state — so the
+    rebuild says so and reads the archive the losing fold made, instead of
+    dropping a feature with no word about it."""
+    base = tmp_path / "base" / ".codoc"
+    ws = Workspace(base)
+    seed(ws)
+    ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {}}], actor=H)
+    ws.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": "h1"}, "payload": {}}], actor="loop")
+    ws.close()
+    import shutil
+    a, b = tmp_path / "a" / ".codoc", tmp_path / "b" / ".codoc"
+    for d in (a, b):
+        d.parent.mkdir()
+        shutil.copytree(base, d)
+    for d, bid, title in ((a, "h2", "Alpha"), (b, "h3", "Beta")):
+        w = Workspace(d)
+        w.submit([{"kind": K.BLOCK_ADD, "target": {"bid": bid}, "payload": {"kind": HEADING, "level": 1, "after": "p1"}},
+                  {"kind": K.TEXT_INSERT, "target": {"bid": bid, "path": "text"}, "payload": {"after": START, "text": title}},
+                  {"kind": K.FEATURE_HANDOFF, "target": {"fid": bid}, "payload": {}}], actor=H)
+        w.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": bid}, "payload": {}}], actor="loop")
+        w.close()
+        fold(d)
+    for src in (b / "log").rglob("*.jsonl"):                 # the git merge: both folds arrive
+        dst = a / "log" / src.relative_to(b / "log")
+        dst.parent.mkdir(exist_ok=True)
+        if not dst.exists():
+            shutil.copy(src, dst)
+    m = Workspace(a, readonly=True)
+    titles = {T(m.store, h.id) for h in m.store.headings()}
+    assert {"Alpha", "Beta"} <= titles, (titles, m.problems)
+    assert any("another clone" in p.reason for p in m.problems), m.problems
+    m.close()

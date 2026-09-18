@@ -38,6 +38,7 @@ from codoc.substrate.clock import parse
 from codoc.substrate.workspace import Roles
 
 FUTURE_SKEW_MS = 24 * 60 * 60 * 1000       # a day: a clock this wrong is not drift
+SNAPSHOT_BATCH = "snap-"                   # a fold's own session, and so its batch
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,8 @@ def refused_verdicts(store: Store, roles: Roles) -> dict[str, int]:
     have let in (`codoc rebuild` prints it)."""
     out: dict[str, int] = {}
     for op in store.ops:
+        if op.batch.startswith(SNAPSHOT_BATCH):
+            continue        # a fold re-expresses ops that were authorized when written
         if op.conflict is None and roles.policy(store, op):
             out[op.actor] = out.get(op.actor, 0) + 1
     return out

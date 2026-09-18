@@ -103,8 +103,6 @@ class Store:
         # and has none now is proposed for deletion; after a fold there is no
         # `bind.attach` op left to read, so it is state and not history.
         self.bound_once: set[str] = set()
-        # Folded ops, kept but never applied: block → the ones that named it.
-        self.archived_on: dict[str, list[Op]] = {}
         # One slot for the open plans' mark ops, keyed on this store's own
         # length: a publish renders a thousand fields in the rejected read mode
         # and each one asks for the same list (``derive.plan_mark_ops``).
@@ -346,32 +344,12 @@ class Store:
             # conflicted does not, because nothing about the plans changed.
             self.plans_head = pos + 1
 
-    def remember(self, op: Op) -> None:
-        """Keep a folded op without applying it. A snapshot restores the text an
-        op produced and archives the op itself; the views that read history —
-        the directive's Focus, the reds and greens, the symbols a phantom
-        settles against — still have to find it. Position −1 says it is older
-        than anything this store applied."""
-        self.by_id[op.id] = op
-        self.position[op.id] = -1
-        for bid in {op.target.get("bid"), op.target.get("fid"), op.target.get("into"),
-                    op.payload.get("bid"), op.payload.get("new")} | set(op.payload.get("killed") or []):
-            if isinstance(bid, str) and bid:
-                self.archived_on.setdefault(bid, []).append(op)
-
     def ops_on(self, bids) -> list[Op]:
-        """The recorded ops on any of ``bids``, oldest first, each once —
-        folded ops first, since they are older than anything applied here."""
+        """The recorded ops on any of ``bids``, oldest first, each once."""
         seen: set[int] = set()
-        old: list[Op] = []
-        got: set[str] = set()
         for b in bids:
             seen.update(self.ops_by_block.get(b, ()))
-            for o in self.archived_on.get(b, ()):
-                if o.id not in got:
-                    got.add(o.id)
-                    old.append(o)
-        return old + [self.ops[i] for i in sorted(seen)]
+        return [self.ops[i] for i in sorted(seen)]
 
     # ── equality for tests and snapshots ───────────────────────────────────
     def to_json(self) -> dict:

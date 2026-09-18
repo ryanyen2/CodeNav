@@ -130,7 +130,9 @@ def test_snapshot_folds_and_rebuilds_identically(tmp_path):
     write_snapshot(tmp_path / ".codoc", ws2.store, ws2.clock)
     assert len(L.list_snapshots(tmp_path / ".codoc")) == 1
     assert all("archive" not in str(p) for p in L.list_sessions(tmp_path / ".codoc"))
-    assert list((tmp_path / ".codoc" / "log" / L.ARCHIVE_DIR).glob("*.jsonl")), "the folded logs were not archived"
+    # An open proposal is work in flight, so the fold stops before it and the
+    # session file holding it stays the log — the verdict still reads its ops.
+    assert L.list_sessions(tmp_path / ".codoc"), "the log a verdict still needs was archived"
     ws2.close()
     ws3 = Workspace(tmp_path / ".codoc")
     assert not ws3.problems

@@ -445,16 +445,30 @@ folded. Earlier files move to `log/archive/`. Replay applies the snapshot
 first — **without the authority check**, since a fold re-expresses ops that
 were authorized when they were written and is not a new decision — and then
 every op not inside its frontier, with the check on, regardless of `at`, so a
-branch forked before the snapshot merges correctly. `state_fingerprint` is
-equal across a fold — and the state is not all a reader reads, so the fold also
-archives the ops of every feature that is not settled: the directive's `Focus:`
-and `removed:` lines, `ground`'s reds and greens, and the symbols a phantom
-settles against are read from the ops, and a fold that dropped them would
-answer differently the moment it ran. The rebuild remembers those ops without
-applying them. What a settled feature did is history, and history stays
-readable in `log/archive/` (no reader opens it yet; the timeline reads the
-window). A snapshot is therefore as trusted as the log it replaces: the hub
-refuses a pull request that introduces or changes one.
+branch forked before the snapshot merges correctly.
+
+**The fold stops where the work in flight begins.** State is not all a reader
+reads: a queued feature's directive takes `Focus:` from the mark ops a person
+turned on and `removed:` from the op that killed each word, an open plan's
+verdict undoes the plan's own ops by identity, drift is a comparison of op
+order, and so are the reds and greens `ground` paints. So the fold runs only up
+to the last point at which none of those was outstanding — Eg-walker's
+*critical version*, a frontier with nothing in flight across it
+(`derive.reads_its_ops` names the four and why) — and everything after it stays
+an ordinary session log. A tree nobody is editing folds whole; a tree with a
+proposal open folds up to the proposal and no further, and `codoc snapshot`
+says so rather than persisting a derived copy of what a reader still needs.
+Unsent ink is not one of the four: `ink` reads segments, and a segment carries
+its actor, its clock and its minting op through the fold.
+
+`state_fingerprint` is equal across a fold, and so is every derived view — a
+view that reads ops reads ops the fold left alone. A session file the fold
+covers WHOLE moves to `log/archive/`; one that also holds ops after the cut
+stays, and the frontier is what keeps its folded half from applying twice.
+Two clones that each fold is not a fork the merge can resolve — only one state
+can be the state — so a rebuild that finds two snapshots says so and reads the
+archive the losing fold made. A snapshot is as trusted as the log it replaces:
+the hub refuses a pull request that introduces or changes one.
 
 ### 7.6 Privacy
 

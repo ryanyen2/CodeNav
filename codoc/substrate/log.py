@@ -70,7 +70,6 @@ class SessionFile:
     ops: list[Op]
     problems: list[LogProblem] = field(default_factory=list)
     torn_tail: int | None = None       # byte offset of an unreadable last line; the prefix is kept
-    archived: list[Op] = field(default_factory=list)   # snapshot only: ops to remember, not to apply
 
     @property
     def valid(self) -> bool:
@@ -107,7 +106,6 @@ def read_session(path: str | Path) -> SessionFile:
     expected_seq = 1
     last_at = ""
     torn: int | None = None
-    archived: list[Op] = []
     body = [(n, line) for n, line in enumerate(lines[1:], start=2) if line.strip()]
     for k, (n, line) in enumerate(body):
         try:
@@ -120,11 +118,6 @@ def read_session(path: str | Path) -> SessionFile:
                 # state the daemon was in, so it stays; the caller truncates.
                 torn = len("\n".join(lines[:n - 1]).encode("utf-8")) + (1 if n > 1 else 0)
             break
-        if d.get("archived"):
-            # A snapshot's record of an op it folded: the store remembers it
-            # (a verdict on an open plan needs it) and never applies it again.
-            archived.append(op)
-            continue
         sess, _, seq = op.id.rpartition(":")
         if sess != session or not seq.isdigit() or int(seq) != expected_seq:
             problems.append(LogProblem(str(path), n, f"id {op.id!r} out of sequence (expected {session}:{expected_seq})"))
@@ -137,7 +130,7 @@ def read_session(path: str | Path) -> SessionFile:
         ops.append(op)
     if problems and torn is None:
         ops = []
-    return SessionFile(path, session, header, ops, problems, torn, archived)
+    return SessionFile(path, session, header, ops, problems, torn)
 
 
 def truncate_torn(f: SessionFile) -> bool:
@@ -156,6 +149,13 @@ def list_sessions(codoc_dir: str | Path) -> list[Path]:
     if not d.exists():
         return []
     return sorted(p for p in d.glob("*.jsonl") if not p.name.startswith(SNAPSHOT_PREFIX))
+
+
+def list_archived(codoc_dir: str | Path) -> list[Path]:
+    """The session files a fold moved aside. Nothing reads them in the ordinary
+    case — that is what folding them means — but a merge of two folds has to."""
+    d = log_dir(codoc_dir) / ARCHIVE_DIR
+    return sorted(d.glob("*.jsonl")) if d.is_dir() else []
 
 
 def list_snapshots(codoc_dir: str | Path) -> list[Path]:

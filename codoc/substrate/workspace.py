@@ -196,16 +196,23 @@ class Workspace:
                 files.append(f)
         exclude = None
         snaps = L.list_snapshots(self.codoc_dir)
+        if len(snaps) > 1:
+            # Two clones each folded and the merge brought both. Only one state
+            # can be the state, and the other's log is in `log/archive/`, which
+            # nothing reads — so say so, and read the archive, rather than
+            # losing a feature quietly (04 §5: fold on the integration branch).
+            self.problems.append(L.LogProblem(str(snaps[-1]), 1, (
+                f"{len(snaps)} snapshots: {', '.join(p.name for p in snaps[:-1])} was folded by another clone; "
+                "replaying its archived log. Re-fold once, on one branch.")))
+            for p in L.list_archived(self.codoc_dir):
+                f = L.read_session(p)
+                if f.valid and not f.header.get("snapshot"):
+                    files.append(f)
         if snaps:
             snap = L.read_session(snaps[-1])
             self.problems.extend(snap.problems)
             if snap.valid:
                 exclude = snap.header.get("frontier") or {}
-                for op in snap.archived:
-                    # Folded ops the still-open plans' verdicts and the views
-                    # that read history will need. Remembered, never applied:
-                    # their effect is in the text the snapshot restores.
-                    self.store.remember(op)
                 for op in snap.ops:
                     self._replay_one(op)
         for op in L.replay_order(files, exclude):

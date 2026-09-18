@@ -381,6 +381,34 @@ def phase(store: Store, fid: str, realizing: set[str] = frozenset()) -> str:
     return "synced"
 
 
+def reads_its_ops(store: Store, fid: str) -> bool:
+    """Whether a view still reads this feature's OPS and not just its state —
+    which is what a snapshot may not fold away (01 §7.5).
+
+    Four do. A queued feature's directive takes ``Focus:`` from the mark ops a
+    person turned on and ``removed:`` from the op that killed each word; an open
+    plan's verdict undoes the plan's own ops by identity; drift is itself a
+    comparison of op order; and the reds and greens ``ground`` paints are the
+    loop's ops since the person last looked, which is a comparison of position.
+    A phantom's settle reads the symbols its delete recorded, which is the
+    directive again.
+
+    Unsent ink is NOT one: ``ink`` reads segments, and a segment carries its
+    actor, its clock and its minting op through the fold. Neither is a feature
+    whose greens the person has already caught up on — that is what catching up
+    means.
+    """
+    b = store.blocks.get(fid)
+    if b is None:
+        return False
+    w = store.watermarks(fid)
+    if bool(w.handoff) and not covered(w.handoff, w.realized):
+        return True
+    if not b.live:
+        return False
+    return bool(open_plans_on(store, fid)) or _drifted(store, fid) or bool(ground(store, fid))
+
+
 def _drifted(store: Store, fid: str) -> bool:
     """Bound code moved and nobody has looked at the prose since: the newest
     op among binding changes, prose edits (any actor) and realizations on this
