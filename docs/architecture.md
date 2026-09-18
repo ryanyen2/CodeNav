@@ -268,6 +268,19 @@ content, `text_view` (which fields are attributed Text), optional `lift` (code
 get attribution, marks, plans, translation and History for free; comments are
 a kind whose anchor is a `comment{block}` mark.
 
+## 7.1 The hub (`codoc/serve/`, `docs/serve-deployment.md`)
+
+`codoc serve` claims the repo (`serve.lock`), supervises one daemon, and
+serves the same editor bundle over HTTP: a GitHub session maps the visitor's
+collaborator permission to a role in the tracked `config.json`, their edits
+become submissions in `inbox/hub-<login>.jsonl` (the daemon stamps
+`human:<login>` and applies them under that role), and one SSE feed carries the
+projection, status, their acks and the timeline window. `worker.py` turns each
+uncovered hand-off into a pull request from a sandboxed agent on a worktree
+(`sandbox.py`, `realize_agent.py`, `consult.py`: no shell, edits confined to
+the feature's bound files, secrets unreadable, tokens scrubbed, a post-run
+scope gate), and `ratelimit.py` bounds writes per login.
+
 ## 8. Version control (`04-version-control.md`)
 
 One session file per daemon lifetime; a session closes on every commit and

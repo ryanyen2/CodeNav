@@ -412,21 +412,31 @@ def serve(root: str = ROOT,
         raise typer.Exit(2)
     import uvicorn
     from codoc.serve.app import build_app
+    from codoc.serve.ratelimit import RateLimiter
     from codoc.serve.static import resolve_static_dir
     from codoc.serve.supervise import DaemonSupervisor, OwnershipError
     auth = build_auth_context(gh) if gh else None
-    application = build_app(str(cd), static_dir=resolve_static_dir(static_dir), auth=auth)
-    tun = None
+    application = build_app(str(cd), static_dir=resolve_static_dir(static_dir), auth=auth,
+                            rate_limiter=RateLimiter() if auth else None)
+    tun, worker = None, None
     try:
         with DaemonSupervisor(root, str(cd)):
             if tunnel:
                 from codoc.serve.tunnel import launch_tunnel
                 tun = launch_tunnel(port, config=os.environ.get("CODOC_TUNNEL_CONFIG"))
+            if gh and os.environ.get("CODOC_SERVE_PR", "1") != "0":
+                # With GitHub configured the server decides what is built: each
+                # hand-off becomes a PR from a sandboxed agent on a worktree.
+                from codoc.serve.worker import Worker
+                worker = Worker(root, str(cd), base=os.environ.get("CODOC_SERVE_BASE", "main"),
+                                printer=typer.echo).start()
             typer.echo(f"codoc hub on http://{host}:{port}" + (" (GitHub auth on)" if auth else " (localhost, no auth)"))
             uvicorn.run(application, host=host, port=port, log_level="warning")
     except OwnershipError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(3)
     finally:
+        if worker is not None:
+            worker.stop()
         if tun is not None:
             tun.terminate()

@@ -41,11 +41,29 @@ edits can only be plans of their own and a forged verdict is a recorded
 ## What travels
 
 Nothing new. A contributor's ops are in the daemon's session logs like
-anyone's; a realized change is a PR whose logs carry the tree's history with
-it. The hub does not build hand-offs itself yet: a maintainer's daemon (or
-`codoc realize` on a checkout that has the logs) does. The PR worker on a
-worktree is the next piece; until then a hand-off on the hub queues the
-directive for whoever runs the realize pass.
+anyone's; a realized change is a pull request whose logs carry the tree's
+history with it.
+
+## Building a hand-off (the PR worker)
+
+With GitHub configured, the server decides what is built: every feature whose
+hand-off is not yet realized gets one pull request. Each runs **off the live
+tree** on its own git worktree and branch (`codoc/realize-<hand-off op id>`),
+implemented by an agent under an enforced sandbox:
+
+- no shell (`Read`, `Edit`, `Write`, `Glob`, `Grep`, and a `WebFetch` gated by
+  `CODOC_CONSULT_ALLOWLIST`, empty by default);
+- edits confined to the feature's bound files, never `.github/`, `.claude/`,
+  `.codoc/`, `.mcp.json` or a manifest or lockfile;
+- secrets unreadable, and every GitHub token scrubbed from the agent's
+  environment, so only the orchestrator can authenticate;
+- a post-run gate: a write outside the scope aborts the pull request.
+
+The worker writes nothing to the tree. A request is realized when the code
+lands and the maintainer's daemon indexes it, exactly as for a local build.
+`.codoc/cache/hub-prs.json` (ignored) remembers which hand-offs already have a
+pull request. `CODOC_SERVE_BASE` is the base branch (default `main`);
+`CODOC_SERVE_PR=0` turns the worker off and leaves the queue for a person.
 
 ## Routes
 

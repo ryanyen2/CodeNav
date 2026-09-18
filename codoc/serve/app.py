@@ -47,7 +47,7 @@ def _callback(request: Request) -> str:
     return str(request.base_url).rstrip("/") + "/auth/callback"
 
 
-def build_app(codoc_dir: str, *, static_dir: str | None = None, auth: AuthContext | None = None):
+def build_app(codoc_dir: str, *, static_dir: str | None = None, auth: AuthContext | None = None, rate_limiter=None):
     cd = Path(codoc_dir)
     app = FastAPI(title="codoc", docs_url=None, redoc_url=None)
 
@@ -123,6 +123,10 @@ def build_app(codoc_dir: str, *, static_dir: str | None = None, auth: AuthContex
             return denied()
         if request.headers.get("x-codoc-csrf") is None:
             return JSONResponse({"error": "missing CSRF header"}, status_code=403)
+        # Every write wakes the daemon and fans out to every connected browser,
+        # so a flood is both a daemon DoS and a broadcast amplifier.
+        if rate_limiter is not None and not rate_limiter.allow(s.login):
+            return JSONResponse({"error": "rate limited"}, status_code=429)
         try:
             m = await request.json()
         except Exception:  # noqa: BLE001
