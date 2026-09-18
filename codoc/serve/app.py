@@ -61,7 +61,7 @@ def build_app(codoc_dir: str, *, static_dir: str | None = None, auth: AuthContex
     def session(request: Request) -> Session | None:
         if auth is None:
             return LOCAL
-        s = auth.session(request.cookies.get(COOKIE_NAME))
+        s = auth.session(request.cookies.get(COOKIE_NAME), cd)
         return s if s and s.role != NONE else None
 
     def denied() -> JSONResponse:
@@ -202,7 +202,7 @@ def handle_message(cd: Path, s: Session, m: dict) -> JSONResponse:
 
 SHELL = """<!doctype html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self';"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none';"/>
 <link rel="stylesheet" href="/assets/app.css"/><title>codoc</title></head>
 <body><div id="app"></div><script src="/assets/hub.js"></script><script src="/assets/app.js"></script></body></html>"""
 

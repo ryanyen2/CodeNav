@@ -16,7 +16,7 @@ its bodies before submitting.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from codoc.calculus import ops as K
@@ -47,6 +47,24 @@ def _withdrawing_own_empty_plan(store: Store, op: Op) -> bool:
         return False
     plan = store.plans.get(str(op.target.get("pid") or ""))
     return plan is not None and plan.actor == op.actor and plan.status == "open" and not plan.ops
+
+
+def _own_plan_text(store: Store, op: Op) -> bool:
+    """A delete or restore naming only characters an open plan of this actor's
+    minted. Taking back words you proposed touches nothing of anyone else's, and
+    without it a contributor cannot undo their own typing: the inverse of their
+    plan-tagged insert is a bare ``text.delete``, which a plan cannot carry."""
+    if op.kind not in (K.TEXT_DELETE, K.TEXT_RESTORE):
+        return False
+    segments = op.payload.get("segments") or ()
+    if not segments:
+        return False
+    for seg in segments:
+        minted = store.by_id.get(str(seg[0]))
+        plan = store.plans.get(minted.plan) if minted is not None and minted.plan else None
+        if plan is None or plan.actor != op.actor or plan.status != "open":
+            return False
+    return True
 
 
 def is_comment_op(store: Store, kind: str, target: dict, payload: dict) -> bool:
@@ -125,7 +143,7 @@ class Roles:
             return None
         if op.kind == K.PLAN_OPEN:
             return None
-        if _withdrawing_own_empty_plan(store, op):
+        if _withdrawing_own_empty_plan(store, op) or _own_plan_text(store, op):
             return None
         if is_comment_op(store, op.kind, op.target, op.payload):
             return None
@@ -434,6 +452,11 @@ class Workspace:
 
     def _drain_one(self, client: str, actor: str, s: L.Submission, acked: dict[str, str]) -> list[Op]:
         batch = s.batch or new_batch_id()
+        if s.caused_by and actor_kind(actor) not in MACHINE_KINDS:
+            # `caused_by` says "this op is what that hand-off produced" and the
+            # provenance card and `settle` read it. A person's client does not
+            # get to assert it about itself.
+            s = replace(s, caused_by=None)
         s = self._as_proposal(actor, s)
         plan = s.plan or self._suggester_plan(actor, s.kind if s.kind != "ingest" else K.TEXT_INSERT,
                                               s.target, s.payload, batch)

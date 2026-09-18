@@ -30,6 +30,11 @@ from codoc.serve.sandbox import out_of_scope_changes
 from codoc.substrate import client
 
 LEDGER = "cache/hub-prs.json"
+# A hand-off whose branch carries the agent's commit but has no pull request
+# yet: `built:<branch>:<attempts>`. The next pass resumes from the push rather
+# than paying for another model session.
+BUILT = "built:"
+MAX_ATTEMPTS = 5
 
 
 def branch_name(handoff_id: str) -> str:
@@ -82,7 +87,8 @@ def pending(codoc_dir: str | Path, store, done: dict[str, str] | None = None) ->
         w = store.watermarks(fid)
         hid = w.handoffs[-1] if w.handoffs else ""
         scope = sorted({b.file for b in store.bindings.values() if b.feature == fid})
-        if not hid or hid in done or not scope:
+        answer = done.get(hid, "")
+        if not hid or (answer and not answer.startswith(BUILT)) or not scope:
             continue
         out.append(Request(fid, hid, title(store, fid, "rejected") or fid, directive(store, fid), scope))
     return out
@@ -95,15 +101,26 @@ class Result:
     reason: str = ""
     out_of_scope: list[str] = field(default_factory=list)
     transient: bool = False      # git or gh failed: worth another interval, not a verdict on the request
+    built: bool = False          # the agent ran and its work is committed: retry from the push, not the model
 
 
-def realize_one(req: Request, worktree: str, *, run, agent, base: str = "main", root: str | None = None) -> Result:
-    """Worktree → sandboxed agent → scope gate → commit → PR. Every git and gh
-    call is checked: a worktree git refused is not a worktree to run an agent
-    in, and a pull request that was not opened is not a pull request.
+def realize_one(req: Request, worktree: str, *, run, agent, base: str = "main", root: str | None = None,
+                resume: bool = False) -> Result:
+    """Worktree → sandboxed agent → scope gate → commit → push → PR. Every git
+    and gh call is checked: a worktree git refused is not a worktree to run an
+    agent in, and a pull request that was not opened is not a pull request.
     ``run(argv, cwd=None) -> returncode``; ``agent(directive, worktree, scope)``
-    returns the files it changed."""
+    returns the files it changed.
+
+    ``resume`` picks the work up at the push: the agent already ran and its
+    commit is on the branch, and asking the model again would spend another
+    session to produce a different diff for the same request."""
     branch = branch_name(req.handoff)
+    if resume:
+        if run(["git", "worktree", "add", worktree, branch], cwd=root):
+            return Result(False, branch, "git could not re-create the worktree for the built branch",
+                          transient=True, built=True)
+        return _publish(req, worktree, branch, base, run)
     if run(["git", "worktree", "add", "-b", branch, worktree], cwd=root):
         return Result(False, branch, "git refused to create the worktree or branch", transient=True)
     changed = agent({"text": req.text, "id": req.handoff, "title": req.title}, worktree, scope=req.scope)
@@ -118,11 +135,21 @@ def realize_one(req: Request, worktree: str, *, run, agent, base: str = "main", 
         return Result(False, branch, "no changes produced")
     if run(["git", "add", "-A"], cwd=worktree) or run(["git", "commit", "-m", f"codoc: {req.title}"], cwd=worktree):
         return Result(False, branch, "git refused to commit the agent's work", transient=True)
+    return _publish(req, worktree, branch, base, run)
+
+
+def _publish(req: Request, worktree: str, branch: str, base: str, run) -> Result:
+    """The half that can be retried without the model: push, then ask for the
+    pull request."""
+    # `gh pr create --head` "explicitly skips any forking or pushing behavior",
+    # so the branch has to be on the remote before we ask for the pull request.
+    if run(["git", "push", "-u", "origin", branch], cwd=worktree):
+        return Result(False, branch, "git could not push the branch", transient=True, built=True)
     body = (f"Realizes the hand-off `{req.handoff}` on feature **{req.title}** (`{req.fid}`).\n\n"
             "Opened by the codoc hub from a hand-off in the tree. Review as usual; "
             "the tree marks the request realized once this lands and the daemon indexes it.")
     if run(pr_create_command(branch, f"codoc: {req.title}", body, base=base), cwd=worktree):
-        return Result(False, branch, "gh could not open the pull request", transient=True)
+        return Result(False, branch, "gh could not open the pull request", transient=True, built=True)
     return Result(True, branch)
 
 
@@ -144,15 +171,17 @@ def process_ready(root_dir: str, codoc_dir: str, *, base: str = "main", run=_run
     Hand-offs left unanswered by a transient failure are appended to ``retry``,
     which is how the worker knows to come back to them before the tree moves."""
     store = store if store is not None else client.read(codoc_dir).store
-    reqs = pending(codoc_dir, store)
+    ledger = read_ledger(codoc_dir)
+    reqs = pending(codoc_dir, store, ledger)
     if not reqs:
         return []
     agent = agent or make_sandboxed_agent()
     done: list[str] = []
     for req in reqs:
         worktree = str(Path(codoc_dir) / "worktrees" / branch_name(req.handoff).replace("/", "-"))
+        tried = _attempts(ledger.get(req.handoff, ""))
         try:
-            res = realize_one(req, worktree, run=run, agent=agent, base=base, root=root_dir)
+            res = realize_one(req, worktree, run=run, agent=agent, base=base, root=root_dir, resume=tried > 0)
         except Exception as exc:  # noqa: BLE001 — one bad request never wedges the loop
             printer(f"  ⚠ hub realize {req.fid} failed: {exc}")
             _cleanup(worktree, branch_name(req.handoff), run, root_dir)
@@ -166,11 +195,21 @@ def process_ready(root_dir: str, codoc_dir: str, *, base: str = "main", run=_run
             # unsafe directive would do the same thing again.
             record_pr(codoc_dir, req.handoff, "refused: out of scope")
             printer(f"  ✗ hub realize {req.fid} wrote out of scope ({', '.join(res.out_of_scope)}) — no PR")
+        elif res.transient and res.built and tried + 1 >= MAX_ATTEMPTS:
+            # The work is done and the remote will not take it. Stop paying for
+            # attempts and say what stopped, with the branch still there.
+            record_pr(codoc_dir, req.handoff, f"refused after {tried + 1} attempts: {res.reason}")
+            printer(f"  ✗ hub realize {req.fid}: {res.reason} — gave up after {tried + 1}; branch {res.branch} kept")
         elif res.transient:
             # git or gh failed, or the sandbox could not run: the request was
             # never answered, so the next interval tries again rather than
-            # burying it in the ledger.
+            # burying it in the ledger. When the agent's work is already
+            # committed, the branch stays and the retry starts at the push —
+            # asking the model again would spend another session on the same
+            # request.
             printer(f"  ⚠ hub realize {req.fid}: {res.reason}; will retry")
+            if res.built:
+                record_pr(codoc_dir, req.handoff, f"{BUILT}{res.branch}:{tried + 1}")
             if retry is not None:
                 retry.append(req.handoff)
         else:
@@ -178,14 +217,26 @@ def process_ready(root_dir: str, codoc_dir: str, *, base: str = "main", run=_run
             # the feature off anew when they want another try.
             record_pr(codoc_dir, req.handoff, f"refused: {res.reason}")
             printer(f"  · hub realize {req.fid}: {res.reason}")
-        _cleanup(worktree, res.branch, run, root_dir)
+        _cleanup(worktree, res.branch, run, root_dir, keep_branch=res.built)
     return done
 
 
-def _cleanup(worktree: str, branch: str, run, root: str | None = None) -> None:
-    """Leave no worktree and no branch behind: the next attempt must be able to
-    create both by the same names."""
-    for argv in (["git", "worktree", "remove", "--force", worktree], ["git", "branch", "-D", branch]):
+def _attempts(answer: str) -> int:
+    """How many times this hand-off's branch has been built and not published."""
+    if not answer.startswith(BUILT):
+        return 0
+    tail = answer.rpartition(":")[2]
+    return int(tail) if tail.isdigit() else 1
+
+
+def _cleanup(worktree: str, branch: str, run, root: str | None = None, *, keep_branch: bool = False) -> None:
+    """Leave no worktree behind: the next attempt must be able to create one by
+    the same name. The branch goes with it, unless it carries work the agent has
+    already done and only the publishing failed."""
+    argvs = [["git", "worktree", "remove", "--force", worktree]]
+    if not keep_branch:
+        argvs.append(["git", "branch", "-D", branch])
+    for argv in argvs:
         try:
             run(argv, cwd=root)
         except Exception:  # noqa: BLE001 — best effort

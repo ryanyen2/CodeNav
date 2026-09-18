@@ -144,7 +144,11 @@ def can_use_tool(tool_name: str, tool_input: dict | None, *,
     # boundary itself.
     if target and not under_root(target, root):
         return False, f"{tool_name} outside the worktree is not permitted"
-    if tool_name == "Read":
+    # Every tool that can read a file is a read: `Grep` returns the matching
+    # lines and `Glob` the names, so a secret `Read` refuses is one they must
+    # refuse too. A `Grep` that names no path searches the worktree, which is
+    # the repository the agent is here to change.
+    if tool_name in ("Read", "Grep", "Glob"):
         if target and is_secret_path(target, root):
             return False, "reading secrets is not permitted"
         return True, ""

@@ -89,10 +89,15 @@ class AuthContext:
     oauth: object | None = None           # github_auth.GithubOAuth in deployment
     recheck_seconds: float = DEFAULT_RECHECK_SECONDS
 
-    def session(self, sid: str | None) -> Session | None:
+    def session(self, sid: str | None, codoc_dir: str | Path | None = None) -> Session | None:
         """The session behind this cookie, with its role re-asked of GitHub on a
         cadence. Revoking access has to reach a tab that is already open, and
-        the role it signed in with is a decision somebody has since changed."""
+        the role it signed in with is a decision somebody has since changed.
+
+        A changed role is written back to the tracked ``config.json`` as well:
+        the session gate decides what the HTTP routes allow, and the roles table
+        decides what the applier allows. A demotion that reached only the first
+        would leave the daemon accepting their verdicts."""
         s = self.store.get(sid)
         if s is None:
             return None
@@ -103,7 +108,11 @@ class AuthContext:
         role = authorize(s.login, self.resolver)
         if role == NONE:
             self.store.delete(s.sid)
+            if codoc_dir is not None:
+                record_role(codoc_dir, s.login, NONE)
             return None
+        if role != s.role and codoc_dir is not None:
+            record_role(codoc_dir, s.login, role)
         s.role = role
         return s
 

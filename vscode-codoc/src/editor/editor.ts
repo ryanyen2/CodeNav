@@ -153,7 +153,14 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
     // ── recording ──────────────────────────────────────────────────────────
     function record(tr: Transaction): void {
         const tagged = tr.getMeta(RECORDED) as OpBody[] | undefined;
-        if (tagged) { queue(tagged, (tr.getMeta(GESTURE_CIDS) as string[]) ?? [], bornOrGone(tr)); return; }
+        if (tagged) {
+            // An EMPTY list is not a gesture: adoption and the NFC fix-up carry
+            // the tag to pass the structural guard, and holding what they moved
+            // would leave every block a projection inserts or removes waiting
+            // for an ack nobody will send — for the life of the page.
+            if (tagged.length) queue(tagged, (tr.getMeta(GESTURE_CIDS) as string[]) ?? [], bornOrGone(tr));
+            return;
+        }
         if (!tr.docChanged) return;
         const rec = recorder.record(tr.steps, tr.docs);
         if (rec.unhandled.length) {

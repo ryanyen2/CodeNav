@@ -31,6 +31,10 @@ from codoc.serve.consult import consult_url_allowed
 # The sandbox's minimal set PLUS a consult-gated WebFetch (sandbox.ALLOWED_TOOLS omits
 # WebFetch precisely because it must go through the consult gate, wired below).
 HUB_ALLOWED_TOOLS = (*sandbox.ALLOWED_TOOLS, "WebFetch")
+# Named so the model is never offered them. The PreToolUse hook refuses anything
+# outside HUB_ALLOWED_TOOLS anyway; this is the belt.
+DENIED_TOOLS = ("Bash", "BashOutput", "KillShell", "Task", "NotebookEdit", "TodoWrite",
+                "WebSearch", "SlashCommand", "ExitPlanMode")
 
 
 def realize_tool_policy(scope, *, consult_allowlist, resolve, root=None) -> Callable[[str, dict | None], "tuple[bool, str]"]:
@@ -58,7 +62,8 @@ def consult_allowlist_from_env(environ: dict | None = None) -> frozenset:
     return frozenset(h.strip().lower() for h in raw.split(",") if h.strip())
 
 
-_GH_TOKEN_KEYS = ("CODOC_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN", "GITHUB_APP_PRIVATE_KEY")
+_GH_TOKEN_KEYS = ("CODOC_GITHUB_TOKEN", "CODOC_GITHUB_CLIENT_SECRET", "GITHUB_TOKEN", "GH_TOKEN",
+                  "GITHUB_APP_PRIVATE_KEY")
 
 
 def changed_files(worktree_path: str, *, run_capture) -> list[str]:
@@ -131,11 +136,20 @@ def _default_resolve(host: str) -> list[str]:
 
 
 def _run_sandboxed_sdk(*, prompt: str, worktree_path: str, policy) -> bool:
-    """Run one directive on the Claude Agent SDK with the sandbox hook installed.
-    Returns True if the session ran (under the enforced policy), False if the sandbox
-    could not be installed (SDK missing / unsupported) so the caller fails safe."""
+    """Run one directive on the Claude Agent SDK with the sandbox installed as a
+    **PreToolUse hook**. Returns True if the session ran (under the enforced
+    policy), False if the sandbox could not be installed (SDK missing /
+    unsupported) so the caller fails safe.
+
+    A hook and not ``can_use_tool``: an ``allowed_tools`` entry naming a whole
+    tool auto-approves it BEFORE the permission callback runs — the SDK says so
+    itself, with a ``CanUseToolShadowedWarning`` — so listing the five tools we
+    guard is what stopped the guard from ever being asked about them. A
+    PreToolUse hook runs whatever the allow rules say. ``allowed_tools`` stays,
+    so a headless run never stops to prompt, and everything else is named in
+    ``disallowed_tools`` so the model is not offered it in the first place."""
     try:
-        from claude_agent_sdk import ClaudeAgentOptions, query
+        from claude_agent_sdk import ClaudeAgentOptions, HookMatcher, query
     except Exception:  # noqa: BLE001 — SDK not installed → cannot sandbox → refuse
         return False
 
@@ -143,16 +157,30 @@ def _run_sandboxed_sdk(*, prompt: str, worktree_path: str, policy) -> bool:
         allowed, reason = policy(tool_name, tool_input if isinstance(tool_input, dict) else {})
         return _permission_result(allowed, reason)
 
+    async def pre_tool_use(payload, _tool_use_id, _ctx):
+        name = (payload or {}).get("tool_name", "")
+        got = (payload or {}).get("tool_input")
+        allowed, reason = policy(name, got if isinstance(got, dict) else {})
+        return {"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow" if allowed else "deny",
+            "permissionDecisionReason": reason or "permitted by the codoc realize sandbox",
+        }}
+
     try:
         options = ClaudeAgentOptions(
             cwd=worktree_path,
             allowed_tools=list(HUB_ALLOWED_TOOLS),
-            permission_mode="default",  # so the canUseTool hook is consulted
-            can_use_tool=can_use_tool,
+            disallowed_tools=list(DENIED_TOOLS),
+            permission_mode="default",
+            can_use_tool=can_use_tool,        # for a build whose hooks do not fire
+            hooks={"PreToolUse": [HookMatcher(hooks=[pre_tool_use])]},
         )
     except TypeError:
-        # This SDK build does not accept a canUseTool hook — we cannot guarantee the
+        # This SDK build does not accept the hook — we cannot guarantee the
         # boundary, so refuse rather than run unsandboxed.
+        return False
+    if not getattr(options, "hooks", None):
         return False
 
     import asyncio
