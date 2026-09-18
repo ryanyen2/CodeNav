@@ -32,7 +32,7 @@ codoc lang [tag] | translate     # authoring language; convert existing prose
 codoc rebuild | snapshot         # replay the logs; fold them
 codoc import-v1                  # bring a v1 codoc.db into the log
 
-python3.11 -m pytest tests/      # Python tests (231)
+python3.11 -m pytest tests/      # Python tests (239)
 cd vscode-codoc && npx vitest run && npx tsc --noEmit && node esbuild.config.mjs
 ```
 
