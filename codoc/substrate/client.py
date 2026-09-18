@@ -107,7 +107,8 @@ def read(codoc_dir: str | Path) -> Workspace:
 
 
 def ingest(codoc_dir: str | Path, *, client: str, bid: str, path: str, base_text: str, new_md: str,
-           plan: str | None = None, caused_by: str | None = None, root_dir: str | None = None) -> dict:
+           plan: str | None = None, caused_by: str | None = None, root_dir: str | None = None,
+           batch: str | None = None) -> dict:
     """A whole-text write from another process. When a daemon is alive the
     boundary diff still has to run in the applier, so the request is submitted
     as an ``ingest`` submission the daemon expands; without one, run it here."""
@@ -115,13 +116,15 @@ def ingest(codoc_dir: str | Path, *, client: str, bid: str, path: str, base_text
     actor = _actor(client)
     if not daemon_running(codoc_dir):
         ws = _applier(codoc_dir)
-        res, ops = ws.ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, plan=plan, caused_by=caused_by)
+        res, ops = ws.ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, plan=plan,
+                             caused_by=caused_by, batch=batch)
         publish(codoc_dir, ws.store, root_dir=root_dir or str(codoc_dir.parent))
         return {"refused": res.refused, "ops": [o.id for o in ops],
                 "status": None if ops or res.refused else "unchanged"}
     release(codoc_dir)
     sub = Submission(cid=f"{client}-{uuid.uuid4().hex[:12]}", kind="ingest", target={"bid": bid, "path": path},
-                     payload={"base_text": base_text, "new_md": new_md}, plan=plan, caused_by=caused_by)
+                     payload={"base_text": base_text, "new_md": new_md}, plan=plan, caused_by=caused_by,
+                     batch=batch or "")
     L.submit(codoc_dir, client, [sub])
     ack = wait_for_acks(codoc_dir, client, [sub.cid], 3.0)[0]
     return {"refused": ack.get("conflict"), "ops": [ack["op"]] if ack.get("op") else [],

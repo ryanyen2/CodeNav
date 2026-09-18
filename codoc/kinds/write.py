@@ -79,7 +79,7 @@ class Written:
 
 
 def write_block(ws: Workspace, bid: str, content: dict, *, actor: str, plan: str | None = None,
-                caused_by: str | None = None, batch: str | None = None) -> Written:
+                caused_by: str | None = None, batch: str | None = None, derived: bool = False) -> Written:
     out = Written(bid)
     p = plan_write(ws.store.blocks.get(bid), content)
     if p.refused:
@@ -88,7 +88,8 @@ def write_block(ws: Workspace, bid: str, content: dict, *, actor: str, plan: str
     if p.sets:
         out.ops.extend(ws.submit(p.sets, actor=actor, plan=plan, caused_by=caused_by, batch=batch))
     for f, base, new_md in p.ingests:
-        res, ops = ws.ingest(bid, f, base_text=base, new_md=new_md, actor=actor, plan=plan, caused_by=caused_by, batch=batch)
+        res, ops = ws.ingest(bid, f, base_text=base, new_md=new_md, actor=actor, plan=plan, caused_by=caused_by,
+                             batch=batch, derived=derived)
         if res.refused:
             out.refused.append((f, res.refused))
         out.ops.extend(ops)

@@ -432,24 +432,33 @@ def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[
 
 
 def _at_realized(store: Store, text: Text, realized: dict) -> Text:
-    """The field without what a PERSON changed since the last realization: their
-    characters are not there yet and their kills have not happened. By identity,
-    no diff. Only a person's, because `lower` speaks for the author — a diagram
-    the loop lifted from the code is already in the code, and telling the agent
-    "the author drew that edge" about it contradicts the `consult` line beside
-    it."""
+    """The field without what the AUTHOR changed since the last realization:
+    their characters are not there yet and their kills have not happened. By
+    identity, no diff. Only the author's, because `lower` speaks for them — a
+    diagram the loop lifted from the code is already in the code, and telling
+    the agent "the author drew that edge" about it contradicts the `consult`
+    line beside it."""
     t = text.clone()
-    t.segs = [s for s in t.segs if in_frontier(s.op, realized) or not _by_human(store, s.op)]
+    t.segs = [s for s in t.segs if in_frontier(s.op, realized) or not _authored(store, s.op)]
     for s in t.segs:
-        if s.dead and not in_frontier(s.dead, realized) and _by_human(store, s.dead):
+        if s.dead and not in_frontier(s.dead, realized) and _authored(store, s.dead):
             s.dead = None
     t.marks = [m for m in t.marks if t.holds(m.start) and t.holds(m.end)]
     return t
 
 
-def _by_human(store: Store, op_id: OpId) -> bool:
+def _authored(store: Store, op_id: OpId) -> bool:
+    """Whether a reader would call this the author's word: a person wrote it,
+    or a person ACCEPTED it. Accepting is how an author adopts an agent's
+    words — "a plan is by definition a request to build" (02 §3.3) — so an
+    accepted edge has to reach the directive the same way a typed one does."""
     o = store.by_id.get(op_id)
-    return o is not None and is_human(o.actor)
+    if o is None:
+        return False
+    if is_human(o.actor):
+        return True
+    plan = store.plans.get(o.plan) if o.plan else None
+    return plan is not None and plan.status == "accepted"
 
 
 def _human_changes(store: Store, fid: str, w: Watermarks) -> list[str]:

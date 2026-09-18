@@ -36,7 +36,7 @@ def lift_pass(ws: Workspace, graph=None, codoc_dir: str | None = None, only: set
         delta = {k: v for k, v in new.items() if current.get(k) != v}
         if not delta:
             continue
-        w = write_block(ws, block.id, delta, actor="loop")
+        w = write_block(ws, block.id, delta, actor="loop", derived=True)
         if w.ops:
             changed += 1
     return changed

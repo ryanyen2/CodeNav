@@ -6,6 +6,8 @@ pending intent become a plan" — has to be what the tree does.
 """
 from codoc.calculus import ops as K
 from codoc.calculus.derive import markdown, phase
+from codoc.calculus.doc import PARAGRAPH
+from codoc.calculus.ids import START
 from codoc.calculus.text import BOLD
 from codoc.loops.realize import handoff
 from codoc.mcp import tools
@@ -72,3 +74,53 @@ def test_a_small_repair_to_the_machines_own_prose_still_lands(tmp_path):
     st = Workspace(cd, readonly=True).store
     assert st.blocks["p1"].text().live_text() == "Retries once more."
     assert not [p for p in st.plans.values() if p.status == "open"]
+
+
+def test_one_amend_over_two_paragraphs_is_one_proposal(tmp_path):
+    """01 §4 rule 8: "One amend is one plan: every block it repairs ... rides
+    under the same plan id, so one repair gets one verdict." The tool sent one
+    ingest per block with no batch, and `_plan_for` fell back to keying on the
+    block id — a proposal per paragraph for the person to answer."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed(ws)
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "p2"}, "payload": {"kind": PARAGRAPH, "after": "p1"}},
+               {"kind": K.TEXT_INSERT, "target": {"bid": "p2", "path": "text"}, "payload": {"after": START, "text": "Backs off."}}], actor=H)
+    handoff(ws, "h1", actor=H)                            # queued: the document wins, so both repairs propose
+    publish(cd, ws.store, root_dir=str(tmp_path))
+    ws.close()
+    try:
+        out = tools.reflect(str(cd), ops=[{"kind": "amend", "feature_id": "h1", "blocks": [
+            {"id": "p1", "text": "Retries twice."}, {"id": "p2", "text": "Backs off exponentially."}]}],
+            root_dir=str(tmp_path))
+        assert out["ok"], out
+        st = client.read(cd).store
+        open_plans = [p for p in st.plans.values() if p.status == "open" and p.actor == "agent:claude-code"]
+        assert len(open_plans) == 1, [(p.id, p.target, p.ops) for p in open_plans]
+        assert len(open_plans[0].ops) > 1                  # and both repairs are under it
+    finally:
+        client.release(cd)
+
+
+def test_a_repair_never_rides_in_the_agents_open_proposal_to_delete(tmp_path):
+    """`_plan_for` reused "an open plan of theirs on the same block" whatever
+    its kind, so an agent that proposed retiring a feature and then repaired
+    its title had the repair filed under the DELETE: accepting the deletion
+    accepted the repair, rejecting it dropped it."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed(ws)
+    handoff(ws, "h1", actor=H)                            # queued, so the repair must propose
+    publish(cd, ws.store, root_dir=str(tmp_path))
+    ws.close()
+    try:
+        assert tools.propose(str(cd), ops=[{"kind": "retire_node", "feature_id": "h1"}], note="dead code",
+                             root_dir=str(tmp_path))["ok"]
+        tools.reflect(str(cd), ops=[{"kind": "amend", "feature_id": "h1", "title": "Server client"}],
+                      root_dir=str(tmp_path))
+        st = client.read(cd).store
+        riders = {st.plans[o.plan].kind for o in st.ops
+                  if o.kind == K.TEXT_INSERT and o.plan and "Server" in o.payload.get("text", "")}
+        assert riders and "delete" not in riders, riders
+    finally:
+        client.release(cd)

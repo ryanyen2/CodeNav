@@ -345,7 +345,8 @@ class Workspace:
         return ops
 
     def ingest(self, bid: str, path: str, *, base_text: str, new_md: str, actor: str, base: dict | None = None,
-               plan: str | None = None, caused_by: str | None = None, batch: str | None = None) -> tuple[Ingest, list[Op]]:
+               plan: str | None = None, caused_by: str | None = None, batch: str | None = None,
+               derived: bool = False) -> tuple[Ingest, list[Op]]:
         """``plan_ingest`` then ``commit_ingest``, on the trunk or under ``plan``.
 
         A machine writing prose on its own is gated HERE, because this is where
@@ -356,10 +357,18 @@ class Workspace:
         feature with pending intent, becomes a plan of that actor's. The
         document wins and the person decides. A caller that sees the whole
         repair and wants one plan for all of it (``reflect._amend``) computes
-        and commits its parts itself, so it passes through here only once."""
+        and commits its parts itself, so it passes through here only once.
+
+        ``derived`` says this content was READ OFF THE CODE rather than
+        authored — the lift pass's re-derived diagram, and nothing else. The
+        gate exists to keep a machine from overwriting words somebody meant,
+        and a derived field holds none: it is attribution, like a binding
+        refresh (03 §5.1). Gating it would make the always-on channel stop and
+        ask whenever the code moved far enough, which is precisely when the
+        picture most needs to follow."""
         res = self.plan_ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, trunk=plan is None)
         opened = None
-        if plan is None and (why := self._must_propose(bid, actor, res)):
+        if plan is None and not derived and (why := self._must_propose(bid, actor, res)):
             plan = opened = self._plan_for(actor, batch or bid, bid, why)
             if plan is not None:
                 batch = batch or plan
@@ -469,8 +478,11 @@ class Workspace:
         if plan is not None and plan.status == "open":
             return pid
         if bid:
+            # An `edit` plan only: a proposal to DELETE or MOVE this feature is
+            # a different question, and filing a repair under it means accepting
+            # the deletion accepts the repair and rejecting it drops it.
             for p in reversed(list(self.store.plans.values())):
-                if p.status == "open" and p.actor == actor and p.target == bid:
+                if p.status == "open" and p.actor == actor and p.target == bid and p.kind == "edit":
                     self._suggest_plans[key] = p.id
                     return p.id
         pid = new_plan_id()

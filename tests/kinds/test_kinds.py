@@ -1,6 +1,6 @@
 """Block kinds on the extension interface (`03-extensions.md`)."""
 from codoc.calculus import ops as K
-from codoc.calculus.derive import attribution, markdown
+from codoc.calculus.derive import attribution, directive, markdown
 from codoc.calculus.doc import text_fields
 from codoc.calculus.export import export_markdown
 from codoc.calculus.ids import START
@@ -78,6 +78,52 @@ def test_diagram_lifts_from_the_graph_and_lowers_an_edge_delta(tmp_path):
     handoff(ws, "h1", actor="human:local")
     g2 = Graph([{"src_symbol": "c.py::send", "dst_name": "other", "dst_symbol": "c.py::other", "kind": "call", "src_file": "c.py", "internal": True}])
     assert lift_pass(ws, g2) == 0
+
+
+def test_a_lift_lands_on_the_trunk_however_much_of_the_picture_changed(tmp_path):
+    """Review 7: a lift "is attribution, like a binding refresh, never intent"
+    (03 §5.1), so the machine gate in `Workspace.ingest` does not apply to it.
+    It used to: when the code moved far enough, the re-derived diagram deleted
+    more than half its source and the always-on channel stopped to ask."""
+    def graph(*edges):
+        return Graph([{"src_symbol": s, "dst_name": d.split("::")[-1], "dst_symbol": d,
+                       "kind": "call", "src_file": "c.py", "internal": True} for s, d in edges])
+
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws)
+    for sym in ("retry", "backoff", "jitter"):
+        ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": f"c.py::{sym}"}}], actor="loop")
+    d = add_block(ws, "diagram", {"source": ""}, after="p1", actor="loop")
+    assert d.ok and lift_pass(ws, graph()) == 1 and "jitter" in ws.store.blocks[d.bid].text("source").live_text()
+    for sym in ("send", "retry", "backoff", "jitter"):                # every symbol it drew is gone
+        ws.submit([{"kind": K.BIND_DETACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": f"c.py::{sym}"}}], actor="loop")
+    ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": "c.py::alpha"}}], actor="loop")
+    assert lift_pass(ws, graph()) == 1
+    assert [p.id for p in ws.store.plans.values() if p.status == "open"] == []
+    src = ws.store.blocks[d.bid].text("source")
+    assert markdown(src, "rejected", ws.store) == src.live_text() == "flowchart TB\n  alpha"
+
+
+def test_an_accepted_plan_on_a_diagram_reaches_the_directive(tmp_path):
+    """02 §3.3: "a plan is by definition a request to build". `_at_realized`
+    holds back what the AUTHOR changed since the last realization, and
+    accepting a plan is how an author adopts an agent's words — so the edge
+    they accepted has to reach `lower` as theirs, not sit in `old` already."""
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws)
+    ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": "c.py::retry"}}], actor="loop")
+    d = add_block(ws, "diagram", {"source": ""}, after="p1", actor="loop")
+    assert d.ok and lift_pass(ws, Graph([])) == 1                     # no edges in the code yet
+    base = ws.store.blocks[d.bid].text("source").live_text()
+    pid = ws.open_plan(actor="agent:claude-code", kind="edit", target=d.bid, note="wire the retry")
+    res, ops = ws.ingest(d.bid, "source", base_text=base, new_md=base + "\n  send --> retry",
+                         actor="agent:claude-code", plan=pid)
+    assert not res.refused and ops
+    ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}},
+               {"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {"asked": f"Build the plan {pid}."}}],
+              actor="human:local")
+    out = directive(ws.store, "h1")
+    assert "send --> retry" in out and "Add a dependency or call from `send` to `retry`" in out, out
 
 
 def test_mcp_write_block_adds_and_edits_as_the_agent(tmp_path):

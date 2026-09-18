@@ -24,7 +24,7 @@ from codoc.calculus.derive import (
     attribution, dead_cites, description, history as feature_history, markdown, phase, title,
 )
 from codoc.calculus.doc import HEADING, PARAGRAPH, fold_tree, text_fields
-from codoc.calculus.ids import START, new_block_id, new_plan_id
+from codoc.calculus.ids import START, new_batch_id, new_block_id, new_plan_id
 from codoc.calculus.text import SUGGEST_DEL
 from codoc.doclang import detect_prose_language, workspace_doc_language
 from codoc.graph.graph import Graph
@@ -229,11 +229,15 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "", caused_by: 
         elif kind == "amend":
             if fid not in store.blocks:
                 return _err(f"unknown feature_id {fid!r}")
+            # One amend is one batch, so if the gate turns it into a proposal
+            # it is ONE proposal over every block it repairs (01 §4 rule 8) —
+            # `_plan_for` keys on the batch and falls back to the block id.
+            batch = new_batch_id()
             if raw.get("title"):
-                ingests.append({"bid": fid, "path": "text", "new_md": raw["title"]})
+                ingests.append({"bid": fid, "path": "text", "new_md": raw["title"], "batch": batch})
             for entry in raw.get("blocks", []):
                 if entry.get("id") in store.blocks:
-                    ingests.append({"bid": entry["id"], "path": "text", "new_md": entry.get("text", "")})
+                    ingests.append({"bid": entry["id"], "path": "text", "new_md": entry.get("text", ""), "batch": batch})
                 elif entry.get("text"):
                     plans.append({"kind": "add_paragraph", "feature_id": fid, "text": entry["text"]})
         elif kind in ("add_node", "move_node", "retire_node"):
@@ -247,7 +251,7 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "", caused_by: 
         t = store.blocks[ing["bid"]].text().live_text()
         results["ingested"].append({**ing, **client.ingest(codoc_dir, client=AGENT, bid=ing["bid"], path=ing["path"],
                                                            base_text=t, new_md=ing["new_md"], caused_by=caused_by,
-                                                           root_dir=root_dir)})
+                                                           root_dir=root_dir, batch=ing["batch"])})
     if plans:
         results["planned"] = propose(codoc_dir, ops=plans, note=rationale, caused_by=caused_by, root_dir=root_dir)
     return results
