@@ -821,3 +821,56 @@ def test_a_hand_off_given_after_a_fold_still_carries_what_the_person_changed(tmp
     d = directive(ws2.store, "h1")
     assert 'removed: "once"' in d and 'Focus: "Retries"' in d, d
     ws2.close()
+
+
+def test_a_fold_does_not_orphan_the_session_a_held_applier_is_still_writing(tmp_path):
+    """Review 8: a held daemonless applier (the MCP server between calls) has
+    an open session file whose every op so far is settled, so the fold archived
+    it — and the applier's next op went to `log/archive/`, which nothing
+    replays. A file says when its writer CLOSED it now, and only a closed file
+    is archived: the question "did my file move" is deleted rather than
+    answered."""
+    from codoc.substrate import client
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws); ws.close()
+    r = list(client.read(cd).store.blocks["p1"].text().live_refs())
+    client.write(cd, client="cli", bodies=[{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                                            "payload": {"after": list(r[-1]), "text": " A."}}])
+    held = client._OWNED[cd]
+    with client.applying(cd) as w:                     # `codoc snapshot`'s own path
+        assert write_snapshot(cd, w.store, w.clock) is not None
+    r = list(held.store.blocks["p1"].text().live_refs())
+    client.write(cd, client="cli", bodies=[{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                                            "payload": {"after": list(r[-1]), "text": " B."}}])
+    client.release(cd)
+    fresh = Workspace(cd, readonly=True)
+    assert T(fresh.store, "p1") == "Retries once. A. B.", (
+        T(fresh.store, "p1"), [p.name for p in L.list_sessions(cd)], [p.name for p in L.list_archived(cd)])
+    fresh.close()
+
+
+def test_a_held_appliers_reads_see_what_another_process_wrote(tmp_path):
+    """`applying()` catches a held workspace up when the log grew by another
+    hand; `read()` did not, and every MCP read and the `base_text` its
+    `reflect` computes go through it. The agent's next amend was `stale_base`
+    against a tree the person had already changed with `codoc accept`."""
+    import subprocess
+    import sys
+
+    from codoc.substrate import client
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws); ws.close()
+    r = list(client.read(cd).store.blocks["p1"].text().live_refs())
+    client.write(cd, client="cli", bodies=[{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                                            "payload": {"after": list(r[-1]), "text": " A."}}])
+    other = subprocess.run([sys.executable, "-c", f"""
+import sys; sys.path.insert(0, {str(Path.cwd())!r})
+from codoc.substrate import client
+ws = client.read({str(cd)!r})
+r = list(ws.store.blocks["p1"].text().live_refs())
+client.write({str(cd)!r}, client="cli", bodies=[{{"kind": "text.insert", "target": {{"bid": "p1", "path": "text"}},
+      "payload": {{"after": list(r[-1]), "text": " B."}}}}])
+"""], capture_output=True, text=True, timeout=120)
+    assert other.returncode == 0, other.stderr
+    assert " B." in T(client.read(cd).store, "p1"), T(client.read(cd).store, "p1")
+    client.release(cd)

@@ -62,6 +62,20 @@ def _sizes(codoc_dir: Path) -> dict[str, int]:
     return {p.name: p.stat().st_size for p in L.log_dir(codoc_dir).glob("*.jsonl")}
 
 
+def _catch_up(codoc_dir: Path, ws: Workspace) -> None:
+    """Rebuild when the log grew by a hand that is not ours since our last
+    turn. Both the writes and the READS go through this: a held workspace that
+    has not looked describes the tree before the person's `codoc accept`, and
+    the agent's next amend computes its `base_text` from that."""
+    mine = ws.session + ".jsonl"
+    was = _SEEN.get(codoc_dir)
+    if was is None:
+        return
+    now = _sizes(codoc_dir)
+    if {k: v for k, v in now.items() if k != mine} != {k: v for k, v in was.items() if k != mine}:
+        ws.rebuild()
+
+
 @contextmanager
 def applying(codoc_dir: Path):
     """The workspace, under the applier lock, caught up with anybody else's
@@ -71,14 +85,7 @@ def applying(codoc_dir: Path):
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         ws = _applier(codoc_dir)
-        mine = ws.session + ".jsonl"
-        now, was = _sizes(codoc_dir), _SEEN.get(codoc_dir)
-        if was is not None and {k: v for k, v in now.items() if k != mine} != \
-                {k: v for k, v in was.items() if k != mine}:
-            # Another process applied between our turns. Its ops are in the log
-            # and not in our store, so publishing from ours would describe a
-            # tree that never existed. The log is the truth: read it again.
-            ws.rebuild()
+        _catch_up(codoc_dir, ws)
         yield ws
         _SEEN[codoc_dir] = _sizes(codoc_dir)
     finally:
@@ -141,10 +148,17 @@ def wait_for_acks(codoc_dir: Path, client: str, cids: list[str], wait_s: float) 
 
 def read(codoc_dir: str | Path) -> Workspace:
     """A workspace to read from: this process's own when it is the applier
-    (so a read sees what it just wrote), else the logs replayed read-only."""
+    (so a read sees what it just wrote, caught up with anybody else's writes),
+    else the logs replayed read-only."""
     codoc_dir = Path(codoc_dir)
     held = _OWNED.get(codoc_dir)
-    return held if held is not None else Workspace(codoc_dir, readonly=True)
+    if held is None:
+        return Workspace(codoc_dir, readonly=True)
+    # A read does not take the lock (nothing is written) and does not record
+    # what it saw: `_SEEN` is the WRITE turn's memory, and a read must not
+    # convince the next write that it has already caught up.
+    _catch_up(codoc_dir, held)
+    return held
 
 
 def ingest(codoc_dir: str | Path, *, client: str, bid: str, path: str, base_text: str, new_md: str,

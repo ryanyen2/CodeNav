@@ -99,23 +99,27 @@ repository. `codoc snapshot` folds the **settled prefix** of it — everything
 before the oldest op any unfinished feature was written by — into a single
 `log/snapshot-<hlc>.jsonl` (one `block.add` per live or dead block with its
 segments, actors and marks preserved, plus bindings, plans and frontiers),
-records the frontier of ops it folded, and moves the session files that
-frontier covers WHOLE under `log/archive/`. Everything after the cut stays an
-ordinary log, because the directive, `ground` and a phantom's evidence are
-read from the ops themselves (`01` §7.5). A rebuild applies the snapshot first
+records the frontier of ops it folded, and moves under `log/archive/` the
+session files that frontier covers WHOLE **and whose writer has closed them** —
+a file still open belongs to a live applier, and moving it would send that
+applier's next op somewhere no rebuild reads. Everything after the cut stays an
+ordinary log, because an open plan's verdict undoes the plan's own ops by
+identity (`01` §7.5; everything else a reader needs is on the document). A
+rebuild applies the snapshot first
 and then every op outside its frontier regardless of HLC, so a branch forked
 before the snapshot merges correctly and its inserts after pre-snapshot
 tombstones still land, because the snapshot keeps dead segments. Attribution
 survives because segments carry their actor.
 
-**How much it compacts depends on the tree's state, and a tree in flight
-compacts by nothing.** After a reflect pass every feature is drifted, so the
-oldest unsettled op is near the start of the log and the fold writes nothing
-(it returns None rather than a file). That is the honest answer, not a defect
-to tune around: the alternative is a snapshot that silently drops what the
-reads need. Fold when the tree is settled — in practice on the integration
-branch, after a sync. Snapshots and logs should not be in git-lfs: the merge
-driver would receive pointer files.
+**How much it compacts depends on what is in flight, which is now only open
+proposals.** A tree with no plan open folds whole, drifted or not; a tree with
+a proposal on its first feature folds up to that feature and no further, and
+`codoc snapshot` says so rather than writing a file. It used to be far worse —
+after a reflect pass every feature is drifted, and drift was read from the op
+ORDER, so the fold wrote nothing at all. What changed is not the fold but what
+the readers read: drift, `ground`, the directive and a phantom's settle are
+questions about the document now (`01` §7.5). Snapshots and logs should not be
+in git-lfs: the merge driver would receive pointer files.
 
 ## 6. What the hub adds
 

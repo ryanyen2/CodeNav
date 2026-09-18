@@ -70,6 +70,11 @@ class SessionFile:
     ops: list[Op]
     problems: list[LogProblem] = field(default_factory=list)
     torn_tail: int | None = None       # byte offset of an unreadable last line; the prefix is kept
+    # Whether the writer said it was done with this file. Nothing may ARCHIVE
+    # an open one: a fold that moved a file a live applier still holds would
+    # send that applier's next op to `log/archive/`, which no rebuild reads.
+    # (Git's `gc` packs only what no process is writing, for the same reason.)
+    closed: bool = False
 
     @property
     def valid(self) -> bool:
@@ -107,9 +112,13 @@ def read_session(path: str | Path) -> SessionFile:
     last_at = ""
     torn: int | None = None
     body = [(n, line) for n, line in enumerate(lines[1:], start=2) if line.strip()]
+    closed = False
     for k, (n, line) in enumerate(body):
         try:
             d = json.loads(line)
+            if "closed" in d and "id" not in d:
+                closed = True         # the writer's trailer: this file is done
+                continue
             op = Op.from_json(d)
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             problems.append(LogProblem(str(path), n, f"unreadable op: {e}"))
@@ -130,7 +139,7 @@ def read_session(path: str | Path) -> SessionFile:
         ops.append(op)
     if problems and torn is None:
         ops = []
-    return SessionFile(path, session, header, ops, problems, torn)
+    return SessionFile(path, session, header, ops, problems, torn, closed)
 
 
 def truncate_torn(f: SessionFile) -> bool:
@@ -217,7 +226,10 @@ class SessionWriter:
             os.fsync(self._fh.fileno())
 
     def close(self) -> None:
+        """Stamp the file closed and let it go. The stamp is what tells a fold
+        this file may be archived: an open one belongs to a live applier."""
         if self._fh is not None:
+            self._fh.write(json.dumps({"closed": 1}) + "\n")
             self.sync()
             self._fh.close()
             self._fh = None

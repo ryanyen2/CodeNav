@@ -197,12 +197,14 @@ def write_snapshot(codoc_dir: str | Path, store: Store, clock: Clock, *, node: s
     tmp.replace(path)
     archive = d / L.ARCHIVE_DIR
     archive.mkdir(exist_ok=True)
-    # Only a file the fold covers WHOLE: one that also holds ops after the cut
-    # is still the log, and the frontier is what keeps its folded half from
-    # being applied a second time.
+    # Only a file the fold covers WHOLE and whose writer has CLOSED: one that
+    # also holds ops after the cut is still the log (and the frontier keeps its
+    # folded half from applying twice), and one still open belongs to a live
+    # applier — moving it would send that applier's next op to `log/archive/`,
+    # which no rebuild reads.
     for old in L.list_sessions(codoc_dir):
         sess = L.read_session(old)
-        if sess.valid and sess.ops and all(_covered(o.id, frontier) for o in sess.ops):
+        if sess.valid and sess.closed and sess.ops and all(_covered(o.id, frontier) for o in sess.ops):
             old.replace(archive / old.name)
     for old_snap in L.list_snapshots(codoc_dir):
         if old_snap != path:
