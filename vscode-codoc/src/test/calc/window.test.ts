@@ -59,3 +59,43 @@ describe('proposed mark toggles', () => {
         expect(markPaints(undefined)).toEqual([]);
     });
 });
+
+describe('the window reader after the daemon publishes births and batch starts', () => {
+    const w: HistoryWindow = { start: 10, head: 14, before: { p1: 'old' }, born: ['p2'], ranks: { p1: 'a', p2: 'b' }, ops: [
+        { pos: 10, id: 's:10', at: 'a', actor: 'loop', kind: 'text.insert', batch: 'L', batch_first: 10, plan: null, caused_by: null, blocks: { p1: 'old!' }, inverse: [{ kind: 'x', target: {}, payload: {} }] },
+        { pos: 11, id: 's:11', at: 'b', actor: 'human:local', kind: 'block.split', batch: 'b1', batch_first: 9, plan: null, caused_by: null, blocks: { p1: 'old', p2: '!' }, inverse: [{ kind: 'x', target: {}, payload: {} }] },
+        { pos: 12, id: 's:12', at: 'c', actor: 'human:local', kind: 'text.insert', batch: 'b1', batch_first: 9, plan: null, caused_by: null, blocks: { p2: '!?' }, inverse: [{ kind: 'x', target: {}, payload: {} }] },
+    ] };
+    it('will not half-undo a batch that began before the window', () => {
+        expect(nextUndo(w, 'human:local')).toBeNull();          // b1 started at 9, the window starts at 10
+        expect(nextUndo(w, 'loop')!.batch).toBe('u-L');
+    });
+    it('shows nothing for a block born inside the window, and `before` for one that is not', () => {
+        expect(textAt(w, 'p2', -1, '!?')).toBeNull();
+        expect(textAt(w, 'p2', 0, '!?')).toBeNull();
+        expect(textAt(w, 'p2', 1, '!?')).toBe('!');
+        expect(textAt(w, 'p1', -1, 'old')).toBe('old');
+    });
+});
+
+describe('the `## ` rule', () => {
+    it('drops the hashes it can see and keeps the words after them', async () => {
+        const { EditorState, TextSelection } = await import('@tiptap/pm/state');
+        const { docFrom } = await import('../../calc/adopt');
+        const { headingFromRule } = await import('../../editor/commands');
+        const { codocSchema } = await import('../../editor/schema');
+        const schema = codocSchema();
+        const text = '##abc';
+        const proj = { head: 1, frontier: {}, phases: {}, plans: [], bindings: { by_feature: {}, by_file: {} }, claims: {}, blocks: [
+            { id: 'p', kind: 'paragraph', level: 0, rank: 'a', head: 1, fields: { text: { text, spans: [], suggest_del: [],
+              runs: [{ op: 's:p', k0: 0, start: 0, end: text.length, actor: 'human:a', at: '1', plan: null }] } } }] };
+        const { doc, shadows } = docFrom(schema, proj as never);
+        let state = EditorState.create({ schema, doc });
+        state = state.apply(state.tr.setSelection(TextSelection.create(state.doc, 3)));   // caret after "##"
+        const g = headingFromRule(state, { shadows, nextBid: () => 'n1', nextCid: () => 'c1' }, /^(#{1,6})\s$/.exec('## ')!)!;
+        expect(g.tr.doc.child(0).textContent).toBe('abc');
+        expect(g.tr.doc.child(0).type.name).toBe('heading');
+        expect(shadows.get('p')!.text()).toBe('abc');
+        expect((g.ops[0].payload as { to: unknown }).to).toEqual(['s:p', 1]);
+    });
+});

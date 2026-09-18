@@ -84,21 +84,30 @@ to name characters:
 | `## ` input rule, set kind command | `block.set(kind)` (+ `block.set(level)`) |
 | Tab / Shift-Tab, drag | `block.move(after, level_delta)` |
 | delete feature command | `block.delete` (its own body, and its bindings, which the applier detaches and records) + `block.set(level)` × promoted children |
-| paste of several paragraphs | `block.add` per paragraph after the caret's block, then `text.insert` per block |
+| paste of several paragraphs | the first paragraph's words join the caret's block; then `block.add` + `text.insert` per further paragraph (`handlePaste`) |
+| Enter, Backspace or Delete with a selection | the selection's ops (above), then the split or merge, in one batch |
 
-Two rules make this exact rather than heuristic:
+Three rules make this exact rather than heuristic:
 
 1. **Structural steps are never inferred from a `ReplaceStep`.** Enter,
-   Backspace-at-start, `## `, Tab, drag and delete are keymap or command
-   handlers that emit the op and then perform the equivalent ProseMirror
-   change themselves with `origin=recorded` so the Recorder skips the
-   transaction. A `ReplaceStep` whose slice or range crosses a block boundary
-   and did not come from one of these (a paste, a drop, an unknown command) is
-   handled by the one **fallback**: the recorder replaces it with a
-   `block.add`/`text.insert` sequence for inserted blocks and a per-block
-   character comparison for blocks whose inline content changed, and marks the
-   batch `via: "fallback"`. The fallback is confined, named, and never decides
-   who wrote anything: the actor is the person either way.
+   Backspace, Delete, `## `, Tab, drag, paste and delete-feature are keymap or
+   command handlers that emit the op and then perform the equivalent
+   ProseMirror change themselves, tagged `RECORDED` so the Recorder skips the
+   transaction. A `ReplaceStep` that stays inside one block and did not come
+   from one of these is recorded by the Recorder; one whose inline content the
+   Recorder cannot name (an unknown command) is handled by the one
+   **fallback**, a per-block character comparison. The fallback is confined,
+   named, and never decides who wrote anything: the actor is the person either
+   way.
+1a. **The document's block structure changes only through a recorded gesture.**
+   A `filterTransaction` refuses any other transaction that would add, drop,
+   duplicate or un-id a top-level block, so the class of bug where ProseMirror
+   takes a block out of the page and nothing reaches the store is impossible
+   rather than patched gesture by gesture. A selection spanning paragraphs is
+   deleted as ops (the covered text of each, `block.delete` for the ones it
+   swallows whole, `block.merge` of the two ends); one that touches a heading
+   is refused with a word about the delete gesture, because a feature
+   disappears only that way.
 2. **A heading never merges into prose and prose never merges into a heading.**
    The keymap refuses both (v1's `block-boundary.ts`, kept). A heading
    disappears only through the delete command. The five-way "why is this

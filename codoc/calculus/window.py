@@ -6,8 +6,12 @@ reconstruction is exact — a fuzz checks it against a prefix replay — and the
 editor's scrubber never pushes old prose through the recorder. Each entry
 carries the op's recorded inverse, which is what undo submits.
 
-A block born inside the window is absent from ``before`` rather than reported
-as empty: it did not exist then.
+A block born inside the window is absent from ``before`` and named in ``born``,
+so a reader never shows it before it existed. ``ranks`` orders every block the
+window names, live or not, so the scrubber can render a page that held a
+paragraph since merged away. Each entry carries ``batch_first``: where its
+batch began, so an undo can tell a batch it holds whole from one that reaches
+back past the window.
 """
 from __future__ import annotations
 
@@ -41,8 +45,8 @@ def history_window(store: Store, limit: int = 200) -> dict:
         touched = _touched(store, o)
         after = {bid: t.live_text() for bid, path in touched if (t := clone(bid, path)) is not None and path == "text"}
         entries.append({"pos": store.position[o.id], "id": o.id, "at": o.at, "actor": o.actor, "kind": o.kind,
-                        "batch": o.batch, "plan": o.plan, "caused_by": o.caused_by, "blocks": after,
-                        "inverse": list(o.inverse)})
+                        "batch": o.batch, "batch_first": store.batch_first.get(o.batch, store.position[o.id]),
+                        "plan": o.plan, "caused_by": o.caused_by, "blocks": after, "inverse": list(o.inverse)})
         _unapply(o, clone)
         if o.kind == K.BLOCK_ADD:
             born.add(o.target["bid"])
@@ -50,7 +54,9 @@ def history_window(store: Store, limit: int = 200) -> dict:
             born.add(o.payload["new"])
     entries.reverse()
     before = {bid: t.live_text() for (bid, path), t in clones.items() if path == "text" and bid not in born}
-    return {"start": (store.position[ops[0].id] if ops else store.pos), "head": store.pos, "before": before, "ops": entries}
+    ranks = {bid: store.blocks[bid].rank for bid, _ in clones if bid in store.blocks}
+    return {"start": (store.position[ops[0].id] if ops else store.pos), "head": store.pos, "before": before,
+            "born": sorted(born), "ranks": ranks, "ops": entries}
 
 
 def _touched(store: Store, o: Op) -> list[tuple[str, str]]:

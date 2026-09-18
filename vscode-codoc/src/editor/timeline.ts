@@ -59,15 +59,22 @@ export class Timeline {
         const e = w.ops[p];
         this.caption.textContent = `${e.actor.replace(/^human:/, '')} · ${e.kind} · ${e.at.slice(0, 20)}`;
         this.past.replaceChildren();
-        for (const b of proj.blocks) {
-            if (b.kind === 'comment') continue;
+        // Every block the page had then: the live ones, plus any the window
+        // names that have since been deleted or merged away, in that order.
+        const live = new Map(proj.blocks.filter(b => b.kind !== 'comment').map(b => [b.id, b]));
+        const gone = new Set<string>();
+        for (const entry of w.ops) for (const bid of Object.keys(entry.blocks)) if (!live.has(bid)) gone.add(bid);
+        const order = [...live.keys(), ...gone].sort((a, b2) => (w.ranks?.[a] ?? live.get(a)?.rank ?? a).localeCompare(w.ranks?.[b2] ?? live.get(b2)?.rank ?? b2));
+        for (const bid of order) {
+            const b = live.get(bid) ?? { id: bid, kind: 'paragraph', level: 0, rank: '', head: 0, fields: {} };
             const f = b.fields.text as { text?: string } | undefined;
-            const now = textAt(w, b.id, p, f?.text ?? '');
+            const now = textAt(w, bid, p, f?.text ?? '');
             if (now === null) continue;
             const el = document.createElement(b.kind === 'heading' ? 'div' : 'p');
             el.className = b.kind === 'heading' ? `codoc-heading codoc-h${b.level}` : 'codoc-paragraph';
-            if (b.id in e.blocks) {
-                const was = textAt(w, b.id, p - 1, f?.text ?? '') ?? '';
+            if (!live.has(bid)) el.classList.add('codoc-past-gone');
+            if (bid in e.blocks) {
+                const was = textAt(w, bid, p - 1, f?.text ?? '') ?? '';
                 for (const [k, t] of wordDiff(was, now)) {
                     const span = document.createElement(k === 'eq' ? 'span' : k);
                     span.textContent = t;

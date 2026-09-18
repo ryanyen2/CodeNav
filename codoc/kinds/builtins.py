@@ -200,10 +200,18 @@ SCREENSHOT = Kind(
 # ── comment: one message of a thread, anchored by a comment mark ────────────
 
 def comment_lower(old: dict, new: dict, ctx: LowerContext) -> str | None:
-    if new.get("scope", "code") != "code" or new.get("status") == "resolved":
+    """An open thread is a request. ``scope=code`` asks for the implementation
+    only; ``both`` also asks for the description to follow, which the agent
+    does through the tree, not by editing prose behind the person's back."""
+    if new.get("status") == "resolved":
         return None
     body = (new.get("body") or "").strip()
-    return f"Comment on \"{new.get('anchor_text', '')}\": {body}" if body else None
+    if not body:
+        return None
+    line = f"Comment on \"{new.get('anchor_text', '')}\": {body}"
+    if new.get("scope") == "both":
+        line += "\nWhen the code lands, amend this feature's description to match, through codoc_reflect."
+    return line
 
 
 COMMENT = Kind(

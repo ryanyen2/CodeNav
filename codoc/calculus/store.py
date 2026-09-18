@@ -89,6 +89,7 @@ class Store:
         self.ops: list[Op] = []
         self.by_id: dict[OpId, Op] = {}
         self.position: dict[OpId, int] = {}       # op id → index in ``ops`` (apply order)
+        self.batch_first: dict[str, int] = {}     # batch → the position of its first op
         self.frontier: dict[str, int] = {}
         self.char_index: dict[OpId, set[tuple[str, str]]] = {}
         self.mark_index: dict[OpId, set[tuple[str, str]]] = {}
@@ -299,6 +300,8 @@ class Store:
         self.ops.append(op)
         self.by_id[op.id] = op
         self.position[op.id] = len(self.ops) - 1
+        if op.batch:
+            self.batch_first.setdefault(op.batch, len(self.ops) - 1)
         session, _, seq = op.id.rpartition(":")
         self.frontier = frontier_union(self.frontier, {session: int(seq)})
         pos = len(self.ops) - 1

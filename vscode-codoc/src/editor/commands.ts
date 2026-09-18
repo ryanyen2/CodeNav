@@ -11,7 +11,7 @@
  * either direction; a heading disappears only through `deleteFeature`; the
  * half of a split that keeps the block's id is the half that keeps its text.
  */
-import type { Node as PMNode } from '@tiptap/pm/model';
+import type { Node as PMNode, Slice } from '@tiptap/pm/model';
 import { type EditorState, TextSelection, type Transaction } from '@tiptap/pm/state';
 
 import { START, type OpBody } from '../calc/projection';
@@ -37,6 +37,64 @@ function blockAt(state: EditorState, pos: number): { node: PMNode; pos: number; 
 
 function tag(tr: Transaction, ops: OpBody[]): Transaction {
     return tr.setMeta(RECORDED, ops).setMeta('addToHistory', false);
+}
+
+/** The top-level blocks a selection touches, with the part of each it covers. */
+export function selectedBlocks(state: EditorState): Array<{ node: PMNode; pos: number; index: number; from: number; to: number }> {
+    const { from, to } = state.selection;
+    const out: Array<{ node: PMNode; pos: number; index: number; from: number; to: number }> = [];
+    state.doc.forEach((node, pos, index) => {
+        const start = pos + 1, end = pos + node.nodeSize - 1;
+        if (end < from || start > to) return;
+        out.push({ node, pos, index, from: Math.max(from, start) - start, to: Math.min(to, end) - start });
+    });
+    return out;
+}
+
+/**
+ * Delete what is selected, across blocks, as ops: the covered text of every
+ * block it touches, the whole paragraphs it swallows, and a merge of the two
+ * ends when both are paragraphs. A selection that touches a heading's title is
+ * refused (`null`): a feature disappears only through `deleteFeature`, which is
+ * the rule that keeps "why is this heading absent" from being a question.
+ */
+export function deleteSelection(state: EditorState, env: Env): Gesture | null {
+    if (state.selection.empty) return null;
+    const parts = selectedBlocks(state);
+    if (!parts.length) return null;
+    if (parts.length > 1 && parts.some(p => p.node.type.name === 'heading')) return null;
+    const ops: OpBody[] = [];
+    // Text first, by identity, before any position moves.
+    for (const part of parts) {
+        const bid = part.node.attrs.bid as string;
+        const shadow = env.shadows.get(bid);
+        if (!shadow) return null;
+        const a = scalarOffset(part.node, part.from), z = scalarOffset(part.node, part.to);
+        if (z <= a) continue;
+        const refs = shadow.delete(a, z);
+        ops.push({ kind: 'text.delete', target: { bid, path: 'text' }, payload: { from: refs[0], to: refs[refs.length - 1] } });
+    }
+    const [head, ...rest] = parts;
+    const tailPart = rest[rest.length - 1];
+    // Whole blocks between the ends go; the two ends become one.
+    for (const mid of rest.slice(0, -1)) {
+        ops.push({ kind: 'block.delete', target: { bid: mid.node.attrs.bid }, payload: {} });
+        env.shadows.delete(mid.node.attrs.bid as string);
+    }
+    if (tailPart) {
+        const into = head.node.attrs.bid as string, dying = tailPart.node.attrs.bid as string;
+        ops.push({ kind: 'block.merge', target: { into, bid: dying, path: 'text' }, payload: {} });
+        env.shadows.get(into)!.append(env.shadows.get(dying)!);
+        env.shadows.delete(dying);
+    }
+    let tr = state.tr.deleteSelection();
+    if (tailPart) {
+        // ProseMirror joins the ends for us; make sure the survivor keeps the
+        // head's id (the calculus merged into it).
+        const $c = tr.doc.resolve(tr.selection.from);
+        if ($c.depth >= 1) tr = tr.setNodeMarkup($c.before(1), undefined, { ...head.node.attrs });
+    }
+    return { tr: tag(tr, ops), ops, cids: [] };
 }
 
 /** Enter: split the caret's block. */
@@ -169,6 +227,18 @@ export function makeParagraph(state: EditorState, env: Env, markerLen: number): 
     return { tr: tag(tr, ops), ops, cids: [] };
 }
 
+/**
+ * The `## ` input rule: the hashes are already in the document (the space that
+ * completed the rule is not), so exactly the hashes are dropped, by identity,
+ * and the block becomes a heading of that level.
+ */
+export function headingFromRule(state: EditorState, env: Env, match: RegExpMatchArray): Gesture | null {
+    const hashes = match[1].length;
+    const b = blockAt(state, state.selection.from);
+    if (!b || !env.shadows.get(b.node.attrs.bid as string)) return null;
+    return makeHeading(state, env, hashes, hashes);
+}
+
 /** Tab / Shift-Tab on a heading: one level deeper or shallower. */
 export function relevel(state: EditorState, env: Env, delta: number): Gesture | null {
     const b = blockAt(state, state.selection.from);
@@ -249,8 +319,65 @@ export function deleteFeature(state: EditorState, env: Env, fid: string): Gestur
     let start = 0, stop = 0;
     doc.forEach((n, pos, i) => { if (i === idx) start = pos; if (i === end - 1) stop = pos + n.nodeSize; });
     tr = tr.delete(start, stop);
-    for (let i = idx; i < end; i++) env.shadows.delete(doc.child(i).attrs.bid as string);
     if (tr.doc.childCount === 0) return null;   // never empty the tree by one gesture
+    for (let i = idx; i < end; i++) env.shadows.delete(doc.child(i).attrs.bid as string);
     void level;
     return { tr: tag(tr, ops), ops, cids: [] };
+}
+
+
+/** A paste whose slice holds more than one block: the first paragraph's text
+ *  joins the caret's block, and every further paragraph is a block of its own
+ *  (`09-editor.md` §4). The person is the author of all of it. */
+export function pasteBlocks(state: EditorState, env: Env, slice: Slice): Gesture | null {
+    const paras: string[] = [];
+    slice.content.forEach(node => { if (node.isBlock) paras.push(node.textBetween(0, node.content.size, '\n')); });
+    if (paras.length < 2) return null;
+    const b = blockAt(state, state.selection.from);
+    if (!b || !env.shadows.get(b.node.attrs.bid as string)) return null;
+    const ops: OpBody[] = [];
+    const cids: string[] = [];
+    let tr = state.tr;
+    let cut: Gesture | null = null;
+    if (!state.selection.empty) {
+        cut = deleteSelection(state, env);
+        if (!cut) return null;
+        ops.push(...cut.ops);
+        tr = cut.tr;
+    }
+    const $at = tr.doc.resolve(tr.selection.from);
+    const host = $at.node(1);
+    const bid = host.attrs.bid as string;
+    const shadow = env.shadows.get(bid)!;
+    const off = scalarOffset(host, $at.parentOffset);
+    // The first paragraph lands in the caret's block, as typed text would.
+    if (paras[0]) {
+        const cid = env.nextCid();
+        ops.push({ kind: 'text.insert', target: { bid, path: 'text' }, payload: { after: shadow.anchorBefore(off), text: paras[0] } });
+        cids.push(cid);
+        shadow.insert(off, paras[0], cid);
+        tr = tr.insertText(paras[0], tr.selection.from);
+    }
+    // The rest arrive as blocks after it.
+    let after = bid;
+    let pos = $at.after(1) + (paras[0] ? 0 : 0);
+    for (const text of paras.slice(1)) {
+        const nb = env.nextBid();
+        ops.push({ kind: 'block.add', target: { bid: nb }, payload: { kind: 'paragraph', after } });
+        const node = state.schema.nodes.paragraph.create({ bid: nb, head: 0 }, text ? state.schema.text(text) : undefined);
+        pos = tr.mapping.map(pos, 1);
+        tr = tr.insert(pos, node);
+        pos += node.nodeSize;
+        const sh = new Shadow();
+        env.shadows.set(nb, sh);
+        if (text) {
+            const cid = env.nextCid();
+            ops.push({ kind: 'text.insert', target: { bid: nb, path: 'text' }, payload: { after: START, text } });
+            cids.push(cid);
+            sh.insert(0, text, cid);
+        }
+        after = nb;
+    }
+    tr = tr.setSelection(TextSelection.create(tr.doc, Math.min(pos - 1, tr.doc.content.size)));
+    return { tr: tag(tr, ops), ops, cids };
 }

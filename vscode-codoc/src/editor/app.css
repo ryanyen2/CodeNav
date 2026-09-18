@@ -129,3 +129,4 @@ pre.codoc-kind-value { font-family: ui-monospace, SFMono-Regular, Menlo, monospa
 .codoc-past ins { text-decoration: none; background: color-mix(in srgb, var(--codoc-added) 22%, transparent); }
 .codoc-past del { color: var(--codoc-removed); background: color-mix(in srgb, var(--codoc-removed) 14%, transparent); }
 .is-history .codoc-tree { opacity: .6; }
+.codoc-past-gone { opacity: .75; }

@@ -22,8 +22,8 @@ import { paintsFor, type Paint } from '../calc/claims';
 import { NO_WATERMARKS, type Ack, type OpBody, type Projection, type Submission } from '../calc/projection';
 import { Recorder, reconcile, scalarOffset } from '../calc/recorder';
 import type { Shadow } from '../calc/shadow';
-import { RECORDED, deleteFeature, makeHeading, mergeBackward, mergeForward, moveBlock, relevel, splitBlock, type Env } from './commands';
-import { buildDecorations } from './decorations';
+import { RECORDED, deleteFeature, deleteSelection, headingFromRule, mergeBackward, mergeForward, moveBlock, pasteBlocks, relevel, selectedBlocks, splitBlock, type Env } from './commands';
+import { buildDecorations, unitOffset } from './decorations';
 import { dragPlugin } from './drag';
 import { FindWidget, findPlugin } from './find';
 import { Menus } from './menus';
@@ -191,10 +191,41 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
 
     // ── gestures ───────────────────────────────────────────────────────────
     const run = (g: ReturnType<typeof splitBlock>) => { if (!g) return false; view.dispatch(g.tr); return true; };
+
+    /** A selection that spans blocks is deleted as ops, or refused when it
+     *  touches a heading: ProseMirror's own commands would take blocks out of
+     *  the document with nothing recorded. Returns false when there is nothing
+     *  selected, so the caret gestures run as usual. */
+    const cutSelection = (state: EditorState): boolean | 'refused' => {
+        if (state.selection.empty) return false;
+        if (selectedBlocks(state).length < 2) return false;      // one block: the recorder handles it
+        const g = deleteSelection(state, env);
+        if (!g) { host.onConflict?.('', 'a selection across a heading is not a delete; use Delete feature'); return 'refused'; }
+        view.dispatch(g.tr);
+        return true;
+    };
+
     const keys = keymap({
-        Enter: state => run(splitBlock(state, env)),
-        Backspace: state => { const g = mergeBackward(state, env); if (g) return run(g); return refuseHeadingMerge(state, 'back'); },
-        Delete: state => { const g = mergeForward(state, env); if (g) return run(g); return refuseHeadingMerge(state, 'forward'); },
+        Enter: state => {
+            const cut = cutSelection(state);
+            if (cut === 'refused') return true;
+            if (cut) return run(splitBlock(view.state, env)) || true;
+            return run(splitBlock(state, env));
+        },
+        Backspace: state => {
+            const cut = cutSelection(state);
+            if (cut) return true;
+            const g = mergeBackward(state, env);
+            if (g) return run(g);
+            return refuseHeadingMerge(state, 'back');
+        },
+        Delete: state => {
+            const cut = cutSelection(state);
+            if (cut) return true;
+            const g = mergeForward(state, env);
+            if (g) return run(g);
+            return refuseHeadingMerge(state, 'forward');
+        },
         Tab: state => run(relevel(state, env, 1)),
         'Shift-Tab': state => run(relevel(state, env, -1)),
         'Mod-z': () => true,     // undo is a recorded inverse, wired by the app
@@ -224,16 +255,8 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
     }
 
     const headingRule = new InputRule(/^(#{1,6})\s$/, (state, match) => {
-        const g = makeHeading(state, env, match[1].length, 0);
-        if (!g) return null;
-        // The typed `#…␠` were just recorded as inserts; drop them by identity.
-        const b = state.doc.resolve(state.selection.from);
-        const bid = b.node(1).attrs.bid as string;
-        const sh = shadows.get(bid)!;
-        const n = match[0].length;
-        const refs = sh.delete(0, n);
-        g.ops.unshift({ kind: 'text.delete', target: { bid, path: 'text' }, payload: { from: refs[0], to: refs[refs.length - 1] } });
-        return g.tr.delete(b.before(1) + 1, b.before(1) + 1 + n).setMeta(RECORDED, g.ops);
+        const g = headingFromRule(state, env, match);
+        return g ? g.tr : null;
     });
 
     let menus: Menus | null = null;
@@ -242,10 +265,12 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         doc,
         plugins: [
             new Plugin({ props: { handleKeyDown: (_v, ev) => menus?.handleKeyDown(ev) ?? false } }),
-            // A kind block leaves the document only through a recorded gesture
-            // (delete feature, adoption); a stray keystroke that would drop
-            // one is refused rather than silently un-recorded.
-            new Plugin({ filterTransaction: (tr, st) => !!tr.getMeta(RECORDED) || !tr.docChanged || kindCount(tr.doc) >= kindCount(st.doc) }),
+            // Structure changes only through a recorded gesture. A transaction
+            // that would add, drop, duplicate or un-id a top-level block
+            // without one is refused: the recorder can only speak for text
+            // inside blocks it knows, so anything else would leave the store
+            // and the page saying different things (09-editor §4 rule 1).
+            new Plugin({ filterTransaction: (tr, st) => !!tr.getMeta(RECORDED) || !tr.docChanged || sameStructure(st.doc, tr.doc) }),
             keys, inputRules({ rules: [headingRule] }), keymap(baseKeymap), decoPlugin, findPlugin(),
             dragPlugin((bid, after) => { const g = moveBlock(view.state, env, bid, after); if (g) view.dispatch(g.tr); }),
         ],
@@ -259,6 +284,12 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             const next = view.state.apply(tr);
             view.updateState(next);
             if (tr.selectionSet || tr.docChanged) { host.onFeature?.(featureAt(next.selection.from)); menus?.update(); }
+        },
+        handlePaste(_v, _event, slice) {
+            const g = pasteBlocks(view.state, env, slice);
+            if (!g) return false;                       // inline paste: the recorder records it
+            view.dispatch(g.tr);
+            return true;
         },
         handleClickOn(_v, _pos, node, _np, event) {
             const cite = (event.target as HTMLElement | null)?.closest?.('[data-cite]') as HTMLElement | null;
@@ -297,10 +328,19 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         const sel = view.state.selection;
         const caretBid = featureBlockAt(sel.from);
         const caretOff = caretBid ? scalarCaret(sel.from) : 0;
+        // The caret by character identity (§6): the character it sits after
+        // keeps its place through a replacement, whatever changed before it.
+        const caretRef = caretBid && caretOff > 0 ? shadows.get(caretBid)?.refs[caretOff - 1] : undefined;
         // Rebuild the document in the projection's order, keeping held blocks' nodes.
         const currentNodes = new Map<string, PMNode>();
         view.state.doc.forEach(n => currentNodes.set(n.attrs.bid as string, n));
         const nodes: PMNode[] = [];
+        // A block the person is holding stays even if the projection dropped
+        // it: their unacked ops are about to arrive, and the daemon's answer
+        // decides, not a projection that predates them.
+        for (const [bid, node] of currentNodes) {
+            if (held.has(bid) && !byId.has(bid)) nodes.push(node);
+        }
         for (const b of flowBlocks(next)) {
             if (held.has(b.id) && currentNodes.has(b.id)) { nodes.push(currentNodes.get(b.id)!); continue; }
             const cur = currentNodes.get(b.id);
@@ -314,9 +354,11 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         let tr = view.state.tr.replaceWith(0, view.state.doc.content.size, newDoc.content).setMeta(RECORDED, []).setMeta(decoKey, true);
         // Restore the caret by block and scalar offset.
         if (caretBid) {
+            const moved = caretRef ? shadows.get(caretBid)?.indexOf(caretRef) ?? -1 : -1;
+            const off = moved >= 0 ? moved + 1 : caretOff;
             let pos = 0;
-            tr.doc.forEach((n, p) => { if (n.attrs.bid === caretBid) pos = p + 1 + Math.min(n.content.size, caretOff); });
-            if (pos) tr = tr.setSelection(TextSelection.create(tr.doc, pos));
+            tr.doc.forEach((n, p) => { if (n.attrs.bid === caretBid) pos = p + 1 + unitAt(n, off); });
+            if (pos) tr = tr.setSelection(TextSelection.create(tr.doc, Math.min(pos, tr.doc.content.size)));
         }
         view.dispatch(tr);
     }
@@ -326,7 +368,12 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         return $p.depth >= 1 ? ($p.node(1).attrs.bid as string) : null;
     }
 
-    function scalarCaret(pos: number): number {
+    /** UTF-16 offset inside a block for a scalar offset. */
+function unitAt(node: PMNode, scalar: number): number {
+    return unitOffset(node, scalar);
+}
+
+function scalarCaret(pos: number): number {
         const $p = view.state.doc.resolve(pos);
         return $p.depth >= 1 ? $p.parentOffset : 0;
     }
@@ -362,10 +409,15 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
 
 export type { Shadow, Schema };
 
-function kindCount(doc: PMNode): number {
-    let n = 0;
-    doc.forEach(b => { if (b.type.name === 'kindBlock') n++; });
-    return n;
+/** The document's block identities, in order, for the structural guard. */
+function structure(doc: PMNode): string {
+    const ids: string[] = [];
+    doc.forEach(b => ids.push(`${b.type.name}:${b.attrs.bid ?? '?'}`));
+    return ids.join('|');
+}
+
+function sameStructure(before: PMNode, after: PMNode): boolean {
+    return structure(before) === structure(after);
 }
 
 /** A plugin kind rendered read-only from its projected fields: the kind name,

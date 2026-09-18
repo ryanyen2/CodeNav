@@ -18,6 +18,9 @@ export interface WindowEntry {
     actor: string;
     kind: string;
     batch: string;
+    /** Where this batch began, so a batch that reaches back past the window is
+     *  recognisable however its ops interleave with another actors'. */
+    batch_first?: number;
     plan: string | null;
     caused_by: string | null;
     blocks: Record<string, string>;     // text of each touched block right after the op
@@ -28,6 +31,11 @@ export interface HistoryWindow {
     start: number;
     head: number;
     before: Record<string, string>;     // text of each touched block before the window
+    /** Blocks created inside the window: they have no "before". */
+    born?: string[];
+    /** Rank per block the window names, live or not, so a past page can be
+     *  rendered in the order it had. */
+    ranks?: Record<string, string>;
     ops: WindowEntry[];
 }
 
@@ -47,12 +55,17 @@ export function nextUndo(w: HistoryWindow, actor: string, redo = false): { batch
         .filter(([b]) => (depth(b) % 2 === 1) === redo && !undone.has(b))
         .sort((a, b) => b[1][b[1].length - 1].pos - a[1][a[1].length - 1].pos);
     for (const [batch, entries] of candidates) {
-        if (w.start > 0 && entries[0].pos === w.start) continue;   // the batch may reach past the window
+        // A batch that began before the window is only half here; undoing that
+        // half would leave the other half standing.
+        const first = entries[0].batch_first ?? (entries[0].pos === w.start ? w.start - 1 : entries[0].pos);
+        if (w.start > 0 && first < w.start) continue;
         const ops = [...entries].reverse().flatMap(e => e.inverse);
         if (ops.length) return { batch: `u-${batch}`, ops };
     }
     return null;
 }
+
+const BIRTHS = new Set(['block.add', 'block.split']);
 
 /** What block `bid` said right after window position `pos` (an index into
  *  `w.ops`, -1 for before the window); null when the block did not exist yet. */
@@ -61,10 +74,13 @@ export function textAt(w: HistoryWindow, bid: string, pos: number, live: string)
         const t = w.ops[i].blocks[bid];
         if (t !== undefined) return t;
     }
-    if (bid in w.before) return w.before[bid];
-    // Never touched at or before pos: it either predates the window unchanged
-    // (live is right) or is added later in the window (not there yet).
-    return w.ops.slice(pos + 1).some(e => e.kind === 'block.add' && bid in e.blocks) ? null : live;
+    // Nothing at or before `pos`: either the block was born later in the window
+    // (it did not exist then), or it predates the window untouched.
+    const born = new Set(w.born ?? []);
+    const laterBirth = w.ops.slice(pos + 1).some(e => BIRTHS.has(e.kind) && bid in e.blocks
+                                                 && (born.has(bid) || !(bid in w.before)));
+    if (laterBirth) return null;
+    return bid in w.before ? w.before[bid] : live;
 }
 
 /** A display-only word diff between two texts: [kind, text] pieces. */
