@@ -54,7 +54,11 @@ def markdown(text: Text, mode: str = "live", store: Store | None = None) -> str:
     ``accepted`` has anything to apply. What differs between live and rejected
     is the words: a plan's insertions are on the page and not in the document
     without it."""
-    if mode == "live" or store is None:
+    # A field no plan has touched reads the same in all three modes, and most
+    # fields in a tree are that field. Say so before cloning it and before
+    # scanning the plans — a cold publish renders every field twice.
+    if mode == "live" or store is None or not (
+            any(s.live and s.plan for s in text.segs) if mode == "rejected" else text.proposals()):
         return render(text.live_text(), live_spans(text))
     view = text.clone()
     open_plans = {p.id for p in store.plans.values() if p.status == "open"}
@@ -263,8 +267,11 @@ def plan_claims(store: Store, fid: str) -> list[Claim]:
 
 
 def _suggest_spans(t: Text, store: Store) -> list[Span]:
+    spans = live_spans(t, frozenset({SUGGEST_DEL}))
+    if not spans:
+        return []            # nothing proposed here: no reason to scan the plans
     open_plans = {p.id for p in store.plans.values() if p.status == "open"}
-    return [sp for sp in live_spans(t, frozenset({SUGGEST_DEL})) if sp.attrs.get("plan") in open_plans]
+    return [sp for sp in spans if sp.attrs.get("plan") in open_plans]
 
 
 def open_plans_on(store: Store, fid: str) -> list[str]:

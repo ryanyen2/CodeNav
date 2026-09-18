@@ -195,13 +195,13 @@ class Store:
         out = [bid]
         if b.kind != HEADING:
             return out
-        for _, i in self.order[self._index_of(bid) + 1:]:
-            n = self.blocks[i]
+        for j in range(self._index_of(bid) + 1, len(self.order)):
+            n = self.blocks[self.order[j][1]]
             if not n.live:
                 continue
             if n.kind == HEADING and n.level <= b.level:
                 break
-            out.append(i)
+            out.append(n.id)
         return out
 
     def body_ids(self, bid: str) -> list[str]:
@@ -211,13 +211,13 @@ class Store:
         out = [bid]
         if b.kind != HEADING:
             return out
-        for _, i in self.order[self._index_of(bid) + 1:]:
-            n = self.blocks[i]
+        for j in range(self._index_of(bid) + 1, len(self.order)):
+            n = self.blocks[self.order[j][1]]
             if not n.live:
                 continue
             if n.kind == HEADING:
                 break
-            out.append(i)
+            out.append(n.id)
         return out
 
     def feature_range(self, fid: str) -> list[Block]:
@@ -236,10 +236,10 @@ class Store:
             return None
         if b.kind == HEADING:
             return bid if b.live else None
-        for _, i in reversed(self.order[: self._index_of(bid)]):
-            n = self.blocks[i]
+        for j in range(self._index_of(bid) - 1, -1, -1):
+            n = self.blocks[self.order[j][1]]
             if n.live and n.kind == HEADING:
-                return i
+                return n.id
         return None
 
     def headings(self) -> list[Block]:
@@ -249,10 +249,13 @@ class Store:
         """The live blocks immediately before and after ``bid`` in the reading
         flow: a comment thread ranked between two paragraphs does not separate
         them, because nobody reads it there."""
+        # By index, never by slicing `self.order`: these four walks are called
+        # once per block by a cold publish, and an O(n) list copy each turns
+        # that into O(n²) — 450 ms of it alone at 10,000 features.
         i = self._index_of(bid)
-        flows = lambda j: self.blocks[j].live and in_flow(self.blocks[j].kind)
-        prev = next((j for _, j in reversed(self.order[:i]) if flows(j)), None)
-        nxt = next((j for _, j in self.order[i + 1:] if flows(j)), None)
+        flows = lambda j: (b := self.blocks[self.order[j][1]]).live and in_flow(b.kind)
+        prev = next((self.order[j][1] for j in range(i - 1, -1, -1) if flows(j)), None)
+        nxt = next((self.order[j][1] for j in range(i + 1, len(self.order)) if flows(j)), None)
         return prev, nxt
 
     # ── characters and marks ───────────────────────────────────────────────

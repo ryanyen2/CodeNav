@@ -21,7 +21,7 @@ from pathlib import Path
 
 from codoc.calculus import ops as K
 from codoc.calculus.derive import (
-    attribution, dead_cites, description, history as feature_history, markdown, phase, title,
+    attribution, dead_cites, description, history as feature_history, markdown, open_plans, phase, title,
 )
 from codoc.calculus.doc import HEADING, PARAGRAPH, fold_tree, text_fields
 from codoc.calculus.ids import START, new_batch_id, new_block_id, new_plan_id
@@ -134,8 +134,11 @@ def read_tree(codoc_dir: str, *, root_id: str | None = None, depth: int = 0, inc
     if root_id:
         roots = [_find(roots, root_id)]
     walk(roots, 1, None)
+    # `open_plans`, not every open plan: one whose target block is gone cannot
+    # be answered from any surface, so offering it asks for a verdict nobody
+    # can give. It comes back when the block does.
     plans = [{"plan_id": p.id, "kind": p.kind, "target": p.target, "actor": p.actor, "note": p.note}
-             for p in store.plans.values() if p.status == "open"]
+             for p in open_plans(store)]
     return {"ok": True, "features": out, "plans": plans, "doc_language": doc_language_block(codoc_dir)}
 
 
@@ -165,7 +168,7 @@ def read_status(codoc_dir: str) -> dict:
     return {"ok": True, "state": st.get("state", "synced"), "features": len(heads), "queued": len(q),
             "queued_list": [{"feature_id": f, "title": title(store, f, "rejected")} for f in q[:20]],
             "edited": len(edited), "edited_list": [{"feature_id": f, "title": title(store, f)} for f in edited[:20]],
-            "proposals": sum(1 for p in store.plans.values() if p.status == "open"),
+            "proposals": len(open_plans(store)),
             "dead_cites": len(dead), "dead_cite_list": dead[:20],
             "doc_language": doc_language_block(codoc_dir)}
 

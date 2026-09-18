@@ -124,3 +124,35 @@ def test_a_repair_never_rides_in_the_agents_open_proposal_to_delete(tmp_path):
         assert riders and "delete" not in riders, riders
     finally:
         client.release(cd)
+
+
+def test_the_tools_do_not_offer_a_proposal_nobody_can_answer(tmp_path):
+    """`derive.open_plans`: a plan whose target block is gone "is not decidable
+    from any surface, so it is not offered". `read_tree` and `read_status`
+    counted every open plan, so an agent read proposals the editor never drew
+    and a count the person could not clear."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed(ws)
+    pid = ws.open_plan(actor="agent:claude-code", kind="edit", target="p1")
+    r = refs(ws, "p1")
+    ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                "payload": {"after": list(r[-1]), "text": " Proposed."}}], actor="agent:claude-code", plan=pid)
+    publish(cd, ws.store, root_dir=str(tmp_path))
+    ws.close()
+    assert tools.read_status(str(cd))["proposals"] == 1
+    assert [p["plan_id"] for p in tools.read_tree(str(cd))["plans"]] == [pid]
+    client.release(cd)
+    ws = Workspace(cd)
+    d = ws.submit([{"kind": K.BLOCK_DELETE, "target": {"bid": "h1"}, "payload": {}}], actor=H)[0]
+    publish(cd, ws.store, root_dir=str(tmp_path))
+    ws.close()
+    assert tools.read_status(str(cd))["proposals"] == 0
+    assert tools.read_tree(str(cd))["plans"] == []
+    client.release(cd)
+    ws = Workspace(cd)                                   # …and it comes back with the block
+    ws.submit([dict(b) for b in d.inverse], actor=H)
+    publish(cd, ws.store, root_dir=str(tmp_path))
+    ws.close()
+    assert tools.read_status(str(cd))["proposals"] == 1
+    client.release(cd)
