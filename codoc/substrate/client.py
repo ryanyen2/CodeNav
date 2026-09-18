@@ -9,13 +9,24 @@ If not, this process is the applier: it opens the workspace once and keeps it
 for the life of the process, so a long-lived writer (the MCP server) writes one
 session log rather than one per call. A daemon that appears later takes over
 at the next call, and the held workspace is closed.
+
+Two daemonless writers are not forbidden — the MCP server holds its workspace
+while the person runs `codoc accept` — so ``applying()`` wraps apply-and-publish
+in an exclusive lock and, when the log grew by a hand that is not ours since
+our last turn, rebuilds before writing. Without it each held a store the other
+had moved on from and the derived files described whichever published last.
+The lock is per CALL, never for the life of the process: a lease would leave
+the other writer submitting into an inbox with no daemon to drain it.
 """
 from __future__ import annotations
 
 import atexit
+import fcntl
 import json
+import os
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from codoc.substrate import log as L
@@ -35,6 +46,8 @@ def _actor(client: str) -> str:
     return actor
 
 _OWNED: dict[Path, Workspace] = {}
+_SEEN: dict[Path, dict[str, int]] = {}      # log file → size, as this process last left it
+APPLIER_LOCK = "applier.lock"
 
 
 def _applier(codoc_dir: Path) -> Workspace:
@@ -43,6 +56,34 @@ def _applier(codoc_dir: Path) -> Workspace:
     if ws is None:
         ws = _OWNED[codoc_dir] = Workspace(codoc_dir)
     return ws
+
+
+def _sizes(codoc_dir: Path) -> dict[str, int]:
+    return {p.name: p.stat().st_size for p in L.log_dir(codoc_dir).glob("*.jsonl")}
+
+
+@contextmanager
+def applying(codoc_dir: Path):
+    """The workspace, under the applier lock, caught up with anybody else's
+    writes. Yields inside the lock so apply and publish are one turn."""
+    codoc_dir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(codoc_dir / APPLIER_LOCK, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        ws = _applier(codoc_dir)
+        mine = ws.session + ".jsonl"
+        now, was = _sizes(codoc_dir), _SEEN.get(codoc_dir)
+        if was is not None and {k: v for k, v in now.items() if k != mine} != \
+                {k: v for k, v in was.items() if k != mine}:
+            # Another process applied between our turns. Its ops are in the log
+            # and not in our store, so publishing from ours would describe a
+            # tree that never existed. The log is the truth: read it again.
+            ws.rebuild()
+        yield ws
+        _SEEN[codoc_dir] = _sizes(codoc_dir)
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def release(codoc_dir: Path | None = None) -> None:
@@ -66,9 +107,9 @@ def write(codoc_dir: str | Path, *, client: str, bodies: list[dict], root_dir: s
     codoc_dir = Path(codoc_dir)
     actor = _actor(client)
     if not daemon_running(codoc_dir):
-        ws = _applier(codoc_dir)
-        ops = ws.submit(bodies, actor=actor, batch=batch, plan=plan, caused_by=caused_by)
-        publish(codoc_dir, ws.store, root_dir=root_dir or str(codoc_dir.parent))
+        with applying(codoc_dir) as ws:
+            ops = ws.submit(bodies, actor=actor, batch=batch, plan=plan, caused_by=caused_by)
+            publish(codoc_dir, ws.store, root_dir=root_dir or str(codoc_dir.parent))
         return [{"cid": None, "op": o.id, "conflict": o.conflict} for o in ops]
     release(codoc_dir)
     subs = [Submission(cid=f"{client}-{uuid.uuid4().hex[:12]}", kind=b["kind"], target=b.get("target", {}),
@@ -115,10 +156,10 @@ def ingest(codoc_dir: str | Path, *, client: str, bid: str, path: str, base_text
     codoc_dir = Path(codoc_dir)
     actor = _actor(client)
     if not daemon_running(codoc_dir):
-        ws = _applier(codoc_dir)
-        res, ops = ws.ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, plan=plan,
-                             caused_by=caused_by, batch=batch)
-        publish(codoc_dir, ws.store, root_dir=root_dir or str(codoc_dir.parent))
+        with applying(codoc_dir) as ws:
+            res, ops = ws.ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, plan=plan,
+                                 caused_by=caused_by, batch=batch)
+            publish(codoc_dir, ws.store, root_dir=root_dir or str(codoc_dir.parent))
         return {"refused": res.refused, "ops": [o.id for o in ops],
                 "status": None if ops or res.refused else "unchanged"}
     release(codoc_dir)

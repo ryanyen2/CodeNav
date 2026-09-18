@@ -3,6 +3,7 @@
 Each name says the property, not the probe number; the review itself is in
 `docs/substrate/13-substrate-review-5-core.md`.
 """
+import json
 import shutil
 from pathlib import Path
 
@@ -701,3 +702,42 @@ def test_two_clones_that_each_folded_do_not_lose_one_clones_work(tmp_path):
     assert {"Alpha", "Beta"} <= titles, (titles, m.problems)
     assert any("another clone" in p.reason for p in m.problems), m.problems
     m.close()
+
+
+def test_a_second_daemonless_writer_does_not_lose_the_firsts_work(tmp_path):
+    """Review 7: 01 §1 is "one applier, one order, one truth", and with no
+    daemon any process becomes it and KEEPS its workspace (the MCP server
+    does). A second — `codoc accept`, the hub — did the same, so each
+    published from a store the other had moved on from and the derived files
+    described whichever wrote last. `client.applying` takes an exclusive lock
+    for the turn and rebuilds when the log grew by a hand that is not ours."""
+    import subprocess
+    import sys
+
+    from codoc.substrate import client
+    from codoc.substrate.publish import PROJECTION_FILE
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws); ws.close()
+
+    def here(text):
+        r = refs(Workspace(cd, readonly=True), "p1")
+        return client.write(cd, client="cli", bodies=[{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                                                       "payload": {"after": list(r[-1]), "text": text}}],
+                            root_dir=str(tmp_path))
+
+    assert here(" A.")[0]["conflict"] is None                  # this process is now the applier, and holds it
+    other = subprocess.run([sys.executable, "-c", f"""
+import sys; sys.path.insert(0, {str(Path.cwd())!r})
+from codoc.substrate import client
+from codoc.substrate.workspace import Workspace
+ws = Workspace({str(cd)!r}, readonly=True)
+r = list(ws.store.blocks["p1"].text().live_refs())
+print(client.write({str(cd)!r}, client="cli", bodies=[{{"kind": "text.insert", "target": {{"bid": "p1", "path": "text"}},
+      "payload": {{"after": list(r[-1]), "text": " B."}}}}], root_dir={str(tmp_path)!r}))
+"""], capture_output=True, text=True, timeout=120)
+    assert other.returncode == 0, other.stderr
+    assert here(" C.")[0]["conflict"] is None                  # …and our next turn sees theirs
+    proj = json.loads((cd / PROJECTION_FILE).read_text())
+    text = next(e["fields"]["text"]["text"] for e in proj["blocks"] if e["id"] == "p1")
+    assert " A." in text and " B." in text and " C." in text, text
+    client.release(cd)

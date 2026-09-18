@@ -27,7 +27,12 @@ Four consequences shape every decision below:
 - **Provenance is written at the write.** Who wrote a character is recorded by
   the op that wrote it. There is no attribution pass.
 - **One applier, one order, one truth.** A single daemon serializes ops. The log
-  is the truth; the store is a cache rebuilt by replay.
+  is the truth; the store is a cache rebuilt by replay. With no daemon running,
+  whichever process writes becomes the applier for that turn, under an
+  exclusive `.codoc/applier.lock`; a writer whose store the log has outgrown
+  since its last turn rebuilds before it applies. The lock is held for the
+  turn and never for the life of a process — a lease would leave the other
+  writer submitting into an inbox with no daemon to drain it.
 - **No op mutates what it did not name.** Apply never cascades. Consequences a
   gesture wants (promote the children of a deleted heading) are ops the gesture
   emits, in the same batch, so the ledger says why each thing moved.
