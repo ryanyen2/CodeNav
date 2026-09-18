@@ -127,8 +127,17 @@ class Workspace:
             self.problems.extend(snap.problems)
             if snap.valid:
                 exclude = snap.header.get("frontier") or {}
-                for op in snap.ops:
-                    self._replay_one(op)
+                # A snapshot is the fold of ops that were authorized when they
+                # were written, re-expressed as state. Re-checking them against
+                # today's roles would drop verdicts and watermarks from the
+                # state it restores, so the fold is trusted like the log it
+                # replaces (spec §7.5; the hub refuses a PR that changes one).
+                policy, self.store.policy = self.store.policy, None
+                try:
+                    for op in snap.ops:
+                        self._replay_one(op)
+                finally:
+                    self.store.policy = policy
         for op in L.replay_order(files, exclude):
             self._replay_one(op)
 

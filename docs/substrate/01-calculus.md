@@ -416,10 +416,16 @@ burst of typing land as one chain of ops without a round trip per keystroke.
 
 `codoc snapshot` writes `log/snapshot-<hlc>.jsonl`: one `block.add` per live or
 dead block carrying its full `Text` (segments with actor and at, marks) plus the
-bindings, plans and frontiers, and the `Frontier` it folded. Earlier files move
-to `log/archive/`. Replay applies the snapshot first and then every op not
-inside its frontier, regardless of `at`, so a branch forked before the snapshot
-merges correctly. The archive stays readable for the timeline.
+bindings, the plans (with the ops they owned, now archived, and their verdicts)
+and the frontiers (with the words the person asked for), and the `Frontier` it
+folded. Earlier files move to `log/archive/`. Replay applies the snapshot
+first — **without the authority check**, since a fold re-expresses ops that
+were authorized when they were written and is not a new decision — and then
+every op not inside its frontier, with the check on, regardless of `at`, so a
+branch forked before the snapshot merges correctly. `state_fingerprint` is
+equal across a fold. The archive stays readable for the timeline. A snapshot
+is therefore as trusted as the log it replaces: the hub refuses a pull request
+that introduces or changes one.
 
 ### 7.6 Privacy
 

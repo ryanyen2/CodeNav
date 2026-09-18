@@ -3,13 +3,17 @@
 A snapshot is a session file whose header carries the ``Frontier`` it folded
 and whose ops rebuild the store: one ``block.add`` per block, live or dead,
 with its full Text (segments, actors, clocks, marks) as ``texts``; one
-``bind.attach`` per binding; one ``plan.open`` per plan with its status
-restored by a verdict; one ``feature.handoff`` and ``feature.realized`` per
-watermark. Replay applies it first and then every op outside its frontier.
+``bind.attach`` per binding; one ``plan.open`` per plan (carrying the ops it
+owned and the op that opened it, which now live in the archive) with its
+status restored by a verdict; one ``feature.handoff`` — with the words the
+person asked for — and one ``feature.realized`` per watermark. Replay applies
+a snapshot first, without the authority check (these ops were authorized when
+they were written; a fold is not a new decision), then every op outside its
+frontier with the check on.
 
 Dead blocks are kept because anchors may still name their characters from a
 branch forked before the snapshot. Attribution survives because segments
-carry their actor.
+carry their actor. ``state_fingerprint`` is equal across a fold.
 """
 from __future__ import annotations
 
@@ -53,16 +57,22 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
         emit(K.BIND_ATTACH, {"fid": bnd.feature}, {"file": bnd.file, "symbol": bnd.symbol,
                                                    "fingerprint": bnd.fingerprint, "types_hash": bnd.types_hash})
     for p in store.plans.values():
-        emit(K.PLAN_OPEN, {"pid": p.id}, {"kind": p.kind, "target": p.target, "note": p.note}, actor=p.actor)
+        emit(K.PLAN_OPEN, {"pid": p.id}, {"kind": p.kind, "target": p.target, "note": p.note,
+                                          "ops": list(p.ops), "opened_by": p.opened_by}, actor=p.actor)
         if p.status == "accepted":
-            emit(K.PLAN_ACCEPT, {"pid": p.id}, {"subset": []})
+            emit(K.PLAN_ACCEPT, {"pid": p.id}, {})
         elif p.status == "rejected":
             emit(K.PLAN_REJECT, {"pid": p.id}, {})
     for fid, w in store.watermarks_by_fid.items():
         if fid not in store.blocks:
             continue
         if w.handoff:
-            emit(K.FEATURE_HANDOFF, {"fid": fid}, {"covers": w.handoff})
+            asked = store.by_id.get(w.handoffs[-1]) if w.handoffs else None
+            payload = {"covers": w.handoff}
+            for k in ("asked", "base_sha", "delete_code"):
+                if asked is not None and asked.payload.get(k):
+                    payload[k] = asked.payload[k]
+            emit(K.FEATURE_HANDOFF, {"fid": fid}, payload)
         if w.realized:
             emit(K.FEATURE_REALIZED, {"fid": fid}, {"covers": w.realized})
     return out

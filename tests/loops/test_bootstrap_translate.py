@@ -103,9 +103,28 @@ def test_translate_ingests_per_block_and_plans_human_prose(tmp_path):
 
 
 def test_snapshot_folds_and_rebuilds_identically(tmp_path):
+    """A fold is the state, re-expressed: blocks, bindings, plans with their
+    verdicts, and the watermarks (with what the person asked) all survive it."""
+    from codoc.calculus import ops as K
+    from codoc.calculus.derive import directive, phase
+    from codoc.loops.realize import handoff
+
     ws = Workspace(tmp_path / ".codoc")
     bootstrap(ws, ROWS, Graph(), propose_file=fake_file, propose_org=fake_org, propose_the_brief=lambda *a, **k: {}, concurrency=1)
-    before = ws.store.state_fingerprint()
+    fid = ws.store.headings()[0].id
+    body = ws.store.feature_body(fid)[-1]
+    t = body.text()
+    ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": body.id, "path": "text"},
+                "payload": {"after": list(t.last_live_ref()), "text": " Mine."}}], actor="human:local")
+    handoff(ws, fid, actor="human:local", asked="make it retry twice")
+    kept = ws.open_plan(actor="loop", kind="edit", target=fid, note="a proposal nobody answered")
+    ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": body.id, "path": "text"},
+                "payload": {"after": list(ws.store.blocks[body.id].text().last_live_ref()), "text": " Maybe."}}],
+              actor="loop", plan=kept)
+    gone = ws.open_plan(actor="loop", kind="edit", target=fid, note="answered")
+    ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": gone}, "payload": {}}], actor="human:local")
+    ws.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": fid}, "payload": {}}], actor="human:local")
+    before, before_phase, before_directive = ws.store.state_fingerprint(), phase(ws.store, fid), directive(ws.store, fid)
     ws.close()
     ws2 = Workspace(tmp_path / ".codoc")
     write_snapshot(tmp_path / ".codoc", ws2.store, ws2.clock)
@@ -114,10 +133,10 @@ def test_snapshot_folds_and_rebuilds_identically(tmp_path):
     ws2.close()
     ws3 = Workspace(tmp_path / ".codoc")
     assert not ws3.problems
-    after = ws3.store.state_fingerprint()
-    assert [b["id"] for b in after["blocks"]] == [b["id"] for b in before["blocks"]]
-    assert [b["content"] for b in after["blocks"]] == [b["content"] for b in before["blocks"]]
-    assert after["bindings"] == before["bindings"]
+    assert ws3.store.state_fingerprint() == before
+    assert phase(ws3.store, fid) == before_phase
+    assert "make it retry twice" in directive(ws3.store, fid) == before_directive
+    assert all(o.conflict is None for o in ws3.store.ops), [o.conflict for o in ws3.store.ops if o.conflict]
 
 
 def test_import_v1_writes_one_batch_with_writer_roles(tmp_path):

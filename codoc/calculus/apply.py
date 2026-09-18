@@ -560,8 +560,17 @@ def _h_plan_open(store: Store, op: Op, touched: set[str]):
         if not target:
             raise Conflict("delete_plan_needs_target")
         _live_feature(store, target)
-    store.plans[pid] = Plan(pid, op.actor, kind, target, op.payload.get("note", ""), "open", [], op.id)
-    return {"kind": kind, "target": target, "note": op.payload.get("note", "")}, []
+    # ``ops`` and ``opened_by`` are how a snapshot restores a plan whose own ops
+    # now live in the archive; an ordinary plan.open sends neither.
+    ops = [str(i) for i in op.payload.get("ops") or []]
+    opened_by = op.payload.get("opened_by") or op.id
+    store.plans[pid] = Plan(pid, op.actor, kind, target, op.payload.get("note", ""), "open", ops, opened_by)
+    canonical = {"kind": kind, "target": target, "note": op.payload.get("note", "")}
+    if ops:
+        canonical["ops"] = ops
+    if op.payload.get("opened_by"):
+        canonical["opened_by"] = opened_by
+    return canonical, []
 
 
 def _plan_ops(store: Store, plan: Plan) -> list[Op]:
