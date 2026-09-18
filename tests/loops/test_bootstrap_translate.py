@@ -162,3 +162,29 @@ def test_import_v1_writes_one_batch_with_writer_roles(tmp_path):
     assert description(ws.store, roots[0].id) == "First para.\n\nSecond para."
     assert all(s.actor == "human:import" for s in ws.store.blocks[roots[0].id].text().segs)
     assert all(s.actor == "loop" for s in ws.store.blocks[roots[0].children[0].id].text().segs)
+
+
+def test_translate_says_when_it_skipped_a_feature_for_an_open_plan(tmp_path):
+    """A feature left alone because a proposal is open on it is reported as
+    skipped, with why; counting it as already translated would be a lie in the
+    one line the person reads."""
+    from codoc.calculus import ops as K
+    from codoc.calculus.ids import START
+    from codoc.doclang import resolve
+
+    ws = Workspace(tmp_path / ".codoc")
+    ws.submit([
+        {"kind": K.BLOCK_ADD, "target": {"bid": "h1"}, "payload": {"kind": "heading", "level": 1, "after": START}},
+        {"kind": K.TEXT_INSERT, "target": {"bid": "h1", "path": "text"}, "payload": {"after": START, "text": "Client"}},
+        {"kind": K.BLOCK_ADD, "target": {"bid": "p1"}, "payload": {"kind": "paragraph", "after": "h1"}},
+        {"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "Retries once."}},
+    ], actor="loop")
+    pid = ws.open_plan(actor="loop", kind="edit", target="h1")
+    t = ws.store.blocks["p1"].text()
+    ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                "payload": {"after": list(t.last_live_ref()), "text": " Maybe."}}], actor="loop", plan=pid)
+    res = translate_tree(ws, tmp_path / ".codoc", language=resolve("zh-Hans"),
+                         propose=lambda payload, lang, **kw: {p["id"]: ("客户端", "重试一次。") for p in payload})
+    assert res.translated == 0 and res.already == 0
+    assert [s.feature_id for s in res.skipped] == ["h1"] and "plan is open" in res.skipped[0].reason
+    assert "1 skipped" in res.summary()

@@ -431,3 +431,23 @@ def test_a_later_demotion_does_not_rewrite_what_was_written(tmp_path):
     assert ws2.store.state_fingerprint() == fp
     # …and the new table is what judges the next op she writes.
     assert ws2.submit([{"kind": K.PLAN_REJECT, "target": {"pid": pid}, "payload": {}}], actor="human:alice")[0].conflict == "authority"
+
+
+def test_the_page_keeps_a_mark_a_plan_proposes_to_remove(tmp_path):
+    """A proposed unbold leaves the word bold and says so beside it, the way a
+    proposed deletion leaves the words struck rather than gone."""
+    from codoc.calculus.derive import block_entry, plan_claims
+    from codoc.calculus.text import BOLD
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws)
+    ins = [o for o in ws.store.ops if o.kind == K.TEXT_INSERT and o.payload["bid"] == "p1"][0]
+    ws.submit([{"kind": K.TEXT_MARK, "target": {"bid": "p1", "path": "text"},
+                "payload": {"kind": BOLD, "attrs": {}, "start": [ins.id, 8], "end": [ins.id, 11], "on": True}}], actor="human:local")
+    pid = ws.open_plan(actor="loop", kind="edit", target="p1")
+    ws.submit([{"kind": K.TEXT_MARK, "target": {"bid": "p1", "path": "text"},
+                "payload": {"kind": BOLD, "attrs": {}, "start": [ins.id, 8], "end": [ins.id, 11], "on": False}}], actor="loop", plan=pid)
+    spans = block_entry(ws.store, ws.store.blocks["p1"])["fields"]["text"]["spans"]
+    assert [(s["kind"], s["start"], s["end"]) for s in spans] == [(BOLD, 8, 12)]
+    assert [(c.stage, c.text) for c in plan_claims(ws.store, "h1") if c.stage == "unmarked"] == [("unmarked", "bold:once")]
+    ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor="human:local")
+    assert block_entry(ws.store, ws.store.blocks["p1"])["fields"]["text"]["spans"] == []

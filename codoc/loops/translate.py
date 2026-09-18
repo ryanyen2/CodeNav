@@ -90,8 +90,14 @@ def translate_tree(ws: Workspace, codoc_dir: str | Path, *, language: DocLanguag
     res = TranslateResult()
     heads = ws.store.headings()
     res.considered = len(heads)
-    pending = [h.id for h in heads if _needs(ws, h.id, lang) and not _has_open_plan(ws, h.id)]
-    res.already = len(heads) - len(pending)
+    wanted = [h.id for h in heads if _needs(ws, h.id, lang)]
+    pending = [fid for fid in wanted if not _has_open_plan(ws, fid)]
+    res.already = len(heads) - len(wanted)
+    for fid in wanted:
+        if fid in pending:
+            continue
+        res.skipped.append(Skipped(fid, markdown(ws.store.blocks[fid].text(), "rejected", ws.store),
+                                   "a plan is open on it; translating would tombstone its words"))
     if limit > 0:
         pending = pending[:limit]
     taken: dict[str | None, set[str]] = {}

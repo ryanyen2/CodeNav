@@ -434,15 +434,26 @@ def dead_cites(store: Store, known: set[tuple[str, str]]) -> list[tuple[str, Mar
 def block_entry(store: Store, b: Block) -> dict:
     """One block as the editor reads it. Pure, and a function of the block's
     own state plus which plans are open, so a caller may memoize it on
-    ``(block_head[b.id], plans_head)`` (spec §6, ``projection``)."""
+    ``(block_head[b.id], plans_head)`` (spec §6, ``projection``).
+
+    The spans are the marks the document has *without* the open plans' toggles:
+    a proposal to unbold a word leaves the word bold on the page, the way a
+    proposal to delete words leaves them struck rather than gone, and the
+    proposal itself is drawn over it from ``plan_claims``. The words a plan
+    inserted are in ``runs`` and shown as the plan's, as before."""
+    open_ids = {p.id for p in store.plans.values() if p.status == "open"}
     entry = {"id": b.id, "kind": b.kind, "level": b.level, "rank": b.rank, "head": store.block_head.get(b.id, 0),
              "fields": {}}
     for f in text_fields(b.kind):
         t = b.text(f)
+        marked = t
+        if open_ids:
+            marked = t.clone()                      # same characters, the plans' mark toggles undone
+            _unapply_plan_marks(marked, store, open_ids)
         entry["fields"][f] = {
             "text": t.live_text(),
             "runs": [r.__dict__ for r in attribution(t, merge=False)],
-            "spans": [{"kind": s.kind, "attrs": s.attrs, "start": s.start, "end": s.end} for s in live_spans(t)],
+            "spans": [{"kind": s.kind, "attrs": s.attrs, "start": s.start, "end": s.end} for s in live_spans(marked)],
             "suggest_del": [{"plan": s.attrs["plan"], "start": s.start, "end": s.end} for s in _suggest_spans(t, store)],
         }
     for k, v in b.content.items():

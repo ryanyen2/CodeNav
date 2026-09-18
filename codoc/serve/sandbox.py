@@ -33,6 +33,11 @@ _DENY_EDIT_FILES = frozenset({
     ".mcp.json", "pyproject.toml", "setup.py", "setup.cfg",
     "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
     "poetry.lock", "uv.lock", "Cargo.lock", "Gemfile.lock",
+    # Files that run on someone else's machine after review, or decide what
+    # the build installs: the same reason as the manifests above.
+    "conftest.py", "noxfile.py", "tox.ini", "Makefile", "Dockerfile",
+    ".pre-commit-config.yaml", ".gitlab-ci.yml", ".gitmodules", ".gitattributes",
+    ".npmrc", ".yarnrc", ".yarnrc.yml", "requirements.txt", "requirements-dev.txt",
 })
 
 _SECRET_GLOBS = (".env", ".env.*", "*.pem", "*.key", "*.keystore", "id_rsa", "id_ed25519")

@@ -337,6 +337,7 @@ Pure over the store, cached by the keys stated.
 | view | definition | cache key |
 |---|---|---|
 | `text(field)` | live segments concatenated | per block, on write |
+| read modes | `live` is the raw state (every plan's words and mark toggles applied); `rejected` is the document without any open plan, which is what the export, the directive and every model read use; `accepted` is every open plan taken. The editor's page is neither: the projection gives it the rejected marks with the plans' words and toggles drawn over them, so a proposal to unbold a word leaves the word bold and says so beside it | |
 | `tree` | live headings in rank order folded by level; a heading deeper than the preceding one is its child | structural head (advances on add/delete/move/set kind or level) |
 | `description(f)` | `f`'s own live paragraphs (before the next heading), joined by blank lines; a child's prose is the child's | structural head + the blocks' heads |
 | `attribution(field, window)` | segments since `window`, merged when adjacent segments share actor, plan and dead-ness, snapped to `doclang.tokens` boundaries for display only | on read |
