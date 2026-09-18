@@ -18,7 +18,6 @@ import time
 import uuid
 from pathlib import Path
 
-from codoc.calculus.ops import Op
 from codoc.substrate import log as L
 from codoc.substrate.daemon import daemon_running
 from codoc.substrate.log import Submission

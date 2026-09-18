@@ -110,6 +110,14 @@ need the schema to render Text fields, only to render the rest.
 - `kinds.lift.lift_pass(ws, graph, codoc_dir)` re-derives every live kind block
   with a `lift` after a reflect pass, skipping held features (doc wins), and
   writes the delta with `actor=loop` on the trunk.
+- `derive.directive` is where the other two codecs run. Every in-flow kind
+  block in the feature contributes its `consult`; every kind block with a
+  `lower` contributes what that codec makes of the change since the last
+  realization, with `old` being the block's content as the realization read it
+  (its Text fields reconstructed by identity — characters minted since are not
+  there, a kill since has not happened — and its plain fields rolled back
+  through the `block.set` records). An out-of-flow block (a comment) is not
+  prose the agent reads, so it speaks only through `lower`, once.
 - The export fences a kind as `codoc:<kind> {#b-id}` + JSON with Text fields
   as Markdown and empty Text fields left out; a kind registered with
   `exported=False` (comment) is omitted from `tree.codoc`.

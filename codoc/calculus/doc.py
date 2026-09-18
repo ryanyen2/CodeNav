@@ -108,35 +108,6 @@ def clamp_level(level: int) -> int:
     return max(1, min(MAX_LEVEL, int(level)))
 
 
-def dominated(blocks: list[Block], start: int) -> int:
-    """Given the ordered live blocks and the index of a block, the exclusive end
-    index of the range that block owns: itself, or for a heading, itself plus
-    everything until the next heading at the same or a shallower level."""
-    b = blocks[start]
-    if not b.is_heading:
-        return start + 1
-    end = start + 1
-    while end < len(blocks):
-        n = blocks[end]
-        if n.is_heading and n.level <= b.level:
-            break
-        end += 1
-    return end
-
-
-def body_range(blocks: list[Block], start: int) -> int:
-    """A heading's *own* body: itself plus the following non-heading blocks,
-    stopping at any heading. This is what ``block.delete`` on a heading covers
-    (descendant headings are not deleted; a gesture promotes them)."""
-    b = blocks[start]
-    if not b.is_heading:
-        return start + 1
-    end = start + 1
-    while end < len(blocks) and not blocks[end].is_heading:
-        end += 1
-    return end
-
-
 @dataclass
 class TreeNode:
     id: BlockId

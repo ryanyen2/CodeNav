@@ -95,3 +95,39 @@ def test_rebuild_and_snapshot_cli(tmp_path):
     r = runner.invoke(app, ["rebuild", "--root", str(root)])
     assert r.exit_code == 0 and "4 features" in r.output
     assert json.loads((cd / "status.json").read_text())["features"] == 4
+
+
+def test_accepting_a_plan_from_the_shell_hands_its_feature_off(tmp_path):
+    """02 §5: a plan is a request to build, so the verdict queues it. The
+    gesture belongs to whoever sends the verdict — the editor sends both in one
+    batch, and so must the command line, or the same accept means two things."""
+    from codoc.loops.realize import queued
+    root, cd = seeded(tmp_path)
+    st = client.read(cd).store
+    fid = next(h.id for h in st.headings() if "HTTP client" in tools.title(st, h.id))
+    body = st.feature_body(fid)
+    res = tools.propose(str(cd), ops=[{"kind": "amend", "feature_id": fid,
+                                       "blocks": [{"id": body[1].id, "text": "Sends requests over HTTP/2."}]}],
+                        note="http2", root_dir=str(root))
+    assert res["ok"] and queued(client.read(cd).store) == []
+    r = runner.invoke(app, ["accept", res["plan_id"], "--root", str(root)])
+    assert r.exit_code == 0 and "accepted" in r.output, r.output
+    st = client.read(cd).store
+    assert st.plans[res["plan_id"]].status == "accepted"
+    assert queued(st) == [fid], "accepting the plan did not queue the build"
+    assert "HTTP/2" in tools.description(st, fid, "rejected")
+
+
+def test_no_build_takes_the_words_without_the_work(tmp_path):
+    from codoc.loops.realize import queued
+    root, cd = seeded(tmp_path)
+    st = client.read(cd).store
+    fid = next(h.id for h in st.headings() if "HTTP client" in tools.title(st, h.id))
+    body = st.feature_body(fid)
+    res = tools.propose(str(cd), ops=[{"kind": "amend", "feature_id": fid,
+                                       "blocks": [{"id": body[1].id, "text": "Sends requests over HTTP/2."}]}],
+                        note="http2", root_dir=str(root))
+    r = runner.invoke(app, ["accept", res["plan_id"], "--root", str(root), "--no-build"])
+    assert r.exit_code == 0
+    st = client.read(cd).store
+    assert st.plans[res["plan_id"]].status == "accepted" and queued(st) == []

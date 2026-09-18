@@ -23,12 +23,13 @@ next pass (the document wins). A loop's "this feature lost all its code" is a
 accept emits the delete.
 
 **Document → code (realize).** A person's trunk ops on a bound feature's blocks
-beyond `handoff.upto` are a held draft, visible as ink. A hand-off gesture
-records `feature.handoff(upto=head)`; the directive builder renders the
-feature's current text plus what changed since `realized.upto` into the
+beyond the hand-off frontier are a held draft, visible as ink. A hand-off
+gesture records `feature.handoff(covers=head)`; the directive builder renders
+the feature's current text plus what changed since `realized.covers` into the
 agent's prompt. The agent implements, reflects through the code loop with
-`caused_by` the hand-off op, and `feature.realized(upto, sha)` closes it. The
-document never writes code; a gesture does.
+`caused_by` the hand-off op, and `feature.realized(covers, sha)` closes it — a
+realization with nothing queued is refused `nothing_queued`, since there is no
+request to settle. The document never writes code; a gesture does.
 
 ## 2. Editing gestures
 
@@ -95,7 +96,11 @@ it cut, in the same paragraph as their ink.
 text at the rank it would take. The person edits it in place (blue inside
 gray), accepts or rejects. Accept keeps the agent as author of the surviving
 words and hands the feature off in the same batch, since a plan is by
-definition a request to build. Reject tombstones it; History still shows it.
+definition a request to build. **The sender of the verdict emits the hand-off,
+not the applier**: the editor sends both bodies in one batch and `codoc accept`
+does the same (`--no-build` takes the words without the work). A `kind=delete`
+plan is the exception — removing code is its own decision, made with
+`codoc handoff --delete-code`. Reject tombstones it; History still shows it.
 
 ### 3.4 Reviewing an agent session (the study task)
 

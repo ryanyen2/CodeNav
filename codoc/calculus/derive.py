@@ -7,7 +7,7 @@ should the agent build, what happened to it over time.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from codoc.calculus import ops as K
 from codoc.calculus.doc import HEADING, PARAGRAPH, Block, TreeNode, fold_tree, in_flow, text_fields
@@ -147,15 +147,6 @@ def attribution(text: Text, merge: bool = True) -> list[Run]:
             out[-1].at = max(out[-1].at, r.at)
         else:
             out.append(r)
-    return out
-
-
-def blame_summary(text: Text) -> dict[str, int]:
-    """Characters per actor over the live text."""
-    out: dict[str, int] = {}
-    for s in text.segs:
-        if s.live:
-            out[s.actor] = out.get(s.actor, 0) + len(s.chars)
     return out
 
 

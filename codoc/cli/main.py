@@ -213,13 +213,29 @@ def handoff(feature: str, root: str = ROOT,
 
 
 @app.command()
-def accept(plan: str, root: str = ROOT):
-    """Accept a plan (the whole of it)."""
+def accept(plan: str, root: str = ROOT,
+           build: bool = typer.Option(True, "--build/--no-build", help="Hand the feature off in the same batch.")):
+    """Accept a plan (the whole of it), and hand its feature off.
+
+    A plan is a request to build, so the verdict queues it (02 §5). The gesture
+    belongs to whoever sends the verdict, not to the applier — the editor sends
+    both in one batch and so does this. `--no-build` takes the words without
+    the work. A `kind=delete` plan is never handed off from here: removing the
+    code is its own decision, and `codoc handoff --delete-code` is where a
+    person makes it.
+    """
     from codoc.calculus import ops as K
+    from codoc.loop.gitref import head_sha
     from codoc.substrate import client
     cd = _require(root)
-    _report(client.write(cd, client="cli", root_dir=root,
-                         bodies=[{"kind": K.PLAN_ACCEPT, "target": {"pid": plan}, "payload": {}}]), "accepted")
+    ws = client.read(cd)
+    pl = ws.store.plans.get(plan)
+    fid = ws.store.feature_of(pl.target) if pl is not None and pl.target else None
+    bodies = [{"kind": K.PLAN_ACCEPT, "target": {"pid": plan}, "payload": {}}]
+    if build and fid and (pl is None or pl.kind != "delete"):
+        bodies.append({"kind": K.FEATURE_HANDOFF, "target": {"fid": fid},
+                       "payload": {"base_sha": head_sha(root), "asked": f"Build the plan {plan}."}})
+    _report(client.write(cd, client="cli", root_dir=root, bodies=bodies), "accepted")
 
 
 @app.command()
@@ -307,14 +323,43 @@ def rebuild(root: str = ROOT):
     from codoc.substrate.publish import publish
     from codoc.substrate.workspace import Workspace
     cd = _require(root)
+    from codoc.serve.validate import refused_verdicts
     ws = Workspace(cd)
     try:
         publish(cd, ws.store, root_dir=root)
         typer.echo(f"✓ {len(ws.store.headings())} features from {len(ws.store.ops)} ops")
         for p in ws.problems:
             typer.echo(f"  ⚠ {p.path}:{p.line}: {p.reason}")
+        # A signal, not a gate: a recorded answer stands whatever the table says
+        # today, so a count here means a log carries work this table would refuse.
+        for actor, n in sorted(refused_verdicts(ws.store, ws.roles).items()):
+            typer.echo(f"  ⚠ {n} applied op(s) by {actor} the roles table would refuse today")
     finally:
         ws.close()
+
+
+@app.command("validate-logs")
+def validate_logs_cmd(paths: list[str] = typer.Argument(None, help="Log files to check; default: what a merge would add."),
+                      root: str = ROOT, base: str = typer.Option("origin/main", "--base", help="Merge base to diff against.")):
+    """Check a pull request's session logs against the tracked roles table.
+
+    A log file is a capability: replay honours the answer recorded in it, so a
+    forged success in a stranger's log lands on every clone that rebuilds. Run
+    this before merging one.
+    """
+    from codoc.serve.validate import changed_logs, validate_logs
+    from codoc.substrate.workspace import Roles, Workspace
+    cd = _require(root)
+    files = [Path(p) for p in paths] if paths else changed_logs(root, base)
+    if not files:
+        typer.echo("no session logs to check")
+        return
+    ws = Workspace(cd, readonly=True)
+    findings = validate_logs(files, roles=Roles.load(cd), store=ws.store)
+    for f in findings:
+        typer.echo(f"  ✗ {f}")
+    typer.echo(f"{'✗' if findings else '✓'} {len(files)} log file(s), {len(findings)} finding(s)")
+    raise typer.Exit(1 if findings else 0)
 
 
 @app.command()

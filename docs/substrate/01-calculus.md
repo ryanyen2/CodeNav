@@ -326,7 +326,8 @@ apply(store, op) -> store'
 ```
 
 `apply` is total (every op is stored, applied or with a recorded conflict),
-deterministic, and O(segments of the touched blocks). `replay(log)` folds
+deterministic, and O(the segments and marks of the blocks it touches), plus
+the ordered insert a structural op pays. `replay(log)` folds
 `apply` over the log in the order of §7.2 and reproduces the store; the store
 records the set of op ids it has applied so a replay resumes.
 
@@ -341,7 +342,7 @@ Pure over the store, cached by the keys stated.
 | `tree` | live headings in rank order folded by level; a heading deeper than the preceding one is its child | structural head (advances on add/delete/move/set kind or level) |
 | `description(f)` | `f`'s own live paragraphs (before the next heading), joined by blank lines; a child's prose is the child's | structural head + the blocks' heads |
 | `attribution(field, window)` | segments since `window`, merged when adjacent segments share actor, plan and dead-ness, snapped to `doclang.tokens` boundaries for display only | on read |
-| `ink(f)` | human live segments on `f`'s blocks beyond the latest handoff frontier (unsent) or within it and beyond the realized frontier (sent) | |
+| `ink(f)` | human live segments on `f`'s blocks beyond the latest handoff frontier (unsent) or within it and beyond the realized frontier (sent). Moving a paragraph into `f` therefore makes its words `f`'s unsent ink, even though nobody retyped them: the words are new to this feature, the move was the person's op, and `f`'s build has never seen them. Only blocks in the reading flow count — a margin comment is a request about the prose, not the prose (`written_by` and the directive agree) | |
 | `ground(f)` | loop segments and loop-killed dead segments on `f` since the person last engaged with it: the later of the latest hand-off and their newest op on its blocks (in apply order). A feature the person never touched paints nothing: there is no "since". | |
 | `plan(f)` | live segments with `plan` set whose plan is open, plus `suggest_del` marks | |
 | `queued(f)` | the hand-off frontier is not covered by the realized frontier (`covered(handoff, realized)`, one definition for phase, the queue file and phantoms); a feature being edited or built right now is still queued | |
@@ -366,8 +367,9 @@ rebuilds from the logs now on disk, since a checkout or pull may have changed
 their set. One daemon per session file, many actors: the daemon stamps `actor`
 on every op from the client's authenticated identity, so one file carries the
 person, the loop and the agents in the order they wrote. A file with a
-non-monotone `seq` or a malformed op is rejected at load with a report;
-authority is checked per op at apply and again at replay.
+non-monotone `seq` or a malformed op is rejected at load with a report.
+Authority is checked once, when the op arrives, and the answer is recorded
+(§7.3); replay honours what the record says.
 
 ### 7.2 Order
 
@@ -391,9 +393,15 @@ local identity can collide with; the local checkout's `human:local` and
 op **arrives**, and the answer is recorded on the op: a replay honours what was
 recorded rather than re-asking, so `replay(log)` is the same store on every
 machine and at every later state of the table (I6), and reducing someone's
-access tomorrow never deletes what they wrote today. A log from a stranger is
-judged at its own door instead: the hub validates a pull request's session
-files against its table before merging them. The applier checks, per op and
+access tomorrow never deletes what they wrote today. The price is that a log
+file is a capability: edit the recorded `conflict` off a refused verdict and
+every clone that rebuilds will take it. A log from a stranger is therefore
+judged at its own door: `serve/validate.py` reads a pull request's session
+files against this table and refuses an op recorded as applied that the table
+would deny, a snapshot file, or a stamp far ahead of wall time
+(`codoc validate-logs`, one run before merging). Locally the same reading is a
+signal rather than a gate — `codoc rebuild` counts, per actor, the applied ops
+the table would refuse today. The applier checks, per op and
 with the store in hand, that the actor's role allows it: `owner` and `maintainer` may write everything; `machine` (agents,
 the loop, translators, imports) may write the trunk and plans but no verdict
 and no hand-off, with one exception, the loop's own `feature.realized`, which

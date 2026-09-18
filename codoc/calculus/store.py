@@ -263,17 +263,19 @@ class Store:
             if m.op:
                 self.mark_index.setdefault(m.op, set()).add((bid, path))
 
-    def prune_index(self, bid: str, path: str, text: Text) -> None:
+    def prune_index(self, bid: str, path: str, text: Text, was: set[OpId]) -> None:
         """After a split or merge moved characters out of ``(bid, path)``, drop
-        the holders that no longer hold anything of an op."""
-        present = {s.op for s in text.segs}
-        for op in list(self.char_index):
-            if (bid, path) in self.char_index[op] and op not in present:
-                self.char_index[op].discard((bid, path))
-        marks = {m.op for m in text.marks}
-        for op in list(self.mark_index):
-            if (bid, path) in self.mark_index[op] and op not in marks:
-                self.mark_index[op].discard((bid, path))
+        the holders that no longer hold anything of an op. ``was`` is what the
+        field held before the cut (``Text.ops()``), which is what keeps this
+        O(the ops of one field) and not O(every op ever recorded)."""
+        holder = (bid, path)
+        chars = {s.op for s in text.segs}
+        marks = {m.op for m in text.marks if m.op}
+        for op in was:
+            if op not in chars and (idx := self.char_index.get(op)) is not None:
+                idx.discard(holder)
+            if op not in marks and (idx := self.mark_index.get(op)) is not None:
+                idx.discard(holder)
 
     def holders(self, op: OpId) -> list[tuple[Block, str]]:
         """Every ``(block, field)`` holding characters minted by ``op``."""
@@ -334,6 +336,8 @@ class Store:
         if op.conflict is None and op.kind in K.PLAN_KINDS:
             # A plan's existence or status changes what the rejected read mode
             # hides and which proposals are offered, on blocks it never touched.
+            # Open, accept, reject and reopen all move it; a `plan.open` that
+            # conflicted does not, because nothing about the plans changed.
             self.plans_head = pos + 1
 
     def ops_on(self, bids) -> list[Op]:

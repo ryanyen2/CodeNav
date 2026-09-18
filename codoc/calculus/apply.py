@@ -1,4 +1,5 @@
-"""``apply(store, op)`` — total, deterministic, O(touched blocks) (spec §5).
+"""``apply(store, op)`` — total, deterministic, O(the segments and marks of the
+blocks it touches), plus the ordered insert a structural op pays (spec §5).
 
 Every op is recorded: applied, or stored with ``conflict`` set and the state
 untouched. Handlers are two-phase: they RESOLVE every anchor, block and mark
@@ -31,6 +32,16 @@ class Conflict(Exception):
         self.code = code
 
 
+class Wire(dict):
+    """A payload or a target exactly as it arrived. A key a handler needs and
+    the client did not send is the client's mistake, recorded as
+    ``missing:<key>``; a ``KeyError`` from anywhere else inside a handler is
+    this code's mistake and has to surface as one."""
+
+    def __missing__(self, key):
+        raise Conflict(f"missing:{key}")
+
+
 def _ref(v) -> CharRef | str:
     try:
         return ref_from_json(v)
@@ -52,6 +63,7 @@ def apply(store: Store, op: Op) -> Op:
         return store.by_id[op.id]
     touched: set[str] = set()
     structural = op.kind in K.STRUCTURAL
+    op.payload, op.target = Wire(op.payload), Wire(op.target)
     try:
         if op.kind not in K.KINDS:
             raise Conflict("unknown_kind", op.kind)
@@ -77,8 +89,6 @@ def apply(store: Store, op: Op) -> Op:
         op.conflict, op.inverse, touched = "unknown_anchor", [], set()
     except MarkError:
         op.conflict, op.inverse, touched = "mark_partial", [], set()
-    except KeyError as e:
-        op.conflict, op.inverse, touched = f"missing:{e.args[0] if e.args else ''}", [], set()
     except RankError:
         op.conflict, op.inverse, touched = "bad_rank", [], set()
     except (ValueError, TypeError):
@@ -139,6 +149,11 @@ def _segment_holders(store: Store, segs: list[tuple[str, int, int]], hint: tuple
 
 
 def _h_text_delete(store: Store, op: Op, touched: set[str]):
+    """The canonical ``bid`` is the FIRST holder these characters were found
+    in, not all of them: a delete whose range a split has since parted acts on
+    every holder (``segments`` is the record that matters) and names one. A
+    reader that needs the holders resolves ``segments`` by identity rather than
+    trusting this field — the timeline does."""
     bid, path = op.target["bid"], op.target.get("path", "text")
     if "segments" in op.payload:
         segs = [(str(o), int(k), int(n)) for o, k, n in op.payload["segments"]]
@@ -171,6 +186,9 @@ def _h_text_delete(store: Store, op: Op, touched: set[str]):
 
 
 def _h_text_restore(store: Store, op: Op, touched: set[str]):
+    """The canonical ``bid`` is the block the op NAMED, which after a split may
+    hold none of these characters. As with the delete, ``segments`` is the
+    record and identity is how a reader finds where they are."""
     bid, path = op.target["bid"], op.target.get("path", "text")
     by = op.payload.get("by")
     segs = [(str(o), int(k), int(n)) for o, k, n in op.payload["segments"]]
@@ -249,6 +267,8 @@ def _h_block_add(store: Store, op: Op, touched: set[str]):
     for f, tj in (op.payload.get("texts") or {}).items():
         if f in text_fields(kind):
             content[f] = Text.from_json(tj)
+    # A pinned rank comes from a snapshot or a recorded inverse re-placing a
+    # block exactly where it was; a fresh add derives one from its anchor.
     rank = op.payload.get("rank") or store.rank_after(anchor)
     block = Block(bid, kind, rank, level, content)
     if op.payload.get("dead"):
@@ -320,6 +340,7 @@ def _h_block_split(store: Store, op: Op, touched: set[str]):
     existing = store.blocks.get(new)
     if existing is not None and (existing.live or not forced):
         raise Conflict("duplicate_block", new)
+    was = text.ops()
     tail = text.split(at)
     head_live, tail_live = text.live_len() > 0, tail.live_len() > 0
     new_first = (forced == "head") if forced else ((not head_live) and tail_live)
@@ -338,7 +359,7 @@ def _h_block_split(store: Store, op: Op, touched: set[str]):
         store.add_block(nb)
     store.index_text(b.id, path, keep_text)
     store.index_text(new, path, new_text)
-    store.prune_index(b.id, path, keep_text)
+    store.prune_index(b.id, path, keep_text, was)
     touched.update({b.id, new})
     canonical = {"at": ref_to_json(at), "new": new, "new_first": new_first, "rank": nb.rank, "bid": b.id, "path": path}
     if forced:
@@ -367,6 +388,7 @@ def _h_block_merge(store: Store, op: Op, touched: set[str]):
         raise Conflict("not_adjacent")
     before = bid == prev
     ta, tb = a.text(path), b.text(path)
+    was = tb.ops()
     if before:
         joined = Text(tb.segs, tb.marks)
         seam = joined.merge(ta)
@@ -376,7 +398,7 @@ def _h_block_merge(store: Store, op: Op, touched: set[str]):
         seam = ta.merge(tb)
     b.dead = op.id
     store.index_text(into, path, a.text(path))
-    store.prune_index(bid, path, b.text(path))
+    store.prune_index(bid, path, b.text(path), was)
     touched.update({into, bid})
     canonical = {"at": ref_to_json(seam), "order": "before" if before else "after", "path": path, "rank": b.rank}
     if op.payload.get("rejoin"):

@@ -3,7 +3,7 @@ from codoc.calculus import ops as K
 from codoc.calculus.derive import phase
 from codoc.graph.graph import Graph
 from codoc.loop.diff import ChangeSet, ChunkRef
-from codoc.loops.realize import handoff, queued, render_queue, settle, withdraw, write_queue
+from codoc.loops.realize import handoff, queued, render_queue, settle, write_queue
 from codoc.loops.reflect import reflect
 from codoc.substrate.workspace import Workspace
 
@@ -46,7 +46,10 @@ def test_withdraw_restores_the_previous_frontier(tmp_path):
                 "payload": {"after": list(t.last_live_ref()), "text": " More."}}], actor="human:local")
     handoff(ws, "h1", actor="human:local")
     assert phase(ws.store, "h1") == "queued"
-    assert withdraw(ws, "h1", actor="human:local") is not None
+    # Taking the hand-off back is the recorded inverse, submitted as the person's
+    # own op — the same gesture the editor sends.
+    last = ws.store.by_id[ws.store.watermarks("h1").handoffs[-1]]
+    assert ws.submit([dict(b) for b in last.inverse], actor="human:local")[0].conflict is None
     assert phase(ws.store, "h1") == "edited"
 
 

@@ -44,17 +44,6 @@ def handoff(ws: Workspace, fid: str, *, actor: str, asked: str = "", root_dir: s
                        "payload": {"base_sha": sha, "asked": asked, "delete_code": delete_code}}], actor=actor)[0]
 
 
-def withdraw(ws: Workspace, fid: str, *, actor: str) -> Op | None:
-    """Take back the latest hand-off (its recorded inverse), as the person's op."""
-    w = ws.store.watermarks_by_fid.get(fid)
-    if not w or not w.handoffs:
-        return None
-    last = ws.store.by_id.get(w.handoffs[-1])
-    if last is None or not last.inverse:
-        return None
-    return ws.submit([dict(b) for b in last.inverse], actor=actor)[0]
-
-
 def queued(store: Store) -> list[str]:
     """Features whose hand-off frontier is not covered by their realized
     frontier, in document order; dead headings with a pending removal come

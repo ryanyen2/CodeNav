@@ -46,7 +46,15 @@ session is the one thing two people merging the same branches may differ by.
 
 Each log file is validated at load: schema, monotone `seq`, well-formed and
 non-decreasing HLC stamps. A file carries every actor the daemon stamped in
-that session (the person, the loop, the agents); authority is checked per op.
+that session (the person, the loop, the agents); authority was checked when
+each op arrived and the answer is in the file, so a rebuild honours the record
+instead of re-asking a table that has since changed (`01` §7.3). That makes a
+log file a capability, and a file this checkout did not write is judged at its
+own door: `codoc validate-logs` (`serve/validate.py`) reads the session files a
+pull request adds or changes against the tracked table and refuses an op
+recorded as applied that the table would deny, a snapshot file, or a stamp far
+ahead of wall time. Run it before merging; `codoc rebuild` prints the same
+count locally as a signal.
 A file that fails mid-way is reported and skipped, never partially applied; a
 torn *last* line (a crash mid-write) keeps the prefix, since that is a state the
 daemon was in, and the next daemon start cuts the torn line so every later

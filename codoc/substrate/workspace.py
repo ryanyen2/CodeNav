@@ -43,7 +43,9 @@ class Roles:
       itself, which is the daemon settling evidence.
     - ``suggest`` (everyone else): ``plan.open`` and ops tagged with a plan the
       same actor opened. Riding someone else's open plan would land a stranger's
-      words when the maintainer accepts it.
+      words when the maintainer accepts it. "Everyone else" is by the actor's
+      KIND, so an actor the grammar does not name (``unknown:x``) is a
+      suggester, not a machine.
     """
     table: dict[str, str] = field(default_factory=dict)
     default: str = "suggest"
