@@ -28,6 +28,10 @@ export const GESTURE_CIDS = 'codoc:cids';
 /** The document was rebuilt wholesale (an adoption). Mapping a decoration set
  *  of three thousand widgets through a replace of the whole document costs far
  *  more than building it again, so a plugin that keeps one rebuilds on this. */
+/** An adoption: the whole document replaced in one step. A reader that keeps
+ *  state per block maps it through an ordinary transaction and rebuilds on
+ *  this one — mapping three thousand decorations through a whole-document
+ *  replace costs several times what building them again does. */
 export const REPLACED = 'codoc:replaced';
 
 export interface Gesture { tr: Transaction; ops: OpBody[]; cids: string[] }

@@ -4,62 +4,57 @@
  * A handle before every block; dropping it above or below another block moves
  * the dragged block, with everything it dominates, through `moveBlock`, which
  * is one recorded `block.move`. No positional bookkeeping survives the drop.
+ *
+ * The handle is a CSS `::before` on the block, not a widget decoration. A
+ * decoration would be three thousand of them in a large tree, and ProseMirror
+ * consults a decoration set once per top-level child per view update — a scan
+ * from the start of a flat array each time, so N decorated blocks cost ~N²/2
+ * comparisons per transaction. That was half the cost of typing, for a mark
+ * that never depends on what any block says. What is left here is two DOM
+ * events: `mousedown` inside the handle's strip arms the block as a drag
+ * source, and the drag ends disarm it — armed only while it is being used,
+ * because a permanently draggable contenteditable block cannot be selected in.
  */
-import type { Node as PMNode } from '@tiptap/pm/model';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
-
-import { REPLACED } from './commands';
-import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
+import type { EditorView } from '@tiptap/pm/view';
 
 export const dragKey = new PluginKey('codoc-drag');
 const MIME = 'application/x-codoc-bid';
+const HANDLE_LEFT = -34, HANDLE_WIDTH = 12, HANDLE_TOP = 0, HANDLE_HEIGHT = 22;   // must match app.css
 
-function handles(doc: PMNode): DecorationSet {
-    const decos: Decoration[] = [];
-    doc.forEach((block, pos) => {
-        const bid = block.attrs.bid as string | null;
-        if (!bid) return;
-        decos.push(Decoration.widget(pos + 1, () => {
-            const h = document.createElement('span');
-            h.className = 'codoc-handle';
-            h.title = 'drag to move';
-            h.draggable = true;
-            h.contentEditable = 'false';
-            h.addEventListener('dragstart', ev => { ev.dataTransfer?.setData(MIME, bid); ev.dataTransfer!.effectAllowed = 'move'; });
-            return h;
-        }, { side: -2, key: `handle:${bid}`, ignoreSelection: true }));
-    });
-    return DecorationSet.create(doc, decos);
+/** Whether this pointer is over the block's handle strip rather than its text. */
+function onHandle(el: HTMLElement, ev: MouseEvent): boolean {
+    const r = el.getBoundingClientRect();
+    const x = ev.clientX - r.left, y = ev.clientY - r.top;
+    return x >= HANDLE_LEFT && x <= HANDLE_LEFT + HANDLE_WIDTH && y >= HANDLE_TOP && y <= HANDLE_TOP + HANDLE_HEIGHT;
 }
 
-
-export function dragPlugin(move: (bid: string, after: string | 'START') => void): Plugin<DecorationSet> {
+export function dragPlugin(move: (bid: string, after: string | 'START') => void): Plugin {
     let over: HTMLElement | null = null;
+    let armed: HTMLElement | null = null;
     const clear = () => { over?.classList.remove('is-drop-above', 'is-drop-below'); over = null; };
-    return new Plugin<DecorationSet>({
+    const disarm = () => { if (armed) { armed.draggable = false; armed = null; } };
+    return new Plugin({
         key: dragKey,
-        // One handle per block, and a block's handle does not depend on what is
-        // selected or on what any of its words say. Building three thousand
-        // widgets on every transaction — a keystroke, a selection move, an ack —
-        // was half the cost of typing in a large tree; they are kept and mapped,
-        // and rebuilt only when the set of blocks changes.
-        state: {
-            init: (_c, state) => handles(state.doc),
-            apply(tr, set: DecorationSet) {
-                if (!tr.docChanged) return set;
-                if (tr.getMeta(REPLACED)) return handles(tr.doc);
-                const before = new Set<string>(), after = new Set<string>();
-                tr.before.forEach(n => { if (n.attrs.bid) before.add(n.attrs.bid as string); });
-                tr.doc.forEach(n => { if (n.attrs.bid) after.add(n.attrs.bid as string); });
-                const same = before.size === after.size && [...before].every(b => after.has(b));
-                return same ? set.map(tr.mapping, tr.doc) : handles(tr.doc);
-            },
-        },
         props: {
-            decorations(state) {
-                return dragKey.getState(state) as DecorationSet;
-            },
             handleDOMEvents: {
+                mousedown(_view: EditorView, ev: MouseEvent) {
+                    disarm();
+                    const el = (ev.target as HTMLElement | null)?.closest?.('[data-bid]') as HTMLElement | null;
+                    if (!el || !onHandle(el, ev)) return false;
+                    armed = el;
+                    el.draggable = true;
+                    return false;                     // the browser still starts the drag from here
+                },
+                mouseup() { disarm(); return false; },
+                dragstart(_view: EditorView, ev: DragEvent) {
+                    const el = (ev.target as HTMLElement | null)?.closest?.('[data-bid]') as HTMLElement | null;
+                    if (!el || el !== armed || !el.dataset.bid) return false;
+                    ev.dataTransfer?.setData(MIME, el.dataset.bid);
+                    if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'move';
+                    return false;
+                },
+                dragend() { clear(); disarm(); return false; },
                 dragover(view: EditorView, ev: DragEvent) {
                     if (!ev.dataTransfer?.types.includes(MIME)) return false;
                     ev.preventDefault();
@@ -72,6 +67,7 @@ export function dragPlugin(move: (bid: string, after: string | 'START') => void)
                 drop(view: EditorView, ev: DragEvent) {
                     const bid = ev.dataTransfer?.getData(MIME);
                     clear();
+                    disarm();
                     if (!bid) return false;
                     ev.preventDefault();
                     const t = targetBlock(view, ev);

@@ -85,10 +85,18 @@ html, body { margin: 0; height: 100%; background: var(--codoc-bg); color: var(--
 .codoc-menu-item.is-active, .codoc-menu-item:hover { background: var(--codoc-faint); }
 .codoc-menu-detail { color: var(--codoc-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; overflow: hidden; text-overflow: ellipsis; }
 
-/* drag handles */
-.codoc-handle { position: absolute; left: -34px; top: 0.35em; width: 12px; height: 16px; border-radius: 3px; cursor: grab; opacity: 0; background: radial-gradient(circle, var(--codoc-muted) 1px, transparent 1.5px) 0 0 / 6px 6px; }
+/* Drag handles, as a pseudo-element on the block itself. They used to be three
+   thousand widget decorations, and consulting a decoration set costs
+   ProseMirror a scan per top-level child per view update — half the cost of a
+   keystroke in a large tree, for a mark that never depends on what the block
+   says. Nothing here reaches the decoration machinery at all. */
 .codoc-paragraph, .codoc-heading { position: relative; }
-.codoc-paragraph:hover .codoc-handle, .codoc-heading:hover .codoc-handle { opacity: .7; }
+.codoc-paragraph::before, .codoc-heading::before {
+    content: ''; position: absolute; left: -34px; top: 0.35em; width: 12px; height: 16px;
+    border-radius: 3px; cursor: grab; opacity: 0;
+    background: radial-gradient(circle, var(--codoc-muted) 1px, transparent 1.5px) 0 0 / 6px 6px;
+}
+.codoc-paragraph:hover::before, .codoc-heading:hover::before { opacity: .7; }
 .is-drop-above { box-shadow: 0 -2px 0 var(--codoc-human); }
 .is-drop-below { box-shadow: 0 2px 0 var(--codoc-human); }
 

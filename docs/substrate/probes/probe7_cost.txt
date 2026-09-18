@@ -1,0 +1,12 @@
+mount (3,000 blocks): 418.7 ms  [paintsFor 5.4/3000, buildDecorations 62.8/1, decorationsFor 0.0/0, drag.apply 0.0/0, handles() 0.0/0]
+keystroke median of 8 (23.7,20.3,18.1,16.7,16.1,14.9,14.9,14.5): 16.7 ms  [paintsFor 0.1/7, buildDecorations 0.0/0, decorationsFor 4.0/7, drag.apply 0.0/0, handles() 0.0/0] (accumulators: sum over 8)
+  keystroke split: EditorState.apply (all plugins) 4.0 ms; view.updateState (jsdom DOM) 9.5 ms
+adopt, nothing changed: 6.8 ms  [paintsFor 0.0/0, buildDecorations 0.0/0, decorationsFor 0.0/0, drag.apply 0.0/0, handles() 0.0/0]
+adopt, one block changed: 95.2 ms  [paintsFor 0.0/1, buildDecorations 72.1/1, decorationsFor 0.0/0, drag.apply 0.0/0, handles() 0.0/0]
+  whole-doc replaceWith on a bare view (no plugins): 0.6 ms
+adopt, one block inserted: 79.7 ms  [paintsFor 2.9/3001, buildDecorations 58.2/1, decorationsFor 0.0/0, drag.apply 0.0/0, handles() 0.0/0]
+adopt, one block changed, one held: 97.9 ms  [paintsFor 0.0/2, buildDecorations 79.9/1, decorationsFor 0.0/0, drag.apply 0.0/0, handles() 0.0/0]
+ack (one cid): 3.9 ms  [paintsFor 0.0/1, buildDecorations 0.0/0, decorationsFor 0.3/1, drag.apply 0.0/0, handles() 0.0/0]
+ack (one refusal → re-adopt one block): 89.5 ms  [paintsFor 0.0/1, buildDecorations 71.6/1, decorationsFor 0.0/0, drag.apply 0.0/0, handles() 0.0/0]
+History on (author paints for every block): 248.6 ms  [paintsFor 10.3/3001, buildDecorations 113.1/1, decorationsFor 0.0/0, drag.apply 0.0/0, handles() 0.0/0]
+selection move (no doc change), median of 6: 0.39 ms

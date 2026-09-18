@@ -102,7 +102,11 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
                 // transaction is what knows, and it is known here — deciding it
                 // after `applyTransaction` set the flag for the NEXT one, so a
                 // drag left the moved heading with no marker until a keystroke.
-                const dirty = paintsAll || (tr.docChanged && !sameStructure(tr.before, tr.doc))
+                // An adoption replaces the whole document in one step, and
+                // mapping three thousand decorations through that costs far
+                // more than building them again — so `REPLACED` rebuilds the
+                // SET even when only a few blocks' paints had to be recomputed.
+                const dirty = paintsAll || tr.getMeta(REPLACED) || (tr.docChanged && !sameStructure(tr.before, tr.doc))
                     ? null : new Set(paintsDirty);
                 const map = paintMap(state.doc);          // clears the dirty set
                 if (dirty === null) {
@@ -503,16 +507,52 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
     }
 
     // ── adoption ───────────────────────────────────────────────────────────
+    /** The blocks a new projection can have repainted, or null for every one.
+     *
+     *  `repaint()` on every adopt was three quarters of its cost in a large
+     *  tree, and a projection almost never changes what most blocks are
+     *  painted: a block's paints come from its own projected fields and from
+     *  its feature's phase, claims and watermarks. What IS every block is a
+     *  reorder (a block's feature is where it sits) and the realizing set. */
+    function adoptDirty(prev: Projection, next: Projection, moved: Set<string>, reordered: boolean,
+                        wasRealizing: ReadonlySet<string>): Set<string> | null {
+        if (reordered || paintsAll) return null;
+        if (wasRealizing.size !== realizing.size || [...realizing].some(f => !wasRealizing.has(f))) return null;
+        const out = new Set(moved);
+        const features = new Set<string>();
+        const pw = prev.watermarks ?? {}, nw = next.watermarks ?? {};
+        for (const fid of new Set([...Object.keys(prev.phases), ...Object.keys(next.phases)])) {
+            if (prev.phases[fid] !== next.phases[fid]) features.add(fid);
+        }
+        for (const fid of new Set([...Object.keys(prev.claims), ...Object.keys(next.claims)])) {
+            if (!sameJson(prev.claims[fid], next.claims[fid])) features.add(fid);
+        }
+        for (const fid of new Set([...Object.keys(pw), ...Object.keys(nw)])) {
+            if (!sameJson(pw[fid], nw[fid])) features.add(fid);
+        }
+        if (features.size) for (const [bid, fid] of paintFid) if (fid && features.has(fid)) out.add(bid);
+        return out;
+    }
+
+    const markDirty = (dirty: Set<string> | null) => {
+        if (dirty === null) repaint();
+        else for (const bid of dirty) repaint(bid);
+    };
+
     function adopt(next: Projection, nowRealizing: ReadonlySet<string> = new Set(), force: ReadonlySet<string> = new Set()): void {
         flush();
+        const prev = projection, wasRealizing = realizing;
         projection = next;
         realizing = nowRealizing;
-        repaint();                     // a new projection can change any block's paints
         const current: Array<{ bid: string; head: number }> = [];
         view.state.doc.forEach(n => current.push({ bid: n.attrs.bid as string, head: force.has(n.attrs.bid) ? -1 : n.attrs.head as number }));
         const held = new Set([...unacked.keys()].filter(b => (unacked.get(b)?.size ?? 0) > 0 && !force.has(b)));
         const plan = adoptionPlan(current, next, held);
-        if (!plan.length) { view.dispatch(view.state.tr.setMeta(decoKey, true)); return; }
+        if (!plan.length) {
+            markDirty(adoptDirty(prev, next, new Set(), false, wasRealizing));
+            view.dispatch(view.state.tr.setMeta(decoKey, true));
+            return;
+        }
         const sel = view.state.selection;
         const caretBid = featureBlockAt(sel.from);
         const caretOff = caretBid ? scalarCaret(sel.from) : 0;
@@ -529,10 +569,12 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         // their hands and then undo the undo on the next publish.
         const order: string[] = [];
         const nodeFor = new Map<string, PMNode>();
+        const moved = new Set<string>();       // whose paints this projection can have changed
         for (const b of flowBlocks(next)) {
             const cur = currentNodes.get(b.id);
             if (held.has(b.id) && !cur) continue;                        // the page removed it
             order.push(b.id);
+            if (cur?.attrs.head !== b.head) moved.add(b.id);              // a new node, or held over newer words
             if (cur && (held.has(b.id) || (cur.attrs.head === b.head && !force.has(b.id)))) { nodeFor.set(b.id, cur); continue; }
             const { node, shadow } = blockNode(schema, b);
             if (shadow) shadows.set(b.id, shadow);
@@ -549,6 +591,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         });
         const nodes = order.map(id => nodeFor.get(id)!);
         for (const bid of currentNodes.keys()) if (!nodeFor.has(bid)) shadows.delete(bid);
+        markDirty(adoptDirty(prev, next, moved, order.join(' ') !== page.join(' '), wasRealizing));
         const newDoc = schema.nodes.doc.create(null, nodes);
         let tr = view.state.tr.replaceWith(0, view.state.doc.content.size, newDoc.content)
             .setMeta(RECORDED, []).setMeta(REPLACED, true).setMeta(decoKey, true);
@@ -610,6 +653,12 @@ function structure(doc: PMNode): string {
     const ids: string[] = [];
     doc.forEach(b => ids.push(`${b.type.name}:${b.attrs.bid ?? '?'}`));
     return ids.join('|');
+}
+
+/** Deep equality for the small projection slices the paints read. Identity is
+ *  never true: every projection arrives as a fresh parse. */
+function sameJson(a: unknown, b: unknown): boolean {
+    return a === b || JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
 function sameStructure(before: PMNode, after: PMNode): boolean {

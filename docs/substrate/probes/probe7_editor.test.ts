@@ -54,7 +54,8 @@ vi.mock('/Users/r4yen/Desktop/Research/CoDoc/repos/CodeNav-substrate/vscode-codo
         ...actual,
         dragPlugin: (move: unknown) => {
             const p = (actual.dragPlugin as (m: unknown) => Plugin)(move);
-            const spec = p.spec as { state: { init: (...a: unknown[]) => unknown; apply: (...a: unknown[]) => unknown } };
+            const spec = p.spec as { state?: { init: (...a: unknown[]) => unknown; apply: (...a: unknown[]) => unknown } };
+            if (!spec.state) return p;      // the handles are CSS now: no decorations to time
             const init = spec.state.init, apply = spec.state.apply;
             spec.state.init = (...a: unknown[]) => { const t = performance.now(); const r = init(...a); cost.handles += performance.now() - t; cost.handlesCalls++; return r; };
             spec.state.apply = (...a: unknown[]) => { const t = performance.now(); const r = apply(...a); cost.drag += performance.now() - t; cost.dragCalls++; return r; };
