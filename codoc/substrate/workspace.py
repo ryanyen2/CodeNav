@@ -27,7 +27,7 @@ from codoc.calculus.ids import MACHINE_KINDS, actor_kind, new_batch_id, new_plan
 from codoc.calculus.ingest import Ingest, as_plan_bodies, ingest, resolve_pending_refs
 from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
-from codoc.calculus.text import SUGGEST_DEL, nfc
+from codoc.calculus.text import SUGGEST_DEL, AnchorError, nfc
 from codoc.substrate import log as L
 from codoc.substrate.clock import Clock
 
@@ -49,22 +49,56 @@ def _withdrawing_own_empty_plan(store: Store, op: Op) -> bool:
     return plan is not None and plan.actor == op.actor and plan.status == "open" and not plan.ops
 
 
-def _own_plan_text(store: Store, op: Op) -> bool:
-    """A delete or restore naming only characters an open plan of this actor's
-    minted. Taking back words you proposed touches nothing of anyone else's, and
-    without it a contributor cannot undo their own typing: the inverse of their
-    plan-tagged insert is a bare ``text.delete``, which a plan cannot carry."""
-    if op.kind not in (K.TEXT_DELETE, K.TEXT_RESTORE):
+def deleted_ops(store: Store, target: dict, payload: dict) -> set[str]:
+    """The ops that minted the characters a delete names. The ``segments`` form
+    lists them; the ``from``/``to`` form has to be resolved against the text,
+    and resolves to nothing when the range does not land — the applier is where
+    that is reported, not here."""
+    if "segments" in payload:
+        return {str(s[0]) for s in payload["segments"] or ()}
+    try:
+        start, end = _ref(payload["from"]), _ref(payload["to"])
+        block, path = store.locate_char(start, (str(target.get("bid") or ""), str(target.get("path") or "text")))
+        return block.text(path).ops_between(start, end)
+    except (AnchorError, KeyError, IndexError, TypeError, ValueError):
+        return set()
+
+
+def _ref(v) -> tuple[str, int]:
+    return (str(v[0]), int(v[1]))
+
+
+def _own_plan_words(store: Store, actor: str, minted_by: set[str]) -> bool:
+    """Whether every one of these characters was put there by an open plan of
+    ``actor``'s. Taking back words you proposed touches nothing of anyone
+    else's, and without it a contributor cannot undo their own typing: the
+    inverse of their plan-tagged insert is a bare ``text.delete``, which a plan
+    cannot carry."""
+    if not minted_by:
         return False
-    segments = op.payload.get("segments") or ()
-    if not segments:
-        return False
-    for seg in segments:
-        minted = store.by_id.get(str(seg[0]))
+    for oid in minted_by:
+        minted = store.by_id.get(oid)
         plan = store.plans.get(minted.plan) if minted is not None and minted.plan else None
-        if plan is None or plan.actor != op.actor or plan.status != "open":
+        if plan is None or plan.actor != actor or plan.status != "open":
             return False
     return True
+
+
+def _own_plan_text(store: Store, op: Op) -> bool:
+    """A delete of nothing but their own proposed words, or a restore undoing a
+    delete of their own.
+
+    A restore is judged by the delete it undoes, not by who minted the
+    characters: a maintainer removing a plan's words is an ordinary trunk
+    delete — "the plan sees fewer of its words survive" (01 §3) — and a
+    suggester putting them back would be overriding a trunk op, which §7.3
+    gives them no right to do."""
+    if op.kind == K.TEXT_RESTORE:
+        undone = store.by_id.get(str(op.payload.get("by") or ""))
+        return undone is not None and undone.actor == op.actor
+    if op.kind != K.TEXT_DELETE:
+        return False
+    return _own_plan_words(store, op.actor, deleted_ops(store, op.target, op.payload))
 
 
 def is_comment_op(store: Store, kind: str, target: dict, payload: dict) -> bool:
@@ -408,13 +442,17 @@ class Workspace:
         """A suggester's Backspace, as a proposal. A plan proposes and never
         kills (01 §3), so a range ``text.delete`` from a contributor is the
         plan's ``suggest_del`` over the same range — which is what
-        ``as_plan_bodies`` already does for their ingest. A ``segments`` delete
-        is an undo of something, and an undo of a trunk op is not theirs to
-        make, so it stays refused."""
+        ``as_plan_bodies`` already does for their ingest — unless the range
+        holds nothing but words their own open plan put there, which is theirs
+        to take back and not a proposal to strike a proposal. A ``segments``
+        delete is an undo of something, and the policy judges it by the same
+        rule."""
         if s.kind != K.TEXT_DELETE or s.plan or self.roles.role(actor) != SUGGEST:
             return s
         if "from" not in s.payload or "to" not in s.payload:
             return s
+        if _own_plan_words(self.store, actor, deleted_ops(self.store, s.target, s.payload)):
+            return s        # their own proposed words: a real delete, not a proposal to strike a proposal
         return L.Submission(cid=s.cid, kind=K.TEXT_MARK, target=dict(s.target),
                             payload={"kind": SUGGEST_DEL, "attrs": {}, "start": s.payload["from"],
                                      "end": s.payload["to"], "on": True},

@@ -343,6 +343,15 @@ class Text:
         self._coalesce()
         return killed
 
+    def ops_between(self, start: CharRef, end: CharRef) -> set[OpId]:
+        """The ops that minted the live characters from ``start`` to ``end``
+        inclusive: what ``delete`` would kill, without killing it."""
+        si, so = self.locate(start)
+        ei, eo = self.locate(end)
+        if (ei, eo) < (si, so):
+            raise AnchorError(("range", start, end))
+        return {s.op for s in self.segs[si:ei + 1] if s.live}
+
     def kill(self, segments: list[Segment], *, by: OpId) -> list[Segment]:
         """Kill exactly the named characters that are live here; nothing that
         sits between them. Returns what it actually killed."""

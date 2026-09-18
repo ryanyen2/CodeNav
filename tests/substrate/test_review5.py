@@ -476,6 +476,62 @@ def test_a_suggesters_backspace_becomes_a_suggest_del_under_their_plan(tmp_path)
     ws.close()
 
 
+def test_a_contributor_backspacing_over_their_own_proposal_removes_it(tmp_path):
+    """Review 7: the rule above turns EVERY range delete of theirs into a
+    suggest_del, so typing ' More.' and backspacing over it left the maintainer
+    asked to accept the deletion of a suggestion. Their own proposed words are
+    theirs to take back."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    r = refs(ws, "p1")
+    L.submit(cd, "hub-alice", [_sub("i1", K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": list(r[-1]), "text": " More."})])
+    ins = [o for o in ws.drain_inbox() if o.kind == K.TEXT_INSERT][0]
+    assert ins.conflict is None and ins.plan and T(ws.store, "p1") == "Retries once. More."
+    L.submit(cd, "hub-alice", [_sub("d1", K.TEXT_DELETE, {"bid": "p1", "path": "text"},
+                                    {"from": [ins.id, 0], "to": [ins.id, 5]}, batch="b2")])
+    ops = ws.drain_inbox()
+    assert all(o.conflict is None for o in ops), [(o.kind, o.conflict) for o in ops]
+    assert T(ws.store, "p1") == "Retries once."
+    assert not [m for m in ws.store.blocks["p1"].text().marks if m.kind == SUGGEST_DEL]
+    # …but a range that also covers a word of the trunk's is still a proposal.
+    L.submit(cd, "hub-alice", [_sub("d2", K.TEXT_DELETE, {"bid": "p1", "path": "text"},
+                                    {"from": list(r[0]), "to": list(r[6])}, batch="b3")])
+    ws.drain_inbox()
+    assert T(ws.store, "p1") == "Retries once."
+    assert [m.kind for m in ws.store.blocks["p1"].text().marks] == [SUGGEST_DEL]
+    ws.close()
+
+
+def test_a_contributor_cannot_revive_words_the_maintainer_deleted(tmp_path):
+    """The other half: a restore is judged by the delete it undoes, not by who
+    minted the characters. A maintainer removing a plan's words is an ordinary
+    trunk delete (01 §3) and §7.3 gives a suggester no right to override one."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    r = refs(ws, "p1")
+    L.submit(cd, "hub-alice", [_sub("i1", K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": list(r[-1]), "text": " More."})])
+    ins = [o for o in ws.drain_inbox() if o.kind == K.TEXT_INSERT][0]
+    gone = ws.submit([{"kind": K.TEXT_DELETE, "target": {"bid": "p1", "path": "text"},
+                       "payload": {"from": [ins.id, 0], "to": [ins.id, 5]}}], actor=H)[0]
+    assert T(ws.store, "p1") == "Retries once."
+    L.submit(cd, "hub-alice", [_sub("u1", K.TEXT_RESTORE, {"bid": "p1", "path": "text"},
+                                    {"segments": [[ins.id, 0, 6]], "by": gone.id}, batch="b2")])
+    assert [o.conflict for o in ws.drain_inbox()] == ["authority"]
+    assert T(ws.store, "p1") == "Retries once."
+    # …while undoing a delete of THEIR own stands, which is what it has to keep.
+    L.submit(cd, "hub-alice", [_sub("i2", K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": list(r[-1]), "text": " Twice."}, batch="b3")])
+    second = [o for o in ws.drain_inbox() if o.kind == K.TEXT_INSERT][0]
+    L.submit(cd, "hub-alice", [_sub("d2", K.TEXT_DELETE, {"bid": "p1", "path": "text"},
+                                    {"from": [second.id, 0], "to": [second.id, 6]}, batch="b4")])
+    theirs = [o for o in ws.drain_inbox() if o.kind == K.TEXT_DELETE][0]
+    assert theirs.conflict is None and T(ws.store, "p1") == "Retries once."
+    undo = theirs.inverse[0]                            # exactly what the editor's undo sends
+    L.submit(cd, "hub-alice", [_sub("u2", undo["kind"], undo["target"], undo["payload"], batch="b5")])
+    assert [o.conflict for o in ws.drain_inbox()] == [None]
+    assert T(ws.store, "p1") == "Retries once. Twice."
+    ws.close()
+
+
 def test_a_suggesters_no_op_ingest_leaves_no_empty_open_plan(tmp_path):
     """The drain opens the suggester's plan before it knows whether anything
     will land under it (review 5 A9 for translate; same shape here)."""
