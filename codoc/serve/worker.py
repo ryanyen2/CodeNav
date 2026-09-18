@@ -126,6 +126,14 @@ def _run(argv, cwd=None) -> int:
     return subprocess.run(argv, cwd=cwd, check=False).returncode
 
 
+def _published_head(codoc_dir: str) -> int | None:
+    """The store position the daemon last published, or None when unreadable."""
+    try:
+        return int(json.loads((Path(codoc_dir) / "status.json").read_text(encoding="utf-8"))["head"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 def process_ready(root_dir: str, codoc_dir: str, *, base: str = "main", run=_run, agent=None,
                   store=None, printer=print) -> list[str]:
     """Realize every ready hand-off once; returns the hand-off ids that got a PR."""
@@ -182,11 +190,17 @@ class Worker:
         self.root_dir, self.codoc_dir, self.base, self.interval, self.printer = root_dir, codoc_dir, base, interval, printer
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._head: int | None = None
 
     def _loop(self) -> None:
         while not self._stop.is_set():
             try:
-                process_ready(self.root_dir, self.codoc_dir, base=self.base, printer=self.printer)
+                # Replaying the log to find nothing is the common case; the
+                # published head says when there is nothing to find.
+                head = _published_head(self.codoc_dir)
+                if head != self._head:
+                    self._head = head
+                    process_ready(self.root_dir, self.codoc_dir, base=self.base, printer=self.printer)
             except Exception as exc:  # noqa: BLE001 — the worker thread never dies
                 self.printer(f"  ⚠ hub realize worker: {exc}")
             self._stop.wait(self.interval)

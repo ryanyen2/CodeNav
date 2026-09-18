@@ -44,12 +44,11 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
 from codoc.calculus import ops as K
-from codoc.calculus.ids import START, CharRef, actor_kind, is_human
+from codoc.calculus.ids import REWRITERS, START, CharRef, actor_kind, is_human
 from codoc.calculus.inline_md import Span, parse
 from codoc.calculus.text import BOLD, CITE, GROWS_AFTER, LINK, Mark, Text, nfc
 
 VISIBLE_MARKS = frozenset({BOLD, LINK, CITE})     # the kinds Markdown can express
-REFUSING_KINDS = frozenset({"loop", "translator"})  # actors that may not drop a person's mark on the trunk
 
 
 @dataclass
@@ -59,7 +58,6 @@ class Ingest:
     inserted: int = 0
     deleted: int = 0
     refused: str | None = None
-    demote_to_plan: str | None = None                    # set by the substrate when its gate opened a plan
 
     @property
     def unchanged(self) -> bool:
@@ -139,7 +137,7 @@ def ingest(text: Text, *, bid: str, path: str, base_text: str, new_md: str, acto
         offs = sorted(to_new[r] for r in text.mark_refs(m) if r in to_new)
         existing.append((m, offs))
         kept = any(o in cover.get(_key(m.kind, m.attrs), ()) for o in offs)
-        if trunk and actor_kind(actor) in REFUSING_KINDS and is_human(m.actor) and not kept and text.mark_refs(m):
+        if trunk and actor_kind(actor) in REWRITERS and is_human(m.actor) and not kept and text.mark_refs(m):
             res.refused = f"would_drop_human_{m.kind}"
             return res
 

@@ -94,6 +94,12 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         props: { decorations: state => paints.getState(state)?.set ?? null },
     });
 
+    /** Paints per block, memoized on everything that can change them: the
+     *  block's head, how many of its ops are unacked, its feature's phase and
+     *  the History stance. Every keystroke rebuilds the decoration set, and at
+     *  a thousand features that is the difference between typing and waiting. */
+    const paintMemo = new Map<string, { key: string; paints: Paint[] }>();
+
     function paintMap(d: PMNode): Map<string, Paint[]> {
         const out = new Map<string, Paint[]>();
         const byId = new Map(projection.blocks.map(b => [b.id, b]));
@@ -104,8 +110,13 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             if (block.type.name === 'heading') fid = bid;
             const pb = byId.get(bid);
             if (!pb) return;
-            const marks = watermarksFor(fid);
-            out.set(bid, paintsFor(pb, projection, fid, unackedOps(bid), marks, history));
+            const unacked = unackedOps(bid);
+            const key = `${pb.head}|${unacked.size}|${fid ?? ''}|${projection.phases[fid ?? ''] ?? ''}|${history}|${realizing.has(fid ?? '')}`;
+            const hit = paintMemo.get(bid);
+            if (hit && hit.key === key) { out.set(bid, hit.paints); return; }
+            const paints = paintsFor(pb, projection, fid, unacked, watermarksFor(fid), history);
+            paintMemo.set(bid, { key, paints });
+            out.set(bid, paints);
         });
         return out;
     }
@@ -171,13 +182,16 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
     function ack(acks: Ack[]): void {
         const refused = new Map<string, string>();
         for (const a of acks) {
+            const waiting: string[] = [];
             for (const [bid, set] of unacked) {
                 if (set.delete(a.cid)) {
+                    waiting.push(bid);
                     if (a.conflict) refused.set(bid, a.conflict);
                     if (set.size === 0) unacked.delete(bid);
                 }
             }
-            if (a.op && !a.conflict) for (const sh of shadows.values()) sh.resolve(a.cid, a.op);
+            // Only the blocks that were waiting on this cid hold its characters.
+            if (a.op && !a.conflict) for (const bid of waiting) shadows.get(bid)?.resolve(a.cid, a.op);
         }
         if (refused.size) {
             // The op did nothing in the store: the block's shadow lies. Take the
@@ -375,7 +389,7 @@ function unitAt(node: PMNode, scalar: number): number {
 
 function scalarCaret(pos: number): number {
         const $p = view.state.doc.resolve(pos);
-        return $p.depth >= 1 ? $p.parentOffset : 0;
+        return $p.depth >= 1 ? scalarOffset($p.node(1), $p.parentOffset) : 0;
     }
 
     return {

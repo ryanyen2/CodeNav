@@ -20,6 +20,16 @@ def _read(path: Path) -> str | None:
         return None
 
 
+def _stamp(path: Path) -> tuple[float, int] | None:
+    """A file's mtime and size: what changed, without reading it. Ten viewers
+    of a large projection would otherwise read it all, twice a second, each."""
+    try:
+        st = path.stat()
+        return (st.st_mtime, st.st_size)
+    except OSError:
+        return None
+
+
 def status_message(codoc_dir: Path, actor: str = "") -> dict | None:
     """The status the editor reads, plus the two facts only the host knows:
     the tree's language and who this viewer is (undo inverts their batches)."""
@@ -57,6 +67,7 @@ class Feed:
         self.client = client
         self.actor = L.actor_for(client) or ""
         self.sent: dict[str, str] = {}
+        self.stamps: dict[str, tuple[float, int] | None] = {}
         ack = L.inbox_dir(self.dir) / f"{client}.ack.jsonl"
         size = ack.stat().st_size if ack.exists() else 0
         self.ack_offset = size
@@ -66,7 +77,7 @@ class Feed:
 
     def pending(self) -> list[dict]:
         out: list[dict] = []
-        proj = _read(self.dir / PROJECTION)
+        proj = self._if_changed(PROJECTION)
         if proj is not None and proj != self.sent.get(PROJECTION):
             self.sent[PROJECTION] = proj
             try:
@@ -82,6 +93,13 @@ class Feed:
         if acks:
             out.append({"kind": "acks", "acks": acks})
         return out
+
+    def _if_changed(self, name: str) -> str | None:
+        stamp = _stamp(self.dir / name)
+        if stamp is not None and stamp == self.stamps.get(name):
+            return None
+        self.stamps[name] = stamp
+        return _read(self.dir / name)
 
     def _acks(self) -> list[dict]:
         path = L.inbox_dir(self.dir) / f"{self.client}.ack.jsonl"

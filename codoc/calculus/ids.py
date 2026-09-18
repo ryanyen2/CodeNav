@@ -70,3 +70,10 @@ def actor_kind(actor: str) -> str:
 
 def is_human(actor: str) -> bool:
     return actor_kind(actor) == "human"
+
+
+# Everything that is not a person. The authority policy gives these the trunk
+# and plans but no verdict; ``ingest`` additionally refuses to let the two that
+# rewrite prose on their own (the loop, a translator) drop a person's mark.
+MACHINE_KINDS = frozenset({"agent", "translator", "loop", "import"})
+REWRITERS = frozenset({"loop", "translator"})

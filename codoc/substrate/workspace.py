@@ -22,7 +22,7 @@ from pathlib import Path
 from codoc.calculus import ops as K
 from codoc.calculus.apply import apply
 from codoc.calculus.doc import HEADING, PARAGRAPH, is_text_field
-from codoc.calculus.ids import actor_kind, new_batch_id, new_plan_id, new_session_id, op_id
+from codoc.calculus.ids import MACHINE_KINDS, actor_kind, new_batch_id, new_plan_id, new_session_id, op_id
 from codoc.calculus.ingest import Ingest, as_plan_bodies, ingest, resolve_pending_refs
 from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
@@ -31,7 +31,6 @@ from codoc.substrate import log as L
 from codoc.substrate.clock import Clock
 
 OWNER = "owner"
-MACHINE_KINDS = frozenset({"agent", "translator", "loop", "import"})
 
 
 @dataclass

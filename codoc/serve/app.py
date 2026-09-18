@@ -186,12 +186,10 @@ def handle_message(cd: Path, s: Session, m: dict) -> JSONResponse:
         tag = str(m.get("tag") or "").strip()
         if not tag:
             return JSONResponse({"error": "tag required"}, status_code=400)
-        p = cd / "config.json"
-        try:
-            cfg = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            cfg = {}
-        p.write_text(json.dumps({**cfg, "doc_language": tag}, indent=2) + "\n", encoding="utf-8")
+        # Atomically, like every other writer of the tracked config: the daemon
+        # reads it on each inbox pass, and a torn read would drop every role.
+        from codoc.doclang import write_config
+        write_config(cd, doc_language=tag)
         return JSONResponse({"ok": True})
     if kind in ("realize", "sync", "open-cite", "open-file", "find"):
         return JSONResponse({"ok": False, "error": "the hub has no terminal; a maintainer's daemon builds hand-offs"}, status_code=202)
