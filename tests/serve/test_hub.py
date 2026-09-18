@@ -8,6 +8,7 @@ from codoc.serve.app import build_app, client_name
 from codoc.serve.auth import COOKIE_NAME, MAINTAINER, SUGGEST, AuthContext, SessionStore, read_roles, role_for_permission
 from codoc.serve.push import Feed
 from codoc.substrate import log as L
+from codoc.substrate.log import Submission
 from codoc.substrate.publish import publish
 from codoc.substrate.workspace import Workspace
 from tests.loops.test_reflect import seed
@@ -106,3 +107,43 @@ def test_feed_sends_a_snapshot_then_only_changes_and_this_viewers_acks(tmp_path)
     (cd / "config.json").write_text(json.dumps({"doc_language": "ja"}))
     got = feed.pending()
     assert [m["kind"] for m in got] == ["status"] and got[0]["status"]["doc_language"] == "ja"
+
+
+def test_a_contributor_and_the_person_edit_one_checkout_at_once(tmp_path):
+    """The workflow the hub exists for: a suggester proposes from the browser
+    while the person types in VS Code, and only a maintainer's verdict lands it."""
+    from codoc.calculus.derive import markdown, phase, plan_claims
+    from codoc.calculus.ids import START
+    from codoc.doclang import write_config
+    from codoc.substrate.publish import Publisher
+
+    cd = tmp_path / ".codoc"
+    cd.mkdir()
+    write_config(cd, roles={"human:alice": SUGGEST, "human:bob": MAINTAINER})
+    ws = Workspace(cd)
+    seed(ws)
+    t = ws.store.blocks["p1"].text()
+    L.submit(cd, "ide", [Submission(cid="i1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                                    payload={"after": list(t.last_live_ref()), "text": " Mine."}, batch="b-ide")])
+    pid = "p-alice"
+    L.submit(cd, client_name("alice"), [
+        Submission(cid="a1", kind=K.PLAN_OPEN, target={"pid": pid}, payload={"kind": "edit", "target": "p1"}, batch=pid),
+        Submission(cid="a2", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                   payload={"after": list(t.ref_at(7)), "text": "twice not "}, plan=pid, batch=pid),
+        Submission(cid="a3", kind=K.PLAN_ACCEPT, target={"pid": pid}, payload={}, batch=pid)])
+    ops = ws.drain_inbox()
+    assert [(o.actor, o.kind, o.conflict) for o in ops] == [
+        ("human:alice", K.PLAN_OPEN, None), ("human:alice", K.TEXT_INSERT, None),
+        ("human:alice", K.PLAN_ACCEPT, "authority"),          # a suggester may not decide
+        ("human:local", K.TEXT_INSERT, None)]
+    assert markdown(ws.store.blocks["p1"].text(), "rejected", ws.store) == "Retries once before giving up. Mine."
+    assert [(c.stage, c.text) for c in plan_claims(ws.store, "h1")] == [("open", "twice not ")]
+    assert phase(ws.store, "h1") == "edited"                   # the person's unsent words win the badge
+    acks = [json.loads(l) for l in (L.inbox_dir(cd) / f"{client_name('alice')}.ack.jsonl").read_text().splitlines()]
+    assert [a["conflict"] for a in acks] == [None, None, "authority"]
+    L.submit(cd, client_name("bob"), [Submission(cid="b1", kind=K.PLAN_ACCEPT, target={"pid": pid}, payload={}, batch="b-bob")])
+    ws.drain_inbox()
+    assert ws.store.plans[pid].status == "accepted"
+    assert ("human:alice", "twice not ") in [(s.actor, s.chars) for s in ws.store.blocks["p1"].text().segs if s.live]
+    assert Publisher(cd, str(tmp_path)).publish(ws.store, force=True)["state"] == "edited"
+    ws.close()
