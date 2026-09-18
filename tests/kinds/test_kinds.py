@@ -92,3 +92,34 @@ def test_mcp_write_block_adds_and_edits_as_the_agent(tmp_path):
     assert r2["ok"] and Workspace(cd, readonly=True).store.blocks[r["bid"]].text("caption").live_text() == "Calls, now"
     assert tools.write_block(str(cd), bid=r["bid"], content={"nope": 1})["error"] == "unknown field 'nope'"
     assert "unknown kind" in tools.write_block(str(cd), kind="gif", feature_id="h1", content={})["error"]
+
+
+def test_a_feature_carrying_media_survives_every_whole_feature_pass(tmp_path):
+    """A block whose Text fields are not called `text` (a diagram, a comment)
+    is in the body like any other: the author gate, the blame read, a delete
+    plan and a translation all walk its own fields."""
+    from codoc.calculus.derive import description, plan_claims
+    from codoc.doclang import resolve
+    from codoc.loops.context import block_written_by, written_by
+    from codoc.loops.reflect import _strike
+    from codoc.loops.translate import translate_tree
+    from codoc.mcp import tools
+
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws)
+    d = add_block(ws, "diagram", {"source": "flowchart TB\n  a --> b", "caption": "Calls"}, after="p1", actor="loop")
+    c = add_block(ws, "comment", {"thread": "t1", "anchor": "p1", "anchor_text": "once", "body": "Twice?"},
+                  after=d.bid, actor="human:local")
+    assert block_written_by(ws.store, d.bid) == "loop" and block_written_by(ws.store, c.bid) == "human"
+    assert written_by(ws.store, "h1") == "human"
+    assert description(ws.store, "h1") == "Retries once before giving up."       # prose only
+    ws.close()
+    blame = tools.read_history(str(tmp_path / ".codoc"), "h1")["attribution"]
+    assert f"{d.bid}.source" in blame and f"{c.bid}.body" in blame and "p1" in blame
+    ws = Workspace(tmp_path / ".codoc")
+    struck = _strike(ws.store, [b.id for b in ws.store.feature_body("h1")], "p-1")
+    assert sorted(b["target"]["path"] for b in struck) == ["body", "caption", "source", "text", "text"]
+    propose = lambda payload, lang, **kw: {p["id"]: ("客户端", "放弃前重试一次。") for p in payload}
+    res = translate_tree(ws, tmp_path / ".codoc", language=resolve("zh-Hans"), propose=propose)
+    assert res.translated == 1 and ws.store.blocks[c.bid].text("body").live_text() == "Twice?"
+    assert ws.store.blocks[d.bid].text("source").live_text().startswith("flowchart")

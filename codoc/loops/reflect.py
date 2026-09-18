@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 
 from codoc.calculus import ops as K
 from codoc.calculus.derive import phase
-from codoc.calculus.doc import HEADING, PARAGRAPH
+from codoc.calculus.doc import HEADING, PARAGRAPH, text_fields
 from codoc.calculus.ids import START, new_block_id
 from codoc.calculus.ingest import Ingest
 from codoc.calculus.ops import Op, covered
@@ -425,13 +425,17 @@ def _move_plan(p: _Pass, raw: dict) -> str | None:
 
 
 def _strike(store: Store, bids: list[str], pid: str) -> list[dict]:
+    """Propose removing every word of these blocks: one ``suggest_del`` per
+    Text field (a diagram's caption is struck with its source)."""
     bodies = []
     for bid in bids:
-        t = store.blocks[bid].text()
-        if t.live_len():
-            bodies.append({"kind": K.TEXT_MARK, "target": {"bid": bid, "path": "text"},
-                           "payload": {"kind": SUGGEST_DEL, "attrs": {"plan": pid},
-                                       "start": list(t.ref_at(0)), "end": list(t.last_live_ref()), "on": True}})
+        b = store.blocks[bid]
+        for f in text_fields(b.kind):
+            t = b.text(f)
+            if t.live_len():
+                bodies.append({"kind": K.TEXT_MARK, "target": {"bid": bid, "path": f},
+                               "payload": {"kind": SUGGEST_DEL, "attrs": {"plan": pid},
+                                           "start": list(t.ref_at(0)), "end": list(t.last_live_ref()), "on": True}})
     return bodies
 
 

@@ -23,7 +23,7 @@ from codoc.calculus import ops as K
 from codoc.calculus.derive import (
     attribution, dead_cites, description, history as feature_history, markdown, phase, title,
 )
-from codoc.calculus.doc import HEADING, PARAGRAPH, fold_tree
+from codoc.calculus.doc import HEADING, PARAGRAPH, fold_tree, text_fields
 from codoc.calculus.ids import START, new_block_id, new_plan_id
 from codoc.calculus.text import SUGGEST_DEL
 from codoc.doclang import detect_prose_language, workspace_doc_language
@@ -188,8 +188,9 @@ def read_history(codoc_dir: str, feature_id: str, limit: int = 20) -> dict:
         if o.kind == K.TEXT_DELETE:
             e["removed_segments"] = o.payload.get("segments")
         entries.append(e)
-    blame = {b.id: [{"actor": r.actor, "start": r.start, "end": r.end} for r in attribution(b.text())]
-             for b in store.feature_body(feature_id)}
+    blame = {(b.id if f == "text" else f"{b.id}.{f}"):
+             [{"actor": r.actor, "start": r.start, "end": r.end} for r in attribution(b.text(f))]
+             for b in store.feature_body(feature_id) for f in text_fields(b.kind)}
     return {"ok": True, "feature_id": feature_id, "title": title(store, feature_id), "ops": entries, "attribution": blame}
 
 
@@ -277,11 +278,12 @@ def propose(codoc_dir: str, *, ops: list[dict], note: str = "", caused_by: str |
         return last, 1
 
     def strike(b) -> None:
-        t = b.text()
-        if t.live_len():
-            bodies.append({"kind": K.TEXT_MARK, "target": {"bid": b.id, "path": "text"},
-                           "payload": {"kind": SUGGEST_DEL, "attrs": {}, "start": list(t.ref_at(0)),
-                                       "end": list(t.last_live_ref()), "on": True}, "plan": pid})
+        for f in text_fields(b.kind):
+            t = b.text(f)
+            if t.live_len():
+                bodies.append({"kind": K.TEXT_MARK, "target": {"bid": b.id, "path": f},
+                               "payload": {"kind": SUGGEST_DEL, "attrs": {}, "start": list(t.ref_at(0)),
+                                           "end": list(t.last_live_ref()), "on": True}, "plan": pid})
 
     for raw in ops:
         kind = raw.get("kind")
