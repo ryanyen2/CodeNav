@@ -72,14 +72,18 @@ class Request:
 
 
 def pending(codoc_dir: str | Path, store, done: dict[str, str] | None = None) -> list[Request]:
+    """The hand-offs this hub may build. A feature with no bindings is not one:
+    there is no set of files to confine the agent to, and a contributor's
+    accepted proposal must never be a licence to write anywhere. Those stay in
+    the queue for the maintainer, who builds them with a person present."""
     done = read_ledger(codoc_dir) if done is None else done
     out = []
     for fid in queued(store):
         w = store.watermarks(fid)
         hid = w.handoffs[-1] if w.handoffs else ""
-        if not hid or hid in done:
-            continue
         scope = sorted({b.file for b in store.bindings.values() if b.feature == fid})
+        if not hid or hid in done or not scope:
+            continue
         out.append(Request(fid, hid, title(store, fid, "rejected") or fid, directive(store, fid), scope))
     return out
 
@@ -90,25 +94,31 @@ class Result:
     branch: str
     reason: str = ""
     out_of_scope: list[str] = field(default_factory=list)
+    transient: bool = False      # git or gh failed: worth another interval, not a verdict on the request
 
 
-def realize_one(req: Request, worktree: str, *, run, agent, base: str = "main") -> Result:
-    """Worktree → sandboxed agent → scope gate → commit → PR. ``run(argv, cwd=None)``
-    runs git and gh; ``agent(directive, worktree, scope) -> changed files``."""
+def realize_one(req: Request, worktree: str, *, run, agent, base: str = "main", root: str | None = None) -> Result:
+    """Worktree → sandboxed agent → scope gate → commit → PR. Every git and gh
+    call is checked: a worktree git refused is not a worktree to run an agent
+    in, and a pull request that was not opened is not a pull request.
+    ``run(argv, cwd=None) -> returncode``; ``agent(directive, worktree, scope)``
+    returns the files it changed."""
     branch = branch_name(req.handoff)
-    run(["git", "worktree", "add", "-b", branch, worktree])
-    changed = agent({"text": req.text, "id": req.handoff, "title": req.title}, worktree, scope=req.scope or None) or []
-    bad = out_of_scope_changes(changed, req.scope or None)
+    if run(["git", "worktree", "add", "-b", branch, worktree], cwd=root):
+        return Result(False, branch, "git refused to create the worktree or branch", transient=True)
+    changed = agent({"text": req.text, "id": req.handoff, "title": req.title}, worktree, scope=req.scope) or []
+    bad = out_of_scope_changes(changed, req.scope, worktree)
     if bad:
         return Result(False, branch, "the agent wrote outside the feature's bindings", bad)
     if not changed:
         return Result(False, branch, "no changes produced")
-    run(["git", "add", "-A"], cwd=worktree)
-    run(["git", "commit", "-m", f"codoc: {req.title}"], cwd=worktree)
+    if run(["git", "add", "-A"], cwd=worktree) or run(["git", "commit", "-m", f"codoc: {req.title}"], cwd=worktree):
+        return Result(False, branch, "git refused to commit the agent's work", transient=True)
     body = (f"Realizes the hand-off `{req.handoff}` on feature **{req.title}** (`{req.fid}`).\n\n"
             "Opened by the codoc hub from a hand-off in the tree. Review as usual; "
             "the tree marks the request realized once this lands and the daemon indexes it.")
-    run(pr_create_command(branch, f"codoc: {req.title}", body, base=base), cwd=worktree)
+    if run(pr_create_command(branch, f"codoc: {req.title}", body, base=base), cwd=worktree):
+        return Result(False, branch, "gh could not open the pull request", transient=True)
     return Result(True, branch)
 
 
@@ -128,10 +138,10 @@ def process_ready(root_dir: str, codoc_dir: str, *, base: str = "main", run=_run
     for req in reqs:
         worktree = str(Path(codoc_dir) / "worktrees" / branch_name(req.handoff).replace("/", "-"))
         try:
-            res = realize_one(req, worktree, run=run, agent=agent, base=base)
+            res = realize_one(req, worktree, run=run, agent=agent, base=base, root=root_dir)
         except Exception as exc:  # noqa: BLE001 — one bad request never wedges the loop
             printer(f"  ⚠ hub realize {req.fid} failed: {exc}")
-            _cleanup(worktree, run)
+            _cleanup(worktree, branch_name(req.handoff), run, root_dir)
             continue
         if res.ok:
             record_pr(codoc_dir, req.handoff, res.branch)
@@ -140,19 +150,29 @@ def process_ready(root_dir: str, codoc_dir: str, *, base: str = "main", run=_run
         elif res.out_of_scope:
             # A write outside scope is refused, recorded, and not retried: the same
             # unsafe directive would do the same thing again.
-            record_pr(codoc_dir, req.handoff, "refused")
+            record_pr(codoc_dir, req.handoff, "refused: out of scope")
             printer(f"  ✗ hub realize {req.fid} wrote out of scope ({', '.join(res.out_of_scope)}) — no PR")
+        elif res.transient:
+            # git or gh failed: the request was never answered, so the next
+            # interval tries again rather than burying it in the ledger.
+            printer(f"  ⚠ hub realize {req.fid}: {res.reason}; will retry")
         else:
+            # A run that produced nothing produces nothing again; a person hands
+            # the feature off anew when they want another try.
+            record_pr(codoc_dir, req.handoff, f"refused: {res.reason}")
             printer(f"  · hub realize {req.fid}: {res.reason}")
-        _cleanup(worktree, run)
+        _cleanup(worktree, res.branch, run, root_dir)
     return done
 
 
-def _cleanup(worktree: str, run) -> None:
-    try:
-        run(["git", "worktree", "remove", "--force", worktree])
-    except Exception:  # noqa: BLE001 — best effort
-        pass
+def _cleanup(worktree: str, branch: str, run, root: str | None = None) -> None:
+    """Leave no worktree and no branch behind: the next attempt must be able to
+    create both by the same names."""
+    for argv in (["git", "worktree", "remove", "--force", worktree], ["git", "branch", "-D", branch]):
+        try:
+            run(argv, cwd=root)
+        except Exception:  # noqa: BLE001 — best effort
+            pass
 
 
 class Worker:

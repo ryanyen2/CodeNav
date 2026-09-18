@@ -26,8 +26,23 @@ export interface Thread {
 
 export const COMMENT = 'comment';
 
+/** Where each thread's words are now: the block holding its `comment` mark.
+ *  The `anchor` field is the hint the thread was written with; the mark is the
+ *  anchor of record, and it travels with the words through a split or a merge. */
+export function anchorsOf(proj: Projection): Map<string, string> {
+    const out = new Map<string, string>();
+    for (const b of proj.blocks) {
+        const f = textField(b);
+        for (const s of f?.spans ?? []) {
+            if (s.kind === COMMENT && s.attrs.block) out.set(s.attrs.block, b.id);
+        }
+    }
+    return out;
+}
+
 /** Threads from the projection's comment blocks, in document order. */
 export function threadsOf(proj: Projection): Thread[] {
+    const live = anchorsOf(proj);
     const out = new Map<string, Thread>();
     for (const b of proj.blocks) {
         if (b.kind !== COMMENT) continue;
@@ -38,7 +53,7 @@ export function threadsOf(proj: Projection): Thread[] {
         const msg: Message = { bid: b.id, actor: first?.actor ?? '', at: first?.at ?? '', body: body?.text ?? '' };
         const t = out.get(id);
         if (t) { t.messages.push(msg); continue; }
-        out.set(id, { id, anchor: String(f.anchor ?? ''), anchorText: String(f.anchor_text ?? ''),
+        out.set(id, { id, anchor: live.get(id) ?? String(f.anchor ?? ''), anchorText: String(f.anchor_text ?? ''),
                       scope: f.scope === 'both' ? 'both' : 'code', status: f.status === 'resolved' ? 'resolved' : 'open', messages: [msg] });
     }
     return [...out.values()];

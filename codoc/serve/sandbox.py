@@ -46,8 +46,15 @@ def _segments(path: str) -> list[str]:
     return [s for s in str(path).replace("\\", "/").split("/") if s and s != "."]
 
 
-def _posix(path: str) -> str:
-    return "/".join(_segments(path))
+def _posix(path: str, root: str | None = None) -> str:
+    """A path as the scope names it: repo-relative. The agent's tools send
+    absolute paths inside the worktree, so ``root`` is stripped first."""
+    segs = _segments(path)
+    if root:
+        r = _segments(root)
+        if segs[:len(r)] == r:
+            segs = segs[len(r):]
+    return "/".join(segs)
 
 
 def is_secret_path(path: str) -> bool:
@@ -73,25 +80,25 @@ def is_denied_edit(path: str) -> bool:
     return is_secret_path(path)
 
 
-def edit_allowed(path: str, scope: list[str] | None = None) -> bool:
-    """Whether the agent may Edit/Write ``path``. Always denied if denylisted; when
-    a directive ``scope`` is given, the path must also be inside it (an ADD with no
-    scope yet may write anywhere not denylisted)."""
+def edit_allowed(path: str, scope: list[str] | None = None, root: str | None = None) -> bool:
+    """Whether the agent may Edit/Write ``path`` (absolute inside ``root``, or
+    repo-relative). Always denied if denylisted; a directive's ``scope`` is the
+    files its feature is bound to, and the path must be one of them. An empty
+    scope permits nothing: a run the server cannot bound is not run at all
+    (``worker.pending`` never queues one)."""
     if is_denied_edit(path):
         return False
-    if scope:
-        return _posix(path) in {_posix(s) for s in scope}
-    return True
+    return _posix(path, root) in {_posix(s) for s in (scope or ())}
 
 
-def out_of_scope_changes(changed: list[str], scope: list[str] | None = None) -> list[str]:
+def out_of_scope_changes(changed: list[str], scope: list[str] | None = None, root: str | None = None) -> list[str]:
     """Post-run gate: the changed files that fall outside what was permitted. A
     non-empty result fails PR creation."""
-    return [c for c in changed if not edit_allowed(c, scope)]
+    return [c for c in changed if not edit_allowed(c, scope, root)]
 
 
 def can_use_tool(tool_name: str, tool_input: dict | None, *,
-                 scope: list[str] | None = None) -> tuple[bool, str]:
+                 scope: list[str] | None = None, root: str | None = None) -> tuple[bool, str]:
     """The PreToolUse/canUseTool decision: (allowed, reason)."""
     if tool_name not in ALLOWED_TOOLS:
         return False, f"tool '{tool_name}' is not permitted for remote-originated realization"
@@ -103,15 +110,15 @@ def can_use_tool(tool_name: str, tool_input: dict | None, *,
             return False, "reading secrets is not permitted"
         return True, ""
     if tool_name in ("Edit", "Write"):
-        if not edit_allowed(target, scope):
+        if not edit_allowed(target, scope, root):
             return False, f"editing {target!r} is out of the directive's scope"
         return True, ""
     return True, ""
 
 
-def tool_policy(scope: list[str] | None = None):
-    """A scope-bound ``can_use_tool`` for the SDK hook (deployment wiring, U7)."""
+def tool_policy(scope: list[str] | None = None, root: str | None = None):
+    """A scope-bound ``can_use_tool`` for the SDK hook."""
     def predicate(tool_name: str, tool_input: dict | None) -> tuple[bool, str]:
-        return can_use_tool(tool_name, tool_input, scope=scope)
+        return can_use_tool(tool_name, tool_input, scope=scope, root=root)
 
     return predicate

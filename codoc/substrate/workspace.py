@@ -26,6 +26,7 @@ from codoc.calculus.ids import actor_kind, new_batch_id, new_plan_id, new_sessio
 from codoc.calculus.ingest import Ingest, as_plan_bodies, ingest, resolve_pending_refs
 from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
+from codoc.calculus.text import nfc
 from codoc.substrate import log as L
 from codoc.substrate.clock import Clock
 
@@ -97,6 +98,7 @@ class Workspace:
         self.torn: list[L.SessionFile] = []
         self._inbox_offsets: dict[str, int] = {}
         self._acked: dict[str, dict[str, str]] = L.acked(self.codoc_dir)   # client → cid → op id
+        self._sent_text: dict[str, str] = {}      # cid → the insert's text as the client counted it
         self.rebuild()
         self.readonly = readonly
         self.session = session or new_session_id()
@@ -127,26 +129,30 @@ class Workspace:
             self.problems.extend(snap.problems)
             if snap.valid:
                 exclude = snap.header.get("frontier") or {}
-                # A snapshot is the fold of ops that were authorized when they
-                # were written, re-expressed as state. Re-checking them against
-                # today's roles would drop verdicts and watermarks from the
-                # state it restores, so the fold is trusted like the log it
-                # replaces (spec §7.5; the hub refuses a PR that changes one).
-                policy, self.store.policy = self.store.policy, None
-                try:
-                    for op in snap.ops:
-                        self._replay_one(op)
-                finally:
-                    self.store.policy = policy
+                for op in snap.ops:
+                    self._replay_one(op)
         for op in L.replay_order(files, exclude):
             self._replay_one(op)
 
     def _replay_one(self, op: Op) -> None:
+        """Replay one recorded op. The applier accepts every canonical payload
+        back, so the recorded state comes back exactly — including the
+        authority check, which is a question about the moment the op arrived,
+        not about today: re-asking it would let a contributor's later demotion
+        silently drop the words they wrote while they had the right (spec §7.3).
+        A log from a stranger is judged at its own door: the hub validates a
+        pull request's session files before it merges them."""
         self.clock.observe(op.at)
-        # The applier accepts every canonical payload back, so replaying the
-        # recorded op reproduces the recorded state; conflicts recorded before
-        # are recorded again.
-        apply(self.store, _wire(op))
+        wire = _wire(op)
+        if op.conflict:
+            wire.conflict, wire.inverse = op.conflict, []
+            self.store.record(wire, set(), False)
+            return
+        policy, self.store.policy = self.store.policy, None
+        try:
+            apply(self.store, wire)
+        finally:
+            self.store.policy = policy
 
     # ── writing ────────────────────────────────────────────────────────────
     def _mint(self, kind: str, target: dict, payload: dict, *, actor: str, batch: str,
@@ -275,8 +281,11 @@ class Workspace:
             L.ack(self.codoc_dir, client, s.cid, ops[0] if ops else None, error=res.refused or (None if ops else "unchanged"))
             acked[s.cid] = ops[0].id if ops else ""
             return ops
-        op = self._apply(self._mint(s.kind, s.target, _resolve_provisional(s.payload, acked), actor=actor,
-                                    batch=s.batch or new_batch_id(), plan=s.plan, base=s.base, caused_by=s.caused_by))
+        payload = _resolve_provisional(s.payload, acked, self._sent_text)
+        op = self._apply(self._mint(s.kind, s.target, payload, actor=actor, batch=s.batch or new_batch_id(),
+                                    plan=s.plan, base=s.base, caused_by=s.caused_by))
+        if s.kind == K.TEXT_INSERT and isinstance(s.payload.get("text"), str):
+            self._sent_text[s.cid] = s.payload["text"]
         L.ack(self.codoc_dir, client, s.cid, op)
         acked[s.cid] = op.id
         return [op]
@@ -302,19 +311,32 @@ class Workspace:
             self.writer.close()
 
 
-def _resolve_provisional(payload: dict, minted: dict[str, str]) -> dict:
+def _resolve_provisional(payload: dict, minted: dict[str, str], sent: dict[str, str] | None = None) -> dict:
     """Replace ``["$cid", cid, k]`` anchors with ``[op_id, k]`` once the insert
     with that client id has been minted. An unresolvable one is left as is and
-    fails as an unknown anchor, which is the honest outcome."""
+    fails as an unknown anchor, which is the honest outcome.
+
+    ``k`` is the client's own scalar index into the text it sent; the applier
+    stores NFC, so a client that sent a decomposed ``e + ́`` counted one
+    character more than the store has. ``sent`` lets the index be mapped
+    instead of guessed, so a paste from a Mac anchors where the person meant."""
     out = dict(payload)
     for key in ("after", "from", "to", "start", "end", "at"):
         v = out.get(key)
         if isinstance(v, list) and len(v) == 3 and v[0] == "$cid" and minted.get(v[1]):
-            out[key] = [minted[v[1]], v[2]]
+            out[key] = [minted[v[1]], _fold_index(v[2], (sent or {}).get(v[1]))]
     if isinstance(out.get("segments"), list):
         out["segments"] = [[minted.get(seg[1], seg[0]) if isinstance(seg[0], str) and seg[0] == "$cid" else seg[0], *seg[1 + (seg[0] == "$cid"):]]
                            if isinstance(seg, list) and seg and seg[0] == "$cid" else seg for seg in out["segments"]]
     return out
+
+
+def _fold_index(k: int, sent: str | None) -> int:
+    """The index of the client's k-th scalar in the NFC text the store kept."""
+    if not sent or nfc(sent) == sent:
+        return k
+    scalars = list(sent)
+    return max(0, len(nfc("".join(scalars[: k + 1]))) - 1)
 
 
 def _wire(op: Op) -> Op:

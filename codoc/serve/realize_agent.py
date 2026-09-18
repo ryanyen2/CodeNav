@@ -33,10 +33,12 @@ from codoc.serve.consult import consult_url_allowed
 HUB_ALLOWED_TOOLS = (*sandbox.ALLOWED_TOOLS, "WebFetch")
 
 
-def realize_tool_policy(scope, *, consult_allowlist, resolve) -> Callable[[str, dict | None], "tuple[bool, str]"]:
+def realize_tool_policy(scope, *, consult_allowlist, resolve, root=None) -> Callable[[str, dict | None], "tuple[bool, str]"]:
     """The (allowed, reason) decision for one tool call, combining the sandbox policy
-    with the consult-URL gate. Pure — the single enforcement point for a remote run."""
-    base = sandbox.tool_policy(scope)
+    with the consult-URL gate. Pure — the single enforcement point for a remote run.
+    ``root`` is the worktree the agent runs in, so the absolute paths its tools
+    send are checked against the repo-relative scope."""
+    base = sandbox.tool_policy(scope, root)
 
     def predicate(tool_name: str, tool_input: dict | None) -> "tuple[bool, str]":
         if tool_name == "WebFetch":
@@ -106,7 +108,7 @@ def make_sandboxed_agent(*, consult_allowlist=None, resolve=None, run_capture=No
     capture = run_capture or _default_run_capture
 
     def agent(directive: dict, worktree_path: str, scope=None) -> list[str]:
-        policy = realize_tool_policy(scope, consult_allowlist=allowlist, resolve=resolver)
+        policy = realize_tool_policy(scope, consult_allowlist=allowlist, resolve=resolver, root=worktree_path)
         ran = _run_sandboxed_sdk(
             prompt=build_directive_prompt(directive, scope),
             worktree_path=worktree_path,

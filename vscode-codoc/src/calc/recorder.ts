@@ -21,7 +21,7 @@
 import type { Node as PMNode, Slice } from '@tiptap/pm/model';
 import { AddMarkStep, RemoveMarkStep, ReplaceStep, type Step } from '@tiptap/pm/transform';
 
-import { START, scalars, type Anchor, type CharRef, type OpBody } from './projection';
+import { START, nfc, scalars, type Anchor, type CharRef, type OpBody } from './projection';
 import { Shadow } from './shadow';
 
 export interface Recorded {
@@ -94,7 +94,7 @@ export class Recorder {
             let k = 0;
             step.slice.content.forEach(child => {
                 if (child.isText) {
-                    const len = scalars(child.text ?? '').length;
+                    const len = scalars(nfc(child.text ?? '')).length;
                     for (const m of child.marks) {
                         if (!RECORDED.has(m.type.name) || len === 0) continue;
                         out.ops.push({ kind: 'text.mark', target, payload: {
@@ -152,14 +152,15 @@ export function scalarOffset(block: PMNode, parentOffset: number): number {
     return out;
 }
 
-/** The plain text of an inline slice; a hard break is one newline scalar. */
+/** The plain text of an inline slice, NFC as the applier records it; a hard
+ *  break is one newline scalar. */
 export function sliceText(slice: Slice): string {
     let s = '';
     slice.content.forEach(child => {
         if (child.isText) s += child.text ?? '';
         else if (child.type.name === 'hardBreak') s += '\n';
     });
-    return s;
+    return nfc(s);
 }
 
 function inlineOnly(slice: Slice): boolean {
@@ -183,7 +184,7 @@ function markAttrs(kind: string, attrs: Record<string, unknown>): Record<string,
  */
 export function reconcile(block: PMNode, shadow: Shadow, nextCid: () => string): { ops: OpBody[]; cids: string[] } {
     const bid = block.attrs.bid as string;
-    const now = scalars(block.textBetween(0, block.content.size, '\n'));
+    const now = scalars(nfc(block.textBetween(0, block.content.size, '\n')));
     const was = shadow.chars;
     let p = 0;
     while (p < now.length && p < was.length && now[p] === was[p]) p++;

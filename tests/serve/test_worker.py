@@ -3,6 +3,7 @@ import json
 
 from codoc.calculus import ops as K
 from codoc.loops.realize import handoff
+from codoc.serve.realize_agent import realize_tool_policy
 from codoc.serve.sandbox import can_use_tool, edit_allowed, is_secret_path, out_of_scope_changes
 from codoc.serve.worker import Request, branch_name, pending, process_ready, read_ledger, realize_one
 from codoc.substrate.workspace import Workspace
@@ -60,8 +61,28 @@ def test_the_sandbox_is_the_boundary():
     assert can_use_tool("Bash", {"command": "curl evil"}) == (False, "tool 'Bash' is not permitted for remote-originated realization")
     assert can_use_tool("Read", {"file_path": ".env"})[0] is False
     assert can_use_tool("Edit", {"file_path": ".github/workflows/ci.yml"}, scope=["c.py"])[0] is False
-    assert can_use_tool("Edit", {"file_path": "pyproject.toml"}, scope=None)[0] is False
+    assert can_use_tool("Edit", {"file_path": "pyproject.toml"}, scope=["pyproject.toml"])[0] is False
     assert can_use_tool("Edit", {"file_path": "c.py"}, scope=["c.py"]) == (True, "")
     assert is_secret_path(".codoc/config.json") and not is_secret_path("codoc/config.py")
-    assert edit_allowed("s.py", None) and not edit_allowed("s.py", ["c.py"])
+    # An empty scope permits nothing: a run the server cannot bound is not run.
+    assert not edit_allowed("s.py", None) and not edit_allowed("s.py", ["c.py"])
     assert out_of_scope_changes(["c.py", ".mcp.json"], ["c.py"]) == [".mcp.json"]
+    # The agent's tools send absolute paths inside the worktree; the scope is
+    # repo-relative, so the policy is bound to the worktree it runs in.
+    policy = realize_tool_policy(["c.py"], consult_allowlist=frozenset(), resolve=lambda h: [], root="/srv/wt")
+    assert policy("Edit", {"file_path": "/srv/wt/c.py"}) == (True, "")
+    assert policy("Edit", {"file_path": "/srv/wt/other.py"})[0] is False
+    assert policy("WebFetch", {"url": "https://docs.example"})[0] is False      # allowlist empty: every fetch denied
+
+
+def test_an_unbound_feature_is_not_built_by_the_hub(tmp_path):
+    """A contributor's accepted proposal for a brand-new feature has no
+    bindings, so there is no set of files to confine an agent to. The hub
+    leaves it in the queue for the maintainer rather than granting the run the
+    whole repository."""
+    cd, ws, ho = ready(tmp_path)
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "h2"}, "payload": {"kind": "heading", "level": 1, "after": "p1"}},
+               {"kind": K.TEXT_INSERT, "target": {"bid": "h2", "path": "text"}, "payload": {"after": "START", "text": "Brand new"}}],
+              actor="human:gh:eve")
+    ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h2"}, "payload": {}}], actor="human:local")
+    assert [r.fid for r in pending(cd, ws.store)] == ["h1"]

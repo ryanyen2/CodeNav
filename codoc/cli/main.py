@@ -209,8 +209,7 @@ def handoff(feature: str, root: str = ROOT,
     fid = _resolve_feature(ws.store, feature)
     _report(client.write(cd, client="cli", root_dir=root, bodies=[{
         "kind": K.FEATURE_HANDOFF, "target": {"fid": fid},
-        "payload": {"covers": dict(ws.store.frontier), "base_sha": head_sha(root), "asked": asked,
-                    "delete_code": delete_code}}]), "handed off")
+        "payload": {"base_sha": head_sha(root), "asked": asked, "delete_code": delete_code}}]), "handed off")
 
 
 @app.command()

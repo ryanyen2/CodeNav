@@ -23,18 +23,26 @@ PARAGRAPH = "paragraph"
 
 _TEXT_FIELDS: dict[str, tuple[str, ...]] = {HEADING: ("text",), PARAGRAPH: ("text",)}
 _UNEXPORTED: set[str] = set()
+_OUT_OF_FLOW: set[str] = set()
 MAX_LEVEL = 6
 
 
-def register_kind(kind: str, text_fields: tuple[str, ...], *, exported: bool = True) -> None:
-    """Declare a plugin kind's attributed fields, and whether its blocks appear
-    in the Markdown export (a comment thread does not)."""
+def register_kind(kind: str, text_fields: tuple[str, ...], *, exported: bool = True, in_flow: bool = True) -> None:
+    """Declare a plugin kind's attributed fields, whether its blocks appear in
+    the Markdown export, and whether they are in the reading flow. A comment
+    thread is neither: it hangs off the words it discusses, so it never comes
+    between two paragraphs the reader (or a merge) sees as adjacent."""
     _TEXT_FIELDS[kind] = tuple(text_fields)
     (_UNEXPORTED.discard if exported else _UNEXPORTED.add)(kind)
+    (_OUT_OF_FLOW.discard if in_flow else _OUT_OF_FLOW.add)(kind)
 
 
 def is_exported(kind: str) -> bool:
     return kind not in _UNEXPORTED
+
+
+def in_flow(kind: str) -> bool:
+    return kind not in _OUT_OF_FLOW
 
 
 def text_fields(kind: str) -> tuple[str, ...]:

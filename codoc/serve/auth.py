@@ -85,10 +85,13 @@ class AuthContext:
 def record_role(codoc_dir: str | Path, login: str, role: str) -> None:
     """Remember a login's role where every clone reads it: the tracked
     ``config.json`` (``roles: {actor: role}``, spec §7.3), so a rebuild on any
-    machine applies ``human:<login>``'s ops under the same authority."""
+    machine applies that contributor's ops under the same authority. The actor
+    is ``log.hub_actor``, never a bare ``human:<login>``, so no GitHub login can
+    name the maintainer's own identity."""
     from codoc.doclang import read_config, write_config
+    from codoc.substrate.log import hub_actor
     roles = dict(read_config(codoc_dir).get("roles") or {})
-    roles[f"human:{login}"] = role
+    roles[hub_actor(login)] = role
     write_config(codoc_dir, roles=roles)
 
 

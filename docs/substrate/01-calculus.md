@@ -384,11 +384,16 @@ wall time is rejected, before the file is merged.
 
 Roles are decided outside the calculus and recorded where every clone reads
 them: the tracked `config.json` (`roles: {actor: role}`; the hub writes a
-login's role there when they sign in; the local checkout's `human:local` and
-`human:import` are `owner` unless it says otherwise). Because the table is
-tracked, `replay(log)` gives the same store on every machine (I6). The
-applier checks, per op and with the store in hand, that the actor's role
-allows it: `owner` and `maintainer` may write everything; `machine` (agents,
+contributor's role there when they sign in, under `human:gh:<login>`, which no
+local identity can collide with; the local checkout's `human:local` and
+`human:import` are `owner` unless it says otherwise). The check happens when an
+op **arrives**, and the answer is recorded on the op: a replay honours what was
+recorded rather than re-asking, so `replay(log)` is the same store on every
+machine and at every later state of the table (I6), and reducing someone's
+access tomorrow never deletes what they wrote today. A log from a stranger is
+judged at its own door instead: the hub validates a pull request's session
+files against its table before merging them. The applier checks, per op and
+with the store in hand, that the actor's role allows it: `owner` and `maintainer` may write everything; `machine` (agents,
 the loop, translators, imports) may write the trunk and plans but no verdict
 and no hand-off, with one exception, the loop's own `feature.realized`, which
 is the daemon settling evidence; `suggest` may open plans and write ops tagged

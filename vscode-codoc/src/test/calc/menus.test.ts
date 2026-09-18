@@ -64,3 +64,18 @@ describe('comments', () => {
         expect(ops[2].payload).toMatchObject({ kind: 'comment', attrs: { block: 'c9' }, on: true });
     });
 });
+
+describe('comment anchors', () => {
+    it('follow the mark, not the block the thread was written against', async () => {
+        const { threadsOf } = await import('../../editor/comments');
+        const body = (t: string) => ({ text: t, spans: [], suggest_del: [], runs: [{ start: 0, end: t.length, actor: 'human:a', at: '1', plan: null, op: 'x:1', k0: 0 }] });
+        // p2 was merged into p1: the commented words (and their mark) are in p1
+        // now, and the thread still names the dead p2.
+        const proj = { head: 0, frontier: {}, phases: {}, plans: [], bindings: { by_feature: {}, by_file: {} }, claims: {}, blocks: [
+            { id: 'p1', kind: 'paragraph', level: 0, rank: 'a', head: 2, fields: { text: { text: 'firstsecond', suggest_del: [], runs: [],
+              spans: [{ kind: 'comment', attrs: { block: 'c1' }, start: 5, end: 11 }] } } },
+            { id: 'c1', kind: 'comment', level: 0, rank: 'c', head: 1, fields: { thread: 'c1', anchor: 'p2', anchor_text: 'second', scope: 'code', status: 'open', body: body('Why?') } },
+        ] };
+        expect(threadsOf(proj as never)[0].anchor).toBe('p1');
+    });
+});

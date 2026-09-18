@@ -129,3 +129,11 @@ export interface Ack { cid: string; op: string | null; conflict: string | null }
 export function scalars(s: string): string[] {
     return Array.from(s);
 }
+
+/** The applier records NFC (spec §4), so the editor counts and sends NFC: a
+ *  decomposed "e + ́" typed by an IME or pasted from macOS is one character to
+ *  the store, and a shadow that thought it was two would name anchors that do
+ *  not exist. */
+export function nfc(s: string): string {
+    return s.normalize('NFC');
+}

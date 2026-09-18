@@ -9,7 +9,7 @@
  * Provisional refs (`['$cid', cid, k]`) name characters this client inserted
  * before the daemon acked; `resolve(cid, opId)` rewrites them once it has.
  */
-import { type Anchor, type CharRef, START, isProvisional, refEq, scalars } from './projection';
+import { type Anchor, type CharRef, START, isProvisional, nfc, refEq, scalars } from './projection';
 
 export class Shadow {
     /** Parallel arrays: character i has identity refs[i]. */
@@ -49,9 +49,10 @@ export class Shadow {
         return this.refs.findIndex(x => refEq(x, r));
     }
 
-    /** Record a local insert: `text` after offset `at`, minted by client op `cid`. */
+    /** Record a local insert: `text` after offset `at`, minted by client op
+     *  `cid`. The text is NFC, as the applier will record it. */
     insert(at: number, text: string, cid: string): void {
-        const cs = scalars(text);
+        const cs = scalars(nfc(text));
         const refs: CharRef[] = cs.map((_c, k) => ['$cid', cid, k]);
         this.chars.splice(at, 0, ...cs);
         this.refs.splice(at, 0, ...refs);

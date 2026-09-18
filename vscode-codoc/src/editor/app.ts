@@ -31,6 +31,10 @@ let margin: Margin | null = null;
 let timeline: Timeline | null = null;
 let actor = 'human:local';
 let pendingUndo: 'undo' | 'redo' | null = null;
+/** Batches submitted and not yet seen in a published window. Undo waits for
+ *  them: inverting an older batch because the newest has not been drained yet
+ *  would undo something the person did not ask about. */
+const inFlight = new Set<string>();
 let projection: Projection | null = null;
 let status: Record<string, unknown> = {};
 let history = false;
@@ -155,6 +159,7 @@ const cid = () => `ide-${Date.now().toString(36)}-${(seq++).toString(36)}`;
 const batch = () => `t-${Math.random().toString(16).slice(2, 14)}`;
 
 function submit(subs: Submission[]): void {
+    for (const s of subs) inFlight.add(s.batch);
     send({ kind: 'submit', subs });
 }
 
@@ -170,7 +175,7 @@ function buildThread(t: Thread): void {
     const fid = featureOfBlock(t.anchor);
     if (!fid) return;
     const asked = t.messages.map(m => m.body).join(' ');
-    submit([{ cid: cid(), batch: batch(), kind: 'feature.handoff', target: { fid }, payload: { covers: projection.frontier, asked } }]);
+    submit([{ cid: cid(), batch: batch(), kind: 'feature.handoff', target: { fid }, payload: { asked } }]);
     send({ kind: 'realize' });
 }
 
@@ -188,8 +193,10 @@ function handoffAll(): void {
     if (!projection) return;
     editor?.flush();
     const b = batch();
+    // No `covers`: the applier fills it with its own frontier, which includes
+    // the ops we just flushed. The projection's frontier predates them.
     const fids = Object.entries(projection.phases).filter(([, p]) => p === 'edited').map(([f]) => f);
-    submit(fids.map(fid => ({ cid: cid(), batch: b, kind: 'feature.handoff', target: { fid }, payload: { covers: projection!.frontier } })));
+    submit(fids.map(fid => ({ cid: cid(), batch: b, kind: 'feature.handoff', target: { fid }, payload: {} })));
 }
 
 function reveal(fid: string): void {
@@ -208,9 +215,12 @@ function undo(redo: boolean): void {
 
 function applyUndo(w: HistoryWindow): void {
     if (!pendingUndo) return;
-    const next = nextUndo(w, actor, pendingUndo === 'redo');
+    for (const e of w.ops) inFlight.delete(e.batch);
+    if (inFlight.size) return;                    // the window has not caught up; ask again on the next one
+    const redo = pendingUndo === 'redo';
+    const next = nextUndo(w, actor, redo);
     pendingUndo = null;
-    if (!next) { notify('nothing to undo'); return; }
+    if (!next) { notify(redo ? 'nothing to redo' : 'nothing to undo'); return; }
     submit(next.ops.map(op => ({ cid: cid(), batch: next.batch, ...op })));
 }
 
@@ -253,7 +263,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
             renderToolbar(m.proj);
             renderStatus();
             margin?.update(m.proj);
-            if (history) send({ kind: 'history' });
+            if (history || pendingUndo) send({ kind: 'history' });
             return;
         }
         case 'history':
@@ -264,6 +274,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
             return;
         case 'acks':
             if (m.acks) editor?.ack(m.acks as Ack[]);
+            if (pendingUndo) send({ kind: 'history' });
             return;
         case 'status':
             status = m.status ?? {};

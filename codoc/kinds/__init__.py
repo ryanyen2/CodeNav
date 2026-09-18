@@ -47,6 +47,7 @@ class LowerContext:
 class Kind:
     name: str
     text_fields: tuple[str, ...] = ()
+    in_flow: bool = True                              # a comment hangs off words, it does not sit between them
     schema: dict = field(default_factory=dict)        # field → {"type": "string"|"number"|"boolean"|"object"|"array", "enum"?: [...], "required"?: bool}
     lift: Callable[[LiftContext], dict | None] | None = None
     lower: Callable[[dict, dict, LowerContext], str | None] | None = None
@@ -90,7 +91,7 @@ def register(kind: Kind) -> Kind:
     if kind.name in ("heading", "paragraph"):
         raise ValueError(f"{kind.name} is built into the calculus")
     _REGISTRY[kind.name] = kind
-    register_kind(kind.name, kind.text_fields, exported=kind.exported)
+    register_kind(kind.name, kind.text_fields, exported=kind.exported, in_flow=kind.in_flow)
     return kind
 
 

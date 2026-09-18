@@ -38,11 +38,18 @@ SNAPSHOT_PREFIX = "snapshot-"
 CLIENT_IDENTITY = {"ide": "human:local", "cli": "human:local", "mcp": "agent:claude-code"}
 
 
+def hub_actor(login: str) -> str:
+    """A remote contributor's actor. The ``gh:`` prefix is what keeps a GitHub
+    login named ``local`` (or ``import``) from arriving as the maintainer's own
+    identity, here and in the roles table."""
+    return f"human:gh:{login}"
+
+
 def actor_for(client: str) -> str | None:
     if client in CLIENT_IDENTITY:
         return CLIENT_IDENTITY[client]
     if client.startswith("hub-") and len(client) > 4:
-        return f"human:{client[4:]}"
+        return hub_actor(client[4:])
     return None
 
 

@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 
 from codoc.calculus import ops as K
 from codoc.calculus import rank as R
-from codoc.calculus.doc import HEADING, Block, text_fields
+from codoc.calculus.doc import HEADING, Block, in_flow, text_fields
 from codoc.calculus.ids import CharRef, OpId
 from codoc.calculus.ops import Op, frontier_union
 from codoc.calculus.text import AnchorError, Text
@@ -233,10 +233,13 @@ class Store:
         return [b for b in self.ordered() if b.kind == HEADING]
 
     def live_neighbours_of(self, bid: str) -> tuple[str | None, str | None]:
-        """The live blocks immediately before and after ``bid``."""
+        """The live blocks immediately before and after ``bid`` in the reading
+        flow: a comment thread ranked between two paragraphs does not separate
+        them, because nobody reads it there."""
         i = self._index_of(bid)
-        prev = next((j for _, j in reversed(self.order[:i]) if self.blocks[j].live), None)
-        nxt = next((j for _, j in self.order[i + 1:] if self.blocks[j].live), None)
+        flows = lambda j: self.blocks[j].live and in_flow(self.blocks[j].kind)
+        prev = next((j for _, j in reversed(self.order[:i]) if flows(j)), None)
+        nxt = next((j for _, j in self.order[i + 1:] if flows(j)), None)
         return prev, nxt
 
     # ── characters and marks ───────────────────────────────────────────────

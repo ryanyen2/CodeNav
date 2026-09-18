@@ -42,17 +42,27 @@ def history_message(codoc_dir: str | Path) -> dict | None:
         return None
 
 
+REPLAY_ACKS = 200
+
+
 class Feed:
     """Per-connection state: what was last sent, and how far into the viewer's
-    ack file we have read."""
+    ack file we have read. A new connection replays the last few acks rather
+    than starting at the end: an EventSource reconnects on its own, and an ack
+    written in that gap is the one telling the editor its op landed. The editor
+    ignores a cid it does not know."""
 
-    def __init__(self, codoc_dir: str | Path, client: str) -> None:
+    def __init__(self, codoc_dir: str | Path, client: str, replay: int = REPLAY_ACKS) -> None:
         self.dir = Path(codoc_dir)
         self.client = client
         self.actor = L.actor_for(client) or ""
         self.sent: dict[str, str] = {}
         ack = L.inbox_dir(self.dir) / f"{client}.ack.jsonl"
-        self.ack_offset = ack.stat().st_size if ack.exists() else 0
+        size = ack.stat().st_size if ack.exists() else 0
+        self.ack_offset = size
+        if size and replay:
+            complete = ack.read_bytes().split(b"\n")[:-1]        # whole lines only
+            self.ack_offset = size - sum(len(line) + 1 for line in complete[-replay:])
 
     def pending(self) -> list[dict]:
         out: list[dict] = []

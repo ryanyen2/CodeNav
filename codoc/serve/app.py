@@ -30,9 +30,16 @@ LOCAL = Session("local", "local", MAINTAINER, 0.0)
 
 
 def client_name(login: str) -> str:
-    """The inbox file for a login; the daemon stamps ``human:<login>``."""
+    """The inbox file for a GitHub login; the daemon stamps ``log.hub_actor``."""
     safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in login)[:64] or "anon"
     return f"hub-{safe}"
+
+
+def inbox_of(s: Session) -> str:
+    """Which inbox this viewer writes to. With no auth the hub serves the
+    person at the machine, who is the local writer like the IDE and the CLI,
+    not a remote contributor."""
+    return "cli" if s is LOCAL else client_name(s.login)
 
 
 def _https(request: Request) -> bool:
@@ -114,7 +121,7 @@ def build_app(codoc_dir: str, *, static_dir: str | None = None, auth: AuthContex
             return denied()
         from sse_starlette.sse import EventSourceResponse
         from codoc.serve.push import event_source
-        return EventSourceResponse(event_source(cd, client_name(s.login), is_disconnected=request.is_disconnected))
+        return EventSourceResponse(event_source(cd, inbox_of(s), is_disconnected=request.is_disconnected))
 
     @app.post("/api/message")
     async def message(request: Request) -> JSONResponse:
@@ -168,7 +175,7 @@ def handle_message(cd: Path, s: Session, m: dict) -> JSONResponse:
         subs = m.get("subs") or []
         if not isinstance(subs, list) or not all(isinstance(x, dict) for x in subs):
             return JSONResponse({"error": "subs must be a list of submissions"}, status_code=400)
-        L.submit(cd, client_name(s.login), [Submission(
+        L.submit(cd, inbox_of(s), [Submission(
             cid=str(x.get("cid") or ""), kind=str(x.get("kind") or ""), target=dict(x.get("target") or {}),
             payload=dict(x.get("payload") or {}), batch=str(x.get("batch") or ""), plan=x.get("plan") or None,
             caused_by=x.get("caused_by") or None) for x in subs])

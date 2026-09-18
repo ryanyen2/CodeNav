@@ -35,10 +35,12 @@ QUEUE_FILE = "realize.md"
 
 def handoff(ws: Workspace, fid: str, *, actor: str, asked: str = "", root_dir: str | None = None,
             delete_code: bool = False) -> Op:
+    """Hand a feature's edits to the agent. What it covers is not stated: the
+    applier fills it with its own frontier, which is the only one that includes
+    the ops arriving in the same batch as this one."""
     sha = head_sha(root_dir) if root_dir else ""
     return ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": fid},
-                       "payload": {"covers": dict(ws.store.frontier), "base_sha": sha, "asked": asked,
-                                   "delete_code": delete_code}}], actor=actor)[0]
+                       "payload": {"base_sha": sha, "asked": asked, "delete_code": delete_code}}], actor=actor)[0]
 
 
 def withdraw(ws: Workspace, fid: str, *, actor: str) -> Op | None:

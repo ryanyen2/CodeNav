@@ -5,11 +5,14 @@ The MCP server, the CLI and the hub are separate processes. Only one process
 may apply (spec §1), so a writer first asks whether a daemon is alive (the
 pidfile). If so it appends submissions to its inbox and the daemon drains them
 on the next batch; the caller gets client ids back and may poll the ack file.
-If not, it opens the workspace itself, applies, publishes, and closes. Either
-way the caller sees one function.
+If not, this process is the applier: it opens the workspace once and keeps it
+for the life of the process, so a long-lived writer (the MCP server) writes one
+session log rather than one per call. A daemon that appears later takes over
+at the next call, and the held workspace is closed.
 """
 from __future__ import annotations
 
+import atexit
 import json
 import time
 import uuid
@@ -24,6 +27,28 @@ from codoc.substrate.workspace import Workspace
 
 CLIENT_IDENTITY = L.CLIENT_IDENTITY
 
+_OWNED: dict[Path, Workspace] = {}
+
+
+def _applier(codoc_dir: Path) -> Workspace:
+    """This process's workspace for a checkout no daemon owns."""
+    ws = _OWNED.get(codoc_dir)
+    if ws is None:
+        ws = _OWNED[codoc_dir] = Workspace(codoc_dir)
+    return ws
+
+
+def release(codoc_dir: Path | None = None) -> None:
+    """Close the workspaces this process holds (at exit, or when a daemon
+    takes the checkout back)."""
+    for key in ([codoc_dir] if codoc_dir is not None else list(_OWNED)):
+        ws = _OWNED.pop(Path(key), None) if key is not None else None
+        if ws is not None:
+            ws.close()
+
+
+atexit.register(release)
+
 
 def write(codoc_dir: str | Path, *, client: str, bodies: list[dict], root_dir: str | None = None,
           batch: str | None = None, plan: str | None = None, caused_by: str | None = None,
@@ -34,13 +59,11 @@ def write(codoc_dir: str | Path, *, client: str, bodies: list[dict], root_dir: s
     codoc_dir = Path(codoc_dir)
     actor = CLIENT_IDENTITY.get(client, f"human:{client}")
     if not daemon_running(codoc_dir):
-        ws = Workspace(codoc_dir)
-        try:
-            ops = ws.submit(bodies, actor=actor, batch=batch, plan=plan, caused_by=caused_by)
-            publish(codoc_dir, ws.store, root_dir=root_dir or str(codoc_dir.parent))
-        finally:
-            ws.close()
+        ws = _applier(codoc_dir)
+        ops = ws.submit(bodies, actor=actor, batch=batch, plan=plan, caused_by=caused_by)
+        publish(codoc_dir, ws.store, root_dir=root_dir or str(codoc_dir.parent))
         return [{"cid": None, "op": o.id, "conflict": o.conflict} for o in ops]
+    release(codoc_dir)
     subs = [Submission(cid=f"{client}-{uuid.uuid4().hex[:12]}", kind=b["kind"], target=b.get("target", {}),
                        payload=b.get("payload", {}), batch=batch or "", plan=b.get("plan", plan),
                        caused_by=b.get("caused_by", caused_by)) for b in bodies]
@@ -68,8 +91,11 @@ def wait_for_acks(codoc_dir: Path, client: str, cids: list[str], wait_s: float) 
 
 
 def read(codoc_dir: str | Path) -> Workspace:
-    """A read-only workspace: the logs replayed, nothing written."""
-    return Workspace(codoc_dir, readonly=True)
+    """A workspace to read from: this process's own when it is the applier
+    (so a read sees what it just wrote), else the logs replayed read-only."""
+    codoc_dir = Path(codoc_dir)
+    held = _OWNED.get(codoc_dir)
+    return held if held is not None else Workspace(codoc_dir, readonly=True)
 
 
 def ingest(codoc_dir: str | Path, *, client: str, bid: str, path: str, base_text: str, new_md: str,
@@ -80,14 +106,11 @@ def ingest(codoc_dir: str | Path, *, client: str, bid: str, path: str, base_text
     codoc_dir = Path(codoc_dir)
     actor = CLIENT_IDENTITY.get(client, f"human:{client}")
     if not daemon_running(codoc_dir):
-        ws = Workspace(codoc_dir)
-        try:
-            res, ops = ws.ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, plan=plan,
-                                 caused_by=caused_by)
-            publish(codoc_dir, ws.store, root_dir=root_dir or str(codoc_dir.parent))
-        finally:
-            ws.close()
+        ws = _applier(codoc_dir)
+        res, ops = ws.ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, plan=plan, caused_by=caused_by)
+        publish(codoc_dir, ws.store, root_dir=root_dir or str(codoc_dir.parent))
         return {"refused": res.refused, "ops": [o.id for o in ops]}
+    release(codoc_dir)
     sub = Submission(cid=f"{client}-{uuid.uuid4().hex[:12]}", kind="ingest", target={"bid": bid, "path": path},
                      payload={"base_text": base_text, "new_md": new_md}, plan=plan, caused_by=caused_by)
     L.submit(codoc_dir, client, [sub])

@@ -102,13 +102,15 @@ logs should not be in git-lfs: the merge driver would receive pointer files.
 ## 6. What the hub adds
 
 Nothing to the format. The hub's daemon writes its own session logs; a
-contributor's ops carry their actor; a realized PR carries the logs its
-session wrote, so the maintainer's merge of the PR merges the tree's history
-with it. The hub's worktree is a checkout like any other. Authority is checked
-at apply, not at the hub's door: a session file in a PR that carries a verdict
-or hand-off by an actor whose role does not allow it is applied as a recorded
-conflict on rebuild, and the hub refuses to merge a PR whose logs fail
-validation.
+contributor's ops carry their actor (`human:gh:<login>`, namespaced so no
+GitHub login can arrive as the maintainer's own identity); a realized PR
+carries the logs its session wrote, so the maintainer's merge of the PR merges
+the tree's history with it. The hub's worktree is a checkout like any other.
+Authority is checked when an op arrives and the answer is recorded on it, so a
+rebuild reproduces what happened rather than re-judging it under today's
+table; the door for foreign logs is the hub's own validation, which refuses to
+merge a pull request whose session files carry a verdict or hand-off by an
+actor its table does not allow.
 
 ## 6.1 Privacy
 

@@ -56,7 +56,7 @@ def test_local_hub_treats_its_viewer_as_the_owner_and_routes_submissions(tmp_pat
     r = c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "submit", "subs": [
         {"cid": "c1", "kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": "START", "text": "Hi "}, "batch": "b1"}]})
     assert r.json() == {"ok": True, "submitted": 1}
-    lines = L.read_inbox(cd, "hub-local")
+    lines = L.read_inbox(cd, "cli")      # the local hub's viewer is the person at the machine
     assert len(lines) == 1 and lines[0].sub.cid == "c1" and lines[0].sub.kind == K.TEXT_INSERT
     assert c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "set-language", "tag": "ja"}).json() == {"ok": True}
     assert json.loads((cd / "config.json").read_text())["doc_language"] == "ja"
@@ -80,8 +80,10 @@ def test_auth_gate_records_roles_and_a_suggester_cannot_set_the_language(tmp_pat
     assert r.status_code == 302 and COOKIE_NAME in r.cookies
     c.cookies.set(COOKIE_NAME, r.cookies[COOKIE_NAME])
     assert c.get("/api/whoami").json() == {"authenticated": True, "login": "alice", "role": SUGGEST}
-    assert read_roles(cd) == {"human:alice": SUGGEST}
-    assert json.loads((cd / "config.json").read_text())["roles"] == {"human:alice": SUGGEST}   # tracked, so every clone agrees
+    # The actor is namespaced: a GitHub login called "local" can never arrive
+    # as the maintainer's own identity, here or in the roles table.
+    assert read_roles(cd) == {"human:gh:alice": SUGGEST}
+    assert json.loads((cd / "config.json").read_text())["roles"] == {"human:gh:alice": SUGGEST}
     assert c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "set-language", "tag": "ja"}).status_code == 403
     r = c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "submit", "subs": [
         {"cid": "s1", "kind": K.PLAN_OPEN, "target": {"pid": "p-1"}, "payload": {"kind": "edit"}}]})
@@ -90,17 +92,18 @@ def test_auth_gate_records_roles_and_a_suggester_cannot_set_the_language(tmp_pat
     s = auth.store.create("bob", role_for_permission("admin"))
     from codoc.serve.auth import record_role
     record_role(cd, "bob", s.role)
-    assert read_roles(cd) == {"human:alice": SUGGEST, "human:bob": MAINTAINER}
+    assert read_roles(cd) == {"human:gh:alice": SUGGEST, "human:gh:bob": MAINTAINER}
+    assert L.actor_for(client_name("local")) == "human:gh:local" != "human:local"
 
 
 def test_feed_sends_a_snapshot_then_only_changes_and_this_viewers_acks(tmp_path):
     cd = workspace(tmp_path)
-    feed = Feed(cd, "hub-local")
+    feed = Feed(cd, "cli")
     first = feed.pending()
     assert [m["kind"] for m in first] == ["projection", "status"]
     assert first[1]["status"]["doc_language"] == "en" and first[1]["status"]["actor"] == "human:local"
     assert feed.pending() == []
-    L.ack(cd, "hub-local", "c1", None, error="unknown_anchor")
+    L.ack(cd, "cli", "c1", None, error="unknown_anchor")
     L.ack(cd, "hub-other", "c9", None)
     got = feed.pending()
     assert got == [{"kind": "acks", "acks": [{"cid": "c1", "op": "", "conflict": "unknown_anchor"}]}]
@@ -119,7 +122,7 @@ def test_a_contributor_and_the_person_edit_one_checkout_at_once(tmp_path):
 
     cd = tmp_path / ".codoc"
     cd.mkdir()
-    write_config(cd, roles={"human:alice": SUGGEST, "human:bob": MAINTAINER})
+    write_config(cd, roles={"human:gh:alice": SUGGEST, "human:gh:bob": MAINTAINER})
     ws = Workspace(cd)
     seed(ws)
     t = ws.store.blocks["p1"].text()
@@ -133,8 +136,8 @@ def test_a_contributor_and_the_person_edit_one_checkout_at_once(tmp_path):
         Submission(cid="a3", kind=K.PLAN_ACCEPT, target={"pid": pid}, payload={}, batch=pid)])
     ops = ws.drain_inbox()
     assert [(o.actor, o.kind, o.conflict) for o in ops] == [
-        ("human:alice", K.PLAN_OPEN, None), ("human:alice", K.TEXT_INSERT, None),
-        ("human:alice", K.PLAN_ACCEPT, "authority"),          # a suggester may not decide
+        ("human:gh:alice", K.PLAN_OPEN, None), ("human:gh:alice", K.TEXT_INSERT, None),
+        ("human:gh:alice", K.PLAN_ACCEPT, "authority"),       # a suggester may not decide
         ("human:local", K.TEXT_INSERT, None)]
     assert markdown(ws.store.blocks["p1"].text(), "rejected", ws.store) == "Retries once before giving up. Mine."
     assert [(c.stage, c.text) for c in plan_claims(ws.store, "h1")] == [("open", "twice not ")]
@@ -144,6 +147,6 @@ def test_a_contributor_and_the_person_edit_one_checkout_at_once(tmp_path):
     L.submit(cd, client_name("bob"), [Submission(cid="b1", kind=K.PLAN_ACCEPT, target={"pid": pid}, payload={}, batch="b-bob")])
     ws.drain_inbox()
     assert ws.store.plans[pid].status == "accepted"
-    assert ("human:alice", "twice not ") in [(s.actor, s.chars) for s in ws.store.blocks["p1"].text().segs if s.live]
+    assert ("human:gh:alice", "twice not ") in [(s.actor, s.chars) for s in ws.store.blocks["p1"].text().segs if s.live]
     assert Publisher(cd, str(tmp_path)).publish(ws.store, force=True)["state"] == "edited"
     ws.close()

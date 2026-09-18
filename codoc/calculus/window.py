@@ -2,9 +2,12 @@
 op, the text of every block it touched as it read right after the op, and
 each touched block's text as it read before the window. Derived by
 un-applying the window backwards on clones of the live fields, so the
-reconstruction is exact for text ops, splits and merges, and the editor's
-scrubber never pushes old prose through the recorder. Each entry carries the
-op's recorded inverse, which is what undo submits.
+reconstruction is exact — a fuzz checks it against a prefix replay — and the
+editor's scrubber never pushes old prose through the recorder. Each entry
+carries the op's recorded inverse, which is what undo submits.
+
+A block born inside the window is absent from ``before`` rather than reported
+as empty: it did not exist then.
 """
 from __future__ import annotations
 
@@ -16,6 +19,7 @@ from codoc.calculus.store import Store
 from codoc.calculus.text import END, START, Mark, Text
 
 TEXT_KINDS = frozenset({K.TEXT_INSERT, K.TEXT_DELETE, K.TEXT_RESTORE, K.TEXT_MARK})
+VERDICTS = frozenset({K.PLAN_ACCEPT, K.PLAN_REJECT, K.PLAN_REOPEN})
 
 
 def history_window(store: Store, limit: int = 200) -> dict:
@@ -32,6 +36,7 @@ def history_window(store: Store, limit: int = 200) -> dict:
         return clones[key]
 
     entries: list[dict] = []
+    born: set[str] = set()
     for o in reversed(ops):
         touched = _touched(store, o)
         after = {bid: t.live_text() for bid, path in touched if (t := clone(bid, path)) is not None and path == "text"}
@@ -39,8 +44,12 @@ def history_window(store: Store, limit: int = 200) -> dict:
                         "batch": o.batch, "plan": o.plan, "caused_by": o.caused_by, "blocks": after,
                         "inverse": list(o.inverse)})
         _unapply(o, clone)
+        if o.kind == K.BLOCK_ADD:
+            born.add(o.target["bid"])
+        elif o.kind == K.BLOCK_SPLIT and not o.payload.get("new_takes"):
+            born.add(o.payload["new"])
     entries.reverse()
-    before = {bid: t.live_text() for (bid, path), t in clones.items() if path == "text"}
+    before = {bid: t.live_text() for (bid, path), t in clones.items() if path == "text" and bid not in born}
     return {"start": (store.position[ops[0].id] if ops else store.pos), "head": store.pos, "before": before, "ops": entries}
 
 
@@ -56,7 +65,15 @@ def _touched(store: Store, o: Op) -> list[tuple[str, str]]:
         return [(t["bid"], f) for f in text_fields(p.get("kind", ""))]
     if o.kind in (K.BLOCK_DELETE, K.BLOCK_RESTORE):
         return [(i, "text") for i in p.get("killed" if o.kind == K.BLOCK_DELETE else "revived", []) if i in store.blocks]
+    if o.kind in VERDICTS:
+        return [(e["bid"], e.get("path", "text")) for e in _verdict_entries(p) if e["bid"] in store.blocks]
     return []
+
+
+def _verdict_entries(payload: dict) -> list[dict]:
+    """The records a verdict (or its inverse) made that moved text: segments it
+    tombstoned when it struck or undid, or revived when it reopened."""
+    return [e for e in payload.get("killed", []) + payload.get("struck", []) if e.get("segments")]
 
 
 def _unapply(o: Op, clone) -> None:
@@ -69,11 +86,11 @@ def _unapply(o: Op, clone) -> None:
         if o.kind == K.TEXT_INSERT:
             text.kill_op(o.id, by="view")
         elif o.kind == K.TEXT_DELETE:
-            text.revive([tuple(s) for s in p.get("segments", [])], by=o.id)
+            # Whatever killed these characters last is this op, since every
+            # later kill has already been un-applied: revive them unconditionally.
+            text.revive([tuple(s) for s in p.get("segments", [])])
         elif o.kind == K.TEXT_RESTORE:
-            # Re-kill as the op the restore reverted, so that op's own un-apply
-            # (a revive by its id) finds them again further back.
-            text.kill([tuple(s) for s in p.get("segments", [])], by=p.get("by") or "view")
+            text.kill([tuple(s) for s in p.get("segments", [])], by="view")
         elif o.kind == K.TEXT_MARK:
             for mj in p.get("added", []):
                 mk = Mark.from_json(mj)
@@ -93,6 +110,16 @@ def _unapply(o: Op, clone) -> None:
         first.merge(second)
         if p.get("new_first"):
             head.segs, head.marks, tail.segs, tail.marks = tail.segs, tail.marks, [], []
+    elif o.kind in VERDICTS:
+        # An accept tombstones the words it struck and the ops it did not take;
+        # a reject tombstones the whole proposal; a reopen brings them back.
+        revive = o.kind != K.PLAN_REOPEN
+        for e in _verdict_entries(p):
+            text = clone(e["bid"], e.get("path", "text"))
+            if text is None:
+                continue
+            segs = [tuple(s) for s in e["segments"]]
+            text.revive(segs) if revive else text.kill(segs, by="view")
     elif o.kind == K.BLOCK_MERGE:
         path = p.get("path", "text")
         into, dead = clone(t["into"], path), clone(t["bid"], path)

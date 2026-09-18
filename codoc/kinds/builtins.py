@@ -213,7 +213,7 @@ COMMENT = Kind(
             "status": {"type": "string", "enum": ["open", "resolved"]}},
     lower=comment_lower,
     consult=lambda c: f"Comment on \"{c.get('anchor_text', '')}\": {c.get('body', '')}",
-    exported=False,
+    exported=False, in_flow=False,
 )
 
 ALL = (DIAGRAM, URL, PDF, IMAGE, SCREENSHOT, COMMENT)

@@ -33,10 +33,12 @@ export CODOC_TUNNEL_CONFIG=…       # optional: a cloudflared named-tunnel conf
 A visitor signs in; their collaborator permission becomes their **role** in the
 calculus (`Roles`, spec §7.3): `admin`/`write`/`maintain` → `maintainer`,
 `read`/`triage` → `suggest`, anyone else is denied. The hub records the role in
-`.codoc/cache/roles.json`; the daemon applies every op from
-`inbox/hub-<login>.jsonl` as `human:<login>` under that role, so a suggester's
+the tracked `.codoc/config.json`; the daemon applies every op from
+`inbox/hub-<login>.jsonl` as `human:gh:<login>` (namespaced, so a login called
+`local` cannot arrive as the maintainer) under that role, so a suggester's
 edits can only be plans of their own and a forged verdict is a recorded
-`authority` conflict. The browser holds an opaque cookie, never a token.
+`authority` conflict. The browser holds an opaque cookie, never a token. Writes
+are rate limited per login.
 
 ## What travels
 
@@ -53,8 +55,10 @@ implemented by an agent under an enforced sandbox:
 
 - no shell (`Read`, `Edit`, `Write`, `Glob`, `Grep`, and a `WebFetch` gated by
   `CODOC_CONSULT_ALLOWLIST`, empty by default);
-- edits confined to the feature's bound files, never `.github/`, `.claude/`,
-  `.codoc/`, `.mcp.json` or a manifest or lockfile;
+- edits confined to the feature's bound files (a feature with no bindings is
+  not built here at all: there would be nothing to confine the agent to, so it
+  waits for the maintainer), never `.github/`, `.claude/`, `.codoc/`,
+  `.mcp.json` or a manifest or lockfile;
 - secrets unreadable, and every GitHub token scrubbed from the agent's
   environment, so only the orchestrator can authenticate;
 - a post-run gate: a write outside the scope aborts the pull request.
@@ -62,8 +66,11 @@ implemented by an agent under an enforced sandbox:
 The worker writes nothing to the tree. A request is realized when the code
 lands and the maintainer's daemon indexes it, exactly as for a local build.
 `.codoc/cache/hub-prs.json` (ignored) remembers which hand-offs already have a
-pull request. `CODOC_SERVE_BASE` is the base branch (default `main`);
-`CODOC_SERVE_PR=0` turns the worker off and leaves the queue for a person.
+pull request, and which were refused (an agent that wrote outside the scope,
+or produced nothing) so the same request is not tried again and again; a git
+or `gh` failure is not a refusal and is retried. `CODOC_SERVE_BASE` is the base
+branch (default `main`); `CODOC_SERVE_PR=0` turns the worker off and leaves the
+queue for a person.
 
 ## Routes
 

@@ -5,7 +5,7 @@ import shutil
 
 from codoc.calculus import ops as K
 from codoc.calculus.apply import apply
-from codoc.calculus.derive import history, markdown, phase, plan_claims
+from codoc.calculus.derive import directive, history, markdown, phase, plan_claims
 from codoc.calculus.doc import PARAGRAPH
 from codoc.calculus.export import export_markdown
 from codoc.calculus.ids import START
@@ -356,3 +356,78 @@ def test_merged_link_keeps_the_existing_placer_even_when_it_also_displaces():
     mark(m, s, "p1", ins, 4, 14, LINK, {"href": "https://u"}, actor="loop")
     links = [mk for mk in s.blocks["p1"].text().marks if mk.kind == LINK]
     assert [(mk.actor, mk.op) for mk in links] == [("human:a", human.id)]
+
+
+# ── review 4: the window, the inbox and the hand-off ─────────────────────────
+
+def test_window_unapplies_verdicts_and_omits_blocks_born_inside_it():
+    from codoc.calculus.text import SUGGEST_DEL
+    from codoc.calculus.window import history_window
+    from tests.calculus.test_window import texts_after_each_op
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "T")
+    ins = paragraph(m, s, "p1", "keep this maybe", after="h1")
+    apply(s, m.op(K.PLAN_OPEN, {"pid": "pl"}, {"kind": "edit", "target": "h1"}, actor="loop"))
+    apply(s, m.op(K.TEXT_MARK, {"bid": "p1", "path": "text"},
+                  {"kind": SUGGEST_DEL, "attrs": {}, "start": [ins.id, 5], "end": [ins.id, 9], "on": True}, actor="loop", plan="pl"))
+    apply(s, m.op(K.PLAN_ACCEPT, {"pid": "pl"}, {}))
+    apply(s, m.op(K.PLAN_OPEN, {"pid": "p2"}, {"kind": "edit", "target": "h1"}, actor="loop"))
+    pi = apply(s, m.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [ins.id, 14], "text": " later"}, actor="loop", plan="p2"))
+    apply(s, m.op(K.PLAN_REJECT, {"pid": "p2"}, {}))
+    truth = texts_after_each_op(s)
+    w = history_window(s, limit=500)
+    for e in w["ops"]:
+        for bid, text in e["blocks"].items():
+            assert text == truth[e["pos"]][bid], (e["kind"], bid, text, truth[e["pos"]][bid])
+    assert next(e for e in w["ops"] if e["id"] == pi.id)["blocks"]["p1"] == "keep maybe later"
+    short = history_window(s, limit=2)
+    assert "p1" in short["before"]
+    m2, s2 = Mint(), Store()
+    heading(m2, s2, "h1", "T")
+    paragraph(m2, s2, "p1", "one", after="h1")
+    assert "p1" not in history_window(s2, limit=2)["before"]     # born inside the window
+
+
+def test_a_clients_own_scalar_index_survives_normalisation(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "p1"}, "payload": {"kind": PARAGRAPH, "after": START}}], actor="human:local")
+    L.submit(tmp_path / ".codoc", "ide", [
+        Submission(cid="c1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"}, payload={"after": START, "text": "é"}),
+        Submission(cid="c2", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"}, payload={"after": ["$cid", "c1", 1], "text": "x"})])
+    ops = ws.drain_inbox()
+    assert [o.conflict for o in ops] == [None, None]
+    assert T(ws.store, "p1") == "éx"
+
+
+def test_a_handoff_covers_what_arrived_with_it(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws)
+    last = ws.store.blocks["p1"].text().last_live_ref()
+    L.submit(tmp_path / ".codoc", "ide", [
+        Submission(cid="c1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                   payload={"after": list(last), "text": " Twice."}, batch="t1"),
+        Submission(cid="c2", kind=K.FEATURE_HANDOFF, target={"fid": "h1"}, payload={"asked": "twice"}, batch="t2")])
+    ws.drain_inbox()
+    assert phase(ws.store, "h1") == "queued" and "Twice." in directive(ws.store, "h1")
+
+
+def test_a_later_demotion_does_not_rewrite_what_was_written(tmp_path):
+    from codoc.doclang import write_config
+    cd = tmp_path / ".codoc"
+    cd.mkdir()
+    write_config(cd, roles={"human:alice": "maintainer"})
+    ws = Workspace(cd)
+    seed(ws)
+    pid = ws.open_plan(actor="loop")
+    ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "P "}}], actor="loop", plan=pid)
+    acc = ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor="human:alice")[0]
+    bad = ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor="human:bob")[0]
+    assert acc.conflict is None and bad.conflict == "authority"
+    fp = ws.store.state_fingerprint()
+    ws.close()
+    write_config(cd, roles={"human:alice": "suggest"})       # alice's access is reduced later
+    ws2 = Workspace(cd)
+    assert ws2.store.by_id[acc.id].conflict is None and ws2.store.by_id[bad.id].conflict == "authority"
+    assert ws2.store.state_fingerprint() == fp
+    # …and the new table is what judges the next op she writes.
+    assert ws2.submit([{"kind": K.PLAN_REJECT, "target": {"pid": pid}, "payload": {}}], actor="human:alice")[0].conflict == "authority"
