@@ -44,7 +44,6 @@ import sys
 import threading
 from dataclasses import asdict, dataclass
 
-from pydantic import BaseModel
 from dotenv import dotenv_values, find_dotenv
 
 # Load the repo's .env from the CURRENT WORKING DIRECTORY, not from this module's
@@ -78,7 +77,8 @@ if _dotenv_path:
 # ---------------------------------------------------------------------------
 
 
-class LLMConfig(BaseModel):
+@dataclass
+class LLMConfig:
     provider: str  # "openai" | "anthropic" | "ollama" | "claude"
     model: str
     api_key: str | None = None
@@ -658,7 +658,8 @@ def _complete_claude(prompt: str, config: LLMConfig, parts: list[str]) -> str:
 # ---------------------------------------------------------------------------
 
 
-class EmbedderConfig(BaseModel):
+@dataclass
+class EmbedderConfig:
     provider: str  # "openai" | "sentence-transformers"
     model: str
     api_key: str | None = None
