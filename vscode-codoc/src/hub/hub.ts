@@ -79,4 +79,13 @@
     // A 401 closes the stream for good, so when a write succeeds after a refused
     // one — the viewer signed in again — a new one is opened.
     window.addEventListener('codoc:signed-in', () => listen());
+    // …and a viewer who signs in again in another tab and then only READS never
+    // writes, so nothing would ask. Coming back to the tab is the moment to.
+    window.addEventListener('focus', () => {
+        if (!signedOut) return;
+        void fetch('/api/whoami', { credentials: 'same-origin' })
+            .then(r => r.json())
+            .then((me: { authenticated?: boolean }) => { if (me.authenticated) { signedOut = false; listen(); } })
+            .catch(() => undefined);
+    });
 })();

@@ -141,7 +141,8 @@ shadow and removes the ops from the block's unacked set. A conflicting ack
 (`conflict` set) is shown on the block and its op is dropped from the shadow
 by re-adopting that block's projection.
 
-On the hub the browser posts submissions to `/api/submit`, which appends to
+On the hub the browser posts submissions to `/api/message` as
+`{kind: 'submit'}`, which appends to
 `inbox/hub-<login>.jsonl` under the user's identity; acks arrive over SSE.
 
 ## 6. Adopting a projection
@@ -168,6 +169,19 @@ follows, rather than jumping to the top.
 There is no baseline citation and no whole-document diff: the projection is
 the truth for every block the person is not holding.
 
+**A skipped projection is read again when the hold lifts.** A block held
+through an adoption keeps the page's word for it, and the ack that releases it
+does not by itself say what the projection meanwhile said — so the ack asks:
+if every op the acks named is inside the projection's `frontier`, the
+projection already CONTAINS this block's gesture, its word is newer than the
+page's, and that block alone is adopted. A projection whose frontier does not
+cover the op predates the gesture and must not be re-read; adopting it would
+undo the person's typing under their hands. Without the rule, another actor's
+words in the paragraph you are in, an agent's plan there, and your own
+Backspace coming back as the plan's strike-through all waited for an unrelated
+publish — and on the hub, whose feed once sent the projection before the acks,
+they waited for ever.
+
 ## 7. Drawing
 
 Everything drawn is a decoration computed from the projection's per-block
@@ -175,13 +189,13 @@ data plus the shadow; nothing is stored in the doc.
 
 | surface | source |
 |---|---|
-| ink (blue, pulsing unsent / steady sent) | runs with a human actor whose op is outside the realized frontier; unacked local ops are unsent by definition |
+| ink (blue, pulsing unsent / steady sent) | runs with a human actor whose op is outside the realized frontier. There is no separate unacked case: a run reaches the projection only once its op is applied, and the block is unheld by then, so the watermarks are the whole distinction |
 | ground (green added, red removed) | loop runs since the viewer's cursor; removed text drawn as a widget at the tombstone's live offset (`claims` in the projection) |
 | opacity (gray) | `plan` marks; `suggest_del` marks as strike; a plan's proposed mark toggles as a dashed gray underline (the prose itself shows what it says today, the rejected read mode) |
 | margin marker, tree rows, rail | `phases[fid]` |
 | comment cards | comment blocks whose anchor mark resolves |
-| History stance | `attribution` runs per block (`authorPaints`); the scrubber renders `history.json`'s snapshots read-only, marking that moment's change with a word diff (`editor/timeline.ts`). A past page shows the blocks that were on it, in the order they had: the window says which blocks were off the page entering it and which each op took off or put back, and the rank each move displaced, and the reader folds both forward (`calc/window.shapeAt`). Without that a deleted paragraph keeps its words in the store and so reads as present on every page after its deletion |
-| Catch up | a viewer-local read cursor (`localStorage`) over loop batches newer than it |
+| History stance | `attribution` runs per block (`authorPaints`); the scrubber renders `history.json`'s snapshots read-only, marking that moment's change with a word diff (`editor/timeline.ts`). A past page shows the blocks that were on it, in the order they had: the window says which blocks were off the page entering it and which each op took off or put back, and the rank each move displaced, and the reader folds both forward (`calc/window.shapeAt`). Without that a deleted paragraph keeps its words in the store and so reads as present on every page after its deletion. The scrubber holds a POSITION, not an index: parked at now it stays at now when the window grows under it |
+| Catch up | **not built.** A viewer-local read cursor (`localStorage`) over loop batches newer than it. `ground` already says what the code changed since the last realization, which is most of what it was for |
 
 One palette on every surface, as in v1: blue is the person, gray a plan, green
 and red the code. `aria-description` per run for screen readers.
@@ -189,8 +203,11 @@ and red the code. `aria-description` per run for screen readers.
 ## 8. Toolbar and gestures kept
 
 Hand off (⌘S), Accept all / Reject all, History, the language switcher, Find
-and Replace, the palette, drag handles, the walkthrough overlay, the
-placeholder, `@` citation picker, `/` block menu, comments with Build it. Cut
+and Replace, the palette, drag handles (a CSS `::before` on the block, not a
+decoration — see §7's note on what a decoration set costs), the
+placeholder, `@` citation picker, `/` block menu, comments with Build it.
+**Not built: the walkthrough overlay** (`/codoc:ask` renders its walkthrough
+outside the editor). Cut
 per `06-cut-list.md`: glance, reveal, ribbon, presence avatar, the Suggesting
 stance, Keep/Restore on auto-edits (Catch up covers it), retire.
 

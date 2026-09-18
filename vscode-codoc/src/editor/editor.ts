@@ -142,7 +142,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
     function paintsOf(bid: string, fid: string | null): void {
         const pb = projection.blocks.find(b => b.id === bid);
         if (!pb) { paintsOut.delete(bid); return; }
-        paintsOut.set(bid, paintsFor(pb, projection, fid, unackedOps(bid), watermarksFor(fid), history));
+        paintsOut.set(bid, paintsFor(pb, projection, fid, watermarksFor(fid), history));
     }
 
     function paintMap(d: PMNode): Map<string, Paint[]> {
@@ -157,7 +157,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
                 if (block.type.name === 'heading') fid = bid;
                 paintFid.set(bid, fid);
                 const pb = byId.get(bid);
-                if (pb) paintsOut.set(bid, paintsFor(pb, projection, fid, unackedOps(bid), watermarksFor(fid), history));
+                if (pb) paintsOut.set(bid, paintsFor(pb, projection, fid, watermarksFor(fid), history));
             });
         } else {
             for (const bid of paintsDirty) if (paintFid.has(bid)) paintsOf(bid, paintFid.get(bid) ?? null);
@@ -169,10 +169,6 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
 
     function watermarksFor(fid: string | null): { handoff: Record<string, number>; realized: Record<string, number> } {
         return (fid && projection.watermarks?.[fid]) || NO_WATERMARKS;
-    }
-
-    function unackedOps(bid: string): Set<string> {
-        return unacked.get(bid) ?? new Set();
     }
 
     // ── recording ──────────────────────────────────────────────────────────

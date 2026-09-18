@@ -105,9 +105,11 @@ describe('claims', () => {
         f.runs = [{ op: 's:1', k0: 0, start: 0, end: 2, actor: 'human:a', at: '1', plan: null },
                   { op: 's:5', k0: 0, start: 2, end: 4, actor: 'human:a', at: '1', plan: null },
                   { op: 's:9', k0: 0, start: 4, end: 6, actor: 'loop', at: '1', plan: null }];
-        const paints = inkPaints(b, f, { s: 1 }, { s: 5 }, new Set());
+        const paints = inkPaints(b, f, { s: 1 }, { s: 5 });
         expect(paints).toEqual([{ bid: 'p', start: 2, end: 4, cls: 'ink-sent', title: 'yours, handed off' }]);
-        const paints2 = inkPaints(b, f, {}, {}, new Set(['s:5']));
+        // Nothing handed off: both of the person's runs are unsent, and they
+        // join into one paint. The loop's run is nobody's ink.
+        const paints2 = inkPaints(b, f, {}, {});
         expect(paints2.map(p => [p.start, p.end, p.cls])).toEqual([[0, 4, 'ink-unsent']]);
     });
 

@@ -34,7 +34,10 @@ from codoc.serve.consult import consult_url_allowed
 HUB_ALLOWED_TOOLS = (*sandbox.ALLOWED_TOOLS, "WebFetch")
 # Named so the model is never offered them. The PreToolUse hook refuses anything
 # outside HUB_ALLOWED_TOOLS anyway; this is the belt.
-DENIED_TOOLS = ("Bash", "BashOutput", "KillShell", "Task", "NotebookEdit", "TodoWrite",
+# `Agent` is the subagent tool; `Task` was its name and is kept because an
+# older CLI on the maintainer's machine still offers it. The hook denies
+# whatever is not in `ALLOWED_TOOLS` in any case: this list is the belt.
+DENIED_TOOLS = ("Bash", "BashOutput", "KillShell", "Agent", "Task", "NotebookEdit", "TodoWrite",
                 "WebSearch", "SlashCommand", "ExitPlanMode")
 
 

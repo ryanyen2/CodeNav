@@ -31,16 +31,23 @@ export function inFrontier(op: string, frontier: Record<string, number>): boolea
     return i > 0 && Number(op.slice(i + 1)) <= (frontier[op.slice(0, i)] ?? -1);
 }
 
-/** The person's own words that the code does not yet say. */
+/** The person's own words that the code does not yet say.
+ *
+ *  There is no "unacked" case to paint, though `09-editor.md` §7 reads as if
+ *  there were: a run is in the projection only once its op has been applied,
+ *  and the block is unheld by then. The distinction the spec wants —
+ *  unsent against handed off — is the watermarks, and they are what this
+ *  reads. (It used to take an `unacked` set of client ids and compare them
+ *  against op ids, which are `session:seq`: never equal, so the branch was
+ *  dead and the per-block repaint it justified repainted for nothing.) */
 export function inkPaints(b: ProjectedBlock, f: TextField, realized: Record<string, number>,
-                          handoff: Record<string, number>, unacked: ReadonlySet<string>): Paint[] {
+                          handoff: Record<string, number>): Paint[] {
     const out: Paint[] = [];
     let cur: Paint | null = null;
     for (const r of f.runs) {
         if (!r.actor.startsWith(HUMAN) || r.plan) { cur = null; continue; }
-        const provisional = unacked.has(r.op);
-        if (!provisional && inFrontier(r.op, realized)) { cur = null; continue; }
-        const cls: Ink = !provisional && inFrontier(r.op, handoff) ? 'ink-sent' : 'ink-unsent';
+        if (inFrontier(r.op, realized)) { cur = null; continue; }
+        const cls: Ink = inFrontier(r.op, handoff) ? 'ink-sent' : 'ink-unsent';
         if (cur && cur.cls === cls && cur.end === r.start) { cur.end = r.end; continue; }
         cur = { bid: b.id, start: r.start, end: r.end, cls, title: cls === 'ink-sent' ? 'yours, handed off' : 'yours, not yet handed off' };
         out.push(cur);
@@ -95,12 +102,12 @@ export function groundPaints(claims: Claim[] | undefined): Paint[] {
 
 /** All paints for one block. Ink wins over ground where both claim a range
  *  (the person's words are theirs, whatever the code did around them). */
-export function paintsFor(b: ProjectedBlock, proj: Projection, fid: string | null, unacked: ReadonlySet<string>,
+export function paintsFor(b: ProjectedBlock, proj: Projection, fid: string | null,
                           watermarks: { handoff: Record<string, number>; realized: Record<string, number> },
                           history = false): Paint[] {
     const f = b.fields.text as TextField | undefined;
     if (!f || !('runs' in f)) return [];
-    const ink = inkPaints(b, f, watermarks.realized, watermarks.handoff, unacked);
+    const ink = inkPaints(b, f, watermarks.realized, watermarks.handoff);
     const plan = planPaints(b, f, proj.plans);
     const mine = fid ? proj.claims[fid]?.filter(c => c.bid === b.id) : undefined;
     const ground = groundPaints(mine).filter(g => !ink.some(i => i.start < g.end && g.start < i.end));

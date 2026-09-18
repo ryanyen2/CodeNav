@@ -315,7 +315,14 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
                 });
                 timeline = new Timeline(page, () => editor?.view.dom ?? null);
                 margin = new Margin(page, () => editor?.view ?? null, {
-                    submit: ops => { const b = batch(); submit(ops.map(op => ({ cid: cid(), batch: b, ...op }))); },
+                    submit: ops => {
+                        // Flush first: a thread's anchor refs may be `$cid`
+                        // refs of ops still waiting out the settle, and the
+                        // daemon resolves those only in submission order.
+                        editor?.flush();
+                        const b = batch();
+                        submit(ops.map(op => ({ cid: cid(), batch: b, ...op })));
+                    },
                     build: buildThread,
                     newBid: () => `b-${Math.random().toString(16).slice(2, 14).padEnd(12, '0')}`,
                     featureOf: featureOfBlock,

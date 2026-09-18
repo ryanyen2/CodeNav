@@ -10,8 +10,9 @@ instruction. This module is the pure, fully-tested policy:
     .mcp.json, the package manifest/lockfiles) — the paths a malicious suggestion
     would use to persist (workflow injection, hook/MCP registration, dependency
     confusion) past PR review.
-  • ``under_root`` — every path-taking tool (Read, Edit, Write, Glob, Grep)
-    stays inside the worktree. A Read of ``~/.config/gh/hosts.yml`` is one hop
+  • ``under_root`` — every path a tool names stays inside the worktree: a
+    ``file_path`` or ``path``, and a ``Glob``'s ``pattern``, which is a path
+    too. A Read of ``~/.config/gh/hosts.yml`` is one hop
     from the token that opens the PR, and Write is confined to files the
     directive already names, so an unconfined Read is an exfiltration path with
     a publisher attached.

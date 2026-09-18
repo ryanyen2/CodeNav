@@ -7,6 +7,11 @@ repository is their role in the calculus's ``Roles`` table:
     read / triage              → suggest      (plans of their own)
     not a collaborator         → none         (denied)
 
+``none`` is recorded in the tracked table on revocation and denied by the
+applier as well as at the door: it is the absence of a role, not a quieter
+one, and treating it as "everyone else" would make the record of a removal
+grant exactly what a contributor has.
+
 The permission check runs with the maintainer's token (the endpoint requires
 push access), never the visitor's. The browser holds only an opaque cookie.
 """
