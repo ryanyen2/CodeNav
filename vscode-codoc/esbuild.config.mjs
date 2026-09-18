@@ -17,18 +17,6 @@ async function copyFonts() {
   await cp(src, dest, { recursive: true });
 }
 
-/** Assemble the STANDALONE SPA the `codoc serve` hub serves (the "deployed page").
- *  `web/index.html` is the strict-CSP shell; it loads `/assets/doc-view.{js,css}`
- *  + `/assets/fonts/*`. The hub mounts its `--static-dir` at `/assets` and serves
- *  `index.html` as the catch-all, so dropping index.html beside the already-built
- *  doc-view.{js,css}/fonts makes `dist/webview/` a complete servable SPA — the
- *  extension's "Start hub" command points `--static-dir` here. Without this the hub
- *  only serves a placeholder (codoc/serve/app.py:_PLACEHOLDER). Idempotent. */
-async function copyWebShell() {
-  const dest = join(__dirname, 'dist', 'webview');
-  await mkdir(dest, { recursive: true });
-  await cp(join(__dirname, 'web', 'index.html'), join(dest, 'index.html'));
-}
 
 async function build() {
   // 1. Extension host (Node/CommonJS).
@@ -58,16 +46,26 @@ async function build() {
     sourcemap: true,
   });
 
+  // 3. The hub's browser shim: `acquireVsCodeApi` over HTTP + SSE, loaded
+  //    before app.js by the hub's shell (codoc/serve/app.py). Same bundle, one
+  //    code path for both hosts.
+  const hub = await esbuild.context({
+    entryPoints: [join(__dirname, 'src', 'hub', 'hub.ts')],
+    bundle: true,
+    format: 'iife',
+    platform: 'browser',
+    outfile: join(__dirname, 'dist', 'webview', 'hub.js'),
+    sourcemap: true,
+  });
+
   if (watch) {
-    await Promise.all([ext.watch(), web.watch()]);
+    await Promise.all([ext.watch(), web.watch(), hub.watch()]);
     await copyFonts();        // watch doesn't re-copy assets, but they rarely change
-    await copyWebShell();
     console.log('Watching...');
   } else {
-    await Promise.all([ext.rebuild(), web.rebuild()]);
+    await Promise.all([ext.rebuild(), web.rebuild(), hub.rebuild()]);
     await copyFonts();
-    await copyWebShell();
-    await Promise.all([ext.dispose(), web.dispose()]);
+    await Promise.all([ext.dispose(), web.dispose(), hub.dispose()]);
   }
 }
 

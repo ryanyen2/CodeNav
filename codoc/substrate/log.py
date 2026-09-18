@@ -269,6 +269,7 @@ def ack(codoc_dir: str | Path, client: str, cid: str, op: Op | None = None, *, e
     """Tell the client what became of ``cid``: the op it minted (and its
     conflict, if any), or the error that kept it from minting one."""
     path = inbox_dir(codoc_dir) / f"{client}.ack.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps({"cid": cid, "op": op.id if op else "", "conflict": op.conflict if op else error}) + "\n")
 

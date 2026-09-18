@@ -392,3 +392,41 @@ def install_hooks_cmd(root: str = ROOT):
 
 if __name__ == "__main__":
     app()
+
+
+@app.command()
+def serve(root: str = ROOT,
+          host: str = typer.Option("127.0.0.1", "--host", help="Bind address; remote reach is the tunnel, never 0.0.0.0."),
+          port: int = typer.Option(8787, "--port"),
+          static_dir: str = typer.Option(None, "--static-dir", help="The built editor bundle (default: auto-detected)."),
+          tunnel: bool = typer.Option(False, "--tunnel", help="Expose over a cloudflared tunnel (needs GitHub auth configured)."),
+          insecure_public: bool = typer.Option(False, "--i-understand-unauthenticated", hidden=True)):
+    """Serve the tree to GitHub-authorized people from this machine, supervising the daemon."""
+    from codoc.serve.github_auth import GithubAuthConfig, build_auth_context
+    cd = _require(root)
+    gh = GithubAuthConfig.from_env()
+    exposed = tunnel or host not in ("127.0.0.1", "localhost", "::1")
+    if exposed and gh is None and not insecure_public:
+        typer.echo("Refusing to expose the hub without GitHub auth (CODOC_GITHUB_CLIENT_ID/SECRET, "
+                   "CODOC_GITHUB_TOKEN, CODOC_SERVE_REPO); see docs/serve-deployment.md.", err=True)
+        raise typer.Exit(2)
+    import uvicorn
+    from codoc.serve.app import build_app
+    from codoc.serve.static import resolve_static_dir
+    from codoc.serve.supervise import DaemonSupervisor, OwnershipError
+    auth = build_auth_context(gh) if gh else None
+    application = build_app(str(cd), static_dir=resolve_static_dir(static_dir), auth=auth)
+    tun = None
+    try:
+        with DaemonSupervisor(root, str(cd)):
+            if tunnel:
+                from codoc.serve.tunnel import launch_tunnel
+                tun = launch_tunnel(port, config=os.environ.get("CODOC_TUNNEL_CONFIG"))
+            typer.echo(f"codoc hub on http://{host}:{port}" + (" (GitHub auth on)" if auth else " (localhost, no auth)"))
+            uvicorn.run(application, host=host, port=port, log_level="warning")
+    except OwnershipError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(3)
+    finally:
+        if tun is not None:
+            tun.terminate()
