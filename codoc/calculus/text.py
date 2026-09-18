@@ -135,6 +135,12 @@ def _attr_key(attrs: dict | None) -> tuple:
     return tuple(sorted((attrs or {}).items()))
 
 
+def placed_keys(added: list[dict]) -> frozenset:
+    """What a mark op recorded putting on the page, as match keys for
+    :meth:`Text.marks_placed_by`."""
+    return frozenset((a["kind"], _attr_key(a.get("attrs")), tuple(a["start"]), a.get("op", "")) for a in added)
+
+
 @dataclass
 class Text:
     segs: list[Seg] = field(default_factory=list)
@@ -448,18 +454,17 @@ class Text:
     def marks_of(self, op: OpId) -> list[Mark]:
         return [m for m in self.marks if m.op == op]
 
-    def marks_placed_by(self, op: OpId, added: list[dict]) -> list[Mark]:
+    def marks_placed_by(self, op: OpId, keys: frozenset) -> list[Mark]:
         """The live marks one ``text.mark`` op put here — which is not always a
         mark carrying its id. ``set_mark`` keeps the NEIGHBOUR's placer when it
         widens a mark ("widening a person's cite does not make it the loop's")
         and the DISPLACED mark's placer on the pieces it cuts, so a plan that
         widens a person's bold, or cites inside their link, places nothing its
-        own id can find. The op's recorded ``added`` says what it put there, so
-        a mark matches on kind, attrs, start and placer — not end, so one grown
-        over text typed at its edge (I2) still matches."""
-        want = {(a["kind"], _attr_key(a.get("attrs")), tuple(a["start"]), a.get("op", "")) for a in added}
+        own id can find. ``keys`` is ``placed_keys(op)``: what the op recorded
+        putting there, matched on kind, attrs, start and placer — not end, so
+        one grown over text typed at its edge (I2) still matches."""
         return [m for m in self.marks
-                if m.op == op or (m.kind, _attr_key(m.attrs), m.start, m.op) in want]
+                if m.op == op or (m.kind, _attr_key(m.attrs), m.start, m.op) in keys]
 
     def _before(self, a: CharRef, b: CharRef) -> bool:
         return self.locate(a) < self.locate(b)

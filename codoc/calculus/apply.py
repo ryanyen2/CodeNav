@@ -21,7 +21,7 @@ from codoc.calculus.ids import END, START, CharRef, OpId, ref_from_json, ref_to_
 from codoc.calculus.ops import Op, OpBody, body, covered, frontier_union
 from codoc.calculus.rank import RankError
 from codoc.calculus.store import Binding, Plan, Store
-from codoc.calculus.text import SUGGEST_DEL, AnchorError, Mark, MarkError, Text, nfc
+from codoc.calculus.text import SUGGEST_DEL, AnchorError, Mark, MarkError, Text, nfc, placed_keys
 
 RESERVED_PATHS = frozenset({"id", "rank", "dead"})
 
@@ -270,6 +270,8 @@ def _h_block_add(store: Store, op: Op, touched: set[str]):
     # A pinned rank comes from a snapshot or a recorded inverse re-placing a
     # block exactly where it was; a fresh add derives one from its anchor.
     rank = op.payload.get("rank") or store.rank_after(anchor)
+    if op.payload.get("bound_once"):
+        store.bound_once.add(bid)        # a snapshot restoring a feature that once had code
     block = Block(bid, kind, rank, level, content)
     if op.payload.get("dead"):
         block.dead = op.payload["dead"]      # a snapshot restoring a block with its killer
@@ -529,6 +531,7 @@ def _live_feature(store: Store, fid: str) -> Block:
 def _h_bind_attach(store: Store, op: Op, touched: set[str]):
     fid = op.target["fid"]
     _live_feature(store, fid)
+    store.bound_once.add(fid)
     p = op.payload
     key = (p["file"], p["symbol"])
     fp, th = p.get("fingerprint", ""), p.get("types_hash", "")
@@ -658,7 +661,7 @@ def _undo_plan_op(store: Store, o: Op, by: OpId, touched: set[str], record: dict
         added = o.payload.get("added", [])
         for block, p in _mark_targets(store, o, added, hint):
             t = block.text(p)
-            for m in t.marks_placed_by(o.id, added):
+            for m in t.marks_placed_by(o.id, placed_keys(added)):
                 t.marks.remove(m)
                 record.setdefault("marks", []).append({"bid": block.id, "path": p, "mark": m.to_json()})
                 touched.add(block.id)

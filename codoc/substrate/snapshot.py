@@ -30,8 +30,9 @@ import json
 from pathlib import Path
 
 from codoc.calculus import ops as K
-from codoc.calculus.doc import text_fields
+from codoc.calculus.doc import HEADING, text_fields
 from codoc.calculus.ids import START
+from codoc.calculus.ops import Op, in_frontier
 from codoc.calculus.store import Store
 from codoc.substrate import log as L
 from codoc.substrate.clock import Clock
@@ -61,6 +62,11 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
                    "content": content, "texts": texts}
         if not b.live:
             payload["dead"] = b.dead      # the killer keeps its name, so an undo still matches
+        if b.id in store.bound_once:
+            # That this feature ever had code is state, not history: the reflect
+            # pass proposes deleting a feature that HAD code and has none now,
+            # and after a fold there is no `bind.attach` left to read.
+            payload["bound_once"] = True
         emit(K.BLOCK_ADD, {"bid": b.id}, payload)
         prev = b.id
     for bnd in store.bindings.values():
@@ -78,6 +84,17 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
             # The verdict still to come needs these; the fold would otherwise
             # leave a proposal nobody can accept or reject.
             archived.extend({**store.by_id[i].to_json(), "archived": True} for i in p.ops if i in store.by_id)
+    # Work in flight is read from the ops themselves, not from the state: the
+    # directive's `Focus:` and `removed:` lines, the reds and greens `ground`
+    # paints, and the symbols a phantom settles against are all in the ops a
+    # feature's last realization did not cover. A fold that dropped them would
+    # answer differently the moment it ran.
+    seen = {d["id"] for d in archived}
+    for o in _unrealized(store):
+        if o.id not in seen:
+            seen.add(o.id)
+            archived.append({**o.to_json(), "archived": True})
+    archived.sort(key=lambda d: store.position.get(d["id"], 0))
     out.extend(archived)
     for fid, w in store.watermarks_by_fid.items():
         if fid not in store.blocks:
@@ -91,6 +108,22 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
             emit(K.FEATURE_HANDOFF, {"fid": fid}, payload)
         if w.realized:
             emit(K.FEATURE_REALIZED, {"fid": fid}, {"covers": w.realized})
+    return out
+
+
+def _unrealized(store: Store) -> list[Op]:
+    """The applied ops on every feature that is not settled — one the person is
+    editing, one waiting to be built, one with a proposal open, one whose code
+    moved under it — that its last realization did not cover."""
+    from codoc.calculus.derive import phase
+    out: list[Op] = []
+    for h in store.headings() + [store.blocks[i] for i in store.blocks
+                                 if not store.blocks[i].live and store.blocks[i].kind == HEADING]:
+        if phase(store, h.id) == "synced":
+            continue
+        realized = store.watermarks(h.id).realized
+        out.extend(o for o in store.ops_on({b.id for b in store.feature_body(h.id)})
+                   if o.conflict is None and not in_frontier(o.id, realized))
     return out
 
 

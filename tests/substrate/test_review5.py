@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 
 from codoc.calculus import ops as K
-from codoc.calculus.derive import phase
+from codoc.calculus.derive import directive, phase
 from codoc.calculus.doc import HEADING, PARAGRAPH
 from codoc.calculus.ids import START
 from codoc.calculus.store import Store
@@ -62,6 +62,18 @@ def write_roles(cd: Path, roles: dict):
     from codoc.doclang import write_config
     write_config(cd, roles=roles)
 
+
+
+def fold(cd) -> None:
+    """Snapshot the workspace and reopen it: what a long-lived tree does, and
+    what every view has to survive."""
+    ws = Workspace(cd)
+    write_snapshot(cd, ws.store, ws.clock)
+    ws.close()
+
+
+def _sub(cid, kind, target, payload, batch="b1", **kw):
+    return L.Submission(cid=cid, kind=kind, target=target, payload=payload, batch=batch, **kw)
 
 
 def test_demotion_after_the_fact_does_not_rewrite_history(tmp_path):
@@ -381,4 +393,102 @@ def test_written_by_treats_a_loop_lifted_diagram_as_machine_prose(tmp_path):
     assert c.ok, c.refused
     assert block_written_by(ws.store, c.bid) == "human"
     assert written_by(ws.store, "h1") == "loop", "a margin comment made the feature read as human-written"
+    ws.close()
+
+
+def test_a_phantom_with_delete_code_can_still_settle_after_a_fold(tmp_path):
+    """02 §2: a bound feature's removal is held until a hand-off with
+    delete_code, then the agent removes the code and the pass settles it. The
+    settle reads the delete's `detached` from the log; a fold between the
+    hand-off and the build discards that record."""
+    from codoc.graph.graph import Graph
+    from codoc.loop.diff import ChangeSet, ChunkRef
+    from codoc.loops import realize as R
+    from codoc.loops.reflect import reflect
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    ws.submit([{"kind": K.BLOCK_DELETE, "target": {"bid": "h1"}, "payload": {}}], actor=H)
+    ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {"delete_code": True}}], actor=H)
+    ws.close()
+    fold(cd)
+    ws = Workspace(cd)
+    assert R.queued(ws.store) == ["h1"]
+    cs = ChangeSet(removed=[ChunkRef("c.py", "c.py::send", "f1", "t1")])
+    res = reflect(ws, cs, Graph(), propose=lambda *a, **k: [], under_epoch=True)
+    R.settle(ws, res, sha="abc", files=["c.py"])
+    assert R.queued(ws.store) == [], "the phantom's code went and it is still queued"
+    ws.close()
+
+
+def test_the_directive_of_a_queued_feature_is_the_same_across_a_fold(tmp_path):
+    """01 §7.5 folds 'the frontiers (with the words the person asked for)'; a
+    queued feature's directive (Focus from the person's bold, `removed:` from
+    the person's deletion) is a function of the same state and must not lose
+    lines because the ops that carried them were archived."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    r = refs(ws, "p1")
+    mark(ws, "p1", BOLD, r[0], r[6])                                              # Focus: "Retries"
+    ws.submit([{"kind": K.TEXT_DELETE, "target": {"bid": "p1", "path": "text"},
+                "payload": {"from": list(r[8]), "to": list(r[11])}}], actor=H)     # removed: "once"
+    ins(ws, "p1", list(r[12]), " Twice.", actor=H)                                # added: " Twice."
+    ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {"asked": "please"}}], actor=H)
+    d1 = directive(ws.store, "h1")
+    assert 'Focus: "Retries"' in d1 and 'removed: "once"' in d1 and "Author asked: please" in d1, d1
+    ws.close()
+    fold(cd)
+    ws = Workspace(cd, readonly=True)
+    d2 = directive(ws.store, "h1")
+    assert d2 == d1, f"\nBEFORE:\n{d1}\n\nAFTER:\n{d2}"
+
+
+def test_emptied_is_the_same_state_before_and_after_a_fold(tmp_path):
+    """reflect step 2 is 'state-based: any live feature that once had code and
+    has none now'. Whether it once had code is read from the log; a fold keeps
+    only the bindings it has now."""
+    from codoc.loops.reflect import _emptied
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    ws.submit([{"kind": K.BIND_DETACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": "c.py::send"}}], actor="loop")
+    assert _emptied(ws.store) == ["h1"]
+    ws.close()
+    fold(cd)
+    ws = Workspace(cd, readonly=True)
+    assert _emptied(ws.store) == ["h1"], _emptied(ws.store)
+
+
+def test_a_suggesters_backspace_becomes_a_suggest_del_under_their_plan(tmp_path):
+    """02 §3.6: 'a contributor's edit on the trunk is applied as a plan with
+    that actor'. A plan proposes and never kills, so their text.delete is the
+    plan's suggest_del over the range — as_plan_bodies already does this for an
+    ingest. Today the delete is refused `authority` and the editor reloads the
+    paragraph on every Backspace."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    r = refs(ws, "p1")
+    L.submit(cd, "hub-alice", [_sub("d1", K.TEXT_DELETE, {"bid": "p1", "path": "text"}, {"from": list(r[0]), "to": list(r[6])})])
+    ops = ws.drain_inbox()
+    assert [o.conflict for o in ops if o.kind != K.PLAN_OPEN] == [None], [(o.kind, o.conflict) for o in ops]
+    assert T(ws.store, "p1") == "Retries once."                       # proposed, not destroyed
+    t = ws.store.blocks["p1"].text()
+    sd = [m for m in t.marks if m.kind == SUGGEST_DEL]
+    assert sd and ws.store.plans[sd[0].attrs["plan"]].actor == "human:gh:alice", [m.to_json() for m in t.marks]
+    ws.close()
+
+
+def test_a_suggesters_no_op_ingest_leaves_no_empty_open_plan(tmp_path):
+    """The drain opens the suggester's plan before it knows whether anything
+    will land under it (review 5 A9 for translate; same shape here)."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    L.submit(cd, "hub-alice", [_sub("i1", "ingest", {"bid": "p1", "path": "text"},
+                                    {"base_text": "Retries once.", "new_md": "Retries once."})])
+    ws.drain_inbox()
+    empty = [p for p in ws.store.plans.values() if p.status == "open" and not p.ops]
+    assert not empty, [(p.id, p.actor, p.ops) for p in empty]
+    # and a batch whose only op conflicts (unknown anchor)
+    L.submit(cd, "hub-alice", [_sub("x1", K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": ["s-nope:1", 0], "text": "x"}, batch="b2")])
+    ws.drain_inbox()
+    empty = [p for p in ws.store.plans.values() if p.status == "open" and not p.ops]
+    assert not empty, [(p.id, p.actor, p.ops) for p in empty]
     ws.close()

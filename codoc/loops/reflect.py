@@ -306,9 +306,9 @@ def _emptied(store: Store) -> list[str]:
             continue
         # "Once had code" is any attach it ever held, not a detach: a feature
         # whose only symbol was re-attached elsewhere (I8 displacement) has no
-        # detach of its own and is just as empty.
-        if any(o.kind == K.BIND_ATTACH and o.target.get("fid") == h.id and not o.conflict
-               for o in store.ops_on([h.id])):
+        # detach of its own and is just as empty. The store remembers it, so a
+        # snapshot does not make the tree forget.
+        if h.id in store.bound_once:
             out.append(h.id)
     return out
 

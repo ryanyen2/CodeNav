@@ -176,12 +176,10 @@ class Workspace:
             if snap.valid:
                 exclude = snap.header.get("frontier") or {}
                 for op in snap.archived:
-                    # Folded ops a still-open plan's verdict will need. They are
-                    # remembered, never applied: their effect is in the text the
-                    # snapshot restores. Position -1 marks them as older than
-                    # anything in this store.
-                    self.store.by_id[op.id] = op
-                    self.store.position[op.id] = -1
+                    # Folded ops the still-open plans' verdicts and the views
+                    # that read history will need. Remembered, never applied:
+                    # their effect is in the text the snapshot restores.
+                    self.store.remember(op)
                 for op in snap.ops:
                     self._replay_one(op)
         for op in L.replay_order(files, exclude):

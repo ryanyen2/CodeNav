@@ -15,7 +15,7 @@ from codoc.calculus.ids import OpId, is_human
 from codoc.calculus.inline_md import Span, render
 from codoc.calculus.ops import Op, covered, in_frontier
 from codoc.calculus.store import Store, Watermarks
-from codoc.calculus.text import BOLD, CITE, LINK, SUGGEST_DEL, Mark, Text
+from codoc.calculus.text import BOLD, CITE, LINK, SUGGEST_DEL, Mark, Text, placed_keys
 
 LOOP = "loop"
 # A feature with pending intent: the document wins over a machine's repair
@@ -91,8 +91,12 @@ def _unapply_plan_marks(view: Text, store: Store, plans: set[str], ops: list[Op]
     op put there is found by ``Text.marks_placed_by`` (its own id, or an
     ``added`` entry it recorded under another placer), and a mark it displaced
     comes back unless a plan the person already rejected had placed it."""
+    here = {s.op for s in view.segs}
     for o in reversed(ops if ops is not None else plan_mark_ops(store, plans)):
-        for m in view.marks_placed_by(o.id, o.payload.get("added", [])):
+        keys, named = _placed(o)
+        if here.isdisjoint(named):
+            continue          # this op marked characters no part of which is in this field
+        for m in view.marks_placed_by(o.id, keys):
             view.marks.remove(m)
         for mj in o.payload.get("removed", []):
             mk = Mark.from_json(mj)
@@ -100,6 +104,20 @@ def _unapply_plan_marks(view: Text, store: Store, plans: set[str], ops: list[Op]
                 continue
             if view.holds(mk.start) and view.holds(mk.end) and mk not in view.marks:
                 view.marks.append(mk)
+
+
+def _placed(o: Op) -> tuple[frozenset, frozenset]:
+    """``(match keys, the ops whose characters it marked)`` for one mark op,
+    computed once and kept on the op. ``_unapply_plan_marks`` runs per field and
+    a tree has thousands of fields, so this is the difference between reading
+    every open plan's marks per field and reading the ones that touch it."""
+    got = getattr(o, "_placed_cache", None)
+    if got is None:
+        entries = (o.payload.get("added") or []) + (o.payload.get("removed") or [])
+        got = (placed_keys(o.payload.get("added") or []),
+               frozenset(str(a["start"][0]) for a in entries))
+        o._placed_cache = got          # type: ignore[attr-defined]  (a recorded op never changes)
+    return got
 
 
 def _rejected_mark(store: Store, mk: Mark) -> bool:
