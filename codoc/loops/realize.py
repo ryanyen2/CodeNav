@@ -112,7 +112,5 @@ def _phantom_done(store: Store, fid: str, did: str, removed: set[tuple[str, str]
         return False
     if not ho.payload.get("delete_code"):
         return True
-    owned = {(e["file"], e["symbol"]) for o in store.ops_on([fid])
-             if o.kind == K.BLOCK_DELETE and o.conflict is None
-             for e in o.payload.get("detached", []) if e.get("fid") == fid}
+    owned = {(e["file"], e["symbol"]) for e in b.detached}
     return bool(owned) and owned <= removed

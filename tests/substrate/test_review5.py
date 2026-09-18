@@ -665,11 +665,14 @@ def test_a_fold_never_folds_a_fold(tmp_path):
     assert len(L.list_snapshots(cd)) == 1
 
 
-def test_drift_reads_op_order_and_a_fold_does_not_reorder_it(tmp_path):
-    """`_drifted` compares the position of the newest binding op with the newest
-    prose op, so a fold that kept ops out of order would make a feature read
-    `synced` — or not — by the hash of its block ids. Forty of them, so a
-    reordering cannot pass by luck."""
+def test_drift_survives_a_fold_that_takes_every_op_away(tmp_path):
+    """Drift is "the code moved and nobody has looked at the prose since". It
+    used to compare the POSITION of the newest binding op with the newest prose
+    op, so the whole log of every drifted feature had to survive every fold —
+    which, after any reflect pass, is every feature (review 8 §C: 0% foldable).
+    It is three clocks on state now: the watermark's `code_at`, the newest
+    segment or mark on the prose, and the watermark's `realized_at`. Forty
+    features, so an accident cannot pass for the property."""
     cd = tmp_path / ".codoc"
     ws = Workspace(cd)
     for i in range(40):
@@ -690,6 +693,10 @@ def test_drift_reads_op_order_and_a_fold_does_not_reorder_it(tmp_path):
     fold(cd)
     ws2 = Workspace(cd, readonly=True)
     assert {h.id: phase(ws2.store, h.id) for h in ws2.store.headings()} == before
+    # …and the fold really did take the ops: this is the state the old rule
+    # could not fold at all.
+    assert not [o for o in ws2.store.ops if o.kind.startswith("bind.")
+                and o.actor != "import"], "the fold kept the binding ops"
     ws2.close()
 
 
@@ -766,3 +773,51 @@ print(client.write({str(cd)!r}, client="cli", bodies=[{{"kind": "text.insert", "
     text = next(e["fields"]["text"]["text"] for e in proj["blocks"] if e["id"] == "p1")
     assert " A." in text and " B." in text and " C." in text, text
     client.release(cd)
+
+
+def test_a_fold_does_not_reapply_an_op_the_applier_refused(tmp_path):
+    """Review 8: `state_at` built the folded prefix with a bare `apply` on a
+    policy-less store, so an op recorded REFUSED was re-run against the state
+    it would meet the second time — and any that now succeeded was folded in.
+    A stranger's refused op in a merged log became trunk text at the next
+    `codoc snapshot`. Replay honours the record, everywhere (01 §7.3)."""
+    cd = tmp_path / ".codoc"
+    roles = Roles(table={"human:gh:alice": "suggest", H: "owner"}, default="suggest")
+    ws = Workspace(cd, roles=roles)
+    seed(ws)
+    r = refs(ws, "p1")
+    # Straight into the log, as a merged foreign session arrives: no daemon
+    # drain to wrap it in a plan of theirs.
+    refused = ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                          "payload": {"after": list(r[-1]), "text": " Alice was here."}}],
+                        actor="human:gh:alice")[0]
+    assert refused.conflict == "authority" and "Alice" not in T(ws.store, "p1")
+    ws.close()
+    fold(cd)
+    ws2 = Workspace(cd, roles=roles, readonly=True)
+    assert "Alice" not in T(ws2.store, "p1"), T(ws2.store, "p1")
+
+
+def test_a_hand_off_given_after_a_fold_still_carries_what_the_person_changed(tmp_path):
+    """01 §6: the directive says what the person changed since the last
+    realization. It read the op that killed each word and the op that placed
+    each mark — and a feature nobody has handed off is settled, so the fold
+    took both. The hand-off that renders them is given AFTERWARDS, which is
+    why nothing at fold time could know. A segment carries its killer now, and
+    a mark its own clock, so both questions are about the document."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed(ws)
+    r = refs(ws, "p1")
+    ws.submit([{"kind": K.TEXT_DELETE, "target": {"bid": "p1", "path": "text"},
+                "payload": {"from": list(r[8]), "to": list(r[11])}},
+               {"kind": K.TEXT_MARK, "target": {"bid": "p1", "path": "text"},
+                "payload": {"kind": BOLD, "attrs": {}, "start": list(r[0]), "end": list(r[6]), "on": True}}], actor=H)
+    assert T(ws.store, "p1") == "Retries ."
+    ws.close()
+    fold(cd)
+    ws2 = Workspace(cd)
+    ws2.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {"asked": "drop the retry"}}], actor=H)
+    d = directive(ws2.store, "h1")
+    assert 'removed: "once"' in d and 'Focus: "Retries"' in d, d
+    ws2.close()

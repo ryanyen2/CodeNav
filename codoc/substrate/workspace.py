@@ -20,12 +20,12 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from codoc.calculus import ops as K
-from codoc.calculus.apply import apply
+from codoc.calculus.apply import apply, replay_recorded
 from codoc.calculus.derive import GATE_HUMAN, GATE_MACHINE, HELD, block_written_by, phase
 from codoc.calculus.doc import HEADING, PARAGRAPH, is_text_field
 from codoc.calculus.ids import MACHINE_KINDS, actor_kind, new_batch_id, new_plan_id, new_session_id, op_id
 from codoc.calculus.ingest import Ingest, as_plan_bodies, ingest, resolve_pending_refs
-from codoc.calculus.ops import Op
+from codoc.calculus.ops import Op, frontier_union
 from codoc.calculus.store import Store
 from codoc.calculus.text import SUGGEST_DEL, AnchorError, nfc
 from codoc.substrate import log as L
@@ -294,28 +294,21 @@ class Workspace:
                 exclude = snap.header.get("frontier") or {}
                 for op in snap.ops:
                     self._replay_one(op)
+                # The folded ops ARE in this state, so the frontier has to say
+                # so. A frontier is a vector clock and a fold drops the folded
+                # sessions' entries from it; without this, everything a later
+                # watermark should cover reads as uncovered — a hand-off given
+                # after a fold would not carry the words the person removed
+                # before it, and `covered()` would call settled work in flight.
+                self.store.frontier = frontier_union(self.store.frontier, exclude)
         for op in L.replay_order(files, exclude):
             self._replay_one(op)
 
     def _replay_one(self, op: Op) -> None:
-        """Replay one recorded op. The applier accepts every canonical payload
-        back, so the recorded state comes back exactly — including the
-        authority check, which is a question about the moment the op arrived,
-        not about today: re-asking it would let a contributor's later demotion
-        silently drop the words they wrote while they had the right (spec §7.3).
-        A log from a stranger is judged at its own door: the hub validates a
-        pull request's session files before it merges them."""
+        """Replay one recorded op, advancing the clock past it.
+        ``apply.replay_recorded`` is the rule, and says why."""
         self.clock.observe(op.at)
-        wire = _wire(op)
-        if op.conflict:
-            wire.conflict, wire.inverse = op.conflict, []
-            self.store.record(wire, set(), False)
-            return
-        policy, self.store.policy = self.store.policy, None
-        try:
-            apply(self.store, wire)
-        finally:
-            self.store.policy = policy
+        replay_recorded(self.store, op)
 
     # ── writing ────────────────────────────────────────────────────────────
     def _mint(self, kind: str, target: dict, payload: dict, *, actor: str, batch: str,
@@ -633,13 +626,3 @@ def _fold_index(k: int, sent: str | None) -> int:
         return k
     scalars = list(sent)
     return max(0, len(nfc("".join(scalars[: k + 1]))) - 1)
-
-
-def _wire(op: Op) -> Op:
-    """The op as a client would have sent it, from its recorded form. The
-    canonical payload is a superset of the wire payload for every kind, and
-    the applier accepts canonical forms directly, so replaying the recorded op
-    reproduces the recorded state (I6)."""
-    return Op(id=op.id, at=op.at, actor=op.actor, batch=op.batch, kind=op.kind,
-              target=dict(op.target), payload=dict(op.payload), base=dict(op.base),
-              plan=op.plan, caused_by=op.caused_by)

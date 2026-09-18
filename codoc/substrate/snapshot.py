@@ -35,7 +35,7 @@ import json
 from pathlib import Path
 
 from codoc.calculus import ops as K
-from codoc.calculus.apply import apply
+from codoc.calculus.apply import replay_recorded
 from codoc.calculus.derive import reads_its_ops
 from codoc.calculus.doc import text_fields
 from codoc.calculus.ids import START
@@ -84,7 +84,11 @@ def state_at(store: Store, cut: int) -> Store:
         return store
     out = Store()
     for op in store.ops[:cut]:
-        apply(out, Op.from_json(json.loads(json.dumps(op.to_json()))))
+        # As a rebuild replays: an op the applier REFUSED is refused again, not
+        # re-judged against the state it would meet the second time. Otherwise
+        # a stranger's refused op in a merged log becomes trunk text at the
+        # next fold, and the snapshot asserts a state the log never described.
+        replay_recorded(out, Op.from_json(json.loads(json.dumps(op.to_json()))))
     return out
 
 
@@ -110,11 +114,22 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
                    "content": content, "texts": texts}
         if not b.live:
             payload["dead"] = b.dead      # the killer keeps its name, so an undo still matches
+        if b.detached:
+            # What this dead heading owned: the phantom's settle asks whether
+            # the agent removed exactly these, and the undo re-attaches them.
+            payload["detached"] = [dict(e) for e in b.detached]
         if b.id in store.bound_once:
             # That this feature ever had code is state, not history: the reflect
             # pass proposes deleting a feature that HAD code and has none now,
             # and after a fold there is no `bind.attach` left to read.
             payload["bound_once"] = True
+        w = store.watermarks_by_fid.get(b.id)
+        if w is not None and (w.code_at or w.realized_at):
+            # And so is WHEN the code under it last moved, and when a
+            # realization last settled it: drift is the comparison of those two
+            # with the prose's own clock, and the ops that carried them are
+            # exactly what this fold is taking away.
+            payload["code_at"], payload["realized_at"] = w.code_at, w.realized_at
         emit(K.BLOCK_ADD, {"bid": b.id}, payload)
         prev = b.id
     for bnd in store.bindings.values():

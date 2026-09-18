@@ -3,7 +3,7 @@ import copy
 import random
 
 from codoc.calculus import ops as K
-from codoc.calculus.apply import apply
+from codoc.calculus.apply import apply, replay_recorded
 from codoc.calculus.doc import HEADING, PARAGRAPH
 from codoc.calculus.ids import START
 from codoc.calculus.ops import Op
@@ -11,15 +11,33 @@ from codoc.calculus.store import Store
 from codoc.calculus.text import BOLD, SUGGEST_DEL
 
 
-class Mint:
-    """Mints ops for one session with a monotone clock."""
+# One monotone clock for every Mint in a test, because one applier stamps every
+# op it applies (01 §7.1) and an HLC only ever goes forward: two Mints with
+# counters of their own would give the second actor's ops timestamps BEFORE the
+# first's, which no store can observe. A test that wants two clones gives each
+# its own `Clock`.
+class Clock:
+    def __init__(self) -> None:
+        self.n = 0
 
-    def __init__(self, session="s", actor="human:a"):
+    def tick(self) -> str:
+        self.n += 1
+        return f"{self.n:020d}"
+
+
+_CLOCK = Clock()
+
+
+class Mint:
+    """Mints ops for one session; the clock is shared unless one is given."""
+
+    def __init__(self, session="s", actor="human:a", clock: Clock | None = None):
         self.session, self.actor, self.n = session, actor, 0
+        self.clock = clock or _CLOCK
 
     def op(self, kind, target, payload, *, actor=None, plan=None, batch="b", caused_by=None):
         self.n += 1
-        return Op(id=f"{self.session}:{self.n}", at=f"{self.n:020d}", actor=actor or self.actor, batch=batch,
+        return Op(id=f"{self.session}:{self.n}", at=self.clock.tick(), actor=actor or self.actor, batch=batch,
                   kind=kind, target=dict(target), payload=dict(payload), plan=plan, caused_by=caused_by)
 
 
@@ -34,9 +52,10 @@ def paragraph(m: Mint, store: Store, bid: str, body: str, after, plan=None, acto
 
 
 def replay(store: Store) -> Store:
+    """As a rebuild replays: what the record says, not what today would judge."""
     fresh = Store(store.policy)
     for o in store.ops:
-        apply(fresh, Op.from_json(copy.deepcopy(o.to_json())))
+        replay_recorded(fresh, Op.from_json(copy.deepcopy(o.to_json())))
     return fresh
 
 

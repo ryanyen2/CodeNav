@@ -456,30 +456,43 @@ burst of typing land as one chain of ops without a round trip per keystroke.
 dead block carrying its full `Text` (segments with actor and at, marks) plus the
 bindings, the plans (with the ops they owned, now archived, and their verdicts)
 and the frontiers (with the words the person asked for), and the `Frontier` it
-folded. Earlier files move to `log/archive/`. Replay applies the snapshot
-first — **without the authority check**, since a fold re-expresses ops that
-were authorized when they were written and is not a new decision — and then
-every op not inside its frontier, with the check on, regardless of `at`, so a
-branch forked before the snapshot merges correctly.
+folded. Earlier files move to `log/archive/`. Replay applies the snapshot first
+and then every op not inside its frontier, regardless of `at`, so a branch
+forked before the snapshot merges correctly. Both halves replay **as the record
+says**: an op recorded refused is refused again and applied not at all, which
+is what §7.3 means and is not re-asking the question — re-judging a refused op
+against the state it meets the second time is how a stranger's refused op in a
+merged log would become trunk text at the next fold. The snapshot's own ops
+carry no conflicts and pass the check by construction.
 
-**The fold stops where the work in flight begins.** State is not all a reader
-reads: a queued feature's directive takes `Focus:` from the mark ops a person
-turned on and `removed:` from the op that killed each word, an open plan's
-verdict undoes the plan's own ops by identity, drift is a comparison of op
-order, and so are the reds and greens `ground` paints. So the fold runs only up
-to the last point at which none of those was outstanding — Eg-walker's
-*critical version*, a frontier with nothing in flight across it
-(`derive.reads_its_ops` names the four and why) — and everything after it stays
-an ordinary session log. A tree nobody is editing folds whole; a tree with a
-proposal open folds up to the proposal and no further, and `codoc snapshot`
-says so rather than persisting a derived copy of what a reader still needs.
-Unsent ink is not one of the four: `ink` reads segments, and a segment carries
-its actor, its clock and its minting op through the fold.
+**The fold stops where the work in flight begins.** One thing is still in
+flight in a way state cannot express: an **open plan**, whose verdict undoes
+the plan's own ops by identity, and which is unanswered by definition. So the
+fold runs up to the last point at which no plan was open across it —
+Eg-walker's *critical version*, a frontier with nothing in flight — and
+everything after stays an ordinary session log. A tree nobody is proposing
+against folds whole; a tree with a proposal open folds up to the proposal and
+no further, and `codoc snapshot` says so.
 
-`state_fingerprint` is equal across a fold, and so is every derived view — a
-view that reads ops reads ops the fold left alone. A session file the fold
-covers WHOLE moves to `log/archive/`; one that also holds ops after the cut
-stays, and the frontier is what keeps its folded half from applying twice.
+**Everything else a reader needs is on the thing it is about.** That is the
+rule, and it is the same one that lets `ink` survive a fold: a segment carries
+its minter's actor and clock AND its killer's; a mark carries its actor, its
+placing op and its clock; a watermark carries when the code under the feature
+last moved (`code_at`) and when a realization last settled it (`realized_at`);
+a dead heading carries the bindings it owned. So the directive's `removed:` and
+`Focus:`, the reds and greens `ground` paints, drift, and a phantom's settle
+are all questions about the document. They had to become so: three of them are
+asked by a hand-off given AFTER the fold, and nothing at fold time could know
+it was coming. (Reading them from the ops meant a tree that had drifted —
+which, after any reflect pass, is every tree — folded nothing at all.)
+
+`state_fingerprint` is equal across a fold, and so is every derived view of the
+DOCUMENT. `history` and the timeline are not: they are views of the log, and a
+fold is the log ending. A session file the fold covers WHOLE moves to
+`log/archive/`; one that also holds ops after the cut stays, and the frontier
+is what keeps its folded half from applying twice. The store's own frontier
+takes the snapshot's in, because the folded ops are in this state: a watermark
+taken after a fold has to cover them.
 Two clones that each fold is not a fork the merge can resolve — only one state
 can be the state — so a rebuild that finds two snapshots says so and reads the
 archive the losing fold made. A snapshot is as trusted as the log it replaces:

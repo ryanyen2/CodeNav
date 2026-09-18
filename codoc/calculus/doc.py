@@ -61,6 +61,12 @@ class Block:
     level: int = 0
     content: dict = field(default_factory=dict)   # field -> Text | JSON
     dead: OpId | None = None
+    # What this heading owned when it died: `[{file, symbol, fingerprint,
+    # types_hash}]`. A dead heading owns no code (01 §3), so the bindings are
+    # gone from the store — but the phantom's settle has to know which symbols
+    # the agent was asked to remove, and the undo has to put them back. Both
+    # read this rather than the delete op, so a fold can take the op away.
+    detached: list = field(default_factory=list)
 
     @property
     def live(self) -> bool:
@@ -77,6 +83,8 @@ class Block:
         d = {"id": self.id, "kind": self.kind, "rank": self.rank, "level": self.level, "content": content}
         if self.dead:
             d["dead"] = self.dead
+        if self.detached:
+            d["detached"] = [dict(e) for e in self.detached]
         return d
 
     @classmethod
@@ -85,7 +93,8 @@ class Block:
         content = {}
         for k, v in (d.get("content") or {}).items():
             content[k] = Text.from_json(v) if k in text_fields(kind) else v
-        return cls(d["id"], kind, d["rank"], int(d.get("level") or 0), content, d.get("dead"))
+        return cls(d["id"], kind, d["rank"], int(d.get("level") or 0), content, d.get("dead"),
+                   [dict(e) for e in (d.get("detached") or [])])
 
 
 def empty_content(kind: str, content: dict | None = None) -> dict:

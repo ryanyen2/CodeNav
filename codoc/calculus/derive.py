@@ -204,19 +204,18 @@ def ink(store: Store, fid: str) -> list[Claim]:
 
 def ground(store: Store, fid: str) -> list[Claim]:
     """What the loop did to this feature since the person last engaged with it
-    (their latest hand-off, or their newest op on its blocks, whichever is
-    later in this store's apply order): live loop segments as ``added``,
+    (their latest hand-off, or the newest character or mark of theirs on its
+    blocks, whichever is later by the clock): live loop segments as ``added``,
     loop-killed dead segments as ``removed`` (their text carried, positioned at
     the live offset where they were). A feature the person never touched paints
     nothing: there is no "since" to measure from."""
     w = store.watermarks(fid)
-    since = max((store.position[o.id] for o in store.ops_on(_body_ids(store, fid))
-                 if is_human(o.actor) and not o.conflict), default=-1)
-    if not w.handoff and since < 0:
+    since = touched_at(store, fid, human_only=True)
+    if not w.handoff and not since:
         return []
 
-    def new(op_id: OpId) -> bool:
-        return not in_frontier(op_id, w.handoff) and store.position.get(op_id, -1) > since
+    def new(op_id: str, at: str) -> bool:
+        return at > since and not in_frontier(op_id, w.handoff)
 
     out: list[Claim] = []
     for b in prose_blocks(store, fid):
@@ -225,13 +224,11 @@ def ground(store: Store, fid: str) -> list[Claim]:
             i = 0
             for s in t.segs:
                 if s.live:
-                    if s.actor == LOOP and not s.plan and new(s.op):
+                    if s.actor == LOOP and not s.plan and new(s.op, s.at):
                         out.append(Claim(b.id, f, i, i + len(s.chars), "code", "added", s.actor, s.chars))
                     i += len(s.chars)
-                elif s.dead:
-                    killer = _op(store, s.dead)
-                    if killer is not None and killer.actor == LOOP and new(s.dead):
-                        out.append(Claim(b.id, f, i, i, "code", "removed", killer.actor, s.chars))
+                elif s.dead and s.dead_actor == LOOP and new(s.dead, s.dead_at):
+                    out.append(Claim(b.id, f, i, i, "code", "removed", s.dead_actor, s.chars))
     return out
 
 
@@ -316,45 +313,57 @@ def reads_its_ops(store: Store, fid: str) -> bool:
     """Whether a view still reads this feature's OPS and not just its state —
     which is what a snapshot may not fold away (01 §7.5).
 
-    Four do. A queued feature's directive takes ``Focus:`` from the mark ops a
-    person turned on and ``removed:`` from the op that killed each word; an open
-    plan's verdict undoes the plan's own ops by identity; drift is itself a
-    comparison of op order; and the reds and greens ``ground`` paints are the
-    loop's ops since the person last looked, which is a comparison of position.
-    A phantom's settle reads the symbols its delete recorded, which is the
-    directive again.
+    ONE does: an open plan's verdict undoes the plan's own ops by identity, and
+    a proposal is in flight by definition — a fold that took its ops would be
+    folding away the answer to a question nobody has answered yet.
 
-    Unsent ink is NOT one: ``ink`` reads segments, and a segment carries its
-    actor, its clock and its minting op through the fold. Neither is a feature
-    whose greens the person has already caught up on — that is what catching up
-    means.
+    Everything else reads state, and the rule that got them there is 01 §7.5's:
+    put on the THING what the reader needs. A segment carries its minter's
+    actor and clock and now its killer's; a mark carries its actor, its placing
+    op and its clock; a watermark carries when the code last moved and when a
+    realization last settled; a dead heading carries what it owned. So the
+    directive's `removed:` and `Focus:`, `ground`'s reds and greens, drift, and
+    a phantom's settle are all questions about the document — which they had to
+    become, because three of them are asked by a hand-off given AFTER the fold
+    and nothing at fold time could know it was coming.
     """
     b = store.blocks.get(fid)
-    if b is None:
-        return False
-    w = store.watermarks(fid)
-    if bool(w.handoff) and not covered(w.handoff, w.realized):
-        return True
-    if not b.live:
-        return False
-    return bool(open_plans_on(store, fid)) or _drifted(store, fid) or bool(ground(store, fid))
+    return b is not None and b.live and bool(open_plans_on(store, fid))
+
+
+def touched_at(store: Store, fid: str, *, human_only: bool = False) -> str:
+    """The clock of the newest thing anyone did to this feature's PROSE: a
+    character written or removed, a mark placed. Read from the text, because
+    that is where a segment's and a mark's clocks live; ``human_only`` asks the
+    same question about the person alone, which is what ``ground`` measures
+    "since" from."""
+    newest = ""
+    for b in prose_blocks(store, fid):
+        for f in text_fields(b.kind):
+            t = b.text(f)
+            for sg in t.segs:
+                if not human_only or is_human(sg.actor):
+                    newest = max(newest, sg.at)
+                if sg.dead and (not human_only or is_human(sg.dead_actor)):
+                    newest = max(newest, sg.dead_at)
+            for m in t.marks:
+                if not human_only or is_human(m.actor):
+                    newest = max(newest, m.at)
+    return newest
 
 
 def _drifted(store: Store, fid: str) -> bool:
-    """Bound code moved and nobody has looked at the prose since: the newest
-    op among binding changes, prose edits (any actor) and realizations on this
-    feature is a binding change (``bind.attach`` is a relocation, not drift)."""
-    last_bind = last_prose = last_realized = -1
-    for i, o in enumerate(store.ops_on(_body_ids(store, fid))):
-        if o.conflict:
-            continue
-        if o.kind in (K.BIND_REFRESH, K.BIND_DETACH) and o.target.get("fid") == fid:
-            last_bind = i
-        elif o.kind.startswith("text."):
-            last_prose = i
-        elif o.kind == K.FEATURE_REALIZED and o.target.get("fid") == fid:
-            last_realized = i
-    return last_bind >= 0 and last_bind > max(last_prose, last_realized)
+    """Bound code moved and nobody has looked at the prose since.
+
+    Three clocks, all on state: when the code under this feature last moved
+    (`bind.refresh` or `bind.detach` — an `attach` is a relocation, not drift),
+    when anybody last touched the prose, and when a realization last settled
+    it. This used to compare the ORDER of those ops, which is why a feature
+    that had drifted kept its whole log alive through every fold."""
+    w = store.watermarks(fid)
+    if not w.code_at:
+        return False
+    return w.code_at > max(w.realized_at, touched_at(store, fid))
 
 
 # ── directive ────────────────────────────────────────────────────────────────
@@ -386,7 +395,7 @@ def directive(store: Store, fid: str) -> str:
         lines.append("Changed since the last realization:")
         for c in changes:
             lines.append(f"- {c}")
-    focus = [t for m in _new_marks(store, fid, w) if m.kind == BOLD and (t := _mark_text(store, fid, m))]
+    focus = _focus(store, fid, w)
     if focus:
         lines.append("")
         lines.append("Focus: " + "; ".join(f'"{t}"' for t in focus))
@@ -469,6 +478,11 @@ def _authored(store: Store, op_id: OpId) -> bool:
 
 
 def _human_changes(store: Store, fid: str, w: Watermarks) -> list[str]:
+    """What the person did that the code has not answered, as the directive
+    says it. Read from the TEXT, never from the ops: a segment carries who
+    minted it and now who killed it, so a fold that takes the ops away leaves
+    the request intact — which matters because the hand-off that renders it is
+    usually given after the fold, and nothing at fold time could know."""
     out = []
     for c in ink(store, fid):
         if c.stage == "sent":
@@ -476,35 +490,30 @@ def _human_changes(store: Store, fid: str, w: Watermarks) -> list[str]:
     for b in prose_blocks(store, fid):
         for f in text_fields(b.kind):
             for s in b.text(f).segs:
-                if s.dead:
-                    killer = _op(store, s.dead)
-                    if killer and is_human(killer.actor) and not in_frontier(s.dead, w.realized) \
-                            and in_frontier(s.dead, w.handoff):
-                        out.append(f"removed: \"{s.chars}\"")
+                if s.dead and is_human(s.dead_actor) and not in_frontier(s.dead, w.realized) \
+                        and in_frontier(s.dead, w.handoff):
+                    out.append(f"removed: \"{s.chars}\"")
     return out
 
 
-def _new_marks(store: Store, fid: str, w: Watermarks) -> list[Mark]:
-    """Marks a person turned on since the last realization."""
-    out: list[Mark] = []
-    for o in store.ops_on(_body_ids(store, fid)):
-        if o.conflict or o.kind != K.TEXT_MARK or not is_human(o.actor) or not o.payload.get("on", True):
-            continue
-        if in_frontier(o.id, w.realized):
-            continue
-        out.extend(Mark.from_json(mj) for mj in o.payload.get("added", []))
+def _focus(store: Store, fid: str, w: Watermarks) -> list[str]:
+    """The words a person bolded and has not had realized — 02 §2's focus
+    spans, as the directive names them.
+
+    A mark carries its own actor and placing op, so this reads the MARKS, not
+    the ops that placed them: a mark since turned off is simply not here to
+    find, and a fold that takes the ops away leaves the focus intact. (It used
+    to walk `text.mark` ops and re-find each recorded mark in the text, which
+    needed the op to survive and had a matching rule of its own.)"""
+    out: list[str] = []
+    for b in prose_blocks(store, fid):
+        for f in text_fields(b.kind):
+            t = b.text(f)
+            for m in t.marks:
+                if m.kind == BOLD and is_human(m.actor) and m.op and not in_frontier(m.op, w.realized):
+                    if words := t.mark_text(m):
+                        out.append(words)
     return out
-
-
-def _mark_text(store: Store, fid: str, m: Mark) -> str:
-    """The live words under the mark ``m``'s placing op left on the page (a
-    merge keeps the first placer; a mark since turned off yields nothing)."""
-    for block, f in store.mark_holders(m.op):
-        if store.feature_of(block.id) == fid:
-            for cur in block.text(f).marks:
-                if cur.op == m.op and cur.kind == m.kind:
-                    return block.text(f).mark_text(cur)
-    return ""
 
 
 def _all_links(store: Store, fid: str) -> list[tuple[str, str]]:

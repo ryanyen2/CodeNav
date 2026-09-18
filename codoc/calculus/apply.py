@@ -97,6 +97,30 @@ def apply(store: Store, op: Op) -> Op:
     return op
 
 
+def replay_recorded(store: Store, op: Op) -> Op:
+    """Apply a RECORDED op as its record says, not as today would judge it.
+
+    A refused op is recorded refused and applied not at all: the authority
+    check is a question about the moment the op arrived (01 §7.3), and so is
+    every other conflict — an op that failed on an anchor its neighbours have
+    since restored must not quietly succeed on the second reading. Rebuild and
+    the snapshot's fold both replay, so both go through here; the one door is
+    what keeps `replay(log) == store` (I6) true of a folded log too.
+    """
+    wire = Op(id=op.id, at=op.at, actor=op.actor, batch=op.batch, kind=op.kind,
+              target=dict(op.target), payload=dict(op.payload), base=dict(op.base),
+              plan=op.plan, caused_by=op.caused_by)
+    if op.conflict:
+        wire.conflict, wire.inverse = op.conflict, []
+        store.record(wire, set(), False)
+        return wire
+    policy, store.policy = store.policy, None
+    try:
+        return apply(store, wire)
+    finally:
+        store.policy = policy
+
+
 # ── text ─────────────────────────────────────────────────────────────────────
 
 def _live_text_field(store: Store, bid: str, path: str) -> tuple[Block, Text]:
@@ -167,7 +191,7 @@ def _h_text_delete(store: Store, op: Op, touched: set[str]):
             work = [(b0, path)]
         killed: list[list] = []
         for block, p in work:
-            killed.extend([list(k) for k in block.text(p).kill(segs, by=op.id)])
+            killed.extend([list(k) for k in block.text(p).kill(segs, by=op.id, by_actor=op.actor, by_at=op.at)])
             touched.add(block.id)
         bid, path = work[0][0].id, work[0][1]
         canonical = {"segments": killed, "bid": bid, "path": path}
@@ -179,7 +203,7 @@ def _h_text_delete(store: Store, op: Op, touched: set[str]):
     text = block.text(p)
     if not text.holds(end):
         raise Conflict("range_spans_blocks")
-    killed = [list(k) for k in text.delete(start, end, by=op.id)]
+    killed = [list(k) for k in text.delete(start, end, by=op.id, by_actor=op.actor, by_at=op.at)]
     touched.add(block.id)
     canonical = {"segments": killed, "bid": block.id, "path": p}
     return canonical, [body(K.TEXT_RESTORE, {"bid": block.id, "path": p}, {"segments": killed, "by": op.id})]
@@ -224,13 +248,14 @@ def _h_text_mark(store: Store, op: Op, touched: set[str]):
     # payload so a replay restores the same mark (I6).
     actor = op.payload.get("actor") or op.actor
     placer = op.payload.get("op") or op.id
+    at = op.payload.get("at") or op.at
     if op.plan and kind not in PROPOSALS:
         # A plan proposes; it does not edit the trunk's marks. The toggle is
         # recorded beside them and a verdict is what applies or drops it, so
         # nothing later has to find a mark that a merge, a split or another
         # plan has moved since (01 §3).
         record = Mark(SUGGEST_MARK, {"plan": op.plan, "mark": kind, "on": "1" if on else "",
-                                     **{f"a:{k}": v for k, v in attrs.items()}}, start, end, actor, placer)
+                                     **{f"a:{k}": v for k, v in attrs.items()}}, start, end, actor, placer, at)
         if record not in text.marks:
             text.marks.append(record)
         store.index_text(block.id, p, text)
@@ -240,7 +265,7 @@ def _h_text_mark(store: Store, op: Op, touched: set[str]):
         return canonical, [body(K.TEXT_MARK, {"bid": block.id, "path": p},
                                 {"kind": SUGGEST_MARK, "attrs": dict(record.attrs), "start": list(start),
                                  "end": list(end), "on": False})]
-    removed, added = text.set_mark(kind, attrs, start, end, on, actor=actor, op=placer)
+    removed, added = text.set_mark(kind, attrs, start, end, on, actor=actor, op=placer, at=at)
     store.index_text(block.id, p, text)
     touched.add(block.id)
     canonical = {"kind": kind, "attrs": attrs, "start": ref_to_json(start), "end": ref_to_json(end), "on": on,
@@ -250,6 +275,8 @@ def _h_text_mark(store: Store, op: Op, touched: set[str]):
         canonical["actor"] = actor
     if op.payload.get("op"):
         canonical["op"] = placer
+    if op.payload.get("at"):
+        canonical["at"] = at          # a restored mark keeps when it was placed, as it keeps who
     inverse: list[OpBody] = []
     for m in added:
         inverse.append(body(K.TEXT_MARK, {"bid": block.id, "path": p},
@@ -257,7 +284,7 @@ def _h_text_mark(store: Store, op: Op, touched: set[str]):
     for m in removed:
         inverse.append(body(K.TEXT_MARK, {"bid": block.id, "path": p},
                             {"kind": m.kind, "attrs": m.attrs, "start": list(m.start), "end": list(m.end),
-                             "on": True, "actor": m.actor, "op": m.op}))
+                             "on": True, "actor": m.actor, "op": m.op, "at": m.at}))
     return canonical, inverse
 
 
@@ -291,6 +318,12 @@ def _h_block_add(store: Store, op: Op, touched: set[str]):
     block = Block(bid, kind, rank, level, content)
     if op.payload.get("dead"):
         block.dead = op.payload["dead"]      # a snapshot restoring a block with its killer
+    if op.payload.get("detached"):
+        block.detached = [dict(e) for e in op.payload["detached"]]
+    if op.payload.get("code_at") or op.payload.get("realized_at"):
+        w = store.watermarks(bid)
+        w.code_at = str(op.payload.get("code_at") or "")
+        w.realized_at = str(op.payload.get("realized_at") or "")
     store.add_block(block)
     for f in text_fields(kind):
         store.index_text(bid, f, content[f])
@@ -464,15 +497,20 @@ def _h_block_move(store: Store, op: Op, touched: set[str]):
 
 
 def _detach_dead(store: Store, fids: list[str], touched: set[str]) -> list[dict]:
-    """A dead heading owns no code (spec §3): drop its bindings and return them
-    so the inverse can re-attach."""
+    """A dead heading owns no code (spec §3): drop its bindings, remember them
+    ON THE BLOCK (the phantom's settle and the undo both read them there, so a
+    fold may take this op away), and return them for the inverse."""
     out = []
     for fid in fids:
+        mine = []
         for key, b in list(store.bindings.items()):
             if b.feature == fid:
-                out.append({"fid": fid, **b.to_json()})
+                mine.append({"fid": fid, **b.to_json()})
                 del store.bindings[key]
                 touched.add(fid)
+        if mine:
+            store.blocks[fid].detached = mine
+        out.extend(mine)
     return out
 
 
@@ -481,9 +519,12 @@ def _reattach(store: Store, entries: list[dict], touched: set[str]) -> None:
     (their attach stands)."""
     for e in entries:
         key = (e["file"], e["symbol"])
-        if key not in store.bindings and store.blocks.get(e["fid"]) is not None:
+        owner = store.blocks.get(e["fid"])
+        if key not in store.bindings and owner is not None:
             store.bindings[key] = Binding(e["fid"], e["file"], e["symbol"], e.get("fingerprint", ""), e.get("types_hash", ""))
             touched.add(e["fid"])
+        if owner is not None:
+            owner.detached = [d for d in owner.detached if (d["file"], d["symbol"]) != key]
 
 
 def _h_block_delete(store: Store, op: Op, touched: set[str]):
@@ -579,6 +620,7 @@ def _h_bind_detach(store: Store, op: Op, touched: set[str]):
     if prior is None or prior.feature != fid:
         raise Conflict("not_bound", f"{key} on {fid}")
     del store.bindings[key]
+    store.watermarks(fid).code_at = max(store.watermarks(fid).code_at, op.at)
     touched.add(fid)
     canonical = {**op.payload, "fingerprint": prior.fingerprint, "types_hash": prior.types_hash}
     return canonical, [body(K.BIND_ATTACH, {"fid": fid}, {"file": prior.file, "symbol": prior.symbol,
@@ -593,6 +635,7 @@ def _h_bind_refresh(store: Store, op: Op, touched: set[str]):
         raise Conflict("not_bound", f"{key} on {fid}")
     store.bindings[key] = replace(prior, fingerprint=op.payload.get("fingerprint", ""),
                                   types_hash=op.payload.get("types_hash", ""))
+    store.watermarks(fid).code_at = max(store.watermarks(fid).code_at, op.at)
     touched.add(fid)
     canonical = {**op.payload, "prev_fingerprint": prior.fingerprint, "prev_types_hash": prior.types_hash}
     return canonical, [body(K.BIND_REFRESH, {"fid": fid}, {"file": prior.file, "symbol": prior.symbol,
@@ -658,14 +701,15 @@ def _closure(plan_ops: list[Op], subset: list[OpId]) -> list[OpId]:
     return [o.id for o in plan_ops if o.id in want]
 
 
-def _undo_plan_op(store: Store, o: Op, by: OpId, touched: set[str], record: dict) -> None:
+def _undo_plan_op(store: Store, o: Op, by: OpId, touched: set[str], record: dict,
+                  by_actor: str = "", by_at: str = "") -> None:
     """Undo one plan op the way a verdict does: inserts die by identity, marks
     are removed by their placing op, a block the plan created dies if it is now
     empty, a set is reverted, a move is restored unless someone re-ranked the
     block since (their move stands)."""
     if o.kind == K.TEXT_INSERT:
         for block, p in store.holders(o.id):
-            got = block.text(p).kill_op(o.id, by=by)
+            got = block.text(p).kill_op(o.id, by=by, by_actor=by_actor, by_at=by_at)
             if got:
                 record.setdefault("killed", []).append({"bid": block.id, "path": p, "segments": [list(k) for k in got]})
                 touched.add(block.id)
@@ -790,12 +834,12 @@ def _h_plan_accept(store: Store, op: Op, touched: set[str]):
     record: dict = {}
     for o in reversed(pops):
         if o.id not in acc:
-            _undo_plan_op(store, o, op.id, touched, record)
+            _undo_plan_op(store, o, op.id, touched, record, op.actor, op.at)
     for block, p, m in strike:
         t = block.text(p)
         if m not in t.marks:
             continue
-        got = t.delete(m.start, m.end, by=op.id)
+        got = t.delete(m.start, m.end, by=op.id, by_actor=op.actor, by_at=op.at)
         t.marks.remove(m)
         record.setdefault("struck", []).append({"bid": block.id, "path": p, "mark": m.to_json(),
                                                 "segments": [list(k) for k in got]})
@@ -807,7 +851,7 @@ def _h_plan_accept(store: Store, op: Op, touched: set[str]):
         t = block.text(p)
         want = {k[2:]: v for k, v in m.attrs.items() if k.startswith("a:")}
         was_removed, was_added = t.set_mark(m.attrs.get("mark", ""), want, m.start, m.end,
-                                            bool(m.attrs.get("on")), actor=m.actor, op=m.op)
+                                            bool(m.attrs.get("on")), actor=m.actor, op=m.op, at=m.at)
         t.marks.remove(m)
         store.index_text(block.id, p, t)
         record.setdefault("applied", []).append(
@@ -841,7 +885,7 @@ def _h_plan_reject(store: Store, op: Op, touched: set[str]):
     pops = _plan_ops(store, plan)
     _touch_plan(store, plan, pops, touched)
     for o in reversed(pops):
-        _undo_plan_op(store, o, op.id, touched, record)
+        _undo_plan_op(store, o, op.id, touched, record, op.actor, op.at)
     plan.status, plan.decided_by = "rejected", op.actor
     return dict(record), [body(K.PLAN_REOPEN, {"pid": pid}, {"from": "rejected", "by": op.id, **record})]
 
@@ -1001,6 +1045,7 @@ def _h_feature_realized(store: Store, op: Op, touched: set[str]):
         raise Conflict("nothing_queued", fid)
     covers = dict(op.payload.get("covers") or w.handoff)
     w.realized = frontier_union(w.realized, covers)
+    w.realized_at = max(w.realized_at, op.at)
     touched.add(fid)
     canonical = {"covers": covers, "sha": op.payload.get("sha", ""),
                  "files": list(op.payload.get("files") or []), "summary": op.payload.get("summary", "")}

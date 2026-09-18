@@ -75,6 +75,15 @@ class Seg:
     at: str
     plan: str | None = None
     dead: OpId | None = None
+    # Who removed these characters. An `OpId` names the SESSION, not the actor
+    # (one file, many actors — 01 §7.1), so without this the killer's identity
+    # lives only on the op, and every reader that wants it — the directive's
+    # `removed:` line, `ground`, the window — has to be handed the log. A
+    # segment already carries its MINTER's actor for exactly this reason
+    # (01 §7.5: "attribution survives because segments carry their actor");
+    # this is the other half, and it is what lets a fold take the ops away.
+    dead_actor: str = ""
+    dead_at: str = ""              # and when, for the same reason
 
     @property
     def len(self) -> int:
@@ -99,13 +108,18 @@ class Seg:
         d = {"op": self.op, "k0": self.k0, "chars": self.chars, "actor": self.actor, "at": self.at}
         if self.plan:
             d["plan"] = self.plan
+        if self.dead_actor:
+            d["dead_actor"] = self.dead_actor
+        if self.dead_at:
+            d["dead_at"] = self.dead_at
         if self.dead:
             d["dead"] = self.dead
         return d
 
     @classmethod
     def from_json(cls, d: dict) -> "Seg":
-        return cls(d["op"], d["k0"], d["chars"], d["actor"], d["at"], d.get("plan"), d.get("dead"))
+        return cls(d["op"], d["k0"], d["chars"], d["actor"], d["at"], d.get("plan"), d.get("dead"),
+                   d.get("dead_actor", ""), d.get("dead_at", ""))
 
 
 @dataclass
@@ -116,12 +130,13 @@ class Mark:
     end: CharRef          # inclusive
     actor: str = ""       # who placed it: a person's bold is a Focus directive, the loop's is not
     op: OpId = ""         # the op that placed it; a verdict or an undo finds it by this
+    at: str = ""          # and when: placing a mark is looking at the prose, which drift measures
 
     def same(self, other: "Mark") -> bool:
         return self.kind == other.kind and self.attrs == other.attrs
 
     def piece(self, start: CharRef, end: CharRef) -> "Mark":
-        return Mark(self.kind, dict(self.attrs), start, end, self.actor, self.op)
+        return Mark(self.kind, dict(self.attrs), start, end, self.actor, self.op, self.at)
 
     def to_json(self) -> dict:
         d = {"kind": self.kind, "attrs": self.attrs, "start": list(self.start), "end": list(self.end)}
@@ -129,12 +144,14 @@ class Mark:
             d["actor"] = self.actor
         if self.op:
             d["op"] = self.op
+        if self.at:
+            d["at"] = self.at
         return d
 
     @classmethod
     def from_json(cls, d: dict) -> "Mark":
         return cls(d["kind"], dict(d.get("attrs") or {}), tuple(d["start"]), tuple(d["end"]),
-                   d.get("actor", ""), d.get("op", ""))
+                   d.get("actor", ""), d.get("op", ""), d.get("at", ""))
 
 
 Pos = tuple[int, int]   # (segment index, offset); comparable
@@ -330,7 +347,7 @@ class Text:
                 m.end = seg.last
         return seg
 
-    def delete(self, start: CharRef, end: CharRef, *, by: OpId) -> list[Segment]:
+    def delete(self, start: CharRef, end: CharRef, *, by: OpId, by_actor: str = "", by_at: str = "") -> list[Segment]:
         """Kill every live character from ``start`` to ``end`` inclusive, in
         sequence order. Returns the canonical segments it killed."""
         si, ei = self._isolate(start, end)
@@ -338,7 +355,7 @@ class Text:
         for i in range(si, ei + 1):
             s = self.segs[i]
             if s.live:
-                self.segs[i] = replace(s, dead=by)
+                self.segs[i] = replace(s, dead=by, dead_actor=by_actor, dead_at=by_at)
                 killed.append((s.op, s.k0, len(s.chars)))
         self._coalesce()
         return killed
@@ -352,7 +369,7 @@ class Text:
             raise AnchorError(("range", start, end))
         return {s.op for s in self.segs[si:ei + 1] if s.live}
 
-    def kill(self, segments: list[Segment], *, by: OpId) -> list[Segment]:
+    def kill(self, segments: list[Segment], *, by: OpId, by_actor: str = "", by_at: str = "") -> list[Segment]:
         """Kill exactly the named characters that are live here; nothing that
         sits between them. Returns what it actually killed."""
         killed: list[Segment] = []
@@ -360,7 +377,7 @@ class Text:
             for i in self._isolate_identity(op, k0, ln):
                 s = self.segs[i]
                 if s.live:
-                    self.segs[i] = replace(s, dead=by)
+                    self.segs[i] = replace(s, dead=by, dead_actor=by_actor, dead_at=by_at)
                     killed.append((s.op, s.k0, len(s.chars)))
         self._coalesce()
         return killed
@@ -374,26 +391,26 @@ class Text:
             for i in self._isolate_identity(op, k0, ln):
                 s = self.segs[i]
                 if not s.live and (by is None or s.dead == by):
-                    self.segs[i] = replace(s, dead=None)
+                    self.segs[i] = replace(s, dead=None, dead_actor="", dead_at="")
                     revived.append((s.op, s.k0, len(s.chars)))
         self._coalesce()
         return revived
 
-    def kill_op(self, op: OpId, *, by: OpId) -> list[Segment]:
+    def kill_op(self, op: OpId, *, by: OpId, by_actor: str = "", by_at: str = "") -> list[Segment]:
         """Kill every live character ``op`` minted here (a rejected plan insert)."""
         segs = [(s.op, s.k0, len(s.chars)) for s in self.segs if s.op == op and s.live]
-        return self.kill(segs, by=by) if segs else []
+        return self.kill(segs, by=by, by_actor=by_actor, by_at=by_at) if segs else []
 
     # ── marks ──────────────────────────────────────────────────────────────
     def set_mark(self, kind: str, attrs: dict, start: CharRef, end: CharRef, on: bool,
-                 *, actor: str = "", op: OpId = "") -> tuple[list[Mark], list[Mark]]:
+                 *, actor: str = "", op: OpId = "", at: str = "") -> tuple[list[Mark], list[Mark]]:
         """Toggle a mark over an inclusive identity range. Returns
         ``(removed, added)``, which is exactly the inverse."""
         self.locate(start)
         self.locate(end)
         if self._before(end, start):
             raise AnchorError(("range", start, end))
-        new = Mark(kind, dict(attrs), start, end, actor, op)
+        new = Mark(kind, dict(attrs), start, end, actor, op, at)
         removed: list[Mark] = []
         added: list[Mark] = []
         if on:
