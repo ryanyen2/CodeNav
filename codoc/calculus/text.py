@@ -360,6 +360,23 @@ class Text:
         self._coalesce()
         return killed
 
+    def ops_between_refs(self, start: CharRef, end: CharRef) -> list[CharRef]:
+        """Every live character from ``start`` to ``end`` inclusive, by
+        identity: what ``delete`` would kill, named rather than killed."""
+        si, so = self.locate(start)
+        ei, eo = self.locate(end)
+        if (ei, eo) < (si, so):
+            raise AnchorError(("range", start, end))
+        out: list[CharRef] = []
+        for i in range(si, ei + 1):
+            sg = self.segs[i]
+            if not sg.live:
+                continue
+            lo = so if i == si else 0
+            hi = eo if i == ei else len(sg.chars) - 1
+            out.extend(sg.ref(j) for j in range(lo, hi + 1))
+        return out
+
     def ops_between(self, start: CharRef, end: CharRef) -> set[OpId]:
         """The ops that minted the live characters from ``start`` to ``end``
         inclusive: what ``delete`` would kill, without killing it."""

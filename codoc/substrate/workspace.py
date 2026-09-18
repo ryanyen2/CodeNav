@@ -52,9 +52,11 @@ def _withdrawing_own_empty_plan(store: Store, op: Op) -> bool:
 
 def deleted_ops(store: Store, target: dict, payload: dict) -> set[str]:
     """The ops that minted the characters a delete names. The ``segments`` form
-    lists them; the ``from``/``to`` form has to be resolved against the text,
-    and resolves to nothing when the range does not land — the applier is where
-    that is reported, not here."""
+    lists them; the ``from``/``to`` form has to be resolved against the text.
+    Used by the DRAIN to decide whether a contributor's Backspace is a proposal
+    or their own words coming back — never by the policy, which has only the
+    plans to reason from (and the hub's door, which validates a stranger's log,
+    has only what the log carries)."""
     if "segments" in payload:
         return {str(s[0]) for s in payload["segments"] or ()}
     try:
@@ -69,12 +71,9 @@ def _ref(v) -> tuple[str, int]:
     return (str(v[0]), int(v[1]))
 
 
-def _own_plan_words(store: Store, actor: str, minted_by: set[str]) -> bool:
+def own_plan_words(store: Store, actor: str, minted_by: set[str]) -> bool:
     """Whether every one of these characters was put there by an open plan of
-    ``actor``'s. Taking back words you proposed touches nothing of anyone
-    else's, and without it a contributor cannot undo their own typing: the
-    inverse of their plan-tagged insert is a bare ``text.delete``, which a plan
-    cannot carry."""
+    ``actor``'s — their own proposed words, which are theirs to take back."""
     if not minted_by:
         return False
     for oid in minted_by:
@@ -83,23 +82,6 @@ def _own_plan_words(store: Store, actor: str, minted_by: set[str]) -> bool:
         if plan is None or plan.actor != actor or plan.status != "open":
             return False
     return True
-
-
-def _own_plan_text(store: Store, op: Op) -> bool:
-    """A delete of nothing but their own proposed words, or a restore undoing a
-    delete of their own.
-
-    A restore is judged by the delete it undoes, not by who minted the
-    characters: a maintainer removing a plan's words is an ordinary trunk
-    delete — "the plan sees fewer of its words survive" (01 §3) — and a
-    suggester putting them back would be overriding a trunk op, which §7.3
-    gives them no right to do."""
-    if op.kind == K.TEXT_RESTORE:
-        undone = store.by_id.get(str(op.payload.get("by") or ""))
-        return undone is not None and undone.actor == op.actor
-    if op.kind != K.TEXT_DELETE:
-        return False
-    return _own_plan_words(store, op.actor, deleted_ops(store, op.target, op.payload))
 
 
 def is_comment_op(store: Store, kind: str, target: dict, payload: dict) -> bool:
@@ -163,10 +145,12 @@ class Roles:
       have to tag anything themselves: the drain opens the plan and tags their
       ops, turning a deletion into the plan's ``suggest_del`` (02 §3.6). What
       it cannot carry under a plan — a merge, a block delete — stays refused.
-      Two untagged writes are allowed, because no plan can carry them and both
-      are about their OWN words: a ``text.delete`` covering only characters an
-      open plan of theirs minted, and a ``text.restore`` undoing a
-      ``text.delete`` of their own (``_own_plan_text``).
+      Nothing untagged but a comment: taking back words they proposed is the
+      proposal getting smaller, so it rides in the plan like everything else
+      (``ops.PLANNABLE`` carries ``text.delete``/``text.restore`` for exactly
+      that, and the applier holds them to the plan's own characters). This
+      matters beyond tidiness: a policy that reads only ``plans`` is one the
+      hub's door can evaluate for a stranger's log, which is all it has.
 
     A comment is writable untagged by anyone: it hangs off words rather than
     standing among them, and there is nothing for a maintainer to accept. What
@@ -220,7 +204,7 @@ class Roles:
             return None
         if op.kind == K.PLAN_OPEN:
             return None
-        if _withdrawing_own_empty_plan(store, op) or _own_plan_text(store, op):
+        if _withdrawing_own_empty_plan(store, op):
             return None
         if is_comment_op(store, op.kind, op.target, op.payload):
             return None if _own_comment(store, op) else f"{role} may not change another person's comment"
@@ -503,7 +487,7 @@ class Workspace:
             return s
         if "from" not in s.payload or "to" not in s.payload:
             return s
-        if _own_plan_words(self.store, actor, deleted_ops(self.store, s.target, s.payload)):
+        if own_plan_words(self.store, actor, deleted_ops(self.store, s.target, s.payload)):
             return s        # their own proposed words: a real delete, not a proposal to strike a proposal
         return L.Submission(cid=s.cid, kind=K.TEXT_MARK, target=dict(s.target),
                             payload={"kind": SUGGEST_DEL, "attrs": {}, "start": s.payload["from"],
@@ -557,6 +541,12 @@ class Workspace:
             # provenance card and `settle` read it. A person's client does not
             # get to assert it about itself.
             s = replace(s, caused_by=None)
+        if s.kind != "ingest":
+            # Resolve first: `_as_proposal` asks which plan minted the
+            # characters a range names, and a `$cid` ref answers nothing. The
+            # editor batches a flush, so an insert and the Backspace over it
+            # arrive together exactly when somebody corrects a typo.
+            s = replace(s, payload=_resolve_provisional(s.payload, acked, self._sent_text))
         s = self._as_proposal(actor, s)
         plan = s.plan or self._suggester_plan(actor, s.kind if s.kind != "ingest" else K.TEXT_INSERT,
                                               s.target, s.payload, batch)
@@ -570,8 +560,7 @@ class Workspace:
                   status=None if ops or res.refused else "unchanged")
             acked[s.cid] = ops[0].id if ops else ""
             return ops
-        payload = _resolve_provisional(s.payload, acked, self._sent_text)
-        op = self._apply(self._mint(s.kind, s.target, payload, actor=actor, batch=batch,
+        op = self._apply(self._mint(s.kind, s.target, s.payload, actor=actor, batch=batch,
                                     plan=plan, base=s.base, caused_by=s.caused_by))
         if s.kind == K.TEXT_INSERT and isinstance(s.payload.get("text"), str):
             self._sent_text[s.cid] = s.payload["text"]

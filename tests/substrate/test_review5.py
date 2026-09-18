@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 
 from codoc.calculus import ops as K
-from codoc.calculus.derive import directive, phase
+from codoc.calculus.derive import directive, markdown, phase
 from codoc.calculus.doc import HEADING, PARAGRAPH
 from codoc.calculus.ids import START
 from codoc.calculus.store import Store
@@ -506,7 +506,14 @@ def test_a_contributor_backspacing_over_their_own_proposal_removes_it(tmp_path):
 def test_a_contributor_cannot_revive_words_the_maintainer_deleted(tmp_path):
     """The other half: a restore is judged by the delete it undoes, not by who
     minted the characters. A maintainer removing a plan's words is an ordinary
-    trunk delete (01 §3) and §7.3 gives a suggester no right to override one."""
+    trunk delete (01 §3) and a proposal does not get to answer it.
+
+    Review 8 moved the rule from the POLICY to the applier, which is why the
+    refusal reads `not_this_plans_delete` rather than `authority`: the policy
+    had to read `by_id` to answer, and the hub's door — which judges a
+    stranger's log with only the plans in hand — could not. Everything a
+    contributor writes is tagged with their plan now, and the applier holds it
+    to that plan's own characters."""
     cd = tmp_path / ".codoc"
     ws = Workspace(cd); seed(ws)
     r = refs(ws, "p1")
@@ -517,7 +524,7 @@ def test_a_contributor_cannot_revive_words_the_maintainer_deleted(tmp_path):
     assert T(ws.store, "p1") == "Retries once."
     L.submit(cd, "hub-alice", [_sub("u1", K.TEXT_RESTORE, {"bid": "p1", "path": "text"},
                                     {"segments": [[ins.id, 0, 6]], "by": gone.id}, batch="b2")])
-    assert [o.conflict for o in ws.drain_inbox()] == ["authority"]
+    assert [o.conflict for o in ws.drain_inbox()] == ["not_this_plans_delete"]
     assert T(ws.store, "p1") == "Retries once."
     # …while undoing a delete of THEIR own stands, which is what it has to keep.
     L.submit(cd, "hub-alice", [_sub("i2", K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": list(r[-1]), "text": " Twice."}, batch="b3")])
@@ -874,3 +881,54 @@ client.write({str(cd)!r}, client="cli", bodies=[{{"kind": "text.insert", "target
     assert other.returncode == 0, other.stderr
     assert " B." in T(client.read(cd).store, "p1"), T(client.read(cd).store, "p1")
     client.release(cd)
+
+
+def test_a_contributor_cannot_revive_words_they_withdrew_once_the_plan_is_decided(tmp_path):
+    """Review 8: propose, withdraw, wait for the verdict, restore. The restore
+    used to be judged by "was the delete yours", which it was, so the words
+    came back live carrying a DECIDED plan's tag — prose nobody accepted after
+    an accept, and after a reject a state the calculus assumes cannot exist
+    (the `rejected` read mode hides an OPEN plan's words, so the export printed
+    them). Everything a contributor writes rides in their plan now, so a
+    decided plan simply has no room left in it."""
+    for verdict in (K.PLAN_ACCEPT, K.PLAN_REJECT):
+        cd = tmp_path / verdict / ".codoc"
+        ws = Workspace(cd); seed(ws)
+        r = refs(ws, "p1")
+        L.submit(cd, "hub-alice", [_sub("i1", K.TEXT_INSERT, {"bid": "p1", "path": "text"},
+                                        {"after": list(r[-1]), "text": " More."})])
+        ins = [o for o in ws.drain_inbox() if o.kind == K.TEXT_INSERT][0]
+        L.submit(cd, "hub-alice", [_sub("d1", K.TEXT_DELETE, {"bid": "p1", "path": "text"},
+                                        {"segments": [[ins.id, 0, 6]]}, batch="b2")])
+        gone = [o for o in ws.drain_inbox() if o.kind == K.TEXT_DELETE][0]
+        assert gone.conflict is None and gone.plan == ins.plan   # their own words, in their own plan
+        ws.submit([{"kind": verdict, "target": {"pid": ins.plan}, "payload": {}}], actor=H)
+        L.submit(cd, "hub-alice", [_sub("u1", K.TEXT_RESTORE, {"bid": "p1", "path": "text"},
+                                        {"segments": [[ins.id, 0, 6]], "by": gone.id}, batch="b3")])
+        after = ws.drain_inbox()
+        assert all(o.conflict for o in after), [(o.kind, o.conflict) for o in after]
+        assert T(ws.store, "p1") == "Retries once."
+        assert markdown(ws.store.blocks["p1"].text(), "rejected", ws.store) == "Retries once."
+        ws.close()
+
+
+def test_a_contributors_typo_corrected_within_one_flush_is_not_struck_as_a_proposal(tmp_path):
+    """The editor batches a flush, so an insert and the Backspace over it
+    arrive together exactly when somebody corrects a typo — with `$cid` refs
+    that name an op the daemon has not minted yet. The drain decided whether
+    the range was their own words BEFORE resolving them, so the answer was
+    always no and the correction became a strike-through under their own
+    proposal."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    r = refs(ws, "p1")
+    L.submit(cd, "hub-alice", [
+        _sub("c1", K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": list(r[-1]), "text": " Moer"}),
+        _sub("c2", K.TEXT_DELETE, {"bid": "p1", "path": "text"},
+             {"from": ["$cid", "c1", 0], "to": ["$cid", "c1", 4]}),
+    ])
+    ops = ws.drain_inbox()
+    assert all(o.conflict is None for o in ops), [(o.kind, o.conflict) for o in ops]
+    assert T(ws.store, "p1") == "Retries once."
+    assert not ws.store.blocks["p1"].text().proposals(kind=SUGGEST_DEL)
+    ws.close()

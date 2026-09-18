@@ -32,6 +32,7 @@ from pathlib import Path
 
 from codoc.calculus import ops as K
 from codoc.calculus.ops import Op
+from codoc.calculus.doc import PARAGRAPH, Block
 from codoc.calculus.store import Plan, Store
 from codoc.substrate import log as L
 from codoc.substrate.clock import parse
@@ -65,7 +66,7 @@ def validate_logs(paths, *, roles: Roles, store: Store | None = None, now_ms: in
             continue
         f = L.read_session(p)
         out.extend(Finding(str(p), pr.line, pr.reason) for pr in f.problems)
-        view = _plans_view(store, f.ops)
+        view = _policy_view(store, f.ops)
         for i, op in enumerate(f.ops, start=2):        # line 1 is the header
             if op.conflict is None and (why := roles.policy(view, op)):
                 out.append(Finding(str(p), i, f"recorded as applied, but the roles table refuses it: {why}"))
@@ -106,16 +107,29 @@ def refused_verdicts(store: Store, roles: Roles) -> dict[str, int]:
     return out
 
 
-def _plans_view(store: Store | None, ops: list[Op]) -> Store:
-    """A store the policy can answer from. It reads nothing but ``plans``, so
-    this is the plans the workspace already has plus the ones these files open."""
+def _policy_view(store: Store | None, ops: list[Op]) -> Store:
+    """A store the policy can answer from.
+
+    It reads the PLANS — which is nearly all of it, and deliberately so: a
+    policy that needs the whole document is one this door cannot evaluate. The
+    exception is a comment, where "is this thread yours" is who added the
+    block, so the blocks these files add and the workspace's own come too.
+    """
     view = Store()
     if store is not None:
         view.plans.update(store.plans)
+        view.blocks.update(store.blocks)
+        for bid, idx in store.ops_by_block.items():
+            view.ops_by_block[bid] = list(idx)
+        view.ops = list(store.ops)
     for op in ops:
-        pid = op.target.get("pid") if op.kind == K.PLAN_OPEN else None
-        if pid:
+        if op.kind == K.PLAN_OPEN and (pid := op.target.get("pid")):
             view.plans.setdefault(str(pid), Plan(id=str(pid), actor=op.actor))
+        if op.kind == K.BLOCK_ADD and op.conflict is None and (bid := op.target.get("bid")):
+            view.blocks.setdefault(str(bid), Block(str(bid), str(op.payload.get("kind") or PARAGRAPH), "",
+                                                   content=dict(op.payload.get("content") or {})))
+            view.ops_by_block.setdefault(str(bid), []).append(len(view.ops))
+            view.ops.append(op)
     return view
 
 

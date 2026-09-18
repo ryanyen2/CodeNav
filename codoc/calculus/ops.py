@@ -52,7 +52,14 @@ KINDS = frozenset({
 # are not here. ``bind.attach`` is here because a proposed node's bindings are
 # part of the proposal: rejecting it detaches them. Each kind here has an
 # inverse that ``plan.reject`` applies.
-PLANNABLE = frozenset({TEXT_INSERT, TEXT_MARK, BLOCK_ADD, BLOCK_SET, BLOCK_SPLIT, BLOCK_MOVE, BIND_ATTACH})
+# `text.delete` and `text.restore` are here for one case only, and the handler
+# enforces it: a plan taking back words IT proposed. That is the proposal
+# getting smaller, not a second act on the trunk — and it is why a suggester
+# needs no untagged op at all, which is what Google Docs' suggestion model has
+# always said. A plan may not delete anybody else's characters: `suggest_del`
+# is how a proposal asks for that.
+PLANNABLE = frozenset({TEXT_INSERT, TEXT_DELETE, TEXT_RESTORE, TEXT_MARK,
+                       BLOCK_ADD, BLOCK_SET, BLOCK_SPLIT, BLOCK_MOVE, BIND_ATTACH})
 
 # Verdicts and hand-offs: ``owner`` or ``maintainer`` only. ``feature.realized``
 # is emitted by the daemon on evidence, never by an agent; the shipped policy

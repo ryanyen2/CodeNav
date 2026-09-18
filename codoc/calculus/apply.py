@@ -182,6 +182,7 @@ def _h_text_delete(store: Store, op: Op, touched: set[str]):
     if "segments" in op.payload:
         segs = [(str(o), int(k), int(n)) for o, k, n in op.payload["segments"]]
         work = _segment_holders(store, segs, (bid, path), live_only=True)
+        _only_own_plan(store, op, work, segs)
         if not work:
             # Nothing named is held anywhere (a replayed no-op): the block the
             # canonical names is still the one this op is history of.
@@ -203,10 +204,41 @@ def _h_text_delete(store: Store, op: Op, touched: set[str]):
     text = block.text(p)
     if not text.holds(end):
         raise Conflict("range_spans_blocks")
+    _only_own_plan(store, op, [(block, p)], [(o, k, 1) for o, k in
+                                             ((r[0], r[1]) for r in text.ops_between_refs(start, end))])
     killed = [list(k) for k in text.delete(start, end, by=op.id, by_actor=op.actor, by_at=op.at)]
     touched.add(block.id)
     canonical = {"segments": killed, "bid": block.id, "path": p}
     return canonical, [body(K.TEXT_RESTORE, {"bid": block.id, "path": p}, {"segments": killed, "by": op.id})]
+
+
+def _only_own_plan(store: Store, op: Op, work, segs) -> None:
+    """A plan taking back words it proposed is the proposal getting smaller; a
+    plan reaching past its own words is not its to make.
+
+    Under a plan, `text.delete` and `text.restore` may name ONLY characters
+    that plan minted. This is the whole of what a contributor needs beyond
+    tagged writes — Google Docs' rule, where every edit a suggester makes is
+    part of their suggestion — and it lives here, where anchors are resolved
+    and the segments are in hand, rather than in the policy, which has only the
+    plans to reason from."""
+    if not op.plan:
+        return
+    if op.kind == K.TEXT_RESTORE:
+        # A restore under a plan undoes a delete of that plan's. Reviving
+        # characters somebody ELSE killed would override their op — a
+        # maintainer removing a plan's words is an ordinary trunk delete (01
+        # §3) and a proposal does not get to answer it.
+        undone = store.by_id.get(str(op.payload.get("by") or ""))
+        if undone is None or undone.plan != op.plan:
+            raise Conflict("not_this_plans_delete", str(op.payload.get("by") or ""))
+        return
+    named = {(str(o), int(k) + i) for o, k, n in segs for i in range(int(n))}
+    for block, p in work:
+        for sg in block.text(p).segs:
+            for i in range(len(sg.chars)):
+                if (sg.op, sg.k0 + i) in named and sg.plan != op.plan:
+                    raise Conflict("not_this_plans_words", sg.op)
 
 
 def _h_text_restore(store: Store, op: Op, touched: set[str]):
@@ -217,6 +249,7 @@ def _h_text_restore(store: Store, op: Op, touched: set[str]):
     by = op.payload.get("by")
     segs = [(str(o), int(k), int(n)) for o, k, n in op.payload["segments"]]
     work = _segment_holders(store, segs, (bid, path), live_only=False)
+    _only_own_plan(store, op, work, segs)
     revived: list[list] = []
     for block, p in work:
         revived.extend([list(k) for k in block.text(p).revive(segs, by=by)])

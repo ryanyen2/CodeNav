@@ -8,6 +8,7 @@ import json
 from codoc.calculus import ops as K
 from codoc.serve.validate import Finding, refused_verdicts, validate_logs
 from codoc.substrate import log as L
+from codoc.substrate.log import Submission
 from codoc.substrate.snapshot import write_snapshot
 from codoc.substrate.workspace import Roles, Workspace
 from tests.substrate.test_review5 import H, seed, write_roles
@@ -100,3 +101,33 @@ def test_rebuild_counts_what_the_table_would_refuse_today(tmp_path):
 def test_a_finding_reads_as_a_place_and_a_reason():
     assert str(Finding("log/s-1.jsonl", 4, "why")) == "log/s-1.jsonl:4: why"
     assert str(Finding("log/snapshot-x.jsonl", 0, "why")) == "log/snapshot-x.jsonl: why"
+
+
+def test_the_door_accepts_a_contributors_own_words_delete_and_their_own_comment(tmp_path):
+    """Review 8: the policy's own-words exceptions read `by_id` and `ops_on`,
+    which the door's view did not carry — so every pull request from a
+    contributor who corrected a word was refused at merge. The delete rides in
+    their plan now (the policy reads plans, which is what a door can have) and
+    the comment rule reads the blocks the files themselves add."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed(ws)
+    r = list(ws.store.blocks["p1"].text().live_refs())
+    L.submit(cd, "hub-alice", [Submission(cid="i1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                                          payload={"after": list(r[-1]), "text": " More."}, batch="b1")])
+    ins = [o for o in ws.drain_inbox() if o.kind == K.TEXT_INSERT][0]
+    L.submit(cd, "hub-alice", [
+        Submission(cid="d1", kind=K.TEXT_DELETE, target={"bid": "p1", "path": "text"},
+                   payload={"segments": [[ins.id, 0, 6]]}, batch="b2"),
+        Submission(cid="c1", kind=K.BLOCK_ADD, target={"bid": "cx"},
+                   payload={"kind": "comment", "after": "p1",
+                            "content": {"thread": "cx", "anchor": "p1", "anchor_text": "Retries",
+                                        "scope": "code", "status": "open"}}, batch="b3"),
+        Submission(cid="c2", kind=K.BLOCK_SET, target={"bid": "cx", "path": "status"},
+                   payload={"value": "resolved"}, batch="b3"),
+    ])
+    assert all(o.conflict is None for o in ws.drain_inbox())
+    session = [p for p in L.list_sessions(cd) if p.stem == ws.session][0]
+    ws.close()
+    roles = Roles(table={"human:gh:alice": "suggest", H: "owner"}, default="suggest")
+    assert validate_logs([session], roles=roles, store=Workspace(cd, readonly=True).store) == []
