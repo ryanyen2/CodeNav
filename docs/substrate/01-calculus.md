@@ -425,13 +425,18 @@ the loop, translators, imports) may write the trunk and plans but no verdict
 and no hand-off, with one exception, the loop's own `feature.realized`, which
 is the daemon settling evidence; `suggest` may open plans and write ops tagged
 with a plan the same actor opened (riding someone else's open plan would land
-a stranger's words when the maintainer accepts it). They may also write two
-things no plan can carry, both about **their own words only**: a `text.delete`
-whose every character an open plan of theirs minted — taking back what you
-proposed is not a proposal — and a `text.restore` undoing a `text.delete` of
-their own. The restore is judged by the delete it undoes and never by who
-minted the characters: a maintainer removing a plan's words is an ordinary
-trunk delete (§3), and putting them back would override it. A machine may
+a stranger's words when the maintainer accepts it) — and comments, which hang
+off words rather than standing among them.
+
+**Taking back words you proposed is the proposal getting smaller**, so it rides
+in the plan like everything else: `text.delete` and `text.restore` are
+`PLANNABLE`, and under a plan the applier holds them to that plan's own
+characters — a delete may name only characters the plan minted, a restore may
+undo only a delete of the plan's own. A plan asking for somebody ELSE's words
+to go is a `suggest_del`, which is a proposal and waits for a verdict. That
+leaves the policy a function of the PLANS, which is the point: the hub's door
+judges a stranger's log with nothing but what the log carries, and a rule that
+needs the whole document is a rule the door cannot evaluate. A machine may
 write into any open plan (an agent extending the loop's or a contributor's
 proposal is a proposal still). A disallowed op is recorded with `conflict="authority"` and
 not applied, so a PR that carries a forged `plan.accept` in its session file
