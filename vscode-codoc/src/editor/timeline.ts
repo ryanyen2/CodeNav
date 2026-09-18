@@ -34,11 +34,16 @@ export class Timeline {
     }
 
     setWindow(w: HistoryWindow, proj: Projection): void {
+        // "At now" is a position the person chose, not a number. A new op makes
+        // the old number a moment in the PAST, so reading it back flipped the
+        // page into a reconstruction nobody asked for, with the live editor
+        // hidden under it — every time anyone else edited anything.
+        const atNow = Number(this.range.value) >= (this.window?.ops.length ?? 0);
         this.window = w;
         this.proj = proj;
         this.range.max = String(w.ops.length);
-        if (!this.bar.hidden && Number(this.range.value) < w.ops.length) this.show(Number(this.range.value));
-        else this.range.value = String(w.ops.length);
+        if (atNow) { this.range.value = String(w.ops.length); this.show(w.ops.length); }
+        else if (!this.bar.hidden) this.show(Number(this.range.value));
     }
 
     toggle(on: boolean): void {

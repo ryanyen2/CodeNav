@@ -173,6 +173,11 @@ async function readFrom(p: string, offset: number): Promise<{ lines: string[]; e
         const fh = await fsp.open(p, 'r');
         try {
             const st = await fh.stat();
+            // The daemon trims this file to its newest lines at session open, so
+            // a file SHORTER than where we stopped is a rotation, not a quiet
+            // moment: read it from the start rather than never reading it
+            // again, which would leave every block held for the session.
+            if (st.size < offset) offset = 0;
             if (st.size <= offset) return { lines: [], end: offset };
             const buf = Buffer.alloc(st.size - offset);
             await fh.read(buf, 0, buf.length, offset);

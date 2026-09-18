@@ -103,6 +103,11 @@ function renderTree(proj: Projection): void {
             dot.title = PHASE_LABEL[phase];
             row.append(dot, el('span', 'codoc-row-title', title));
             row.addEventListener('click', () => reveal(h.id));
+            // Step the cursor off the row first: `at` walks the LIVE children,
+            // so when it points at the row being replaced (the ordinary case —
+            // rows are walked in order) removing it leaves `insertBefore` a
+            // reference node that is no longer a child, which throws.
+            if (at === hit?.row) at = at.nextElementSibling;
             hit?.row.remove();
             hit = { key, row };
             rows.set(h.id, hit);
@@ -180,6 +185,15 @@ function renderStatus(): void {
     const n = projection ? projection.blocks.filter(b => b.kind === 'heading').length : 0;
     statusBar.textContent = notice || `${n} features · ${String(status.state ?? 'synced')}`;
     statusBar.classList.toggle('is-notice', !!notice);
+}
+
+function paint(what: string, draw: () => void): void {
+    try {
+        draw();
+    } catch (e) {
+        console.error(`codoc: ${what} could not be drawn`, e);
+        notify(`${what} could not be drawn; the page may be behind`);
+    }
 }
 
 function notify(text: string): void {
@@ -309,10 +323,14 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
             } else {
                 editor.adopt(m.proj, realizing);
             }
-            renderTree(m.proj);
-            renderToolbar(m.proj);
-            renderStatus();
-            margin?.update(m.proj);
+            // Each pane is an independent view of ONE projection, so a throw in
+            // one must not cost the others their update: a single bad tree row
+            // used to skip the toolbar, the status, the margin and the undo
+            // re-request as well, and leave the person a page that had quietly
+            // stopped following the store.
+            paint('the tree pane', () => renderTree(m.proj!));
+            paint('the toolbar', () => { renderToolbar(m.proj!); renderStatus(); });
+            paint('the margin', () => margin?.update(m.proj!));
             if (history || pendingUndo) send({ kind: 'history' });
             return;
         }

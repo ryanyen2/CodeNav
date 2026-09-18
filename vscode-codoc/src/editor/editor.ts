@@ -18,7 +18,7 @@ import { baseKeymap } from '@tiptap/pm/commands';
 import { InputRule, inputRules } from '@tiptap/pm/inputrules';
 
 import { adoptionPlan, blockNode, docFrom, flowBlocks } from '../calc/adopt';
-import { paintsFor, type Paint } from '../calc/claims';
+import { inFrontier, paintsFor, type Paint } from '../calc/claims';
 import { NO_WATERMARKS, nfc, type Ack, type OpBody, type Projection, type Submission } from '../calc/projection';
 import { Recorder, reconcile, scalarOffset } from '../calc/recorder';
 import type { Shadow } from '../calc/shadow';
@@ -97,7 +97,13 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             init: (_c, state) => ({ set: buildDecorations(state.doc, paintMap(state.doc), projection.phases, realizing) }),
             apply(tr, prev, _old, state) {
                 if (!tr.docChanged && !tr.getMeta(decoKey)) return prev;
-                const dirty = paintsAll ? null : new Set(paintsDirty);
+                // Which feature a block belongs to is WHERE IT SITS, so a block
+                // arriving or leaving can change any later block's paints. The
+                // transaction is what knows, and it is known here — deciding it
+                // after `applyTransaction` set the flag for the NEXT one, so a
+                // drag left the moved heading with no marker until a keystroke.
+                const dirty = paintsAll || (tr.docChanged && !sameStructure(tr.before, tr.doc))
+                    ? null : new Set(paintsDirty);
                 const map = paintMap(state.doc);          // clears the dirty set
                 if (dirty === null) {
                     return { set: buildDecorations(state.doc, map, projection.phases, realizing) };
@@ -245,6 +251,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
 
     function ack(acks: Ack[]): void {
         const refused = new Map<string, string>();
+        const released = new Map<string, string[]>();      // block → the ops its acks named
         for (const a of acks) {
             const waiting: string[] = [];
             for (const [bid, set] of unacked) {
@@ -252,6 +259,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
                     waiting.push(bid);
                     repaint(bid);
                     if (a.conflict) refused.set(bid, a.conflict);
+                    if (a.op) released.set(bid, [...(released.get(bid) ?? []), a.op]);
                     if (set.size === 0) unacked.delete(bid);
                 }
             }
@@ -265,7 +273,37 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             adopt(projection, realizing, new Set(refused.keys()));
             return;
         }
+        const stale = caughtUp(released);
+        if (stale.size) { adopt(projection, realizing, stale); return; }
         view.dispatch(view.state.tr.setMeta(decoKey, true));
+    }
+
+    /** The blocks this ack released whose projected `head` the page has not read.
+     *
+     *  `adopt` leaves a held block alone — the page is right about it and the
+     *  projection may predate the gesture. Nothing re-read it afterwards, so
+     *  another actor's letter in the paragraph you are typing in, an agent's
+     *  plan there, and your own Backspace coming back as the plan's
+     *  strike-through all waited for an unrelated publish. On the hub they
+     *  waited forever: its feed sends the projection before the acks, so the
+     *  hold is always still on when the projection lands.
+     *
+     *  The frontier is what makes this safe. A projection whose frontier covers
+     *  every op the acks named already CONTAINS this block's gesture, so its
+     *  word is newer than the page's. One that does not predates the gesture
+     *  and adopting it would undo the person's typing under their hands. */
+    function caughtUp(released: ReadonlyMap<string, string[]>): Set<string> {
+        const out = new Set<string>();
+        if (!released.size) return out;
+        const heads = new Map(projection.blocks.map(b => [b.id, b.head]));
+        view.state.doc.forEach(n => {
+            const bid = n.attrs.bid as string;
+            const ops = released.get(bid);
+            if (!ops || (unacked.get(bid)?.size ?? 0) > 0) return;
+            if (!ops.every(op => inFrontier(op, projection.frontier))) return;
+            if (heads.get(bid) !== undefined && heads.get(bid) !== n.attrs.head) out.add(bid);
+        });
+        return out;
     }
 
     // ── gestures ───────────────────────────────────────────────────────────
@@ -387,9 +425,6 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             // next projection took them away (09-editor §4 rule 1).
             const { state: next, transactions } = view.state.applyTransaction(tr);
             for (const applied of transactions) record(applied);
-            // Which feature a block belongs to is where it sits, so a block
-            // arriving or leaving can change any later block's paints.
-            if (tr.docChanged && !sameStructure(view.state.doc, next.doc)) repaint();
             view.updateState(next);
             if (tr.selectionSet || tr.docChanged) { host.onFeature?.(featureAt(next.selection.from)); menus?.update(); }
         },

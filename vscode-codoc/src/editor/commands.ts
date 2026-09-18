@@ -14,7 +14,7 @@
 import type { Node as PMNode, Slice } from '@tiptap/pm/model';
 import { type EditorState, TextSelection, type Transaction } from '@tiptap/pm/state';
 
-import { START, type OpBody } from '../calc/projection';
+import { START, nfc, type OpBody } from '../calc/projection';
 import { scalarOffset } from '../calc/recorder';
 import { Shadow } from '../calc/shadow';
 import { MAX_LEVEL } from './schema';
@@ -353,8 +353,11 @@ export function deleteFeature(state: EditorState, env: Env, fid: string): Gestur
  *  joins the caret's block, and every further paragraph is a block of its own
  *  (`09-editor.md` §4). The person is the author of all of it. */
 export function pasteBlocks(state: EditorState, env: Env, slice: Slice): Gesture | null {
+    // NFC at the door, like every other text that becomes an op (01 §2): the
+    // shadow and the store compose it, and a page left holding the decomposed
+    // form disagrees with both about how many characters are there.
     const paras: string[] = [];
-    slice.content.forEach(node => { if (node.isBlock) paras.push(node.textBetween(0, node.content.size, '\n')); });
+    slice.content.forEach(node => { if (node.isBlock) paras.push(nfc(node.textBetween(0, node.content.size, '\n'))); });
     if (paras.length < 2) return null;
     const b = blockAt(state, state.selection.from);
     if (!b || !env.shadows.get(b.node.attrs.bid as string)) return null;

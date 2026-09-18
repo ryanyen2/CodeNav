@@ -81,7 +81,17 @@ class Feed:
             self.ack_offset = size - sum(len(line) + 1 for line in complete[-replay:])
 
     def pending(self) -> list[dict]:
+        # Acks FIRST, which is the order on disk: the daemon acks during the
+        # drain and publishes afterwards. A projection ahead of the ack that
+        # releases a block is skipped for that block (the page is right about a
+        # block it still holds), so sending it first made the hub the one
+        # surface where that always happened. The editor recovers either way —
+        # it re-reads a released block the projection's frontier covers — but
+        # the two surfaces should not differ in the order they deliver.
         out: list[dict] = []
+        acks = self._acks()
+        if acks:
+            out.append({"kind": "acks", "acks": acks})
         proj = self._if_changed(PROJECTION)
         if proj is not None and proj != self.sent.get(PROJECTION):
             self.sent[PROJECTION] = proj
@@ -97,9 +107,6 @@ class Feed:
             if st and key != self.sent.get(STATUS):
                 self.sent[STATUS] = key
                 out.append(st)
-        acks = self._acks()
-        if acks:
-            out.append({"kind": "acks", "acks": acks})
         return out
 
     def _if_changed(self, name: str) -> str | None:
@@ -118,6 +125,12 @@ class Feed:
         path = L.inbox_dir(self.dir) / f"{self.client}.ack.jsonl"
         if not path.exists():
             return []
+        # A file shorter than where we stopped has been rotated (`rotate_acks`
+        # trims to the newest lines at session open), not gone quiet. Reading
+        # from the start again costs a replay of acks the page already has —
+        # which is idempotent — where not reading leaves every block held.
+        if path.stat().st_size < self.ack_offset:
+            self.ack_offset = 0
         with path.open("rb") as fh:
             fh.seek(self.ack_offset)
             data = fh.read()

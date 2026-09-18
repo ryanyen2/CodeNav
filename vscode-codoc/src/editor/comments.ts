@@ -118,10 +118,35 @@ export class Margin {
         (this.el.querySelector('.codoc-card.is-draft textarea') as HTMLTextAreaElement | null)?.focus();
     }
 
+    /** Half-written replies, by card, across a rebuild. A card's `textarea`
+     *  value lives only in the DOM and every settle anywhere in the tree
+     *  publishes a projection that lands here, so without this the sentence
+     *  somebody is composing is wiped by a stranger's keystroke. */
+    private drafts(): Map<string, string> {
+        const out = new Map<string, string>();
+        for (const card of this.el.querySelectorAll('.codoc-card')) {
+            const ta = card.querySelector('textarea') as HTMLTextAreaElement | null;
+            if (ta?.value) out.set((card as HTMLElement).dataset.thread || 'draft', ta.value);
+        }
+        return out;
+    }
+
     private render(): void {
+        const typed = this.drafts();
+        const active = document.activeElement;
+        const focused = active instanceof HTMLTextAreaElement
+            ? (active.closest('.codoc-card') as HTMLElement | null)?.dataset.thread || 'draft' : null;
         this.el.replaceChildren();
         if (this.draft) this.el.append(this.card(null, this.draft));
         for (const t of this.threads) this.el.append(this.card(t, null));
+        for (const card of this.el.querySelectorAll('.codoc-card')) {
+            const key = (card as HTMLElement).dataset.thread || 'draft';
+            const ta = card.querySelector('textarea') as HTMLTextAreaElement | null;
+            if (!ta) continue;
+            const was = typed.get(key);
+            if (was !== undefined) ta.value = was;
+            if (key === focused) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+        }
         this.layout();
     }
 
@@ -130,6 +155,7 @@ export class Margin {
         const card = document.createElement('div');
         card.className = `codoc-card${t ? '' : ' is-draft'}`;
         card.dataset.anchor = anchor;
+        if (t) card.dataset.thread = t.id;
         const quote = document.createElement('div');
         quote.className = 'codoc-card-quote';
         quote.textContent = t?.anchorText ?? draft!.anchorText;
@@ -157,7 +183,7 @@ export class Margin {
             if (!body) return;
             if (t) this.host.submit(replyOps(t, this.host.newBid(), body));
             else { const d = draft!; this.host.submit(newThreadOps(this.host.newBid(), d.anchor, d.anchorText, body, scope, d.start, d.end)); this.draft = null; }
-            ta.value = '';
+            ta.value = '';                          // posted: `drafts()` must not carry it back
             this.render();
         };
         if (t) {

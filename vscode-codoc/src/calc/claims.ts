@@ -24,7 +24,9 @@ export interface Paint {
 
 const HUMAN = 'human:';
 
-function inFrontier(op: string, frontier: Record<string, number>): boolean {
+/** Whether a frontier already contains an op: `session:seq` with `seq` at or
+ *  below what the frontier records for that session. */
+export function inFrontier(op: string, frontier: Record<string, number>): boolean {
     const i = op.lastIndexOf(':');
     return i > 0 && Number(op.slice(i + 1)) <= (frontier[op.slice(0, i)] ?? -1);
 }
