@@ -17,10 +17,10 @@ import { keymap } from '@tiptap/pm/keymap';
 import { baseKeymap } from '@tiptap/pm/commands';
 import { InputRule, inputRules } from '@tiptap/pm/inputrules';
 
-import { adoptionPlan, blockNode, docFrom } from '../calc/adopt';
+import { adoptionPlan, blockNode, docFrom, flowBlocks } from '../calc/adopt';
 import { paintsFor, type Paint } from '../calc/claims';
 import { NO_WATERMARKS, type Ack, type OpBody, type Projection, type Submission } from '../calc/projection';
-import { Recorder, reconcile } from '../calc/recorder';
+import { Recorder, reconcile, scalarOffset } from '../calc/recorder';
 import type { Shadow } from '../calc/shadow';
 import { RECORDED, deleteFeature, makeHeading, mergeBackward, mergeForward, moveBlock, relevel, splitBlock, type Env } from './commands';
 import { buildDecorations } from './decorations';
@@ -49,6 +49,8 @@ export interface EditorHandle {
     /** Show who wrote each run of words (the History stance). */
     setHistory(on: boolean): void;
     find(replace: boolean): void;
+    /** The current selection as a comment anchor: block, words, character refs. */
+    selectionAnchor(): { bid: string; text: string; start: unknown; end: unknown } | null;
     deleteFeature(fid: string): void;
     moveBlock(bid: string, afterBid: string | 'START', levelDelta?: number): void;
     projection(): Projection | null;
@@ -299,7 +301,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         const currentNodes = new Map<string, PMNode>();
         view.state.doc.forEach(n => currentNodes.set(n.attrs.bid as string, n));
         const nodes: PMNode[] = [];
-        for (const b of next.blocks) {
+        for (const b of flowBlocks(next)) {
             if (held.has(b.id) && currentNodes.has(b.id)) { nodes.push(currentNodes.get(b.id)!); continue; }
             const cur = currentNodes.get(b.id);
             if (cur && cur.attrs.head === b.head && !force.has(b.id)) { nodes.push(cur); continue; }
@@ -337,6 +339,17 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         featureAt,
         setHistory: on => { history = on; view.dispatch(view.state.tr.setMeta(decoKey, true)); },
         find: replace => finder.open(replace),
+        selectionAnchor: () => {
+            const { from, to, empty } = view.state.selection;
+            const $f = view.state.doc.resolve(from), $t = view.state.doc.resolve(to);
+            if (empty || $f.depth !== 1 || $t.depth !== 1 || $f.parent !== $t.parent) return null;
+            const bid = $f.parent.attrs.bid as string;
+            const sh = shadows.get(bid);
+            if (!sh) return null;
+            const a = scalarOffset($f.parent, $f.parentOffset), b = scalarOffset($t.parent, $t.parentOffset);
+            if (b <= a) return null;
+            return { bid, text: sh.chars.slice(a, b).join(''), start: sh.ref(a), end: sh.ref(b - 1) };
+        },
         deleteFeature: fid => {
             const binds = projection.bindings.by_feature[fid] ?? [];
             const g = deleteFeature(view.state, env, fid, binds);

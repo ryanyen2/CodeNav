@@ -15,6 +15,12 @@ import { Shadow } from './shadow';
 
 interface Boundary { at: number; open: Array<[string, Record<string, string>]>; close: Array<[string, Record<string, string>]> }
 
+/** The blocks the document shows: everything but comment threads, which the
+ *  editor draws in the margin beside their anchor (03-extensions §4). */
+export function flowBlocks(proj: Projection): ProjectedBlock[] {
+    return proj.blocks.filter(b => b.kind !== 'comment');
+}
+
 /** One block's node with its marks, and the shadow that matches it. */
 export function blockNode(schema: Schema, b: ProjectedBlock): { node: PMNode; shadow: Shadow | null } {
     if (b.kind !== 'heading' && b.kind !== 'paragraph') {
@@ -69,7 +75,7 @@ export interface AdoptionStep {
  * projection's; a held block keeps its content but takes its projected place.
  */
 export function adoptionPlan(current: Array<{ bid: string; head: number }>, proj: Projection, held: ReadonlySet<string>): AdoptionStep[] {
-    const target = proj.blocks;
+    const target = flowBlocks(proj);
     const have = new Map(current.map((c, i) => [c.bid, { ...c, index: i }]));
     const want = new Map(target.map((b, i) => [b.id, { b, index: i }]));
     const steps: AdoptionStep[] = [];
@@ -92,7 +98,7 @@ export function adoptionPlan(current: Array<{ bid: string; head: number }>, proj
 export function docFrom(schema: Schema, proj: Projection): { doc: PMNode; shadows: Map<string, Shadow> } {
     const shadows = new Map<string, Shadow>();
     const nodes: PMNode[] = [];
-    for (const b of proj.blocks) {
+    for (const b of flowBlocks(proj)) {
         const { node, shadow } = blockNode(schema, b);
         nodes.push(node);
         if (shadow) shadows.set(b.id, shadow);

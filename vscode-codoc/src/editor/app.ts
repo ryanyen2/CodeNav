@@ -11,6 +11,7 @@ import './app.css';
 import { PHASE_CHANNEL, PHASE_LABEL } from '../calc/claims';
 import type { Ack, Phase, Projection, Submission } from '../calc/projection';
 import type { HostToWebview, WebviewToHost } from '../host/provider';
+import { Margin, type Thread } from './comments';
 import { mountEditor, type EditorHandle } from './editor';
 
 interface VsCodeApi { postMessage(m: unknown): void; getState(): unknown; setState(s: unknown): void }
@@ -24,6 +25,7 @@ const send = (m: WebviewToHost) => api.postMessage(m);
 
 const root = document.getElementById('app')!;
 let editor: EditorHandle | null = null;
+let margin: Margin | null = null;
 let projection: Projection | null = null;
 let status: Record<string, unknown> = {};
 let history = false;
@@ -93,6 +95,14 @@ function renderToolbar(proj: Projection): void {
     }
     lang.addEventListener('change', () => send({ kind: 'set-language', tag: lang.value }));
     toolbar.append(lang);
+    const comment = el('button', 'codoc-btn', 'Comment');
+    comment.title = 'comment on the selected words (a request the agent can act on)';
+    comment.addEventListener('click', () => {
+        const a = editor?.selectionAnchor();
+        if (!a) { notify('select the words to comment on first'); return; }
+        margin?.compose(a.bid, a.text, a.start, a.end);
+    });
+    toolbar.append(comment);
     if (openPlans.length) {
         const acceptAll = el('button', 'codoc-btn codoc-btn-plan', `Accept all (${openPlans.length})`);
         acceptAll.addEventListener('click', () => verdicts(openPlans.map(p => p.id), true));
@@ -142,6 +152,26 @@ function verdicts(pids: string[], accept: boolean): void {
     submit(pids.map(pid => ({ cid: cid(), batch: b, kind: accept ? 'plan.accept' : 'plan.reject', target: { pid }, payload: {} })));
 }
 
+function buildThread(t: Thread): void {
+    if (!projection) return;
+    editor?.flush();
+    const fid = featureOfBlock(t.anchor);
+    if (!fid) return;
+    const asked = t.messages.map(m => m.body).join(' ');
+    submit([{ cid: cid(), batch: batch(), kind: 'feature.handoff', target: { fid }, payload: { covers: projection.frontier, asked } }]);
+    send({ kind: 'realize' });
+}
+
+function featureOfBlock(bid: string): string | null {
+    if (!projection) return null;
+    let fid: string | null = null;
+    for (const b of projection.blocks) {
+        if (b.kind === 'heading') fid = b.id;
+        if (b.id === bid) return fid;
+    }
+    return null;
+}
+
 function handoffAll(): void {
     if (!projection) return;
     editor?.flush();
@@ -181,12 +211,19 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
                     openCite: (file, symbol) => send({ kind: 'open-cite', file, symbol }),
                     onConflict: (_bid, conflict) => notify(`an edit could not apply (${conflict}); the paragraph was reloaded`),
                 });
+                margin = new Margin(page, () => editor?.view ?? null, {
+                    submit: ops => { const b = batch(); submit(ops.map(op => ({ cid: cid(), batch: b, ...op }))); },
+                    build: buildThread,
+                    newBid: () => `b-${Math.random().toString(16).slice(2, 14).padEnd(12, '0')}`,
+                    featureOf: featureOfBlock,
+                });
             } else {
                 editor.adopt(m.proj, realizing);
             }
             renderTree(m.proj);
             renderToolbar(m.proj);
             renderStatus();
+            margin?.update(m.proj);
             return;
         }
         case 'acks':
