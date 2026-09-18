@@ -208,6 +208,46 @@ class Text:
         """Every op with a segment here (live or dead) or a mark here."""
         return {s.op for s in self.segs} | {m.op for m in self.marks if m.op}
 
+    def live_offsets(self) -> dict[CharRef, int]:
+        """Live character → live offset, for callers that map many refs."""
+        out: dict[CharRef, int] = {}
+        i = 0
+        for s in self.segs:
+            if s.live:
+                for k in range(len(s.chars)):
+                    out[s.ref(k)] = i
+                    i += 1
+        return out
+
+    # ── marks as views ─────────────────────────────────────────────────────
+    def mark_refs(self, m: Mark) -> list[CharRef]:
+        """The live characters under ``m``, in sequence order (a mark over dead
+        characters only yields nothing)."""
+        si, so = self.locate(m.start)
+        ei, eo = self.locate(m.end)
+        out: list[CharRef] = []
+        for i in range(si, ei + 1):
+            seg = self.segs[i]
+            if not seg.live:
+                continue
+            lo = so if i == si else 0
+            hi = eo if i == ei else len(seg.chars) - 1
+            out.extend(seg.ref(k) for k in range(lo, hi + 1))
+        return out
+
+    def live_span(self, m: Mark, offsets: dict[CharRef, int] | None = None) -> tuple[int, int] | None:
+        """``m`` as a half-open live-offset span, or None when nothing under it
+        is live."""
+        refs = self.mark_refs(m)
+        if not refs:
+            return None
+        offsets = offsets if offsets is not None else self.live_offsets()
+        return offsets[refs[0]], offsets[refs[-1]] + 1
+
+    def mark_text(self, m: Mark) -> str:
+        span = self.live_span(m)
+        return self.live_text()[span[0]:span[1]] if span else ""
+
     # ── segment surgery ────────────────────────────────────────────────────
     def _cut(self, i: int, off: int) -> None:
         """Ensure a segment boundary at offset ``off`` inside segment ``i``.
@@ -358,14 +398,19 @@ class Text:
                         pieces = self._cut_out(m, new)
                         self.marks.extend(pieces)
                         added.extend(pieces)
+            # Extending an existing mark keeps that mark's placer: widening a
+            # person's cite by one word does not make it the loop's cite.
             lo, hi = new.start, new.end
+            keep_actor, keep_op = actor, op
             for m in list(self.marks):
                 if m.same(new) and (self._overlaps(m, new) or self._adjacent(m, new)):
                     self.marks.remove(m)
+                    if not removed:
+                        keep_actor, keep_op = m.actor, m.op
                     removed.append(m)
                     lo = m.start if self._before(m.start, lo) else lo
                     hi = m.end if self._before(hi, m.end) else hi
-            new = Mark(kind, dict(attrs), lo, hi, actor, op)
+            new = Mark(kind, dict(attrs), lo, hi, keep_actor, keep_op)
             self.marks.append(new)
             added.append(new)
             return removed, added

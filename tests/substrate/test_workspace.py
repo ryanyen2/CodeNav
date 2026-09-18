@@ -5,7 +5,7 @@ from codoc.calculus import ops as K
 from codoc.calculus.doc import HEADING, PARAGRAPH
 from codoc.calculus.ids import START
 from codoc.substrate import log as L
-from codoc.substrate.clock import Clock, SkewError, fmt
+from codoc.substrate.clock import Clock, fmt
 from codoc.substrate.log import Submission
 from codoc.substrate.workspace import Workspace
 
@@ -104,7 +104,7 @@ def test_ingest_through_workspace_gates_to_plan(tmp_path):
     assert plan.actor == "loop" and plan.status == "open"
 
 
-def test_clock_observes_and_refuses_skew():
+def test_clock_observes_every_replayed_stamp():
     c = Clock("n")
     a = c.tick()
     b = c.tick()
@@ -112,11 +112,23 @@ def test_clock_observes_and_refuses_skew():
     w = c.wall
     c.observe(fmt(w + 1000, 0, "other"))
     assert c.tick() > fmt(w + 999, 0, "zzz")
-    try:
-        c.observe(fmt(c.wall + 60 * 60 * 1000, 0, "far"))
-        assert False, "expected SkewError"
-    except SkewError:
-        pass
+    # A peer's fast clock moves ours forward too: the log is the truth, and
+    # an op typed after replaying it must still sort after it.
+    far = fmt(c.wall + 60 * 60 * 1000, 0, "far")
+    c.observe(far)
+    assert c.tick() > far
+
+
+def test_rebuild_replays_a_far_future_stamp_and_later_ops_anchor_to_it(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "p1"}, "payload": {"kind": PARAGRAPH, "after": START}}], actor="human:local")
+    ws.clock.wall += 60 * 60 * 1000 - 1                       # a peer's fast clock stamped this
+    ins = ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "hello"}}], actor="human:local")[0]
+    ws.close()
+    ws2 = Workspace(tmp_path / ".codoc")
+    assert ws2.store.blocks["p1"].text().live_text() == "hello"
+    nxt = ws2.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": [ins.id, 4], "text": "!"}}], actor="human:local")[0]
+    assert nxt.conflict is None and nxt.at > ins.at
 
 
 def test_provisional_anchors_chain_a_typing_batch(tmp_path):

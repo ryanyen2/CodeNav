@@ -54,3 +54,19 @@ def ref_from_json(v) -> CharRef | str:
 
 def ref_to_json(r: CharRef | str):
     return r if isinstance(r, str) else [r[0], r[1]]
+
+
+# The actor grammar is closed: ``human:<who>``, ``agent:<which>``,
+# ``translator:<lang>``, ``loop`` (the daemon's own passes) and ``import``
+# (a v1 or Markdown import). Everything that decides by actor decides by kind.
+ACTOR_KINDS = frozenset({"human", "agent", "translator", "loop", "import"})
+
+
+def actor_kind(actor: str) -> str:
+    """``human`` | ``agent`` | ``translator`` | ``loop`` | ``import`` | ``unknown``."""
+    kind = actor.partition(":")[0]
+    return kind if kind in ACTOR_KINDS else "unknown"
+
+
+def is_human(actor: str) -> bool:
+    return actor_kind(actor) == "human"

@@ -12,9 +12,11 @@ trunk. What this module does is small:
 - ``write_queue``: render every queued directive into ``realize.md``, the
   prompt the realizing session or ``codoc realize`` reads. Regenerable; the
   log is the truth.
-- ``settle``: after a reflect pass ran under a hand-off (its ops cite the
-  hand-off in ``caused_by``), record ``feature.realized`` for each feature
-  whose bindings that pass touched. The daemon emits this, never the agent.
+- ``settle``: after a reflect pass ran under a closed agent epoch and cited a
+  hand-off in ``caused_by``, record ``feature.realized`` for each feature
+  whose bindings that pass touched. The daemon emits this, never the agent; the
+  owner may also write it by hand (``codoc done``) for a request whose
+  implementation moved no bound symbol.
 """
 from __future__ import annotations
 
@@ -22,8 +24,8 @@ from pathlib import Path
 
 from codoc.agent.base import format_prompt, load_prompt
 from codoc.calculus import ops as K
-from codoc.calculus.derive import directive, phase
-from codoc.calculus.ops import Op, in_frontier
+from codoc.calculus.derive import directive
+from codoc.calculus.ops import Op, covered
 from codoc.calculus.store import Store
 from codoc.loop.gitref import head_sha
 from codoc.substrate.workspace import Workspace
@@ -44,25 +46,21 @@ def withdraw(ws: Workspace, fid: str, *, actor: str) -> Op | None:
     w = ws.store.watermarks_by_fid.get(fid)
     if not w or not w.handoffs:
         return None
-    last = next((o for o in reversed(ws.store.ops) if o.id == w.handoffs[-1]), None)
+    last = ws.store.by_id.get(w.handoffs[-1])
     if last is None or not last.inverse:
         return None
     return ws.submit([dict(b) for b in last.inverse], actor=actor)[0]
 
 
 def queued(store: Store) -> list[str]:
-    """Features with handed-off, unrealized work, in document order; dead
-    headings with a pending removal come last."""
-    out = [h.id for h in store.headings() if phase(store, h.id) in ("queued", "planned")]
-    for fid, w in store.watermarks_by_fid.items():
-        b = store.blocks.get(fid)
-        if b is not None and not b.live and w.handoffs and not _covered(w.handoff, w.realized):
-            out.append(fid)
+    """Features whose hand-off frontier is not covered by their realized
+    frontier, in document order; dead headings with a pending removal come
+    last. A watermark fact: a feature being edited or built right now is
+    still queued (the agent is reading its directive)."""
+    pending = {fid for fid, w in store.watermarks_by_fid.items() if w.handoff and not covered(w.handoff, w.realized)}
+    out = [h.id for h in store.headings() if h.id in pending]
+    out.extend(fid for fid in pending if fid in store.blocks and not store.blocks[fid].live)
     return out
-
-
-def _covered(handoff: dict, realized: dict) -> bool:
-    return all(realized.get(s, -1) >= n for s, n in handoff.items())
 
 
 def render_queue(store: Store, root_dir: str = ".", doc_language=None) -> str:
@@ -91,18 +89,15 @@ def write_queue(codoc_dir: str | Path, store: Store, root_dir: str = ".", doc_la
     return path
 
 
-def settle(ws: Workspace, cited: dict[str, str], *, sha: str = "", files: list[str] | None = None,
-           summary: str = "") -> list[Op]:
-    """Record ``feature.realized`` for each feature whose latest hand-off a
-    reflect pass cited (``cited``: fid → hand-off op id) and whose bindings
-    that pass actually touched."""
+def settle(ws: Workspace, res, *, sha: str = "", files: list[str] | None = None, summary: str = "") -> list[Op]:
+    """Record ``feature.realized`` for each feature whose latest hand-off the
+    reflect pass ``res`` cited and whose bindings one of its ops touched."""
     out = []
-    for fid, did in cited.items():
+    for fid, did in res.caused.items():
         w = ws.store.watermarks_by_fid.get(fid)
         if not w or not w.handoffs or w.handoffs[-1] != did:
             continue
-        touched = any(o.caused_by == did and o.kind.startswith("bind.") and o.conflict is None for o in ws.store.ops)
-        if not touched:
+        if not any(o.caused_by == did and o.kind.startswith("bind.") and o.conflict is None for o in res.ops):
             continue
         out.extend(ws.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": fid},
                                "payload": {"covers": dict(w.handoff), "sha": sha, "files": files or [],

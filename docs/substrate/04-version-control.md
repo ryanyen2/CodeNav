@@ -29,9 +29,11 @@ survive the merge unchanged, so every anchor, frontier and plan subset recorded
 before the merge still names the same thing after it.
 
 The daemon advances its clock past the highest HLC it has replayed, so an op
-typed after a pull is later than the characters it anchors to; an op stamped
-more than ten minutes ahead of the applier's wall clock is quarantined and
-reported rather than applied, so one wrong clock cannot poison the order.
+typed after a pull is later than the characters it anchors to. A committed log
+is the truth and nothing in it is refused at replay, a peer's fast clock
+included: the local daemon's clock simply moves forward past it. The hub, which
+accepts session files from strangers, rejects a file stamped far ahead of wall
+time before it is merged.
 
 After a merge, `codoc rebuild` replays all logs. Ops from the other branch land
 on the merged state through their character anchors: an insert after a
@@ -42,16 +44,20 @@ naming the block. Nothing is silently lost and nothing is guessed. Given the
 same set of log files, the rebuild is deterministic; an uncommitted local
 session is the one thing two people merging the same branches may differ by.
 
-Each log file is validated at load: schema, monotone `seq`, one actor, HLC
-sanity. A file that fails is reported and skipped, never partially applied.
+Each log file is validated at load: schema, monotone `seq`, well-formed and
+non-decreasing HLC stamps. A file carries every actor the daemon stamped in
+that session (the person, the loop, the agents); authority is checked per op.
+A file that fails is reported and skipped, never partially applied.
 Only one daemon may own a checkout's `cache/`; the existing watch singleton
 lock is kept for exactly that reason.
 
 ## 3. The export in git
 
 `tree.codoc` is committed so that a pull request shows the intent change
-beside the code change, and so a person without codoc can read the tree.
-Because it is derived, a merge conflict in it is meaningless. A `.gitattributes`
+beside the code change, and so a person without codoc can read the tree. It is
+rendered in the `rejected` read mode: an open plan is a proposal, not the
+document, so an un-vetted repair never enters git as fact; accepting it is what
+commits it. Because it is derived, a merge conflict in it is meaningless. A `.gitattributes`
 merge driver (`tree.codoc merge=codoc`) resolves it by regeneration:
 
 ```

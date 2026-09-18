@@ -13,7 +13,11 @@ Headings carry their level as the number of hashes and their id as a
 pandoc-style attribute; paragraphs carry no id (an agent that needs to cite
 one asks the projection). Plugin kinds are fenced with the kind name and
 their non-Text content as JSON; their Text fields are rendered as Markdown
-strings inside that JSON. Comments and dead blocks are omitted.
+strings inside that JSON. Comments and dead blocks are omitted, and so is
+every open plan: the export is the ``rejected`` read mode, because a proposal
+nobody has accepted is not the document (a block that holds nothing but an
+open plan's words is left out whole). Plain text that would read as markup is
+escaped by ``inline_md.render``, so ``import(export(s))`` rebuilds ``s``.
 
 ``import_markdown`` is the inverse for a fresh store: it yields op bodies
 (``block.add``, ``text.insert``, ``text.mark``) that rebuild the same export.
@@ -32,25 +36,30 @@ from codoc.calculus.ids import START, new_block_id
 from codoc.calculus.inline_md import parse
 from codoc.calculus.store import Store
 
-_HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*\{#(b-[0-9a-f]+)\}\s*$")
-_FENCE = re.compile(r"^```codoc:([a-z_]+)\s*\{#(b-[0-9a-f]+)\}\s*$")
+_HEADING = re.compile(r"^(#{1,6}) (.*) \{#(b-[0-9a-f]+)\}$")
+_FENCE = re.compile(r"^```codoc:([a-z_]+) \{#(b-[0-9a-f]+)\}$")
+MODE = "rejected"
 
 
 def export_markdown(store: Store) -> str:
     out: list[str] = []
     for b in store.ordered():
+        if b.kind in (HEADING, PARAGRAPH):
+            t = b.text()
+            md = markdown(t, MODE, store)
+            if t.live_len() and not md.strip():
+                continue        # nothing here but an open plan's words
         if b.kind == HEADING:
-            out.append(f"{'#' * max(1, b.level)} {markdown(b.text())} {{#{b.id}}}")
+            out.append(f"{'#' * max(1, b.level)} {md} {{#{b.id}}}")
             out.append("")
         elif b.kind == PARAGRAPH:
-            md = markdown(b.text())
             if md.strip():
                 out.append(md)
                 out.append("")
         else:
             content = {}
             for k, v in b.content.items():
-                content[k] = markdown(v) if k in text_fields(b.kind) else v
+                content[k] = markdown(v, MODE, store) if k in text_fields(b.kind) else v
             out.append(f"```codoc:{b.kind} {{#{b.id}}}")
             out.append(json.dumps(content, ensure_ascii=False, sort_keys=True))
             out.append("```")
@@ -69,9 +78,10 @@ def import_markdown(md: str, *, keep_ids: bool = True) -> list[dict]:
 
     def flush_para() -> None:
         nonlocal last
-        text = " ".join(l.strip() for l in para).strip()
+        # One line is a paragraph as exported, verbatim; a hand-wrapped one joins.
+        text = para[0] if len(para) == 1 else " ".join(l.strip() for l in para).strip()
         para.clear()
-        if not text:
+        if not text.strip():
             return
         bid = new_block_id()
         bodies.append({"kind": K.BLOCK_ADD, "target": {"bid": bid}, "payload": {"kind": PARAGRAPH, "after": last}})

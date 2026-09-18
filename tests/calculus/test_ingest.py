@@ -26,13 +26,12 @@ def test_tokenize_is_lossless_and_script_aware():
     s = "hello  world, 你好世界 ok"
     toks = tokenize(s)
     assert "".join(toks) == s
-    assert "你" in toks and "hello  " in toks and toks[-1] == "ok"
+    assert "你" in toks and "hello" in toks and "  " in toks and toks[-1] == "ok"
 
 
 def run_ingest(store: Store, m: Mint, bid: str, new_md: str, actor="loop", plan=None, base=None):
     t = store.blocks[bid].text()
-    res = ingest(t, bid=bid, path="text", base_text=t.live_text(), new_md=new_md, actor=actor,
-                 base=base if base is not None else dict(store.frontier), plan=plan)
+    res = ingest(t, bid=bid, path="text", base_text=t.live_text(), new_md=new_md, actor=actor, plan=plan)
     if res.refused:
         return res, []
     ops = []
@@ -58,24 +57,22 @@ def test_ingest_repairs_keep_human_words_and_attribute_new_ones_to_loop():
     t = s.blocks["p1"].text()
     assert t.live_text() == "The client retries three times and then gives up."
     authors = [(seg.actor, seg.chars) for seg in t.segs if seg.live]
-    assert ("loop", "three times ") in authors
-    assert all(a == "human:a" for a, c in authors if c != "three times ")
+    assert ("loop", "three times") in authors
+    assert all(a == "human:a" for a, c in authors if c != "three times")
     assert 0 < res.deleted_fraction < 0.2
 
 
-def test_ingest_refuses_stale_base_and_demotes_when_edited_since():
+def test_ingest_refuses_a_stale_base_text():
     m, s = Mint(), Store()
     heading(m, s, "h1", "Client")
     paragraph(m, s, "p1", "alpha beta", after="h1")
     t = s.blocks["p1"].text()
-    res = ingest(t, bid="p1", path="text", base_text="alpha", new_md="alpha gamma", actor="loop", base=dict(s.frontier))
+    res = ingest(t, bid="p1", path="text", base_text="alpha", new_md="alpha gamma", actor="loop")
     assert res.refused == "stale_base"
-    # A loop write computed against an older frontier while the human typed since.
-    old = dict(s.frontier)
+    # The person typed after the loop read: the loop's text is stale by construction.
     apply(s, m.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": list(t.last_live_ref()), "text": " delta"}))
-    t = s.blocks["p1"].text()
-    res = ingest(t, bid="p1", path="text", base_text=t.live_text(), new_md="alpha beta delta gamma", actor="loop", base=old)
-    assert res.refused is None and res.demote_to_plan == "edited_since_base"
+    res = ingest(s.blocks["p1"].text(), bid="p1", path="text", base_text="alpha beta", new_md="alpha beta gamma", actor="loop")
+    assert res.refused == "stale_base"
 
 
 def test_ingest_keeps_human_marks_by_identity_and_refuses_dropping_them():
@@ -110,7 +107,7 @@ def test_ingest_refuses_paragraph_breaks_and_full_rewrite_is_measured():
     heading(m, s, "h1", "Client")
     paragraph(m, s, "p1", "one two three", after="h1")
     t = s.blocks["p1"].text()
-    res = ingest(t, bid="p1", path="text", base_text=t.live_text(), new_md="one\n\ntwo", actor="loop", base=dict(s.frontier))
+    res = ingest(t, bid="p1", path="text", base_text=t.live_text(), new_md="one\n\ntwo", actor="loop")
     assert res.refused == "multi_paragraph"
-    res = ingest(t, bid="p1", path="text", base_text=t.live_text(), new_md="entirely different words", actor="loop", base=dict(s.frontier))
-    assert res.deleted_fraction > 0.8   # whitespace tokens legitimately survive
+    res = ingest(t, bid="p1", path="text", base_text=t.live_text(), new_md="entirely different words", actor="loop")
+    assert res.deleted_fraction == 1.0   # whitespace never survives on its own

@@ -193,7 +193,7 @@ def test_refusals():
 # ── A12: replay carries the policy ──────────────────────────────────────────
 
 def test_replay_with_policy_keeps_forged_writes_out():
-    def policy(op):
+    def policy(store, op):
         return "suggest" if op.actor == "human:contrib" and op.plan is None and op.kind != K.PLAN_OPEN else None
     m, s = Mint(), Store(policy)
     heading(m, s, "h1", "Top")

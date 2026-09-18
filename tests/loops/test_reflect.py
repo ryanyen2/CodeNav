@@ -75,7 +75,7 @@ def test_large_rewrite_and_held_feature_become_plans(tmp_path):
     assert len(r2.plans) == 1 and ws.store.plans[r2.plans[0]].note == "the document has pending intent"
 
 
-def test_add_node_is_a_plan_with_bindings_on_trunk_and_coverage_net(tmp_path):
+def test_add_node_is_a_plan_with_its_bindings_and_coverage_net(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
     seed(ws)
     added = [chunk("s.py", "s.py::save", "f9", "t9", "def save(): ..."), chunk("s.py", "s.py::load", "f8", "t8")]
@@ -85,13 +85,13 @@ def test_add_node_is_a_plan_with_bindings_on_trunk_and_coverage_net(tmp_path):
         return [{"kind": "add_node", "parent_id": "h1", "title": "Storage", "description": "Saves and loads state.",
                  "bindings": [["s.py", "s.py::save"]], "rationale": "no node covered persistence"}]
 
-    r = reflect(ws, ChangeSet(added=added, rows=[]), Graph(), propose=propose,
-                index_keys={("s.py", "s.py::save"), ("s.py", "s.py::load")})
+    r = reflect(ws, ChangeSet(added=added, rows=[]), Graph(), propose=propose)
     assert len(r.plans) == 2                      # the add plan, plus a coverage plan for the unplaced chunk
     plan = ws.store.plans[r.plans[0]]
     assert plan.kind == "add" and ws.store.blocks[plan.target].level == 2
     assert title(ws.store, plan.target) == "Storage"
     assert ws.store.bindings[("s.py", "s.py::save")].feature == plan.target
+    assert any(ws.store.by_id[i].kind == K.BIND_ATTACH for i in plan.ops)   # the binding is part of the proposal
     # Accept: the node's words keep the loop as author and it is now a real feature.
     ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": plan.id}, "payload": {}}], actor="human:local")
     assert phase(ws.store, plan.target) == "synced"

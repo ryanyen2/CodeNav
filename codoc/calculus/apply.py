@@ -55,7 +55,7 @@ def apply(store: Store, op: Op) -> Op:
         if op.kind not in K.KINDS:
             raise Conflict("unknown_kind", op.kind)
         if store.policy is not None:
-            denial = store.policy(op)
+            denial = store.policy(store, op)
             if denial:
                 raise Conflict("authority", denial)
         if op.plan:
@@ -191,7 +191,8 @@ def _h_text_mark(store: Store, op: Op, touched: set[str]):
             raise Conflict("suggest_del_needs_plan")
         attrs["plan"] = op.plan
     # A restored mark keeps its original placer and actor: only an inverse says
-    # so, and an inverse is the person's own op.
+    # so, and an inverse is the person's own op. Both ride in the canonical
+    # payload so a replay restores the same mark (I6).
     actor = op.payload.get("actor") or op.actor
     placer = op.payload.get("op") or op.id
     removed, added = text.set_mark(kind, attrs, start, end, on, actor=actor, op=placer)
@@ -200,6 +201,10 @@ def _h_text_mark(store: Store, op: Op, touched: set[str]):
     canonical = {"kind": kind, "attrs": attrs, "start": ref_to_json(start), "end": ref_to_json(end), "on": on,
                  "bid": block.id, "path": p, "removed": [m.to_json() for m in removed],
                  "added": [m.to_json() for m in added]}
+    if op.payload.get("actor"):
+        canonical["actor"] = actor
+    if op.payload.get("op"):
+        canonical["op"] = placer
     inverse: list[OpBody] = []
     for m in added:
         inverse.append(body(K.TEXT_MARK, {"bid": block.id, "path": p},
@@ -544,7 +549,7 @@ def _closure(plan_ops: list[Op], subset: list[OpId]) -> list[OpId]:
             o = by_id[i]
             deps = [v[0] for key in ("after", "start", "end", "at")
                     if isinstance(v := o.payload.get(key), list) and len(v) == 2 and v[0] in by_id]
-            dep = creators.get(o.payload.get("bid") or o.target.get("bid") or "")
+            dep = creators.get(o.payload.get("bid") or o.target.get("bid") or o.target.get("fid") or "")
             if dep:
                 deps.append(dep)
             for d in deps:
@@ -566,10 +571,26 @@ def _undo_plan_op(store: Store, o: Op, by: OpId, touched: set[str], record: dict
                 record.setdefault("killed", []).append({"bid": block.id, "path": p, "segments": [list(k) for k in got]})
                 touched.add(block.id)
     elif o.kind == K.TEXT_MARK:
-        for block, p in store.mark_holders(o.id):
-            for m in block.text(p).remove_marks(op=o.id):
-                record.setdefault("marks", []).append({"bid": block.id, "path": p, "mark": m.to_json()})
-                touched.add(block.id)
+        # Exactly what the toggle recorded: its added marks go, the marks it
+        # displaced, merged or turned off come back.
+        hint = (o.payload.get("bid", ""), o.payload.get("path", "text"))
+        for mj in o.payload.get("added", []):
+            mk = Mark.from_json(mj)
+            for block, p in _mark_holder(store, mk, hint):
+                t = block.text(p)
+                if mk in t.marks:
+                    t.marks.remove(mk)
+                    record.setdefault("marks", []).append({"bid": block.id, "path": p, "mark": mj})
+                    touched.add(block.id)
+        for mj in o.payload.get("removed", []):
+            mk = Mark.from_json(mj)
+            for block, p in _mark_holder(store, mk, hint):
+                t = block.text(p)
+                if mk not in t.marks:
+                    t.marks.append(mk)
+                    store.index_text(block.id, p, t)
+                    record.setdefault("marks_back", []).append({"bid": block.id, "path": p, "mark": mj})
+                    touched.add(block.id)
     elif o.kind in (K.BLOCK_ADD, K.BLOCK_SPLIT):
         bid = o.target["bid"] if o.kind == K.BLOCK_ADD else o.payload["new"]
         b = store.blocks.get(bid)
@@ -594,8 +615,23 @@ def _undo_plan_op(store: Store, o: Op, by: OpId, touched: set[str], record: dict
             b.content[path] = inv["value"]
         record.setdefault("sets", []).append(was)
         touched.add(bid)
+    elif o.kind == K.BIND_ATTACH:
+        key = (o.payload["file"], o.payload["symbol"])
+        fid = o.target["fid"]
+        cur = store.bindings.get(key)
+        if cur is None or cur.feature != fid:
+            return                      # someone re-bound it since; their attach stands
+        record.setdefault("binds", []).append({"fid": fid, **cur.to_json()})
+        displaced = o.payload.get("displaced")
+        if displaced:
+            store.bindings[key] = Binding(displaced["feature"], displaced["file"], displaced["symbol"],
+                                          displaced.get("fingerprint", ""), displaced.get("types_hash", ""))
+            touched.add(displaced["feature"])
+        else:
+            del store.bindings[key]
+        touched.add(fid)
     elif o.kind == K.BLOCK_MOVE:
-        pos_of_move = store.ops.index(o) + 1
+        pos_of_move = store.position[o.id] + 1
         for bid, rank, level in o.payload.get("prev", []):
             b = store.blocks.get(bid)
             if b is None or store.rank_head.get(bid, 0) > pos_of_move:
@@ -605,6 +641,16 @@ def _undo_plan_op(store: Store, o: Op, by: OpId, touched: set[str], record: dict
             if b.kind == HEADING:
                 b.level = clamp_level(level)
             touched.add(bid)
+
+
+def _mark_holder(store: Store, mk: Mark, hint: tuple[str, str]) -> list[tuple[Block, str]]:
+    """The one Text holding both ends of a mark, if any (a split may have
+    moved them apart, in which case the mark is two marks and neither is this one)."""
+    try:
+        block, p = store.locate_char(mk.start, hint)
+    except AnchorError:
+        return []
+    return [(block, p)] if block.text(p).holds(mk.end) else []
 
 
 def _h_plan_accept(store: Store, op: Op, touched: set[str]):
@@ -647,7 +693,7 @@ def _h_plan_accept(store: Store, op: Op, touched: set[str]):
             deleted.append(i)
             touched.add(i)
     plan.status = "accepted"
-    canonical = {"accepted": accepted, "rejected": rejected, "deleted_blocks": deleted, **record}
+    canonical = {"subset": subset, "accepted": accepted, "rejected": rejected, "deleted_blocks": deleted, **record}
     return canonical, [body(K.PLAN_REOPEN, {"pid": pid},
                             {"from": "accepted", "subset": accepted if subset is not None else None,
                              "deleted_blocks": deleted, "by": op.id, **record})]
@@ -701,6 +747,13 @@ def _h_plan_reopen(store: Store, op: Op, touched: set[str]):
             t.marks.append(mk)
             store.index_text(block.id, f, t)
         touched.add(block.id)
+    for entry in p.get("marks_back", []):
+        mk = Mark.from_json(entry["mark"])
+        b = store.blocks[entry["bid"]]
+        t = b.text(entry["path"])
+        if mk in t.marks:
+            t.marks.remove(mk)
+        touched.add(b.id)
     for i in p.get("blocks", []) + p.get("deleted_blocks", []):
         b = store.blocks[i]
         if b.dead == by:
@@ -722,6 +775,14 @@ def _h_plan_reopen(store: Store, op: Op, touched: set[str]):
         if b.kind == HEADING:
             b.level = clamp_level(level)
         touched.add(bid)
+    for entry in p.get("binds", []):
+        key = (entry["file"], entry["symbol"])
+        prior = store.bindings.get(key)
+        if prior is not None:
+            touched.add(prior.feature)
+        store.bindings[key] = Binding(entry["fid"], entry["file"], entry["symbol"],
+                                      entry.get("fingerprint", ""), entry.get("types_hash", ""))
+        touched.add(entry["fid"])
     plan.status = "open"
     verdict = K.PLAN_ACCEPT if p.get("from") == "accepted" else K.PLAN_REJECT
     vpayload = {"subset": p["subset"]} if verdict == K.PLAN_ACCEPT and p.get("subset") is not None else {}

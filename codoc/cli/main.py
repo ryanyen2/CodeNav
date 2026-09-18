@@ -224,6 +224,21 @@ def accept(plan: str, root: str = ROOT):
 
 
 @app.command()
+def done(feature: str, root: str = ROOT, summary: str = typer.Option("", "--summary", help="What was built.")):
+    """Mark a handed-off feature realized by hand (when the build moved no bound
+    symbol, so the daemon saw no evidence)."""
+    from codoc.calculus import ops as K
+    from codoc.loop.gitref import head_sha
+    from codoc.substrate import client
+    cd = _require(root)
+    ws = client.read(cd)
+    fid = _resolve_feature(ws.store, feature)
+    _report(client.write(cd, client="cli", root_dir=root, bodies=[{
+        "kind": K.FEATURE_REALIZED, "target": {"fid": fid},
+        "payload": {"sha": head_sha(root), "summary": summary}}]), "marked done")
+
+
+@app.command()
 def reject(plan: str, root: str = ROOT):
     """Reject a plan."""
     from codoc.calculus import ops as K
@@ -299,8 +314,6 @@ def rebuild(root: str = ROOT):
         typer.echo(f"✓ {len(ws.store.headings())} features from {len(ws.store.ops)} ops")
         for p in ws.problems:
             typer.echo(f"  ⚠ {p.path}:{p.line}: {p.reason}")
-        if ws.quarantined:
-            typer.echo(f"  ⚠ {len(ws.quarantined)} op(s) quarantined for clock skew")
     finally:
         ws.close()
 

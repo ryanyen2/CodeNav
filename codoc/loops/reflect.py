@@ -8,18 +8,23 @@ Given a change set from the index, the pass:
 2. opens a ``delete`` plan for every feature that just lost its last binding
    (the loop never deletes; it proposes);
 3. asks one LLM pass to place the added chunks and repair stale prose. Its
-   answer is block-keyed. Attachments apply on the trunk (attribution, not
-   intent). New nodes, moves and deletions open plans. Prose repairs enter
-   through ``ingest`` under the amend gate: a small repair lands on the trunk
-   with ``actor=loop``; a large one, or any repair on a feature with unsent
-   ink or queued work, becomes a plan (the document wins);
+   answer is block-keyed and validated before anything is written.
+   Attachments to existing features apply on the trunk (attribution, not
+   intent). New nodes, moves and deletions open plans; a new node's bindings
+   are part of its plan. Prose repairs enter through ``ingest`` under the amend
+   gate: an amend whose every part is a small repair lands on the trunk with
+   ``actor=loop``; one that rewrites a block past the gate, adds or strikes a
+   paragraph, or touches a feature with unsent ink or queued work, becomes ONE
+   plan (the document wins, and one repair gets one verdict);
 4. covers what the model left unplaced: a chunk lands with the feature that
    owns most of its graph neighbours, else in a plan for a node named after
    its file.
 
-Every op this pass writes on a feature with queued work carries ``caused_by``
-the feature's latest hand-off, which is what lets the daemon mark the feature
-realized and lets History chain a change back to the request.
+When the pass runs because an agent session closed (``under_epoch``), every op
+it writes on a feature with queued work carries ``caused_by`` the feature's
+latest hand-off: that is what lets the daemon mark the feature realized and
+lets History chain a change back to the request. A pass triggered by a hand
+edit cites nothing, since nobody implemented anything.
 
 ``propose`` is injectable: a callable ``(changes, subtree, all_titles, **kw) →
 list[dict]`` of raw ops in the prompt's JSON shape. Tests inject a fake.
@@ -31,19 +36,22 @@ from dataclasses import dataclass, field
 
 from codoc.calculus import ops as K
 from codoc.calculus.derive import phase
-from codoc.calculus.doc import HEADING, PARAGRAPH, parent_of
+from codoc.calculus.doc import HEADING, PARAGRAPH
 from codoc.calculus.ids import START, new_block_id
+from codoc.calculus.ingest import Ingest
+from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
 from codoc.calculus.text import SUGGEST_DEL
 from codoc.graph.graph import Graph
 from codoc.loop.diff import ChangeSet, ChunkRef
-from codoc.loops.context import impacted_features, owner_of, select_context, written_by
+from codoc.loops.context import block_written_by, impacted_features, owner_of, select_context
 from codoc.substrate.workspace import Workspace
 
 LOOP = "loop"
 MAX_ADDED_PER_CALL = 25
 GATE_MACHINE = 0.5      # deleted fraction above which a loop repair becomes a plan
 GATE_HUMAN = 0.15       # …when a person last wrote the block
+HELD = ("edited", "queued", "planned")
 
 
 @dataclass
@@ -51,9 +59,10 @@ class ReflectResult:
     auto: Counter = field(default_factory=Counter)
     plans: list[str] = field(default_factory=list)
     llm_calls: int = 0
-    refused: list[tuple[str, str]] = field(default_factory=list)   # (bid, reason)
+    refused: list[tuple[str, str]] = field(default_factory=list)   # (bid or kind, reason)
     impacted: list[str] = field(default_factory=list)
     caused: dict[str, str] = field(default_factory=dict)            # fid -> handoff op cited
+    ops: list[Op] = field(default_factory=list)                     # everything this pass wrote
 
     def summary(self) -> str:
         parts = [", ".join(f"{n} {k}" for k, n in sorted(self.auto.items())) or "no auto ops"]
@@ -66,19 +75,46 @@ class ReflectResult:
         return " · ".join(parts)
 
 
+class _Pass:
+    """One reflect pass's writer: every submit and ingest lands in ``res.ops``."""
+
+    def __init__(self, ws: Workspace, res: ReflectResult, caused_by: dict[str, str]) -> None:
+        self.ws, self.res, self._caused = ws, res, caused_by
+
+    @property
+    def store(self) -> Store:
+        return self.ws.store
+
+    def cause(self, fid: str | None) -> str | None:
+        return self._caused.get(fid) if fid else None
+
+    def submit(self, bodies: list[dict], **kw) -> list[Op]:
+        ops = self.ws.submit(bodies, actor=LOOP, **kw)
+        self.res.ops.extend(ops)
+        return ops
+
+    def commit(self, ing: Ingest, **kw) -> list[Op]:
+        ops = self.ws.commit_ingest(ing, actor=LOOP, **kw)
+        self.res.ops.extend(ops)
+        return ops
+
+    def open_plan(self, **kw) -> str:
+        pid = self.ws.open_plan(actor=LOOP, **kw)
+        self.res.ops.append(self.store.by_id[self.store.plans[pid].opened_by])
+        self.res.plans.append(pid)
+        return pid
+
+
 def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: str = "codebase",
             config=None, doc_language=None, allow_delete: bool = True, extra_changes: dict | None = None,
-            index_keys: set[tuple[str, str]] | None = None) -> ReflectResult:
+            under_epoch: bool = False) -> ReflectResult:
     store = ws.store
     res = ReflectResult()
     fp = cs.fingerprints()
     th = cs.types_hashes()
-    index_keys = index_keys if index_keys is not None else ({(r.file, r.symbol_path) for r in cs.rows} or None)
-    caused_by = _causes(store)
+    caused_by = _causes(store) if under_epoch else {}
     res.caused = dict(caused_by)
-
-    def cause(fid: str | None) -> str | None:
-        return caused_by.get(fid) if fid else None
+    p = _Pass(ws, res, caused_by)
 
     # 1. Deterministic binding maintenance.
     removed_owner: dict[tuple[str, str], str] = {}
@@ -87,25 +123,25 @@ def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: s
         b = store.bindings.get((r.file, r.symbol_path))
         if b:
             removed_owner[(r.file, r.symbol_path)] = b.feature
-            bodies.append(_bind(K.BIND_DETACH, b.feature, r.file, r.symbol_path, caused_by=cause(b.feature)))
+            bodies.append(_bind(K.BIND_DETACH, b.feature, r.file, r.symbol_path, caused_by=p.cause(b.feature)))
     for c in cs.modified:
         b = store.bindings.get((c.file, c.symbol_path))
         if b and (b.fingerprint != c.fingerprint or b.types_hash != c.types_hash):
             bodies.append(_bind(K.BIND_REFRESH, b.feature, c.file, c.symbol_path, c.fingerprint, c.types_hash,
-                                caused_by=cause(b.feature)))
+                                caused_by=p.cause(b.feature)))
     if bodies:
-        for op in ws.submit(bodies, actor=LOOP):
+        for op in p.submit(bodies):
             if op.conflict is None:
                 res.auto[op.kind.split(".")[1]] += 1
     relocated: set[tuple[str, str]] = set()
     reloc_bodies = []
-    for added, removed, kind in _relocations(cs, removed_owner):
+    for added, removed, _kind in _relocations(cs, removed_owner):
         owner = removed_owner[(removed.file, removed.symbol_path)]
         reloc_bodies.append(_bind(K.BIND_ATTACH, owner, added.file, added.symbol_path, added.fingerprint,
-                                  added.types_hash, caused_by=cause(owner)))
+                                  added.types_hash, caused_by=p.cause(owner)))
         relocated.add((added.file, added.symbol_path))
     if reloc_bodies:
-        for op in ws.submit(reloc_bodies, actor=LOOP):
+        for op in p.submit(reloc_bodies):
             if op.conflict is None:
                 res.auto["relocate"] += 1
 
@@ -115,11 +151,11 @@ def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: s
             b = store.blocks.get(fid)
             if b is None or not b.live or any(x.feature == fid for x in store.bindings.values()):
                 continue
-            if phase(store, fid) in ("edited", "queued", "planned"):
+            if phase(store, fid) in HELD:
                 continue   # the document wins; the person is re-specifying it
-            if any(p.kind == "delete" and p.target == fid and p.status == "open" for p in store.plans.values()):
+            if any(pl.kind == "delete" and pl.target == fid and pl.status == "open" for pl in store.plans.values()):
                 continue
-            res.plans.append(_delete_plan(ws, fid, note="lost all of its code"))
+            _delete_plan(p, fid, note="lost all of its code")
 
     # 3. The LLM pass over what needs judgment.
     added_unbound = [a for a in cs.added if (a.file, a.symbol_path) not in store.bindings
@@ -153,43 +189,44 @@ def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: s
         fresh = propose(changes, subtree, titles, repo_name=repo_name, config=config, doc_language=doc_language)
         raw_ops.extend(fresh or [])
         titles = titles + [{"id": "(proposed this pass)", "title": o.get("title"), "parent_id": o.get("parent_id")}
-                           for o in (fresh or []) if o.get("kind") == "add_node" and o.get("title")]
+                           for o in (fresh or []) if isinstance(o, dict) and o.get("kind") == "add_node" and o.get("title")]
         res.llm_calls += 1
 
     covered: set[tuple[str, str]] = set()
-    touched_keys = set(fp.keys()) | {(r.file, r.symbol_path) for r in cs.removed}
+    # The model may bind only what this change set added or modified: those
+    # chunks exist by construction, and untouched code is not its to reshuffle.
+    touched_keys = set(fp)
     for raw in raw_ops:
-        kind = raw.get("kind")
+        err = validate_raw(raw)
+        if err:
+            res.refused.append((str(raw.get("kind") if isinstance(raw, dict) else raw), err))
+            continue
+        kind = raw["kind"]
         try:
             if kind == "attach":
-                fid = raw.get("feature_id")
+                fid = raw["feature_id"]
                 if fid not in store.blocks or not store.blocks[fid].live:
                     continue
-                binds = _valid_binds(raw.get("bindings", []), index_keys, touched_keys)
+                binds = _valid_binds(raw.get("bindings", []), touched_keys)
                 if binds:
-                    ws.submit([_bind(K.BIND_ATTACH, fid, f, s, fp.get((f, s), ""), th.get((f, s), ""),
-                                     caused_by=cause(fid)) for f, s in binds], actor=LOOP)
+                    p.submit([_bind(K.BIND_ATTACH, fid, f, s, fp.get((f, s), ""), th.get((f, s), ""),
+                                    caused_by=p.cause(fid)) for f, s in binds])
                     covered.update(binds)
                     res.auto["attach"] += len(binds)
             elif kind == "add_node":
-                binds = _valid_binds(raw.get("bindings", []), index_keys, touched_keys)
-                pid = _add_plan(ws, raw, binds, fp, th)
-                if pid:
-                    res.plans.append(pid)
+                binds = _valid_binds(raw.get("bindings", []), touched_keys)
+                if _add_plan(p, raw, binds, fp, th):
                     covered.update(binds)
             elif kind == "amend":
-                _amend(ws, raw, res, cause)
+                _amend(p, raw)
             elif kind == "move_node":
-                pid = _move_plan(ws, raw)
-                if pid:
-                    res.plans.append(pid)
+                _move_plan(p, raw)
             elif kind == "retire_node":
-                fid = raw.get("feature_id")
-                if allow_delete and fid in store.blocks and store.blocks[fid].live \
-                        and phase(store, fid) not in ("edited", "queued", "planned"):
-                    res.plans.append(_delete_plan(ws, fid, note=raw.get("rationale", "")))
-        except (KeyError, TypeError, ValueError):
-            continue
+                fid = raw["feature_id"]
+                if allow_delete and fid in store.blocks and store.blocks[fid].live and phase(store, fid) not in HELD:
+                    _delete_plan(p, fid, note=raw.get("rationale", ""))
+        except (KeyError, TypeError, ValueError) as e:   # a shape the validator did not foresee
+            res.refused.append((kind, repr(e)))
 
     # 4. Coverage net for what the model left unplaced.
     for a in added_unbound:
@@ -198,16 +235,55 @@ def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: s
             continue
         home = graph.neighbor_feature(a.symbol_path, lambda s: owner_of(store, s))
         if home and store.blocks.get(home) and store.blocks[home].live:
-            ws.submit([_bind(K.BIND_ATTACH, home, a.file, a.symbol_path, a.fingerprint, a.types_hash,
-                             caused_by=cause(home))], actor=LOOP)
+            p.submit([_bind(K.BIND_ATTACH, home, a.file, a.symbol_path, a.fingerprint, a.types_hash,
+                            caused_by=p.cause(home))])
             res.auto["net"] += 1
         else:
-            pid = _add_plan(ws, {"title": _title_from_file(a.file), "parent_id": None,
-                                 "description": "", "rationale": "no feature covered this file"},
-                            [key], fp, th)
-            if pid:
-                res.plans.append(pid)
+            _add_plan(p, {"title": _title_from_file(a.file), "parent_id": None, "description": "",
+                          "rationale": "no feature covered this file"}, [key], fp, th)
     return res
+
+
+# ── the model's answer ───────────────────────────────────────────────────────
+
+_RAW_FIELDS = {
+    "attach": {"feature_id": str, "bindings": list},
+    "add_node": {"title": str},
+    "amend": {"feature_id": str},
+    "move_node": {"feature_id": str},
+    "retire_node": {"feature_id": str},
+}
+
+
+def validate_raw(raw) -> str | None:
+    """Why a raw op from the model cannot be acted on, or None. Checked before
+    the first write so a malformed answer never leaves a half-built plan."""
+    if not isinstance(raw, dict):
+        return "not an object"
+    kind = raw.get("kind")
+    if kind not in _RAW_FIELDS:
+        return f"unknown kind {kind!r}"
+    for name, typ in _RAW_FIELDS[kind].items():
+        if not isinstance(raw.get(name), typ):
+            return f"{kind}.{name} must be {typ.__name__}"
+    for name in ("title", "description", "rationale", "parent_id"):
+        if raw.get(name) is not None and not isinstance(raw[name], str):
+            return f"{kind}.{name} must be a string"
+    if "bindings" in raw and not all(isinstance(b, (list, tuple)) and len(b) == 2 for b in raw["bindings"] or []):
+        return f"{kind}.bindings must be [file, symbol] pairs"
+    if kind == "amend":
+        blocks = raw.get("blocks")
+        if blocks is not None:
+            if not isinstance(blocks, list) or not all(isinstance(e, dict) for e in blocks):
+                return "amend.blocks must be a list of objects"
+            for e in blocks:
+                if e.get("id") is not None and not isinstance(e["id"], str):
+                    return "amend.blocks[].id must be a string"
+                if e.get("text") is not None and not isinstance(e["text"], str):
+                    return "amend.blocks[].text must be a string"
+                if e.get("id") is None and not e.get("delete") and not (e.get("text") or "").strip():
+                    return "amend.blocks[] entry has neither id nor text"
+    return None
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -231,18 +307,9 @@ def _causes(store: Store) -> dict[str, str]:
     return out
 
 
-def _valid_binds(raw_binds, index_keys, touched_keys) -> list[tuple[str, str]]:
-    out = []
-    for b in raw_binds or []:
-        if not isinstance(b, (list, tuple)) or len(b) != 2:
-            continue
-        key = (str(b[0]), str(b[1]))
-        if index_keys is not None and key not in index_keys:
-            continue      # the model invented a symbol
-        if key not in touched_keys:
-            continue      # outside the change set: the model may not reshuffle untouched code
-        out.append(key)
-    return out
+def _valid_binds(raw_binds, touched_keys) -> list[tuple[str, str]]:
+    return [(str(b[0]), str(b[1])) for b in raw_binds or []
+            if isinstance(b, (list, tuple)) and len(b) == 2 and (str(b[0]), str(b[1])) in touched_keys]
 
 
 def _relocations(cs: ChangeSet, removed_owner: dict) -> list[tuple[ChunkRef, ChunkRef, str]]:
@@ -260,7 +327,9 @@ def _relocations(cs: ChangeSet, removed_owner: dict) -> list[tuple[ChunkRef, Chu
             used.add((c.file, c.symbol_path))
             matched.add((a.file, a.symbol_path))
             out.append((a, c, "move"))
-    # rename: a unique AST shape among the still-unmatched, same file first then anywhere
+    # rename: a unique AST shape among everything that left the index (bound
+    # or not) matched with a unique shape among what arrived
+    shapes_removed_all = Counter(r.types_hash for r in cs.removed if r.types_hash)
     by_shape_removed: dict[str, list[ChunkRef]] = {}
     for r in removed:
         if (r.file, r.symbol_path) not in used and r.types_hash:
@@ -271,7 +340,7 @@ def _relocations(cs: ChangeSet, removed_owner: dict) -> list[tuple[ChunkRef, Chu
             by_shape_added.setdefault(a.types_hash, []).append(a)
     for shape, adds in by_shape_added.items():
         rems = by_shape_removed.get(shape, [])
-        if len(adds) == 1 and len(rems) == 1:
+        if len(adds) == 1 and len(rems) == 1 and shapes_removed_all[shape] == 1:
             out.append((adds[0], rems[0], "rename"))
             used.add((rems[0].file, rems[0].symbol_path))
     return out
@@ -313,129 +382,133 @@ def _place_after(store: Store, parent: str | None) -> tuple[str, int]:
     return (live[-1].id if live else START), 1
 
 
-def _add_plan(ws: Workspace, raw: dict, binds: list[tuple[str, str]], fp: dict, th: dict) -> str | None:
+def _add_plan(p: _Pass, raw: dict, binds: list[tuple[str, str]], fp: dict, th: dict) -> str | None:
+    """A proposed node: heading, title, paragraphs and its bindings, all under
+    one plan. Rejecting it detaches the bindings with the rest."""
     title = (raw.get("title") or "").strip()
     if not title:
         return None
-    parent = raw.get("parent_id")
-    after, level = _place_after(ws.store, parent)
+    after, level = _place_after(p.store, raw.get("parent_id"))
     fid = new_block_id()
-    pid = ws.open_plan(actor=LOOP, kind="add", target=fid, note=raw.get("rationale", ""))
+    paragraphs = [(new_block_id(), para.strip()) for para in (raw.get("description") or "").split("\n\n") if para.strip()]
+    pid = p.open_plan(kind="add", target=fid, note=raw.get("rationale", ""))
     bodies = [
         {"kind": K.BLOCK_ADD, "target": {"bid": fid}, "payload": {"kind": HEADING, "level": level, "after": after}},
         {"kind": K.TEXT_INSERT, "target": {"bid": fid, "path": "text"}, "payload": {"after": START, "text": title}},
     ]
-    ws.submit(bodies, actor=LOOP, plan=pid, batch=pid)
-    desc = (raw.get("description") or "").strip()
     last = fid
-    for para in [p.strip() for p in desc.split("\n\n") if p.strip()]:
-        bid = new_block_id()
-        ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": bid}, "payload": {"kind": PARAGRAPH, "after": last}}],
-                  actor=LOOP, plan=pid, batch=pid)
-        ws.ingest(bid, "text", base_text="", new_md=para, actor=LOOP, plan=pid, batch=pid)
+    for bid, _ in paragraphs:
+        bodies.append({"kind": K.BLOCK_ADD, "target": {"bid": bid}, "payload": {"kind": PARAGRAPH, "after": last}})
         last = bid
-    if binds:
-        # Bindings are attribution and land on the trunk even for a planned
-        # node; rejecting the plan deletes the node and its bindings with it.
-        ws.submit([_bind(K.BIND_ATTACH, fid, f, s, fp.get((f, s), ""), th.get((f, s), "")) for f, s in binds],
-                  actor=LOOP, batch=pid)
+    bodies.extend(_bind(K.BIND_ATTACH, fid, f, s, fp.get((f, s), ""), th.get((f, s), "")) for f, s in binds)
+    p.submit(bodies, plan=pid, batch=pid)
+    for bid, para in paragraphs:
+        ing = p.ws.plan_ingest(bid, "text", base_text="", new_md=para, actor=LOOP, plan=pid)
+        if ing.refused:
+            p.res.refused.append((bid, ing.refused))
+        else:
+            p.commit(ing, plan=pid, batch=pid)
     return pid
 
 
-def _move_plan(ws: Workspace, raw: dict) -> str | None:
-    fid = raw.get("feature_id")
-    store = ws.store
+def _move_plan(p: _Pass, raw: dict) -> str | None:
+    fid = raw["feature_id"]
+    store = p.store
     if fid not in store.blocks or not store.blocks[fid].live:
         return None
-    parent = raw.get("parent_id")
-    after, level = _place_after(store, parent)
+    after, level = _place_after(store, raw.get("parent_id"))
     if after == fid or after in {b.id for b in store.feature_range(fid)}:
         return None
-    pid = ws.open_plan(actor=LOOP, kind="move", target=fid, note=raw.get("rationale", ""))
-    ws.submit([{"kind": K.BLOCK_MOVE, "target": {"bid": fid},
-                "payload": {"after": after, "level_delta": level - store.blocks[fid].level}}],
-              actor=LOOP, plan=pid, batch=pid)
+    pid = p.open_plan(kind="move", target=fid, note=raw.get("rationale", ""))
+    p.submit([{"kind": K.BLOCK_MOVE, "target": {"bid": fid},
+               "payload": {"after": after, "level_delta": level - store.blocks[fid].level}}], plan=pid, batch=pid)
     return pid
 
 
-def _delete_plan(ws: Workspace, fid: str, note: str) -> str:
-    pid = ws.open_plan(actor=LOOP, kind="delete", target=fid, note=note)
+def _strike(store: Store, bids: list[str], pid: str) -> list[dict]:
     bodies = []
-    for b in ws.store.feature_body(fid):
-        t = b.text()
+    for bid in bids:
+        t = store.blocks[bid].text()
         if t.live_len():
-            bodies.append({"kind": K.TEXT_MARK, "target": {"bid": b.id, "path": "text"},
+            bodies.append({"kind": K.TEXT_MARK, "target": {"bid": bid, "path": "text"},
                            "payload": {"kind": SUGGEST_DEL, "attrs": {"plan": pid},
                                        "start": list(t.ref_at(0)), "end": list(t.last_live_ref()), "on": True}})
+    return bodies
+
+
+def _delete_plan(p: _Pass, fid: str, note: str) -> str:
+    pid = p.open_plan(kind="delete", target=fid, note=note)
+    bodies = _strike(p.store, [b.id for b in p.store.feature_body(fid)], pid)
     if bodies:
-        ws.submit(bodies, actor=LOOP, plan=pid, batch=pid)
+        p.submit(bodies, plan=pid, batch=pid)
     return pid
 
 
-def _amend(ws: Workspace, raw: dict, res: ReflectResult, cause) -> None:
-    """A block-keyed repair: ``title`` and/or ``blocks: [{id?, text}]``. Listed
-    ids are re-ingested; an entry without an id is a new paragraph after the
-    previous one; ids the model omitted are struck under a plan."""
-    store = ws.store
-    fid = raw.get("feature_id")
+def _amend(p: _Pass, raw: dict) -> None:
+    """A block-keyed repair: ``title`` and/or ``blocks: [{id, text} |
+    {id, delete: true} | {text}]``. A listed id is re-ingested; ``delete``
+    strikes it; an entry without an id is a new paragraph after the previous
+    entry; a paragraph the model does not mention is unchanged. Everything is
+    computed first, then written as one unit: on the trunk when every part is
+    a small repair to a feature with nothing pending, else under one plan."""
+    store, fid = p.store, raw["feature_id"]
     if fid not in store.blocks or not store.blocks[fid].live:
         return
-    held = phase(store, fid) in ("edited", "queued", "planned")
-    human = written_by(store, fid) == "human"
-    gate = GATE_HUMAN if human else GATE_MACHINE
-    plan: str | None = None
-    if held:
-        plan = ws.open_plan(actor=LOOP, kind="edit", target=fid, note="the document has pending intent")
-        res.plans.append(plan)
-    batch = plan or None
+    held = phase(store, fid) in HELD
+    need_plan = held
+    sentinel = "plan" if held else None      # the human-mark refusal applies only to trunk writes
+    ingests: list[Ingest] = []
+    adds: list[tuple[str, str, str]] = []    # (after, new bid, text)
+    strikes: list[str] = []
+
+    def consider(bid: str, new_md: str) -> None:
+        nonlocal need_plan
+        ing = p.ws.plan_ingest(bid, "text", base_text=store.blocks[bid].text().live_text(), new_md=new_md,
+                               actor=LOOP, plan=sentinel)
+        if ing.refused:
+            p.res.refused.append((bid, ing.refused))
+            return
+        if ing.unchanged:
+            return
+        gate = GATE_HUMAN if block_written_by(store, bid) == "human" else GATE_MACHINE
+        if ing.deleted_fraction > gate:
+            need_plan = True
+        ingests.append(ing)
+
     if raw.get("title"):
-        r, _ = ws.ingest(fid, "text", base_text=store.blocks[fid].text().live_text(), new_md=raw["title"],
-                         actor=LOOP, plan=plan, gate=None if plan else gate, caused_by=cause(fid), batch=batch)
-        if r.refused:
-            res.refused.append((fid, r.refused))
-        elif r.demote_to_plan and not plan:
-            res.plans.append(_last_plan(ws))
-    if "blocks" not in raw:
-        return
-    body = [b for b in store.feature_body(fid)[1:] if b.kind == PARAGRAPH]
-    seen: set[str] = set()
+        consider(fid, raw["title"])
+    body_ids = {b.id for b in store.feature_body(fid)[1:] if b.kind == PARAGRAPH}
     last = fid
-    for entry in raw["blocks"]:
-        text = (entry.get("text") or "").strip()
-        bid = entry.get("id")
-        if bid and bid in store.blocks and store.blocks[bid].live:
-            seen.add(bid)
-            r, _ = ws.ingest(bid, "text", base_text=store.blocks[bid].text().live_text(), new_md=text, actor=LOOP,
-                             plan=plan, gate=None if plan else gate, caused_by=cause(fid), batch=batch)
-            if r.refused:
-                res.refused.append((bid, r.refused))
-            elif r.demote_to_plan and not plan:
-                res.plans.append(_last_plan(ws))
+    for entry in raw.get("blocks") or []:
+        bid, text = entry.get("id"), (entry.get("text") or "").strip()
+        if bid:
+            if bid not in body_ids:
+                continue
+            if entry.get("delete"):
+                strikes.append(bid)
+                need_plan = True
+            else:
+                consider(bid, text)
             last = bid
         elif text:
             nb = new_block_id()
-            p = plan or ws.open_plan(actor=LOOP, kind="edit", target=fid, note="new paragraph")
-            if not plan:
-                res.plans.append(p)
-            ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": nb}, "payload": {"kind": PARAGRAPH, "after": last}}],
-                      actor=LOOP, plan=p, batch=p, caused_by=cause(fid))
-            ws.ingest(nb, "text", base_text="", new_md=text, actor=LOOP, plan=p, batch=p, caused_by=cause(fid))
+            adds.append((last, nb, text))
+            need_plan = True
             last = nb
-    omitted = [b for b in body if b.id not in seen]
-    if omitted:
-        p = plan or ws.open_plan(actor=LOOP, kind="edit", target=fid, note="paragraph no longer true")
-        if not plan:
-            res.plans.append(p)
-        bodies = []
-        for b in omitted:
-            t = b.text()
-            if t.live_len():
-                bodies.append({"kind": K.TEXT_MARK, "target": {"bid": b.id, "path": "text"},
-                               "payload": {"kind": SUGGEST_DEL, "attrs": {"plan": p},
-                                           "start": list(t.ref_at(0)), "end": list(t.last_live_ref()), "on": True}})
-        if bodies:
-            ws.submit(bodies, actor=LOOP, plan=p, batch=p, caused_by=cause(fid))
-
-
-def _last_plan(ws: Workspace) -> str:
-    return max(ws.store.plans.values(), key=lambda p: p.opened_by or "").id
+    if not ingests and not adds and not strikes:
+        return
+    plan = p.open_plan(kind="edit", target=fid, note="the document has pending intent" if held else "a larger repair") \
+        if need_plan else None
+    batch, cause = plan or None, p.cause(fid)
+    for ing in ingests:
+        p.commit(ing, plan=plan, batch=batch, caused_by=cause)
+    for after, nb, text in adds:
+        p.submit([{"kind": K.BLOCK_ADD, "target": {"bid": nb}, "payload": {"kind": PARAGRAPH, "after": after}}],
+                 plan=plan, batch=batch, caused_by=cause)
+        ing = p.ws.plan_ingest(nb, "text", base_text="", new_md=text, actor=LOOP, plan=plan)
+        if ing.refused:
+            p.res.refused.append((nb, ing.refused))
+        else:
+            p.commit(ing, plan=plan, batch=batch, caused_by=cause)
+    if strikes:
+        p.submit(_strike(store, strikes, plan), plan=plan, batch=batch, caused_by=cause)

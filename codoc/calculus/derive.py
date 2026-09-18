@@ -11,54 +11,29 @@ from dataclasses import dataclass, field
 
 from codoc.calculus import ops as K
 from codoc.calculus.doc import HEADING, PARAGRAPH, Block, TreeNode, fold_tree, text_fields
-from codoc.calculus.ids import OpId
+from codoc.calculus.ids import OpId, is_human
 from codoc.calculus.inline_md import Span, render
-from codoc.calculus.ops import Op, in_frontier
+from codoc.calculus.ops import Op, covered, in_frontier
 from codoc.calculus.store import Store, Watermarks
 from codoc.calculus.text import BOLD, CITE, LINK, SUGGEST_DEL, Mark, Text
 
-HUMAN = "human:"
 LOOP = "loop"
 
 
 # ── text views ───────────────────────────────────────────────────────────────
 
-def live_spans(text: Text) -> list[Span]:
+def live_spans(text: Text, kinds: frozenset | None = None) -> list[Span]:
     """Marks as offset spans over the live text (a mark whose characters are
-    all dead yields nothing)."""
-    offsets: dict[tuple, int] = {}
-    i = 0
-    for s in text.segs:
-        if s.live:
-            for k in range(len(s.chars)):
-                offsets[s.ref(k)] = i
-                i += 1
+    all dead yields nothing). Default: every kind Markdown renders."""
+    offsets = text.live_offsets()
     out: list[Span] = []
     for m in text.marks:
-        if m.kind == SUGGEST_DEL:
+        if (kinds is None and m.kind == SUGGEST_DEL) or (kinds is not None and m.kind not in kinds):
             continue
-        lo = _first_live(text, m, offsets, forward=True)
-        hi = _first_live(text, m, offsets, forward=False)
-        if lo is None or hi is None or hi < lo:
-            continue
-        out.append(Span(m.kind, dict(m.attrs), lo, hi + 1))
+        span = text.live_span(m, offsets)
+        if span:
+            out.append(Span(m.kind, dict(m.attrs), span[0], span[1]))
     return out
-
-
-def _first_live(text: Text, m: Mark, offsets: dict, forward: bool) -> int | None:
-    si, so = text.locate(m.start)
-    ei, eo = text.locate(m.end)
-    rng = range(si, ei + 1) if forward else range(ei, si - 1, -1)
-    for i in rng:
-        seg = text.segs[i]
-        lo = so if i == si else 0
-        hi = eo if i == ei else len(seg.chars) - 1
-        ks = range(lo, hi + 1) if forward else range(hi, lo - 1, -1)
-        if not seg.live:
-            continue
-        for k in ks:
-            return offsets[seg.ref(k)]
-    return None
 
 
 def markdown(text: Text, mode: str = "live", store: Store | None = None) -> str:
@@ -67,7 +42,7 @@ def markdown(text: Text, mode: str = "live", store: Store | None = None) -> str:
     dropped, which is what a directive is rendered from)."""
     if mode == "live" or store is None:
         return render(text.live_text(), live_spans(text))
-    view = Text([s for s in text.segs], list(text.marks)).clone()
+    view = text.clone()
     open_plans = {p.id for p in store.plans.values() if p.status == "open"}
     if mode == "rejected":
         for s in view.segs:
@@ -159,31 +134,52 @@ def _blocks_of(store: Store, fid: str) -> list[Block]:
     return store.feature_body(fid)
 
 
+def _body_ids(store: Store, fid: str) -> set[str]:
+    return {b.id for b in store.feature_body(fid)}
+
+
 def ink(store: Store, fid: str) -> list[Claim]:
     """Human live segments beyond the realized frontier: ``unsent`` past the
-    hand-off frontier, ``sent`` between the two."""
+    hand-off frontier, ``sent`` between the two. Adjacent segments merge only
+    when they share actor, plan and stage, so a word typed after the hand-off
+    never reads as sent because it touches one typed before."""
     w = store.watermarks(fid)
     out: list[Claim] = []
     for b in _blocks_of(store, fid):
         for f in text_fields(b.kind):
             t = b.text(f)
-            for r in attribution(t):
-                if not r.actor.startswith(HUMAN) or r.plan:
-                    continue
-                if in_frontier(r.op, w.realized):
+            lt = t.live_text()
+            last: Claim | None = None
+            for r in attribution(t, merge=False):
+                if not is_human(r.actor) or r.plan or in_frontier(r.op, w.realized):
+                    last = None
                     continue
                 stage = "sent" if in_frontier(r.op, w.handoff) else "unsent"
-                out.append(Claim(b.id, f, r.start, r.end, "human", stage, r.actor, t.live_text()[r.start:r.end]))
+                if last and last.actor == r.actor and last.stage == stage and last.end == r.start:
+                    last.end = r.end
+                    last.text = lt[last.start:last.end]
+                    continue
+                last = Claim(b.id, f, r.start, r.end, "human", stage, r.actor, lt[r.start:r.end])
+                out.append(last)
     return out
 
 
-def ground(store: Store, fid: str, since: dict | None = None) -> list[Claim]:
-    """What the loop did to this feature since ``since`` (default: the latest
-    hand-off frontier): live loop segments as ``added``, loop-killed dead
-    segments as ``removed`` (their text carried, positioned at the live offset
-    where they were)."""
+def ground(store: Store, fid: str) -> list[Claim]:
+    """What the loop did to this feature since the person last engaged with it
+    (their latest hand-off, or their newest op on its blocks, whichever is
+    later in this store's apply order): live loop segments as ``added``,
+    loop-killed dead segments as ``removed`` (their text carried, positioned at
+    the live offset where they were). A feature the person never touched paints
+    nothing: there is no "since" to measure from."""
     w = store.watermarks(fid)
-    since = since if since is not None else w.handoff
+    since = max((store.position[o.id] for o in store.ops_on(_body_ids(store, fid))
+                 if is_human(o.actor) and not o.conflict), default=-1)
+    if not w.handoff and since < 0:
+        return []
+
+    def new(op_id: OpId) -> bool:
+        return not in_frontier(op_id, w.handoff) and store.position.get(op_id, -1) > since
+
     out: list[Claim] = []
     for b in _blocks_of(store, fid):
         for f in text_fields(b.kind):
@@ -191,12 +187,12 @@ def ground(store: Store, fid: str, since: dict | None = None) -> list[Claim]:
             i = 0
             for s in t.segs:
                 if s.live:
-                    if s.actor == LOOP and not s.plan and not in_frontier(s.op, since):
+                    if s.actor == LOOP and not s.plan and new(s.op):
                         out.append(Claim(b.id, f, i, i + len(s.chars), "code", "added", s.actor, s.chars))
                     i += len(s.chars)
-                elif s.dead and s.dead != "view":
+                elif s.dead:
                     killer = _op(store, s.dead)
-                    if killer is not None and killer.actor == LOOP and not in_frontier(s.dead, since):
+                    if killer is not None and killer.actor == LOOP and new(s.dead):
                         out.append(Claim(b.id, f, i, i, "code", "removed", killer.actor, s.chars))
     return out
 
@@ -223,99 +219,59 @@ def plan_claims(store: Store, fid: str) -> list[Claim]:
 
 
 def _suggest_spans(t: Text, store: Store) -> list[Span]:
-    offsets: dict[tuple, int] = {}
-    i = 0
-    for s in t.segs:
-        if s.live:
-            for k in range(len(s.chars)):
-                offsets[s.ref(k)] = i
-                i += 1
-    out = []
-    for m in t.marks:
-        if m.kind != SUGGEST_DEL or store.plans.get(m.attrs.get("plan"), None) is None:
-            continue
-        if store.plans[m.attrs["plan"]].status != "open":
-            continue
-        lo = _first_live(t, m, offsets, True)
-        hi = _first_live(t, m, offsets, False)
-        if lo is not None and hi is not None and hi >= lo:
-            out.append(Span(SUGGEST_DEL, dict(m.attrs), lo, hi + 1))
-    return out
+    open_plans = {p.id for p in store.plans.values() if p.status == "open"}
+    return [sp for sp in live_spans(t, frozenset({SUGGEST_DEL})) if sp.attrs.get("plan") in open_plans]
 
 
 def open_plans_on(store: Store, fid: str) -> list[str]:
-    ids = {b.id for b in _blocks_of(store, fid)}
-    out = []
-    for p in store.plans.values():
-        if p.status != "open":
-            continue
-        if p.target in ids or any(_op_touches(store, i, ids) for i in p.ops):
-            out.append(p.id)
-    return out
+    ids = _body_ids(store, fid)
+    out = {p.id for p in store.plans.values() if p.status == "open" and p.target in ids}
+    out.update(o.plan for o in store.ops_on(ids) if o.plan and not o.conflict
+               and store.plans.get(o.plan) is not None and store.plans[o.plan].status == "open")
+    return sorted(out)
 
 
 def _op(store: Store, op_id: OpId) -> Op | None:
     return store.by_id.get(op_id)
 
 
-def _op_touches(store: Store, op_id: OpId, ids: set[str]) -> bool:
-    o = _op(store, op_id)
-    if o is None:
-        return False
-    return o.target.get("bid") in ids or o.payload.get("bid") in ids
-
-
 # ── phase ────────────────────────────────────────────────────────────────────
 
-PHASES = ("realizing", "edited", "queued", "proposed", "planned", "drifted", "synced")
+# Doc-wins order: a person's unsent edit shows even while an agent holds the
+# realizing lease, which is what lets them keep typing during a build.
+PHASES = ("edited", "realizing", "queued", "planned", "proposed", "drifted", "synced")
 
 
 def phase(store: Store, fid: str, realizing: set[str] = frozenset()) -> str:
     """The single lifecycle state of a feature. Doc wins: a person's pending
     intent outranks anything the code side has to say. ``realizing`` is the
     one ephemeral input (a lease outside the store)."""
+    w = store.watermarks(fid)
+    if any(c.stage == "unsent" for c in ink(store, fid)):
+        return "edited"
     if fid in realizing:
         return "realizing"
-    w = store.watermarks(fid)
-    claims = ink(store, fid)
-    if any(c.stage == "unsent" for c in claims):
-        return "edited"
-    queued = _queued(store, fid, w)
-    bound = any(b.feature == fid for b in store.bindings.values())
-    if queued and not bound:
-        return "planned"
+    queued = bool(w.handoff) and not covered(w.handoff, w.realized)
     if queued:
-        return "queued"
+        return "queued" if any(b.feature == fid for b in store.bindings.values()) else "planned"
     if open_plans_on(store, fid):
         return "proposed"
-    if _drifted(store, fid, w):
+    if _drifted(store, fid):
         return "drifted"
     return "synced"
 
 
-def _queued(store: Store, fid: str, w: Watermarks) -> bool:
-    if not w.handoff:
-        return False
-    return any(not in_frontier(op, w.realized) for op in [_max_op(w.handoff)])
-
-
-def _max_op(frontier: dict) -> OpId:
-    session, seq = max(frontier.items(), key=lambda kv: kv[1]) if frontier else ("", -1)
-    return f"{session}:{seq}"
-
-
-def _drifted(store: Store, fid: str, w: Watermarks) -> bool:
+def _drifted(store: Store, fid: str) -> bool:
     """Bound code moved and nobody has looked at the prose since: the newest
     op among binding changes, prose edits (any actor) and realizations on this
-    feature is a binding change."""
-    ids = {b.id for b in _blocks_of(store, fid)}
+    feature is a binding change (``bind.attach`` is a relocation, not drift)."""
     last_bind = last_prose = last_realized = -1
-    for i, o in enumerate(store.ops):
+    for i, o in enumerate(store.ops_on(_body_ids(store, fid))):
         if o.conflict:
             continue
         if o.kind in (K.BIND_REFRESH, K.BIND_DETACH) and o.target.get("fid") == fid:
             last_bind = i
-        elif o.kind.startswith("text.") and (o.payload.get("bid") in ids or o.target.get("bid") in ids):
+        elif o.kind.startswith("text."):
             last_prose = i
         elif o.kind == K.FEATURE_REALIZED and o.target.get("fid") == fid:
             last_realized = i
@@ -351,18 +307,14 @@ def directive(store: Store, fid: str) -> str:
         lines.append("Changed since the last realization:")
         for c in changes:
             lines.append(f"- {c}")
-    focus = [m for m in _new_marks(store, fid, w) if m.kind == BOLD]
+    focus = [t for m in _new_marks(store, fid, w) if m.kind == BOLD and (t := _mark_text(store, fid, m))]
     if focus:
         lines.append("")
-        lines.append("Focus: " + "; ".join(f'"{_mark_text(store, fid, m)}"' for m in focus))
+        lines.append("Focus: " + "; ".join(f'"{t}"' for t in focus))
     consult = _all_links(store, fid)
     if consult:
         lines.append("")
         lines.append("Consult: " + ", ".join(f"{t} <{u}>" for t, u in consult))
-    scope = sorted({f"{b2}#{s}" if s else b2 for b2, s in _cites(store, fid)})
-    if scope:
-        lines.append("")
-        lines.append("Edit only: " + ", ".join(scope))
     if ho and ho.payload.get("asked"):
         lines.append("")
         lines.append(f"Author asked: {ho.payload['asked']}")
@@ -377,37 +329,34 @@ def _human_changes(store: Store, fid: str, w: Watermarks) -> list[str]:
     for b in _blocks_of(store, fid):
         for f in text_fields(b.kind):
             for s in b.text(f).segs:
-                if s.dead and s.dead != "view":
+                if s.dead:
                     killer = _op(store, s.dead)
-                    if killer and killer.actor.startswith(HUMAN) and not in_frontier(s.dead, w.realized) \
+                    if killer and is_human(killer.actor) and not in_frontier(s.dead, w.realized) \
                             and in_frontier(s.dead, w.handoff):
                         out.append(f"removed: \"{s.chars}\"")
     return out
 
 
 def _new_marks(store: Store, fid: str, w: Watermarks) -> list[Mark]:
-    ids = {b.id for b in _blocks_of(store, fid)}
+    """Marks a person turned on since the last realization."""
     out: list[Mark] = []
-    for o in store.ops:
-        if o.conflict or o.kind != K.TEXT_MARK or not o.actor.startswith(HUMAN):
+    for o in store.ops_on(_body_ids(store, fid)):
+        if o.conflict or o.kind != K.TEXT_MARK or not is_human(o.actor) or not o.payload.get("on", True):
             continue
-        if o.payload.get("bid") not in ids or in_frontier(o.id, w.realized):
+        if in_frontier(o.id, w.realized):
             continue
-        for mj in o.payload.get("added", []):
-            out.append(Mark.from_json(mj))
+        out.extend(Mark.from_json(mj) for mj in o.payload.get("added", []))
     return out
 
 
 def _mark_text(store: Store, fid: str, m: Mark) -> str:
-    for b in _blocks_of(store, fid):
-        for f in text_fields(b.kind):
-            t = b.text(f)
-            if t.holds(m.start):
-                spans = live_spans(t)
-                lt = t.live_text()
-                for sp in spans:
-                    if sp.kind == m.kind and sp.attrs == m.attrs:
-                        return lt[sp.start:sp.end]
+    """The live words under the mark ``m``'s placing op left on the page (a
+    merge keeps the first placer; a mark since turned off yields nothing)."""
+    for block, f in store.mark_holders(m.op):
+        if store.feature_of(block.id) == fid:
+            for cur in block.text(f).marks:
+                if cur.op == m.op and cur.kind == m.kind:
+                    return block.text(f).mark_text(cur)
     return ""
 
 
@@ -423,31 +372,14 @@ def _all_links(store: Store, fid: str) -> list[tuple[str, str]]:
     return out
 
 
-def _cites(store: Store, fid: str) -> list[tuple[str, str]]:
-    out = []
-    for b in _blocks_of(store, fid):
-        for f in text_fields(b.kind):
-            for m in b.text(f).marks:
-                if m.kind == CITE:
-                    out.append((m.attrs.get("file", ""), m.attrs.get("symbol", "")))
-    return out
-
-
 # ── history ──────────────────────────────────────────────────────────────────
 
 def history(store: Store, fid: str) -> list[Op]:
-    """Structural ops on the heading plus text ops on the blocks the feature
-    currently dominates, oldest first. Ops on blocks it dominated at the time
-    but no longer does are omitted."""
-    ids = {b.id for b in _blocks_of(store, fid)}
-    out = []
-    for o in store.ops:
-        if o.conflict:
-            continue
-        tb = o.target.get("bid") or o.target.get("fid") or o.payload.get("bid")
-        if tb in ids or o.target.get("into") in ids:
-            out.append(o)
-    return out
+    """Every op recorded against the heading or a block it currently
+    dominates, oldest first, conflicted ones included (their ``conflict`` says
+    why they did nothing). Ops on blocks it dominated at the time but no longer
+    does are omitted."""
+    return store.ops_on(_body_ids(store, fid))
 
 
 def dead_cites(store: Store, known: set[tuple[str, str]]) -> list[tuple[str, Mark]]:
@@ -462,14 +394,15 @@ def dead_cites(store: Store, known: set[tuple[str, str]]) -> list[tuple[str, Mar
 
 # ── projection ───────────────────────────────────────────────────────────────
 
-def projection(store: Store, realizing: set[str] = frozenset()) -> dict:
+def projection(store: Store, realizing: set[str] = frozenset(), phases: dict[str, str] | None = None) -> dict:
     """What an editor needs: every live block with its text, runs, spans, plan
     claims and its feature's phase. Dead segments are omitted; the editor asks
-    for ``ground`` per feature when History is on."""
+    for ``ground`` per feature when History is on. ``phases`` may be passed in
+    by a caller that already computed them."""
     blocks = []
-    phases: dict[str, str] = {}
+    phases = dict(phases) if phases is not None else {}
     for b in store.ordered():
-        if b.kind == HEADING:
+        if b.kind == HEADING and b.id not in phases:
             phases[b.id] = phase(store, b.id, realizing)
         entry = {"id": b.id, "kind": b.kind, "level": b.level, "rank": b.rank, "head": store.block_head.get(b.id, 0),
                  "fields": {}}

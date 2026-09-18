@@ -49,8 +49,10 @@ KINDS = frozenset({
 
 # Ops a plan may carry. A plan proposes and never destroys: its deletions are
 # ``suggest_del`` marks, so ``text.delete``, ``block.delete`` and ``block.merge``
-# are not here. Each kind here has an inverse that ``plan.reject`` applies.
-PLANNABLE = frozenset({TEXT_INSERT, TEXT_MARK, BLOCK_ADD, BLOCK_SET, BLOCK_SPLIT, BLOCK_MOVE})
+# are not here. ``bind.attach`` is here because a proposed node's bindings are
+# part of the proposal: rejecting it detaches them. Each kind here has an
+# inverse that ``plan.reject`` applies.
+PLANNABLE = frozenset({TEXT_INSERT, TEXT_MARK, BLOCK_ADD, BLOCK_SET, BLOCK_SPLIT, BLOCK_MOVE, BIND_ATTACH})
 
 # Verdicts and hand-offs: ``owner`` or ``maintainer`` only. ``feature.realized``
 # is emitted by the daemon on evidence, never by an agent; the shipped policy
@@ -129,3 +131,9 @@ def frontier_union(a: dict, b: dict) -> dict:
 def in_frontier(op_id: OpId, frontier: dict) -> bool:
     session, _, seq = op_id.rpartition(":")
     return int(seq) <= frontier.get(session, -1)
+
+
+def covered(handoff: dict, realized: dict) -> bool:
+    """Every op the hand-off frontier names is inside the realized frontier:
+    the one definition of "nothing queued" (spec §3, §6)."""
+    return all(realized.get(s, -1) >= n for s, n in handoff.items())

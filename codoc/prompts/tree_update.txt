@@ -14,12 +14,12 @@ near-duplicate nodes.
                   Fields: `parent_id` (omit/null = top level), `title`, `description`, `bindings`.
 - `amend`       — repair a feature's `title` and/or its paragraphs (e.g. modified code
                   shifted its meaning). Fields: `feature_id`, `title?`, `blocks?`.
-                  `blocks` is the feature's paragraph list, BY ID: each entry is
-                  `{"id": "<block id from the subtree>", "text": "<the paragraph as it should read>"}`.
-                  Repeat every paragraph you keep with its id (unchanged text is fine);
-                  an entry without an `id` is a NEW paragraph inserted after the previous
-                  entry; a paragraph you leave out is proposed for removal. Never move
-                  text between ids.
+                  `blocks` names the paragraphs you change, BY ID: an entry
+                  `{"id": "<block id from the subtree>", "text": "<the paragraph as it should read>"}`
+                  repairs that paragraph; `{"id": "<block id>", "delete": true}` proposes
+                  its removal; an entry without an `id` is a NEW paragraph inserted after
+                  the previous entry (or after the title). A paragraph you do not mention
+                  is unchanged. Never move text between ids.
 - `move_node`   — reparent a feature (uplift / restructure). Fields: `feature_id`, `parent_id`.
 - `retire_node` — retire a feature that lost all its code. Fields: `feature_id`.
 

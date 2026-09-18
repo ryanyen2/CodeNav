@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from codoc.calculus.derive import markdown, phase
 from codoc.calculus.doc import PARAGRAPH, parent_of
+from codoc.calculus.ids import is_human
 from codoc.calculus.store import Store
 from codoc.graph.graph import Graph
 
@@ -26,16 +27,29 @@ def owner_of(store: Store, symbol: str) -> str | None:
     return b.feature if b else None
 
 
-def written_by(store: Store, fid: str) -> str:
-    """Who last wrote this feature's prose: the actor of its newest live
-    segment across title and body. ``human`` for any person."""
+def block_written_by(store: Store, bid: str) -> str:
+    """Who last wrote this block: the actor of its newest live segment, an
+    open plan's words excluded (a pending proposal is nobody's prose yet).
+    ``human`` for any person, else the actor, else ``""``."""
     newest = ("", "")
-    for b in store.feature_body(fid):
-        for s in b.text().segs:
-            if s.live and s.at > newest[0]:
-                newest = (s.at, s.actor)
+    for s in store.blocks[bid].text().segs:
+        if not s.live or s.at <= newest[0]:
+            continue
+        if s.plan and (p := store.plans.get(s.plan)) is not None and p.status == "open":
+            continue
+        newest = (s.at, s.actor)
     actor = newest[1]
-    return "human" if actor.startswith("human:") else (actor or "")
+    return "human" if is_human(actor) else actor
+
+
+def written_by(store: Store, fid: str) -> str:
+    """``human`` when a person last wrote any block of the feature (the strict
+    amend gate then applies to the feature's prompt entry), else the newest
+    machine actor."""
+    authors = [block_written_by(store, b.id) for b in store.feature_body(fid)]
+    if "human" in authors:
+        return "human"
+    return next((a for a in reversed(authors) if a), "")
 
 
 def feature_entry(store: Store, fid: str, *, full: bool = True) -> dict:
@@ -101,13 +115,13 @@ def _graph_context(store: Store, graph: Graph, symbols: set[str], seed_features:
             if k not in seen:
                 seen.add(k)
                 edges.append({"from": e["src_symbol"], "to": e.get("dst_symbol"), "kind": e["kind"]})
-    recent: list[dict] = []
-    for op in reversed(store.ops):
-        if len(recent) >= recent_ops:
-            break
-        fid = op.target.get("fid") or store.feature_of(op.target.get("bid", "")) if op.target else None
-        if fid in seed_features and op.conflict is None:
-            recent.append({"kind": op.kind, "feature_id": fid, "actor": op.actor, "at": op.at})
+    ids: set[str] = set()
+    for f in seed_features:
+        if f in store.blocks:
+            ids.update(store.body_ids(f))
+    recent = [{"kind": op.kind, "feature_id": op.target.get("fid") or store.feature_of(op.payload.get("bid") or op.target.get("bid", "")),
+               "actor": op.actor, "at": op.at}
+              for op in reversed(store.ops_on(ids)) if op.conflict is None][:recent_ops]
     return {"edges": edges[:20], "recent": recent}
 
 

@@ -7,6 +7,11 @@ starts a new session log. ``submit`` mints ids, stamps actors, applies, and
 appends to the session log; ``ingest`` runs the boundary diff and submits its
 ops as one batch under the gate the caller states. ``drain_inbox`` turns client
 submissions into ops and acks them by client id (idempotent).
+
+Batches are not atomic: an op that conflicts is recorded and the rest of the
+batch still applies (the loop relies on this: a plan whose third paragraph
+fails to ingest keeps its first two). A caller that needs all-or-nothing checks
+its bodies before submitting.
 """
 from __future__ import annotations
 
@@ -16,37 +21,55 @@ from pathlib import Path
 
 from codoc.calculus import ops as K
 from codoc.calculus.apply import apply
-from codoc.calculus.ids import new_batch_id, new_plan_id, new_session_id, op_id
+from codoc.calculus.doc import is_text_field
+from codoc.calculus.ids import actor_kind, new_batch_id, new_plan_id, new_session_id, op_id
 from codoc.calculus.ingest import Ingest, as_plan_bodies, ingest, resolve_pending_refs
 from codoc.calculus.ops import Op
-from codoc.calculus.store import Policy, Store
+from codoc.calculus.store import Store
 from codoc.substrate import log as L
-from codoc.substrate.clock import Clock, SkewError
+from codoc.substrate.clock import Clock
 
 OWNER = "owner"
+MACHINE_KINDS = frozenset({"agent", "translator", "loop", "import"})
 
 
 @dataclass
 class Roles:
-    """Actor → role. The local checkout's person is ``owner``; everyone else
-    defaults to ``suggest`` unless listed. The hub fills this from GitHub."""
+    """Actor → role, and the policy the applier runs (spec §7.3).
+
+    - ``owner`` / ``maintainer``: everything.
+    - ``machine`` (agents, the loop, translators, imports): the trunk and plans,
+      but no verdicts and no hand-offs; ``feature.realized`` only from the loop
+      itself, which is the daemon settling evidence.
+    - ``suggest`` (everyone else): ``plan.open`` and ops tagged with a plan the
+      same actor opened. Riding someone else's open plan would land a stranger's
+      words when the maintainer accepts it.
+    """
     table: dict[str, str] = field(default_factory=dict)
     default: str = "suggest"
 
     def role(self, actor: str) -> str:
         if actor in self.table:
             return self.table[actor]
-        if actor in ("loop",) or actor.startswith(("translator:", "import", "agent:")):
+        if actor_kind(actor) in MACHINE_KINDS:
             return "machine"
         return self.default
 
-    def policy(self, op: Op) -> str | None:
+    def policy(self, store: Store, op: Op) -> str | None:
         role = self.role(op.actor)
-        if role in (OWNER, "maintainer", "machine"):
+        if role in (OWNER, "maintainer"):
             return None
-        # suggest: plans, comments, and ops inside a plan only.
-        if op.kind == K.PLAN_OPEN or op.plan:
+        if role == "machine":
+            if op.kind in K.VERDICTS and not (op.kind == K.FEATURE_REALIZED and op.actor == "loop"):
+                return f"{op.actor} may not write {op.kind}"
             return None
+        if op.kind == K.PLAN_OPEN:
+            return None
+        if op.plan:
+            plan = store.plans.get(op.plan)
+            if plan is not None and plan.actor == op.actor:
+                return None
+            return f"{role} may only write to its own plans"
         return f"{role} may only write plans"
 
 
@@ -61,8 +84,8 @@ class Workspace:
         self.clock = Clock(node)
         self.store = Store(policy=self.roles.policy)
         self.problems: list[L.LogProblem] = []
-        self.quarantined: list[Op] = []
         self._inbox_offsets: dict[str, int] = {}
+        self._acked: dict[str, set[str]] = L.acked_cids(self.codoc_dir)
         self.rebuild()
         self.readonly = readonly
         self.session = session or new_session_id()
@@ -73,6 +96,8 @@ class Workspace:
 
     # ── replay ─────────────────────────────────────────────────────────────
     def rebuild(self) -> None:
+        """Fold every valid log on disk into a fresh store (I6). The log is the
+        truth: nothing replayed is refused, and the clock advances past it."""
         self.store = Store(policy=self.roles.policy)
         self.problems = []
         files = []
@@ -94,14 +119,10 @@ class Workspace:
             self._replay_one(op)
 
     def _replay_one(self, op: Op) -> None:
-        try:
-            self.clock.observe(op.at)
-        except SkewError:
-            self.quarantined.append(op)
-            return
-        # Replay applies the op as recorded: the wire payload is regenerated
-        # from the canonical one where they differ, so the applier recomputes
-        # the same thing; conflicts recorded before are recorded again.
+        self.clock.observe(op.at)
+        # The applier accepts every canonical payload back, so replaying the
+        # recorded op reproduces the recorded state; conflicts recorded before
+        # are recorded again.
         apply(self.store, _wire(op))
 
     # ── writing ────────────────────────────────────────────────────────────
@@ -112,19 +133,22 @@ class Workspace:
                   kind=kind, target=dict(target), payload=dict(payload), base=dict(base or {}),
                   plan=plan, caused_by=caused_by)
 
-    def submit(self, bodies: list[dict], *, actor: str, batch: str | None = None, plan: str | None = None,
-               base: dict | None = None, caused_by: str | None = None) -> list[Op]:
-        """Mint, apply and log a batch of op bodies ``{kind, target, payload}``."""
+    def _apply(self, op: Op) -> Op:
         if self.writer is None:
             raise RuntimeError("read-only workspace: submit through the daemon's inbox")
+        apply(self.store, op)
+        self.writer.append(op)
+        return op
+
+    def submit(self, bodies: list[dict], *, actor: str, batch: str | None = None, plan: str | None = None,
+               base: dict | None = None, caused_by: str | None = None) -> list[Op]:
+        """Mint, apply and log a batch of op bodies ``{kind, target, payload}``
+        (see the module note on atomicity)."""
         batch = batch or new_batch_id()
-        out: list[Op] = []
-        for b in bodies:
-            op = self._mint(b["kind"], b.get("target", {}), b.get("payload", {}), actor=actor, batch=batch,
-                            plan=b.get("plan", plan), base=base, caused_by=b.get("caused_by", caused_by))
-            apply(self.store, op)
-            self.writer.append(op)
-            out.append(op)
+        out = [self._apply(self._mint(b["kind"], b.get("target", {}), b.get("payload", {}), actor=actor, batch=batch,
+                                      plan=b.get("plan", plan), base=base, caused_by=b.get("caused_by", caused_by)))
+               for b in bodies]
+        self._sync()
         return out
 
     def open_plan(self, *, actor: str, kind: str = "edit", target: str | None = None, note: str = "",
@@ -134,57 +158,66 @@ class Workspace:
                       "payload": {"kind": kind, "target": target, "note": note}}], actor=actor, batch=pid)
         return pid
 
+    # ── ingest ─────────────────────────────────────────────────────────────
+    def plan_ingest(self, bid: str, path: str, *, base_text: str, new_md: str, actor: str,
+                    plan: str | None = None) -> Ingest:
+        """The boundary diff, computed and not applied: what ``new_md`` would do
+        to the field. ``plan`` here only says whether the human-mark refusal
+        applies (it does not on a plan, where the person decides)."""
+        block = self.store.blocks.get(bid)
+        if block is None:
+            return Ingest(refused="no_block")
+        if not block.live:
+            return Ingest(refused="dead_block")
+        if not is_text_field(block.kind, path):
+            return Ingest(refused="not_text")
+        return ingest(block.text(path), bid=bid, path=path, base_text=base_text, new_md=new_md, actor=actor, plan=plan)
+
+    def commit_ingest(self, res: Ingest, *, actor: str, plan: str | None = None, batch: str | None = None,
+                      base: dict | None = None, caused_by: str | None = None) -> list[Op]:
+        """Mint and apply a computed ingest as one batch, under ``plan`` if
+        given (its deletes become ``suggest_del`` marks). Every op records the
+        frontier the diff ran at as ``base``."""
+        if res.refused:
+            return []
+        bodies = as_plan_bodies(res.bodies, plan) if plan else res.bodies
+        batch = batch or plan or new_batch_id()
+        base = base if base is not None else dict(self.store.frontier)
+        ops: list[Op] = []
+        insert_ids: list[str] = []
+        for b in bodies:
+            body = {"kind": b["kind"], "target": b["target"], "payload": dict(b["payload"])}
+            resolve_pending_refs([body], insert_ids)      # inserts precede the marks that name them
+            op = self._apply(self._mint(body["kind"], body["target"], body["payload"], actor=actor, batch=batch,
+                                        plan=plan, base=base, caused_by=caused_by))
+            if b["kind"] == K.TEXT_INSERT:
+                insert_ids.append(op.id)
+            ops.append(op)
+        self._sync()
+        return ops
+
     def ingest(self, bid: str, path: str, *, base_text: str, new_md: str, actor: str, base: dict | None = None,
                plan: str | None = None, caused_by: str | None = None, batch: str | None = None,
                plan_note: str = "", gate: float | None = None) -> tuple[Ingest, list[Op]]:
-        """Run the boundary diff and submit its ops as one batch. ``gate`` is the
+        """``plan_ingest`` then ``commit_ingest``. ``gate`` is the
         ``deleted_fraction`` above which a trunk write becomes a plan; ``None``
-        means never. A demotion (edited since base, or over the gate) opens a
-        plan with this actor and tags every op with it."""
-        block = self.store.blocks.get(bid)
-        if block is None:
-            return Ingest(refused="no_block"), []
-        text = block.text(path)
-        res = ingest(text, bid=bid, path=path, base_text=base_text, new_md=new_md, actor=actor,
-                     base=base if base is not None else dict(self.store.frontier), plan=plan)
+        means never. A demotion opens a plan with this actor and tags every op
+        with it (``res.demote_to_plan`` says so)."""
+        res = self.plan_ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, plan=plan)
         if res.refused:
             return res, []
-        if plan is None and (res.demote_to_plan or (gate is not None and res.deleted_fraction > gate)):
-            reason = res.demote_to_plan or "over_gate"
-            plan = self.open_plan(actor=actor, kind="edit", target=bid, note=plan_note or reason)
-            res.demote_to_plan = reason
-        batch = batch or plan or new_batch_id()
-        bodies = as_plan_bodies(res.bodies, plan) if plan else res.bodies
-        ops: list[Op] = []
-        insert_ids: list[str] = []
-        pending_marks: list[dict] = []
-        for b in bodies:
-            if b["kind"] == K.TEXT_MARK and any(isinstance(b["payload"].get(k), list) and b["payload"][k][:1] == ["$ins"]
-                                                 for k in ("start", "end")):
-                pending_marks.append(b)
-                continue
-            op = self._mint(b["kind"], b["target"], b["payload"], actor=actor, batch=batch, plan=plan,
-                            base=base, caused_by=caused_by)
-            if b["kind"] == K.TEXT_INSERT:
-                insert_ids.append(op.id)
-            apply(self.store, op)
-            self.writer.append(op)
-            ops.append(op)
-        if pending_marks:
-            resolve_pending_refs(pending_marks, insert_ids)
-            for b in pending_marks:
-                op = self._mint(b["kind"], b["target"], b["payload"], actor=actor, batch=batch, plan=plan,
-                                base=base, caused_by=caused_by)
-                apply(self.store, op)
-                self.writer.append(op)
-                ops.append(op)
-        return res, ops
+        if plan is None and gate is not None and res.deleted_fraction > gate:
+            plan = self.open_plan(actor=actor, kind="edit", target=bid, note=plan_note or "over_gate")
+            res.demote_to_plan = "over_gate"
+        return res, self.commit_ingest(res, actor=actor, plan=plan, batch=batch, base=base, caused_by=caused_by)
 
     # ── clients ────────────────────────────────────────────────────────────
     def drain_inbox(self, identity: dict[str, str]) -> list[Op]:
         """Apply every new submission from every client. ``identity`` maps a
         client name to the actor the daemon stamps; unknown clients are
-        ignored (a file nobody vouches for writes nothing).
+        ignored (a file nobody vouches for writes nothing). Only whole lines
+        are consumed; a malformed one is acked with an error so the client
+        learns, and the offset advances line by line, after the ack.
 
         A client cannot know the op ids of characters it typed a moment ago and
         has not yet seen acked, so an anchor may name them provisionally as
@@ -192,56 +225,43 @@ class Workspace:
         submission minted. The drain resolves those against the acks it has
         given, in order, so a batch of typing lands as one chain of ops."""
         out: list[Op] = []
-        acked = self._acked_cids()
         minted: dict[str, str] = {}   # cid -> op id, for provisional anchors
         for client in L.clients(self.codoc_dir):
             actor = identity.get(client)
             if actor is None:
                 continue
-            subs, end = L.read_inbox(self.codoc_dir, client, self._inbox_offsets.get(client, 0))
-            self._inbox_offsets[client] = end
-            for s in subs:
-                if s.cid in acked.get(client, set()):
-                    continue
-                if s.kind == "ingest":
-                    # A whole-text write from another process: the boundary diff
-                    # runs here, in the applier. The ack names the first op.
-                    res, ops = self.ingest(s.target["bid"], s.target.get("path", "text"),
-                                           base_text=s.payload.get("base_text", ""), new_md=s.payload.get("new_md", ""),
-                                           actor=actor, plan=s.plan, caused_by=s.caused_by, batch=s.batch or None)
-                    first = ops[0] if ops else Op(id="", at="", actor=actor, batch="", kind="ingest",
-                                                  conflict=res.refused or ("empty" if not ops else None))
-                    L.ack(self.codoc_dir, client, s.cid, first)
-                    acked.setdefault(client, set()).add(s.cid)
-                    out.extend(ops)
-                    continue
-                payload = _resolve_provisional(s.payload, minted)
-                op = self._mint(s.kind, s.target, payload, actor=actor, batch=s.batch or new_batch_id(),
-                                plan=s.plan, base=s.base, caused_by=s.caused_by)
-                apply(self.store, op)
-                self.writer.append(op)
-                minted[s.cid] = op.id
-                L.ack(self.codoc_dir, client, s.cid, op)
-                acked.setdefault(client, set()).add(s.cid)
-                out.append(op)
-        return out
-
-    def _acked_cids(self) -> dict[str, set[str]]:
-        out: dict[str, set[str]] = {}
-        d = L.inbox_dir(self.codoc_dir)
-        if not d.exists():
-            return out
-        for p in d.glob("*.ack.jsonl"):
-            client = p.name[: -len(".ack.jsonl")]
-            with p.open("r", encoding="utf-8") as fh:
-                for line in fh:
-                    try:
-                        out.setdefault(client, set()).add(json.loads(line)["cid"])
-                    except (json.JSONDecodeError, KeyError):
-                        continue
+            acked = self._acked.setdefault(client, set())
+            for line in L.read_inbox(self.codoc_dir, client, self._inbox_offsets.get(client, 0)):
+                s = line.sub
+                if s is None:
+                    L.ack(self.codoc_dir, client, line.cid, error=line.error)
+                elif s.cid not in acked:
+                    if s.kind == "ingest":
+                        # A whole-text write from another process: the boundary
+                        # diff runs here, in the applier. The ack names the first op.
+                        res, ops = self.ingest(s.target["bid"], s.target.get("path", "text"),
+                                               base_text=s.payload.get("base_text", ""), new_md=s.payload.get("new_md", ""),
+                                               actor=actor, plan=s.plan, caused_by=s.caused_by, batch=s.batch or None)
+                        L.ack(self.codoc_dir, client, s.cid, ops[0] if ops else None,
+                              error=res.refused or (None if ops else "unchanged"))
+                        out.extend(ops)
+                    else:
+                        op = self._apply(self._mint(s.kind, s.target, _resolve_provisional(s.payload, minted),
+                                                    actor=actor, batch=s.batch or new_batch_id(), plan=s.plan,
+                                                    base=s.base, caused_by=s.caused_by))
+                        minted[s.cid] = op.id
+                        L.ack(self.codoc_dir, client, s.cid, op)
+                        out.append(op)
+                    acked.add(s.cid)
+                self._inbox_offsets[client] = line.end
+        self._sync()
         return out
 
     # ── sessions ───────────────────────────────────────────────────────────
+    def _sync(self) -> None:
+        if self.writer is not None:
+            self.writer.sync()
+
     def rotate_session(self) -> str:
         """Close the current session log and open a new one (on commit, HEAD
         change, or at the caller's request)."""

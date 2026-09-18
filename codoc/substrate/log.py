@@ -152,13 +152,18 @@ class SessionWriter:
         self._fh = self.path.open("a", encoding="utf-8")
 
     def append(self, op: Op) -> None:
+        """Write one op to the OS; ``sync`` makes a batch durable."""
         assert self._fh is not None
         self._fh.write(json.dumps(op.to_json(), ensure_ascii=False) + "\n")
         self._fh.flush()
-        os.fsync(self._fh.fileno())
+
+    def sync(self) -> None:
+        if self._fh is not None:
+            os.fsync(self._fh.fileno())
 
     def close(self) -> None:
         if self._fh is not None:
+            self.sync()
             self._fh.close()
             self._fh = None
 
@@ -180,36 +185,77 @@ class Submission:
 
 
 def submit(codoc_dir: str | Path, client: str, subs: list[Submission]) -> Path:
-    """Append submissions to this client's inbox file (O_APPEND; each line is
-    one small write so concurrent writers interleave whole lines)."""
+    """Append submissions to this client's inbox file: one ``O_APPEND`` write
+    for the whole batch, so concurrent writers interleave whole lines."""
     d = inbox_dir(codoc_dir)
     d.mkdir(parents=True, exist_ok=True)
     path = d / f"{client}.jsonl"
-    with path.open("a", encoding="utf-8") as fh:
-        for s in subs:
-            fh.write(json.dumps(s.__dict__, ensure_ascii=False) + "\n")
+    data = "".join(json.dumps(s.__dict__, ensure_ascii=False) + "\n" for s in subs).encode("utf-8")
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
     return path
 
 
-def read_inbox(codoc_dir: str | Path, client: str, offset: int = 0) -> tuple[list[Submission], int]:
-    """Submissions after byte ``offset``, and the new offset."""
+@dataclass
+class InboxLine:
+    """One complete inbox line: a valid submission, or the error that makes it
+    invalid (acked back so the client learns), and the offset just past it."""
+    sub: Submission | None
+    error: str | None
+    end: int
+    cid: str = ""
+
+
+def read_inbox(codoc_dir: str | Path, client: str, offset: int = 0) -> list[InboxLine]:
+    """Complete lines after byte ``offset``. An unterminated tail is left for
+    the next read: a writer may be mid-line."""
     path = inbox_dir(codoc_dir) / f"{client}.jsonl"
     if not path.exists():
-        return [], offset
-    out: list[Submission] = []
+        return []
     with path.open("rb") as fh:
         fh.seek(offset)
         data = fh.read()
-    end = offset + len(data)
-    for line in data.decode("utf-8", errors="replace").splitlines():
-        if not line.strip():
+    out: list[InboxLine] = []
+    pos = 0
+    while (nl := data.find(b"\n", pos)) >= 0:
+        raw, pos = data[pos:nl], nl + 1
+        end = offset + pos
+        if not raw.strip():
             continue
         try:
-            d = json.loads(line)
-            out.append(Submission(**{k: d.get(k) for k in Submission.__dataclass_fields__ if k in d}))
-        except (json.JSONDecodeError, TypeError):
-            continue   # a torn or foreign line; the client resubmits (idempotent by cid)
-    return out, end
+            d = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+            out.append(InboxLine(None, f"unreadable: {e}", end))
+            continue
+        cid = d.get("cid") if isinstance(d, dict) else None
+        err = _validate(d)
+        if err:
+            out.append(InboxLine(None, err, end, cid if isinstance(cid, str) else ""))
+            continue
+        out.append(InboxLine(Submission(**{k: d[k] for k in Submission.__dataclass_fields__ if k in d and d[k] is not None}),
+                             None, end, cid))
+    return out
+
+
+def _validate(d) -> str | None:
+    if not isinstance(d, dict):
+        return "not an object"
+    if not isinstance(d.get("cid"), str) or not d["cid"]:
+        return "cid must be a non-empty string"
+    if not isinstance(d.get("kind"), str):
+        return "kind must be a string"
+    for key in ("target", "payload"):
+        if not isinstance(d.get(key), dict):
+            return f"{key} must be an object"
+    for key in ("batch", "plan", "caused_by"):
+        if d.get(key) is not None and not isinstance(d[key], str):
+            return f"{key} must be a string"
+    if d.get("base") is not None and not isinstance(d["base"], dict):
+        return "base must be an object"
+    return None
 
 
 def clients(codoc_dir: str | Path) -> list[str]:
@@ -219,7 +265,25 @@ def clients(codoc_dir: str | Path) -> list[str]:
     return sorted(p.stem for p in d.glob("*.jsonl") if not p.name.endswith(".ack.jsonl"))
 
 
-def ack(codoc_dir: str | Path, client: str, cid: str, op: Op) -> None:
+def ack(codoc_dir: str | Path, client: str, cid: str, op: Op | None = None, *, error: str | None = None) -> None:
+    """Tell the client what became of ``cid``: the op it minted (and its
+    conflict, if any), or the error that kept it from minting one."""
     path = inbox_dir(codoc_dir) / f"{client}.ack.jsonl"
     with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps({"cid": cid, "op": op.id, "conflict": op.conflict}) + "\n")
+        fh.write(json.dumps({"cid": cid, "op": op.id if op else "", "conflict": op.conflict if op else error}) + "\n")
+
+
+def acked_cids(codoc_dir: str | Path) -> dict[str, set[str]]:
+    out: dict[str, set[str]] = {}
+    d = inbox_dir(codoc_dir)
+    if not d.exists():
+        return out
+    for p in d.glob("*.ack.jsonl"):
+        client = p.name[: -len(".ack.jsonl")]
+        with p.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    out.setdefault(client, set()).add(json.loads(line)["cid"])
+                except (json.JSONDecodeError, KeyError):
+                    continue
+    return out

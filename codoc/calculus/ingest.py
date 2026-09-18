@@ -4,26 +4,31 @@ A person types ops. Everyone else — the loop's LLM pass, a translator, a
 Markdown import, an agent's ``codoc_write_block`` — hands in whole new text for
 one Text field. This module turns that into ops, once, under the rules:
 
-1. The caller states the text it was shown (``base_text``) and the frontier it
-   was shown at (``base``). The field's text at ``base`` must equal
-   ``base_text``; otherwise the call is refused and the caller re-reads. That is
-   the ledger's ``base_text`` arbitration, kept.
+1. The caller states the text it was shown (``base_text``). It must equal the
+   field's current live text; otherwise the call is refused as ``stale_base``
+   and the caller re-reads. (The substrate records the frontier the call ran
+   at on every op it mints.)
 2. Text is NFC. A paragraph break inside the new text is refused: the caller
    addresses blocks, not descriptions (the LLM prompt is block-keyed).
-3. Tokens are script-aware (words and whitespace for spaced scripts, one
-   character per token for unspaced ones). A longest-common-subsequence diff
-   over tokens yields hunks; each hunk is one ``text.delete`` over the base
-   characters it drops and one ``text.insert`` anchored after the last
-   surviving base character before it (or START).
-4. If anyone inserted into the field after ``base`` (live characters beyond the
-   frontier), a trunk write is demoted to a plan: the document wins.
-5. Marks survive by identity. A mark in the new text with the same kind and
-   attrs as an existing mark that still covers a surviving character is the
-   existing mark; nothing is emitted for it. A new-text mark with no such
-   counterpart is minted by this call. A mark whose characters all die dies
-   with them. A loop or translator call that would kill every live character of
-   a human-placed bold, link or cite refuses the block.
-6. The result carries ``deleted_fraction``; the caller's gate decides trunk or
+3. Tokens are script-aware: words and whitespace runs for spaced scripts, one
+   character per token for unspaced ones. The diff is a longest-common-
+   subsequence over tokens in which whitespace never anchors a match on its
+   own (it survives only beside a surviving word), so a rewritten sentence is
+   one hunk and an appended word re-authors nothing. Each hunk is one
+   ``text.delete`` over the base characters it drops and one ``text.insert``
+   anchored after the last surviving base character before it (or START).
+4. Marks survive by identity and the result is a fixed point: after the ops
+   apply, ``markdown(field) == new_md``. An existing mark whose surviving
+   characters the new text still marks the same way is kept; where the new
+   extent differs, the mark is widened by an ``on`` over the new span (bold
+   merges; a link or cite displaces and the inverse restores) and shrunk by an
+   ``off`` over the surviving characters the new text no longer marks. A bold
+   whose end an insert lands on would grow over the insert (I2's one growing
+   kind); when the new text does not bold those words, an ``off`` over them
+   follows the insert. A loop or translator call that would remove a
+   human-placed bold, link or cite from every character it covers, on the
+   trunk, refuses the block; under a plan the person decides.
+5. The result carries ``deleted_fraction``; the caller's gate decides trunk or
    plan from it before minting.
 
 Pure: this module mints no ids and applies nothing. It returns op *bodies* in
@@ -37,49 +42,38 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
 from codoc.calculus import ops as K
-from codoc.calculus.ids import START, CharRef
+from codoc.calculus.ids import START, CharRef, actor_kind, is_human
 from codoc.calculus.inline_md import Span, parse
-from codoc.calculus.ops import in_frontier
-from codoc.calculus.text import BOLD, CITE, LINK, Mark, Text, nfc
+from codoc.calculus.text import BOLD, CITE, GROWS_AFTER, LINK, Mark, Text, nfc
 
-_HUMAN_MARKS = frozenset({BOLD, LINK, CITE})
-_MACHINE_ACTORS = ("loop", "translator:")
+VISIBLE_MARKS = frozenset({BOLD, LINK, CITE})     # the kinds Markdown can express
+MACHINE_KINDS = frozenset({"loop", "translator"})
 
 
 @dataclass
 class Ingest:
-    bodies: list[dict] = field(default_factory=list)   # {kind, target, payload}
+    bodies: list[dict] = field(default_factory=list)   # {kind, target, payload}, in apply order
     deleted_fraction: float = 0.0
     inserted: int = 0
     deleted: int = 0
     refused: str | None = None
-    demote_to_plan: str | None = None                    # reason, when a trunk write must be a plan
+    demote_to_plan: str | None = None                    # set by the substrate when its gate opened a plan
 
-
-class Refused(Exception):
-    pass
+    @property
+    def unchanged(self) -> bool:
+        return not self.bodies and self.refused is None
 
 
 def tokenize(text: str) -> list[str]:
-    """Lossless script-aware tokens: ``"".join(tokenize(t)) == t``. A token is
-    a word with its punctuation and trailing whitespace (so whitespace never
-    matches on its own and a rewritten sentence is one hunk, not a lattice of
-    surviving spaces); each character of an unspaced script (Han, Kana, Thai …)
-    is its own token, so a rewrite of one character does not re-author a
-    sentence."""
+    """Lossless script-aware tokens: ``"".join(tokenize(t)) == t``. Words and
+    whitespace runs are separate tokens; each character of an unspaced script
+    (Han, Kana, Thai …) is its own token, so a rewrite of one character does
+    not re-author a sentence."""
     out: list[str] = []
-    for m in re.finditer(r"\s+|\S+\s*", text):
+    for m in re.finditer(r"\s+|\S+", text):
         tok = m.group(0)
-        if tok.isspace():
-            out.append(tok)
-            continue
-        if _unspaced(tok):
-            body = tok.rstrip()
-            trail = tok[len(body):]
-            chars = list(body)
-            if trail:
-                chars[-1] += trail
-            out.extend(chars)
+        if not tok.isspace() and _unspaced(tok):
+            out.extend(tok)
         else:
             out.append(tok)
     return out
@@ -90,7 +84,7 @@ def _unspaced(word: str) -> bool:
 
 
 def ingest(text: Text, *, bid: str, path: str, base_text: str, new_md: str, actor: str,
-           base: dict, plan: str | None = None) -> Ingest:
+           plan: str | None = None) -> Ingest:
     """Compute the ops that turn ``text`` (live: ``base_text``) into the prose
     and marks of ``new_md``. See the module docstring for the rules."""
     res = Ingest()
@@ -100,47 +94,51 @@ def ingest(text: Text, *, bid: str, path: str, base_text: str, new_md: str, acto
         return res
     live = text.live_text()
     if nfc(base_text) != live:
-        # Was the field edited after base? Then the caller's text is stale by
-        # construction; either way it must re-read.
         res.refused = "stale_base"
         return res
     refs = list(text.live_refs())
-    assert len(refs) == len(live)
-    if plan is None and any(not in_frontier(r[0], base) for r in refs):
-        res.demote_to_plan = "edited_since_base"
     a, b = tokenize(live), tokenize(new_plain)
-    sm = SequenceMatcher(None, a, b, autojunk=False)
-    # Offsets of each token in its text.
-    a_off = _offsets(a)
-    b_off = _offsets(b)
-    survivors: dict[int, CharRef] = {}      # new offset -> base char that survives there
+    sm = SequenceMatcher(str.isspace, a, b, autojunk=False)
+    a_off, b_off = _offsets(a), _offsets(b)
+    survivors: dict[int, CharRef] = {}                    # new offset → base char that survives there
     deletes: list[tuple[CharRef, CharRef]] = []
-    inserts: list[tuple[CharRef | str, int, int]] = []   # (anchor, new_start, new_end)
+    inserts: list[tuple[CharRef | str, int, int]] = []    # (anchor, new_start, new_end)
     last_survivor: CharRef | str = START
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "equal":
             for k in range(i1, i2):
                 for c in range(len(a[k])):
                     survivors[b_off[j1 + (k - i1)] + c] = refs[a_off[k] + c]
-            last_survivor = refs[a_off[i2 - 1] + len(a[i2 - 1]) - 1] if i2 > i1 else last_survivor
+            last_survivor = refs[a_off[i2 - 1] + len(a[i2 - 1]) - 1]
             continue
         if i2 > i1:
             deletes.append((refs[a_off[i1]], refs[a_off[i2 - 1] + len(a[i2 - 1]) - 1]))
         if j2 > j1:
             inserts.append((last_survivor, b_off[j1], b_off[j2 - 1] + len(b[j2 - 1])))
-    deleted_chars = sum(text.offset_of(e) - text.offset_of(s) + 1 for s, e in deletes)  # type: ignore[operator]
-    res.deleted = deleted_chars
+    index = {r: i for i, r in enumerate(refs)}
+    res.deleted = sum(index[e] - index[s] + 1 for s, e in deletes)
     res.inserted = sum(e - s for _, s, e in inserts)
-    res.deleted_fraction = (deleted_chars / len(live)) if live else 0.0
-    # Human marks that would die entirely under a machine write: refuse.
-    if actor.startswith(_MACHINE_ACTORS):
-        dying = _dying_refs(text, deletes)
-        for m in text.marks:
-            if m.kind in _HUMAN_MARKS and m.actor.startswith("human:"):
-                covered = [r for r in _mark_live_refs(text, m)]
-                if covered and all(r in dying for r in covered):
-                    res.refused = f"would_drop_human_{m.kind}"
-                    return res
+    res.deleted_fraction = (res.deleted / len(live)) if live else 0.0
+
+    # Marks: where each existing mark's surviving characters sit in the new
+    # text, and which new offsets each kind of span covers.
+    to_new = {r: o for o, r in survivors.items()}
+    cover: dict[tuple, set[int]] = {}
+    for sp in new_spans:
+        if sp.end > sp.start:
+            cover.setdefault(_key(sp.kind, sp.attrs), set()).update(range(sp.start, sp.end))
+    existing: list[tuple[Mark, list[int]]] = []
+    for m in text.marks:
+        if m.kind not in VISIBLE_MARKS:
+            continue
+        offs = sorted(to_new[r] for r in text.mark_refs(m) if r in to_new)
+        existing.append((m, offs))
+        kept = any(o in cover.get(_key(m.kind, m.attrs), ()) for o in offs)
+        if plan is None and actor_kind(actor) in MACHINE_KINDS and is_human(m.actor) and not kept \
+                and text.mark_refs(m):
+            res.refused = f"would_drop_human_{m.kind}"
+            return res
+
     target = {"bid": bid, "path": path}
     for s, e in deletes:
         res.bodies.append({"kind": K.TEXT_DELETE, "target": target, "payload": {"from": list(s), "to": list(e)}})
@@ -148,22 +146,48 @@ def ingest(text: Text, *, bid: str, path: str, base_text: str, new_md: str, acto
         res.bodies.append({"kind": K.TEXT_INSERT, "target": target,
                            "payload": {"after": anchor if isinstance(anchor, str) else list(anchor),
                                        "text": new_plain[s:e]}})
-    # Marks: identity, never content. Emitted as ops referring to base chars
-    # where the span covers survivors; spans over freshly inserted text refer
-    # to the insert by ordinal ("$ins", index, offset) which the substrate
-    # resolves once the insert's op id exists.
+
+    def mark(kind: str, attrs: dict, start, end, on: bool) -> None:
+        res.bodies.append({"kind": K.TEXT_MARK, "target": target,
+                           "payload": {"kind": kind, "attrs": dict(attrs), "start": start, "end": end, "on": on}})
+
+    # Shrink: surviving characters the new text no longer marks this way.
+    for m, offs in existing:
+        covered = cover.get(_key(m.kind, m.attrs), set())
+        for lo, hi in _runs(o for o in offs if o not in covered):
+            mark(m.kind, m.attrs, list(survivors[lo]), list(survivors[hi]), False)
+    # A growing mark that an insert lands on has grown over words the new text
+    # does not mark: take it off them.
+    for idx, (anchor, s, e) in enumerate(inserts):
+        for m, _ in existing:
+            if m.kind in GROWS_AFTER and anchor == m.end:
+                covered = cover.get(_key(m.kind, m.attrs), set())
+                for lo, hi in _runs(o for o in range(s, e) if o not in covered):
+                    mark(m.kind, m.attrs, ["$ins", idx, lo - s], ["$ins", idx, hi - s], False)
+    # Widen or mint: every new span not already wholly under a same mark.
     for sp in new_spans:
         if sp.end <= sp.start:
             continue
-        span_survivors = [survivors[o] for o in range(sp.start, sp.end) if o in survivors]
-        if span_survivors and any(_mark_covers(text, m, span_survivors) and m.kind == sp.kind and m.attrs == sp.attrs
-                                  for m in text.marks):
-            continue  # an existing mark survives by identity
-        start_ref = _ref_for(sp.start, survivors, inserts)
-        end_ref = _ref_for(sp.end - 1, survivors, inserts)
-        res.bodies.append({"kind": K.TEXT_MARK, "target": target,
-                           "payload": {"kind": sp.kind, "attrs": sp.attrs, "start": start_ref, "end": end_ref, "on": True}})
+        want = set(range(sp.start, sp.end))
+        if any(m.kind == sp.kind and m.attrs == sp.attrs and want <= set(offs) for m, offs in existing):
+            continue
+        mark(sp.kind, sp.attrs, _ref_for(sp.start, survivors, inserts), _ref_for(sp.end - 1, survivors, inserts), True)
     return res
+
+
+def _key(kind: str, attrs: dict) -> tuple:
+    return (kind, tuple(sorted(attrs.items())))
+
+
+def _runs(offsets) -> list[tuple[int, int]]:
+    """Maximal runs of consecutive integers, as inclusive ``(lo, hi)`` pairs."""
+    out: list[tuple[int, int]] = []
+    for o in sorted(offsets):
+        if out and out[-1][1] + 1 == o:
+            out[-1] = (out[-1][0], o)
+        else:
+            out.append((o, o))
+    return out
 
 
 def _offsets(tokens: list[str]) -> list[int]:
@@ -174,41 +198,16 @@ def _offsets(tokens: list[str]) -> list[int]:
     return out
 
 
-def _dying_refs(text: Text, deletes: list[tuple[CharRef, CharRef]]) -> set[CharRef]:
-    dying: set[CharRef] = set()
-    refs = list(text.live_refs())
-    index = {r: i for i, r in enumerate(refs)}
-    for s, e in deletes:
-        for i in range(index[s], index[e] + 1):
-            dying.add(refs[i])
-    return dying
-
-
-def _mark_live_refs(text: Text, m: Mark):
-    si = text.locate(m.start)
-    ei = text.locate(m.end)
-    for i in range(si[0], ei[0] + 1):
-        seg = text.segs[i]
-        if not seg.live:
-            continue
-        lo = si[1] if i == si[0] else 0
-        hi = ei[1] if i == ei[0] else len(seg.chars) - 1
-        for k in range(lo, hi + 1):
-            yield seg.ref(k)
-
-
-def _mark_covers(text: Text, m: Mark, refs: list[CharRef]) -> bool:
-    live = set(_mark_live_refs(text, m))
-    return any(r in live for r in refs)
-
-
-def _ref_for(offset: int, survivors: dict[int, CharRef], inserts: list[tuple[CharRef | str, int, int]]):
+def _ref_for(offset: int, survivors: dict[int, CharRef], inserts: list[tuple[CharRef | str, int, int]]) -> list:
+    """A new-text offset as a wire anchor: the surviving base character, or the
+    insert that minted it as ``["$ins", index, k]`` (every new offset is one or
+    the other by construction of the opcodes)."""
     if offset in survivors:
         return list(survivors[offset])
     for idx, (_, s, e) in enumerate(inserts):
         if s <= offset < e:
             return ["$ins", idx, offset - s]
-    raise Refused(f"offset {offset} maps to neither a survivor nor an insert")
+    raise AssertionError(f"offset {offset} maps to neither a survivor nor an insert")
 
 
 def as_plan_bodies(bodies: list[dict], plan: str) -> list[dict]:

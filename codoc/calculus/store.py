@@ -13,6 +13,10 @@ mutation that changes them:
                       rank so "after a deleted block" still names a place
 - ``rank_head``       block → pos of its last re-rank (a plan's move is not
                       undone over a later re-rank by someone else)
+- ``ops_by_block``    block → positions of the ops recorded against it (the
+                      canonical holders of an applied op; the client's hint
+                      for a conflicted one), so every "ops on this feature"
+                      view is O(ops on the feature), not O(log)
 - ``block_head`` / ``structural_head``   cache keys for the derived views
 """
 from __future__ import annotations
@@ -67,7 +71,7 @@ class Watermarks:
     handoffs: list[OpId] = field(default_factory=list)   # hand-off op ids, oldest first
 
 
-Policy = Callable[[Op], str | None]
+Policy = Callable[["Store", Op], str | None]   # (store, op) → denial reason, or None
 
 
 class Store:
@@ -79,10 +83,12 @@ class Store:
         self.watermarks_by_fid: dict[str, Watermarks] = {}
         self.ops: list[Op] = []
         self.by_id: dict[OpId, Op] = {}
+        self.position: dict[OpId, int] = {}       # op id → index in ``ops`` (apply order)
         self.frontier: dict[str, int] = {}
         self.char_index: dict[OpId, set[tuple[str, str]]] = {}
         self.mark_index: dict[OpId, set[tuple[str, str]]] = {}
         self.block_head: dict[str, int] = {}
+        self.ops_by_block: dict[str, list[int]] = {}
         self.rank_head: dict[str, int] = {}
         self.structural_head: int = 0
         self.policy: Policy | None = policy
@@ -283,13 +289,28 @@ class Store:
     def record(self, op: Op, touched: set[str], structural: bool) -> None:
         self.ops.append(op)
         self.by_id[op.id] = op
+        self.position[op.id] = len(self.ops) - 1
         session, _, seq = op.id.rpartition(":")
         self.frontier = frontier_union(self.frontier, {session: int(seq)})
         p = self.pos
         for bid in touched:
             self.block_head[bid] = p
+            self.ops_by_block.setdefault(bid, []).append(p - 1)
+        if not touched and op.conflict:
+            # A refused op is still history for the block the client named.
+            for hint in (op.target.get("bid"), op.target.get("fid"), op.target.get("into")):
+                if hint:
+                    self.ops_by_block.setdefault(hint, []).append(p - 1)
+                    break
         if structural:
             self.structural_head = p
+
+    def ops_on(self, bids) -> list[Op]:
+        """The recorded ops on any of ``bids``, oldest first, each once."""
+        seen: set[int] = set()
+        for b in bids:
+            seen.update(self.ops_by_block.get(b, ()))
+        return [self.ops[i] for i in sorted(seen)]
 
     # ── equality for tests and snapshots ───────────────────────────────────
     def to_json(self) -> dict:

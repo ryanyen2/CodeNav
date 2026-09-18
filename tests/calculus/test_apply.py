@@ -201,7 +201,7 @@ def test_plan_cannot_delete_blocks_and_suggest_del_needs_plan():
 
 
 def test_authority_policy_records_conflict():
-    def policy(op: Op):
+    def policy(store: Store, op: Op):
         if op.actor.startswith("human:contrib") and op.plan is None and op.kind != K.PLAN_OPEN:
             return "suggest role may only write plans"
         return None

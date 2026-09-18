@@ -8,7 +8,8 @@
 All derived, all regenerable, all written atomically. Nothing here is read
 back by the calculus. ``status.json`` keeps one ephemeral input the store does
 not hold: the realizing lease, which a live realize pass renews by rewriting
-the file and which decays by mtime.
+the file and which decays by mtime. Phases are computed once per publish and
+shared by every file.
 """
 from __future__ import annotations
 
@@ -27,8 +28,6 @@ STATUS_FILE = "status.json"
 EXPORT_FILE = "tree.codoc"
 REALIZING_LEASE_SECONDS = 300
 
-SYNCED, EDITED, QUEUED, REALIZING, PROPOSED = "synced", "edited", "queued", "realizing", "proposed"
-
 
 def atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -37,8 +36,12 @@ def atomic_write(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-def write_projection(codoc_dir: str | Path, store: Store, realizing: set[str] = frozenset()) -> Path:
-    p = projection(store, realizing)
+def phases_of(store: Store, realizing: set[str] = frozenset()) -> dict[str, str]:
+    return {h.id: phase(store, h.id, realizing) for h in store.headings()}
+
+
+def write_projection(codoc_dir: str | Path, store: Store, phases: dict[str, str]) -> Path:
+    p = projection(store, phases=phases)
     by_feature: dict[str, list[dict]] = {}
     by_file: dict[str, list[str]] = {}
     for b in store.bindings.values():
@@ -69,7 +72,7 @@ def realizing_is_fresh(codoc_dir: str | Path, now: float | None = None) -> bool:
     path = Path(codoc_dir) / STATUS_FILE
     try:
         d = json.loads(path.read_text(encoding="utf-8"))
-        if d.get("state") != REALIZING:
+        if d.get("state") != "realizing":
             return False
         age = (now or time.time()) - path.stat().st_mtime
         return age < REALIZING_LEASE_SECONDS and (Path(codoc_dir) / "realize.md").exists()
@@ -77,7 +80,8 @@ def realizing_is_fresh(codoc_dir: str | Path, now: float | None = None) -> bool:
         return False
 
 
-def write_status(codoc_dir: str | Path, store: Store, *, realizing: bool | None = None, detail: str = "") -> dict:
+def write_status(codoc_dir: str | Path, store: Store, *, phases: dict[str, str] | None = None,
+                 realizing: bool | None = None, detail: str = "") -> dict:
     """Derive the workspace state and write it. A fresh realizing lease is
     preserved untouched (a rewrite would renew the lease it just checked)."""
     path = Path(codoc_dir) / STATUS_FILE
@@ -85,33 +89,33 @@ def write_status(codoc_dir: str | Path, store: Store, *, realizing: bool | None 
         if realizing_is_fresh(codoc_dir):
             return json.loads(path.read_text(encoding="utf-8"))
         realizing = False
-    heads = store.headings()
-    phases = {h.id: phase(store, h.id) for h in heads}
+    phases = phases if phases is not None else phases_of(store)
     q = queued(store)
+    edited = sum(1 for p in phases.values() if p == "edited")
+    open_plans = sum(1 for p in store.plans.values() if p.status == "open")
     if realizing:
-        state, pending = REALIZING, len(q)
+        state, pending = "realizing", len(q)
     elif q:
-        state, pending = QUEUED, len(q)
+        state, pending = "queued", len(q)
         detail = detail or f"{len(q)} change(s) ready to implement — run /codoc:sync or codoc realize"
-    elif any(p == "edited" for p in phases.values()):
-        n = sum(1 for p in phases.values() if p == "edited")
-        state, pending = EDITED, n
-        detail = detail or f"{n} feature(s) with unsent edits — hand off to build"
-    elif any(p.status == "open" for p in store.plans.values()):
-        n = sum(1 for p in store.plans.values() if p.status == "open")
-        state, pending = PROPOSED, n
-        detail = detail or f"{n} proposal(s) awaiting your verdict"
+    elif edited:
+        state, pending = "edited", edited
+        detail = detail or f"{edited} feature(s) with unsent edits — hand off to build"
+    elif open_plans:
+        state, pending = "proposed", open_plans
+        detail = detail or f"{open_plans} proposal(s) awaiting your verdict"
     else:
-        state, pending = SYNCED, len(heads)
+        state, pending = "synced", len(phases)
     d = {"version": 2, "state": state, "pending": pending, "detail": detail, "head": store.pos,
-         "features": len(heads), "at": time.time()}
+         "features": len(phases), "at": time.time()}
     atomic_write(path, json.dumps(d))
     return d
 
 
 def publish(codoc_dir: str | Path, store: Store, *, root_dir: str = ".", realizing: set[str] = frozenset(),
             doc_language=None) -> dict:
-    write_projection(codoc_dir, store, realizing)
+    phases = phases_of(store, realizing)
+    write_projection(codoc_dir, store, phases)
     write_export(codoc_dir, store)
     write_queue(codoc_dir, store, root_dir, doc_language)
-    return write_status(codoc_dir, store)
+    return write_status(codoc_dir, store, phases=phases)

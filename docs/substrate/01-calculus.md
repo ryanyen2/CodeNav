@@ -199,7 +199,9 @@ conflict, and the op is recorded with `conflict` and not applied.
 - `bind.attach` enforces I8: a symbol bound elsewhere is detached from its
   prior owner by this op, recorded in the inverse.
 - `plan.open` then ops carrying `plan=pid`. Plan ops apply to the live document
-  immediately, tagged. A plan may not contain `block.delete` or `block.merge`:
+  immediately, tagged. A proposed node's `bind.attach` ops are part of its plan
+  (rejecting the plan detaches them; reopening restores them). A plan may not
+  contain `block.delete` or `block.merge`:
   a plan to delete a feature has `kind=delete`, marks `suggest_del` over all of
   the feature's Text, and its accept emits the delete batch. `plan.accept`
   clears nothing on segments (the tag stays as provenance; `Plan.status`
@@ -221,8 +223,13 @@ conflict, and the op is recorded with `conflict` and not applied.
   merged by per-session max, so a late `feature.realized` for an earlier
   hand-off never moves anything backwards.
 - `feature.realized` is emitted by the daemon, not the agent, when a reflect
-  batch cites the hand-off in `caused_by` and the session that ran it has
-  closed its epoch; `files` and `summary` come from that batch.
+  pass that ran because an agent session closed (or was recovered dead) cites
+  the hand-off in `caused_by` on a binding op; `files` and `summary` come from
+  that pass. A reflect pass triggered by a hand edit cites nothing. A request
+  whose implementation moved no bound symbol (a config change, a new file the
+  model did not attach) has no evidence, so the owner may write
+  `feature.realized` by hand (`codoc done`); the policy allows it to `owner`
+  and `maintainer` and to the loop, never to an agent.
 
 ### 3.1 Batches
 
@@ -244,38 +251,51 @@ call produces whole new text for a Text field. It enters the calculus through
 ingest(bid, path, base: Frontier, base_text: str, new_text: str, actor, plan?, caused_by?)
 ```
 
-1. The applier checks that `base_text` equals the field's live text at `base`
-   (reconstructed by un-applying this block's ops beyond `base`). If not, the
-   call is refused with the current text; the caller re-reads. This is the
-   ledger's `base_text` arbitration rule, kept.
+1. The applier checks that `base_text` equals the field's current live text.
+   If not, the call is refused (`stale_base`) and the caller re-reads: a write
+   computed against text someone has since changed is stale by construction,
+   whoever changed it. This is the ledger's `base_text` arbitration rule, kept
+   in its simplest form; the frontier the diff ran at is recorded as `base` on
+   every op the call mints, so History can say what the writer saw.
 2. `new_text` is NFC-normalized. A paragraph break inside it is refused: the
    caller addresses blocks, never a whole description, so the loop's prompt is
    block-keyed (each paragraph it may change is named by id, and new
    paragraphs are `block.add` ops it requests by position). This keeps every
    structural decision an op and keeps `ingest` a function of one field.
-3. Tokens are `doclang.tokens` (per-script segmentation; a word diff for spaced
-   scripts, a character diff for unspaced ones). The diff runs between
-   `base_text` and `new_text`; equal tokens keep their characters, deleted tokens
-   become `text.delete`, inserted tokens become `text.insert` anchored after
-   the preceding surviving character, all with this call's actor.
-4. Any delete that would cover a character minted after `base` (a character
-   the writer never saw) demotes the whole call to a plan with this actor;
-   with `plan` already set, it is recorded as a conflict on the plan.
-5. Marks survive by identity, never by content match: a mark of the same kind
-   and attrs in `new_text` that covers at least one surviving character of an
-   existing mark keeps that mark; a mark whose characters all died dies with
-   them; a mark present in `new_text` over no existing mark is minted by this
-   call. A call with `actor=loop` or `translator` that would let a
-   human-authored `bold`, `link` or `cite` die is refused for that block.
+3. Tokens are script-aware: words and whitespace runs for spaced scripts, one
+   character per token for unspaced ones. The diff is a longest common
+   subsequence over tokens in which whitespace never anchors a match on its
+   own (it survives only beside a surviving word), so a rewritten sentence is
+   one hunk and a word appended after the last word re-authors nothing. Equal
+   tokens keep their characters, deleted tokens become `text.delete`, inserted
+   tokens become `text.insert` anchored after the preceding surviving
+   character, all with this call's actor.
+4. (Removed: rule 1 already refuses a write against text that changed since
+   the writer read it. Whether a repair may land on the trunk at all while the
+   person has pending intent is rule 8, decided by the loop per feature.)
+5. Marks survive by identity, and the call is a fixed point: after its ops
+   apply, `markdown(field) == new_text`. An existing mark whose surviving
+   characters `new_text` still marks the same way is kept and, where the new
+   extent is wider, widened by an `on` over the new span (which merges into it
+   and keeps its placer); surviving characters `new_text` no longer marks that
+   way get an `off`. A `bold` whose end an insert lands on grows over the
+   insert (I2's one growing kind), so when `new_text` does not bold those
+   words an `off` over them follows the insert. A mark present in `new_text`
+   over no existing mark is minted by this call. A trunk call with
+   `actor=loop` or `translator` that would remove a human-placed `bold`,
+   `link` or `cite` from every character it covers is refused for that block;
+   under a plan the person decides.
 6. An empty `new_text` deletes every live character and leaves the block; the
    caller decides whether to `block.delete`.
 7. The call records `deleted_fraction`, the share of the field's live
-   characters it tombstoned. The loop's amend gate reads it: above the
-   threshold for a block whose last live author is a person (stricter) or
-   anyone else, the call opens a plan instead of landing on the trunk.
-8. While a feature has unsent human ink or is queued, a loop call on any of its
-   blocks opens a plan regardless of size (the ledger's row 13: the document
-   wins), and a loop plan on it is deferred to the next pass.
+   characters it tombstoned. The loop's amend gate reads it per block: above
+   the threshold for a block whose last live author (open plans excluded) is a
+   person (stricter) or anyone else, the amend becomes a plan instead of
+   landing on the trunk.
+8. While a feature has unsent human ink or is queued, a loop amend on any of
+   its blocks becomes a plan regardless of size (the ledger's row 13: the
+   document wins). One amend is one plan: every block it repairs, adds or
+   strikes rides under the same plan id, so one repair gets one verdict.
 
 Known and accepted: a rewrite that reorders two sentences re-authors the moved
 one (its characters die and are re-minted by this call). The gate in step 7
@@ -310,15 +330,16 @@ Pure over the store, cached by the keys stated.
 | `description(f)` | `f`'s own live paragraphs (before the next heading), joined by blank lines; a child's prose is the child's | structural head + the blocks' heads |
 | `attribution(field, window)` | segments since `window`, merged when adjacent segments share actor, plan and dead-ness, snapped to `doclang.tokens` boundaries for display only | on read |
 | `ink(f)` | human live segments on `f`'s blocks beyond the latest handoff frontier (unsent) or within it and beyond the realized frontier (sent) | |
-| `ground(f, since)` | loop segments and loop-killed dead segments on `f` since the viewer's cursor; the cursor defaults to the latest handoff, never the person's last keystroke | |
+| `ground(f)` | loop segments and loop-killed dead segments on `f` since the person last engaged with it: the later of the latest hand-off and their newest op on its blocks (in apply order). A feature the person never touched paints nothing: there is no "since". | |
 | `plan(f)` | live segments with `plan` set whose plan is open, plus `suggest_del` marks | |
-| `phase(f)` | `synced` · `edited` (ink) · `queued` (handoff beyond realized) · `realizing` (lease, the one ephemeral input, read from `status.json`) · `proposed` (open plan on f) · `drifted` (bind.refresh or detach on f beyond realized) · `planned` (no bindings and queued); doc-wins ordering | |
-| `directive(f)` | rendered from the all-rejected read mode of `f`'s text plus the person's ink, with the ops between the frontiers: Focus from `bold` marks, Consult from `link` marks, `Edit only:` from `cite` marks inside open comment spans (tombstoned cites included), `Author asked` from the hand-off's `asked`; for a dead heading with a `delete_code` hand-off, "remove" | |
-| `history(f)` | structural ops on the heading plus text ops on the blocks `f` currently dominates; it omits ops on blocks `f` dominated at the time but no longer does, and says so | |
+| `queued(f)` | the hand-off frontier is not covered by the realized frontier (`covered(handoff, realized)`, one definition for phase, the queue file and phantoms); a feature being edited or built right now is still queued | |
+| `phase(f)` | `edited` (unsent ink) · `realizing` (lease, the one ephemeral input, read from `status.json`) · `queued` · `planned` (queued and unbound) · `proposed` (open plan on f) · `drifted` · `synced`, first that holds. Doc wins: the person's unsent edit shows even while an agent holds the lease. `drifted` means the newest op among `bind.refresh`/`bind.detach` on `f`, text ops on its blocks (any actor) and `feature.realized` is a binding change; a `bind.attach` is a relocation, not drift | |
+| `directive(f)` | rendered from the all-rejected read mode of `f`'s text plus the person's ink, with the ops between the frontiers: Focus from `bold` marks a person turned on since the last realization (each by its own placing op), Consult from `link` marks, `Author asked` from the hand-off's `asked`; for a dead heading with a `delete_code` hand-off, "remove". `Edit only:` returns with comments (a `cite` inside an open comment span); until then the scope is the binding set | |
+| `history(f)` | every op recorded against the heading or a block `f` currently dominates, by the block the op actually landed in, conflicted ops included with their code; ops on blocks `f` dominated at the time but no longer does are omitted | |
 | `timeline(pos)` | un-apply from the live store over a bounded window, per block | |
 | `dead_cites` | `cite` marks whose `(file, symbol)` is absent from the index | index head |
 | `lang(block)` | `doclang.detect_prose_language` of its live text when it differs from the workspace language | per block |
-| `export` | Markdown, `## Title {#b-id}`, paragraphs, kind fences, marks as written; comments omitted | structural head + block heads, debounced |
+| `export` | Markdown in the `rejected` read mode (an open plan is not the document), `## Title {#b-id}`, paragraphs, kind fences, marks as written with `* [ ] \ # \`` escaped where they would read as markup; comments omitted. `import(export(s))` rebuilds `s` | structural head + block heads, debounced |
 | `projection` | per live block `{id, kind, level, rank, head, text, segs (live, plus dead inside the display window), marks, aria}`; `aria` is a per-segment description for screen readers | per block |
 
 ## 7. Sessions, order, authority, and the log
@@ -328,11 +349,13 @@ Pure over the store, cached by the keys stated.
 A session is one daemon lifetime on one checkout, identified by a random id.
 The daemon writes `log/<session>.jsonl`, appending each op after it is applied.
 A session closes and a new one opens on: daemon exit, a git commit, or a change
-of `HEAD` (branch switch, checkout, rebase). Ops that arrive in the gap between
-a `HEAD` change and the rebuild are applied against the rebuilt store and may
-record conflicts. One actor per session file: the daemon stamps `actor` on every
-op from the client's authenticated identity, and a file whose ops carry more than
-one actor, or a non-monotone `seq`, is rejected at load with a report.
+of `HEAD` (branch switch, checkout, rebase); on a `HEAD` change the daemon first
+rebuilds from the logs now on disk, since a checkout or pull may have changed
+their set. One daemon per session file, many actors: the daemon stamps `actor`
+on every op from the client's authenticated identity, so one file carries the
+person, the loop and the agents in the order they wrote. A file with a
+non-monotone `seq` or a malformed op is rejected at load with a report;
+authority is checked per op at apply and again at replay.
 
 ### 7.2 Order
 
@@ -340,19 +363,25 @@ Live: apply order. Replay: for a single session file, `seq`. Across files, the
 merge order is `(at, session, seq)`, and a rebuild after a git merge is
 deterministic given the same set of files. The daemon advances its HLC past the
 maximum `at` it has replayed, so an op typed after a pull is later than what it
-anchors to. An op whose `at` is more than ten minutes ahead of the applier's
-wall clock is quarantined (stored, not applied, reported) so one wrong clock
-cannot poison the order forever.
+anchors to. Only the applier stamps `at` (a client submission carries none),
+and a log on disk is the truth, so nothing is refused at replay: a peer's fast
+clock moves this daemon's clock forward too, and the order stays total. The
+hub, which accepts session files from strangers, is where a stamp far ahead of
+wall time is rejected, before the file is merged.
 
 ### 7.3 Authority
 
 Roles are decided outside the calculus (the hub's GitHub permission table; the
-local checkout is `owner`). The applier checks, per op, that the actor's role
-allows it: `suggest` may write plan-tagged ops and comments; `owner` and
-`maintainer` may write the trunk, verdicts and hand-offs. A disallowed op is
-recorded with `conflict="authority"` and not applied, so a PR that carries a
-forged `plan.accept` in its session file has no effect on rebuild. The hub
-validates a PR's log files before merging.
+local checkout is `owner`). The applier checks, per op and with the store in
+hand, that the actor's role allows it: `owner` and `maintainer` may write
+everything; `machine` (agents, the loop, translators, imports) may write the
+trunk and plans but no verdict and no hand-off, with one exception, the loop's
+own `feature.realized`, which is the daemon settling evidence; `suggest` may
+open plans and write ops tagged with a plan the same actor opened (riding
+someone else's open plan would land a stranger's words when the maintainer
+accepts it). A disallowed op is recorded with `conflict="authority"` and not
+applied, so a PR that carries a forged `plan.accept` in its session file has
+no effect on rebuild. The hub validates a PR's log files before merging.
 
 ### 7.4 Idempotency and provisional anchors
 

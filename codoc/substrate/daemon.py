@@ -29,7 +29,7 @@ from codoc.loop.activity import close_epoch, epoch_touched_files, read_epoch
 from codoc.loop.gitref import head_sha
 from codoc.loops import realize as R
 from codoc.substrate import log as L
-from codoc.substrate.publish import publish
+from codoc.substrate.publish import publish, realizing_is_fresh
 from codoc.substrate.workspace import Workspace
 
 CODE_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".rb", ".cpp", ".c", ".h"}
@@ -62,7 +62,12 @@ class Daemon:
         self._reflect = reflect
         self._changeset = changeset
         self._propose = propose
+        # Inbox file name → the actor the daemon stamps. Locally the file name
+        # is the identity (any process that writes ide.jsonl is the person at
+        # the keyboard); the hub stamps its own files from the session cookie
+        # before the daemon sees them.
         self.identity = {"ide": "human:local", "cli": "human:local", "mcp": "agent:claude-code", "hub": "human:hub"}
+        self._published: tuple | None = None
 
     # ── routing ────────────────────────────────────────────────────────────
     def classify(self, paths: list[str]) -> tuple[set[str], bool, bool]:
@@ -87,10 +92,12 @@ class Daemon:
         now = now if now is not None else time.time()
         code, inbox, activity = self.classify(paths)
         notes: list[str] = []
-        # 1. HEAD moved → new session file.
+        # 1. HEAD moved → the set of logs on disk may have changed (a checkout,
+        # a pull): rebuild from them, then start a new session file.
         sha = head_sha(self.root)
         if sha != self.state.head:
             self.state.head = sha
+            self.ws.rebuild()
             self.ws.rotate_session()
             notes.append("session rotated (HEAD moved)")
         # 2. Client ops.
@@ -98,7 +105,9 @@ class Daemon:
             done = self.ws.drain_inbox(self.identity)
             if done:
                 notes.append(f"{len(done)} client op(s)")
-        # 3. Epoch edges and stale recovery.
+        # 3. Epoch edges and stale recovery. A pass that runs because an agent
+        # session ended is the one kind of evidence that settles a hand-off.
+        under_epoch = False
         if self.state.epoch_open and _stale(self.codoc_dir, now):
             dead = self.state.epoch_id
             files = self.state.suppressed | set(epoch_touched_files(self.codoc_dir))
@@ -106,6 +115,7 @@ class Daemon:
             self.state.suppressed = set()
             if close_epoch(self.codoc_dir, dead, now=now, stale_after=EPOCH_STALE_SECONDS):
                 code |= files
+                under_epoch = True
                 notes.append("recovered a dead agent session")
         if activity:
             ep = read_epoch(self.codoc_dir)
@@ -120,6 +130,7 @@ class Daemon:
                     self.state.epoch_open = False
                     code |= self.state.suppressed | set(epoch_touched_files(self.codoc_dir))
                     self.state.suppressed = set()
+                    under_epoch = True
                     notes.append("agent session closed")
         # 4. Reflect.
         if code:
@@ -127,20 +138,27 @@ class Daemon:
                 self.state.suppressed |= code
                 notes.append(f"holding {len(code)} file(s) for the open session")
             else:
-                notes.append(self.reflect(code))
-        # 5. Publish.
-        publish(self.codoc_dir, self.ws.store, root_dir=str(self.root))
+                notes.append(self.reflect(code, under_epoch=under_epoch))
+        # 5. Publish, unless nothing that feeds the derived files has changed.
+        lease = realizing_is_fresh(self.codoc_dir, now)
+        key = (self.ws.store.pos, lease)
+        if key != self._published:
+            realizing = set(R.queued(self.ws.store)) if lease else set()
+            publish(self.codoc_dir, self.ws.store, root_dir=str(self.root), realizing=realizing)
+            self._published = key
         return "; ".join(notes) or "no-op"
 
-    def reflect(self, files: set[str]) -> str:
+    def reflect(self, files: set[str], *, under_epoch: bool = False) -> str:
         from codoc.loops.reflect import reflect as _reflect
         cs = (self._changeset or _changeset)(str(self.root), str(self.codoc_dir), files)
         if cs is None:
             return "index unavailable"
         self.graph.update(cs.rows, cs.touched_files())
         self.graph.save(self.codoc_dir / GRAPH_CACHE)
-        res = (self._reflect or _reflect)(self.ws, cs, self.graph, propose=self._propose or _propose())
-        R.settle(self.ws, res.caused, sha=head_sha(self.root), files=sorted(files))
+        res = (self._reflect or _reflect)(self.ws, cs, self.graph, propose=self._propose or _propose(),
+                                          under_epoch=under_epoch)
+        if under_epoch:
+            R.settle(self.ws, res, sha=head_sha(self.root), files=sorted(files))
         return f"reflect: {res.summary()}"
 
     # ── lifecycle ──────────────────────────────────────────────────────────

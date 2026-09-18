@@ -42,9 +42,11 @@ class Graph:
         self._out[e["src_symbol"]] = [x for x in self._out[e["src_symbol"]] if self._key(x) != k]
         if e.get("dst_symbol"):
             self._in[e["dst_symbol"]] = [x for x in self._in[e["dst_symbol"]] if self._key(x) != k]
+        self._by_file[e["src_file"]] = [x for x in self._by_file[e["src_file"]] if x != k]
 
     def rebuild(self, rows: list) -> None:
-        self.__init__(extract_edges(rows))
+        fresh = Graph(extract_edges(rows))
+        self.__dict__.update(fresh.__dict__)
 
     def update(self, rows: list, changed_files: set[str]) -> None:
         """Re-extract only the changed files' edges, resolved against all rows."""

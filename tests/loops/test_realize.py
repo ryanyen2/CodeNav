@@ -29,10 +29,10 @@ def test_handoff_queues_directive_and_reflect_under_it_realizes(tmp_path):
     assert write_queue(tmp_path / ".codoc", ws.store) is not None
     # The agent implements; the reflect pass cites the hand-off via caused_by.
     cs = ChangeSet(modified=[ChunkRef("c.py", "c.py::send", "f9", "t1")])
-    r = reflect(ws, cs, Graph(), propose=lambda *a, **k: [])
+    r = reflect(ws, cs, Graph(), propose=lambda *a, **k: [], under_epoch=True)
     assert r.caused == {"h1": ho.id}
-    assert any(o.caused_by == ho.id for o in ws.store.ops if o.kind == K.BIND_REFRESH)
-    done = settle(ws, r.caused, sha="abc123")
+    assert any(o.caused_by == ho.id for o in r.ops if o.kind == K.BIND_REFRESH)
+    done = settle(ws, r, sha="abc123")
     assert len(done) == 1 and done[0].caused_by == ho.id
     assert phase(ws.store, "h1") == "synced"
     assert queued(ws.store) == [] and write_queue(tmp_path / ".codoc", ws.store) is None
