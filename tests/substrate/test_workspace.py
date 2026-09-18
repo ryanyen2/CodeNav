@@ -113,12 +113,25 @@ def test_suggest_role_writes_only_plans(tmp_path):
 
 
 def test_ingest_through_workspace_lands_on_trunk_or_under_a_plan(tmp_path):
+    """01 §4 rule 5: a machine may repair a person's prose on the trunk, up to a
+    point. Past its gate the same words are a proposal instead, and the gate is
+    here because this is where every machine write passes."""
     ws = Workspace(tmp_path / ".codoc")
-    seed(ws)
+    seed(ws, actor="loop")
     t = ws.store.blocks["p1"].text()
     res, ops = ws.ingest("p1", "text", base_text=t.live_text(), new_md="Retries three times.", actor="loop")
-    assert res.refused is None and all(o.plan is None for o in ops)
+    assert res.refused is None and all(o.plan is None for o in ops)     # its own prose, a small repair
     assert ws.store.blocks["p1"].text().live_text() == "Retries three times."
+    # The same repair to a person's paragraph is a proposal: it deletes a third
+    # of it, and a person's prose is held tighter than the loop's own.
+    h = Workspace(tmp_path / "h" / ".codoc")
+    seed(h)
+    res, ops = h.ingest("p1", "text", base_text="Retries once.", new_md="Retries three times.", actor="loop")
+    assert ops and {o.plan for o in ops} != {None}
+    assert h.store.plans[ops[0].plan].actor == "loop" and h.store.plans[ops[0].plan].status == "open"
+    from codoc.calculus.derive import markdown
+    assert markdown(h.store.blocks["p1"].text(), "rejected", h.store) == "Retries once."
+    h.close()
     pid = ws.open_plan(actor="loop", kind="edit", target="p1")
     t = ws.store.blocks["p1"].text()
     res, ops = ws.ingest("p1", "text", base_text=t.live_text(), new_md="Completely new words here.", actor="loop", plan=pid)

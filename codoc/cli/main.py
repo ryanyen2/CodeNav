@@ -32,7 +32,10 @@ def _codoc(root: str) -> Path:
 
 def _require(root: str) -> Path:
     cd = _codoc(root)
-    if not (cd / "log").is_dir():
+    # The directory is what `init` makes unconditionally. `log/` is not: it
+    # appears with the first op, and a repository with no indexable file is
+    # bootstrapped without writing one.
+    if not cd.is_dir():
         typer.echo(f"No codoc workspace at {cd} — run `codoc init` first.", err=True)
         raise typer.Exit(1)
     return cd

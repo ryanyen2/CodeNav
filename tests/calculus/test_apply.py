@@ -299,3 +299,42 @@ def _live_view_from(fp):
         if b.live:
             out.append((b.id, b.kind, b.level, b.text().live_text()))
     return out
+
+
+def test_reopen_never_binds_code_to_a_dead_heading(tmp_path):
+    from codoc.substrate.workspace import Workspace
+    from tests.substrate.test_review5 import H, seed
+    """01 §3 block.delete: 'a dead heading owns no code'. plan.reopen restores
+    the bindings a reject removed without asking whether the heading is still
+    alive."""
+    ws = Workspace(tmp_path / ".codoc"); seed(ws)
+    a = ws.open_plan(actor="loop", kind="edit", target="h1")
+    ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "d.py", "symbol": "d.py::x"}}], actor="loop", plan=a)
+    rej = ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": a}, "payload": {}}], actor=H)[0]
+    assert ("d.py", "d.py::x") not in ws.store.bindings
+    ws.submit([{"kind": K.BLOCK_DELETE, "target": {"bid": "h1"}, "payload": {}}], actor=H)
+    assert not ws.store.blocks["h1"].live and not [b for b in ws.store.bindings.values() if b.feature == "h1"]
+    re = ws.submit([dict(b) for b in rej.inverse], actor=H)[0]        # the person undoes the reject
+    owners = [b for b in ws.store.bindings.values() if b.feature == "h1"]
+    assert not owners or ws.store.blocks["h1"].live, (re.conflict, [b.to_json() for b in owners])
+
+
+def test_a_reopen_naming_an_unknown_block_in_marks_back_is_a_conflict_not_a_crash():
+    """01 §5: apply is total. `_h_plan_reopen` checks every block it will touch
+    except the ones under `marks_back`; a KeyError there escapes apply (and a
+    rebuild that meets it in a merged log dies)."""
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Client")
+    paragraph(m, s, "p1", "Retries once.", after="h1")
+    apply(s, m.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit", "target": "p1"}))
+    rej = apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {}))
+    assert rej.conflict is None
+    bad = m.op(K.PLAN_REOPEN, {"pid": "P"}, {"from": "rejected", "by": rej.id,
+                                             "marks_back": [{"bid": "no-such-block", "path": "text",
+                                                             "mark": {"kind": BOLD, "attrs": {}, "start": ["s:1", 0], "end": ["s:1", 0]}}]})
+    try:
+        out = apply(s, bad)
+    except Exception as e:  # noqa: BLE001
+        pytest.fail(f"apply raised {e!r} instead of recording a conflict")
+    assert out.conflict is not None
+    assert s.plans["P"].status == "rejected"

@@ -648,14 +648,20 @@ def _undo_plan_op(store: Store, o: Op, by: OpId, touched: set[str], record: dict
                 record.setdefault("killed", []).append({"bid": block.id, "path": p, "segments": [list(k) for k in got]})
                 touched.add(block.id)
     elif o.kind == K.TEXT_MARK:
-        # A mark is undone by its placer, not by its value: the one this op put
-        # there may have grown over text typed at its edge (I2's one growing
-        # kind), and two plans over one span record the same value.
-        for block, p in store.mark_holders(o.id):
-            for m in block.text(p).remove_marks(op=o.id):
+        # A mark is undone by what this op PUT there, not by its value: the one
+        # it placed may have grown over text typed at its edge (I2's one growing
+        # kind), and two plans over one span record the same value — but it may
+        # also carry another op's placer, because `set_mark` keeps the
+        # neighbour's when it widens a mark and the displaced one's on the
+        # pieces it cuts. `Text.marks_placed_by` is that rule.
+        hint = (o.payload.get("bid", ""), o.payload.get("path", "text"))
+        added = o.payload.get("added", [])
+        for block, p in _mark_targets(store, o, added, hint):
+            t = block.text(p)
+            for m in t.marks_placed_by(o.id, added):
+                t.marks.remove(m)
                 record.setdefault("marks", []).append({"bid": block.id, "path": p, "mark": m.to_json()})
                 touched.add(block.id)
-        hint = (o.payload.get("bid", ""), o.payload.get("path", "text"))
         for mj in o.payload.get("removed", []):
             mk = Mark.from_json(mj)
             if _rejected_plan_mark(store, mk):
@@ -734,6 +740,20 @@ def _rejected_plan_mark(store: Store, mk: Mark) -> bool:
     placer = store.by_id.get(mk.op)
     plan = store.plans.get(placer.plan) if placer is not None and placer.plan else None
     return plan is not None and plan.status == "rejected"
+
+
+def _mark_targets(store: Store, o: Op, added: list[dict], hint: tuple[str, str]) -> list[tuple[Block, str]]:
+    """Every field a mark op's marks can be in: the ones indexed under its own
+    id, and the holder of each ``added`` entry — a mark it recorded under
+    another placer is indexed under that one."""
+    out = list(store.mark_holders(o.id))
+    seen = {(b.id, p) for b, p in out}
+    for a in added:
+        for b, p in _mark_holder(store, Mark.from_json(a), hint):
+            if (b.id, p) not in seen:
+                seen.add((b.id, p))
+                out.append((b, p))
+    return out
 
 
 def _mark_holder(store: Store, mk: Mark, hint: tuple[str, str]) -> list[tuple[Block, str]]:
@@ -822,7 +842,7 @@ def _h_plan_reopen(store: Store, op: Op, touched: set[str]):
         raise Conflict("plan_open", pid)
     p = op.payload
     by = p.get("by")
-    for entry in p.get("killed", []) + p.get("struck", []) + p.get("marks", []) + p.get("sets", []):
+    for entry in p.get("killed", []) + p.get("struck", []) + p.get("marks", []) + p.get("sets", []) + p.get("marks_back", []):
         if entry["bid"] not in store.blocks:
             raise Conflict("no_block", entry["bid"])
     for i in p.get("blocks", []) + p.get("deleted_blocks", []) + [m[0] for m in p.get("moved", [])]:
@@ -876,6 +896,9 @@ def _h_plan_reopen(store: Store, op: Op, touched: set[str]):
             b.level = clamp_level(level)
         touched.add(bid)
     for entry in p.get("binds", []):
+        owner = store.blocks.get(entry["fid"])
+        if owner is None or not owner.live:
+            continue        # a dead heading owns no code (spec §3), whatever the verdict undid
         key = (entry["file"], entry["symbol"])
         prior = store.bindings.get(key)
         if prior is not None:

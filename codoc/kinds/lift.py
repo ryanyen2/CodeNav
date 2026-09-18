@@ -7,12 +7,11 @@ document wins.
 """
 from __future__ import annotations
 
-from codoc.calculus.derive import phase
+from codoc.calculus.derive import HELD, phase
 from codoc.kinds import LiftContext, get, plain
 from codoc.kinds.write import write_block
 from codoc.substrate.workspace import Workspace
 
-HELD = ("edited", "queued", "planned")
 
 
 def lift_pass(ws: Workspace, graph=None, codoc_dir: str | None = None, only: set[str] | None = None) -> int:

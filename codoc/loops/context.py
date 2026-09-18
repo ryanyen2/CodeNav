@@ -12,7 +12,7 @@ paragraph it changes (spec §4, rule 2).
 """
 from __future__ import annotations
 
-from codoc.calculus.derive import markdown, phase
+from codoc.calculus.derive import block_written_by, markdown, phase
 from codoc.calculus.doc import PARAGRAPH, in_flow, parent_of, text_fields
 from codoc.calculus.ids import is_human
 from codoc.calculus.store import Store
@@ -25,24 +25,6 @@ def owner_of(store: Store, symbol: str) -> str | None:
     file = symbol.split("::", 1)[0]
     b = store.bindings.get((file, symbol))
     return b.feature if b else None
-
-
-def block_written_by(store: Store, bid: str) -> str:
-    """Who last wrote this block: the actor of the newest live segment across
-    its Text fields (a paragraph has one, a diagram has its source and its
-    caption), an open plan's words excluded (a pending proposal is nobody's
-    prose yet). ``human`` for any person, else the actor, else ``""``."""
-    b = store.blocks[bid]
-    newest = ("", "")
-    for f in text_fields(b.kind):
-        for s in b.text(f).segs:
-            if not s.live or s.at <= newest[0]:
-                continue
-            if s.plan and (p := store.plans.get(s.plan)) is not None and p.status == "open":
-                continue
-            newest = (s.at, s.actor)
-    actor = newest[1]
-    return "human" if is_human(actor) else actor
 
 
 def written_by(store: Store, fid: str) -> str:

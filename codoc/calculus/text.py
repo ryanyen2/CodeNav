@@ -131,6 +131,10 @@ class Mark:
 Pos = tuple[int, int]   # (segment index, offset); comparable
 
 
+def _attr_key(attrs: dict | None) -> tuple:
+    return tuple(sorted((attrs or {}).items()))
+
+
 @dataclass
 class Text:
     segs: list[Seg] = field(default_factory=list)
@@ -443,6 +447,19 @@ class Text:
 
     def marks_of(self, op: OpId) -> list[Mark]:
         return [m for m in self.marks if m.op == op]
+
+    def marks_placed_by(self, op: OpId, added: list[dict]) -> list[Mark]:
+        """The live marks one ``text.mark`` op put here — which is not always a
+        mark carrying its id. ``set_mark`` keeps the NEIGHBOUR's placer when it
+        widens a mark ("widening a person's cite does not make it the loop's")
+        and the DISPLACED mark's placer on the pieces it cuts, so a plan that
+        widens a person's bold, or cites inside their link, places nothing its
+        own id can find. The op's recorded ``added`` says what it put there, so
+        a mark matches on kind, attrs, start and placer — not end, so one grown
+        over text typed at its edge (I2) still matches."""
+        want = {(a["kind"], _attr_key(a.get("attrs")), tuple(a["start"]), a.get("op", "")) for a in added}
+        return [m for m in self.marks
+                if m.op == op or (m.kind, _attr_key(m.attrs), m.start, m.op) in want]
 
     def _before(self, a: CharRef, b: CharRef) -> bool:
         return self.locate(a) < self.locate(b)

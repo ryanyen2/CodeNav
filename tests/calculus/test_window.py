@@ -151,3 +151,24 @@ def test_window_equals_prefix_replay_under_every_kind_fuzzed():
                 undoable.append(op)
         check_window(s)
         check_window(s, limit=rng.randint(3, 25))
+
+
+def test_the_window_carries_the_order_a_verdict_undid():
+    """A `plan.reject` that undoes a planned move re-ranks blocks, and a page
+    from before it is in the order the plan had produced. The window records
+    the rank each op displaced, so the reader folds back to it; before this it
+    read displaced ranks from `block.move` alone and a rejected move left the
+    past pages in today's order."""
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "A")
+    paragraph(m, s, "p1", "a", after="h1")
+    heading(m, s, "h2", "B", after="p1")
+    paragraph(m, s, "p2", "b", after="h2")
+    apply(s, m.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "move", "target": "h2"}))
+    mv = apply(s, m.op(K.BLOCK_MOVE, {"bid": "h2"}, {"after": "START", "level_delta": 0}, plan="P"))
+    assert mv.conflict is None and [b.id for b in s.ordered()] == ["h2", "p2", "h1", "p1"]
+    rej = apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {}))
+    assert rej.conflict is None and [b.id for b in s.ordered()] == ["h1", "p1", "h2", "p2"]
+    w = history_window(s, limit=1)
+    # Entering the window h2 sat before h1; today it sits after it.
+    assert w["ranks"]["h2"] < s.blocks["h1"].rank < s.blocks["h2"].rank, (w["ranks"], s.blocks["h2"].rank)

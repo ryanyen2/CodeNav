@@ -207,13 +207,18 @@ def _liveness(o: Op) -> tuple[list[str], list[str]]:
 
 
 def _rank_rows(o: Op) -> list[tuple[str, str]]:
-    """(block, the rank it held before this op), from a move's own record or,
-    for a move that restores one, from its inverse."""
-    if o.kind != K.BLOCK_MOVE:
+    """(block, the rank it held before this op). A move records what it
+    displaced as ``prev`` (or, when it is itself a restore, in its inverse); a
+    verdict that undoes a planned move records the same thing as ``moved``,
+    and a page before it is in the order it undid."""
+    if o.kind == K.BLOCK_MOVE:
+        rows = o.payload.get("prev")
+        if rows is None and o.inverse:
+            rows = (o.inverse[0].get("payload") or {}).get("restore")
+    elif o.kind in VERDICTS:
+        rows = o.payload.get("moved")
+    else:
         return []
-    rows = o.payload.get("prev")
-    if rows is None and o.inverse:
-        rows = (o.inverse[0].get("payload") or {}).get("restore")
     return [(str(r[0]), str(r[1])) for r in (rows or [])]
 
 

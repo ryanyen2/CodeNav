@@ -18,6 +18,13 @@ from codoc.calculus.store import Store, Watermarks
 from codoc.calculus.text import BOLD, CITE, LINK, SUGGEST_DEL, Mark, Text
 
 LOOP = "loop"
+# A feature with pending intent: the document wins over a machine's repair
+# (01 §4 rule 8), whatever its size.
+HELD = ("edited", "queued", "planned")
+# The fraction of a block a machine may delete on the trunk before the repair
+# becomes a proposal instead (01 §4 rule 5); a person's prose is held tighter.
+GATE_MACHINE = 0.5
+GATE_HUMAN = 0.15
 
 
 # ── text views ───────────────────────────────────────────────────────────────
@@ -81,11 +88,12 @@ def plan_mark_ops(store: Store, plans: set[str]) -> list[Op]:
 
 def _unapply_plan_marks(view: Text, store: Store, plans: set[str], ops: list[Op] | None = None) -> None:
     """Undo the open plans' mark toggles on a clone, newest first: a mark this
-    op placed is found by its placer (it may have grown over text typed at its
-    edge), and a mark it displaced comes back unless a plan the person already
-    rejected had placed it."""
+    op put there is found by ``Text.marks_placed_by`` (its own id, or an
+    ``added`` entry it recorded under another placer), and a mark it displaced
+    comes back unless a plan the person already rejected had placed it."""
     for o in reversed(ops if ops is not None else plan_mark_ops(store, plans)):
-        view.remove_marks(op=o.id)
+        for m in view.marks_placed_by(o.id, o.payload.get("added", [])):
+            view.marks.remove(m)
         for mj in o.payload.get("removed", []):
             mk = Mark.from_json(mj)
             if _rejected_mark(store, mk):
@@ -150,6 +158,24 @@ def attribution(text: Text, merge: bool = True) -> list[Run]:
     return out
 
 
+def block_written_by(store: Store, bid: str) -> str:
+    """Who last wrote this block: the actor of the newest live segment across
+    its Text fields (a paragraph has one, a diagram has its source and its
+    caption), an open plan's words excluded (a pending proposal is nobody's
+    prose yet). ``human`` for any person, else the actor, else ``""``."""
+    b = store.blocks[bid]
+    newest = ("", "")
+    for f in text_fields(b.kind):
+        for s in b.text(f).segs:
+            if not s.live or s.at <= newest[0]:
+                continue
+            if s.plan and (p := store.plans.get(s.plan)) is not None and p.status == "open":
+                continue
+            newest = (s.at, s.actor)
+    actor = newest[1]
+    return "human" if is_human(actor) else actor
+
+
 # ── the three channels ───────────────────────────────────────────────────────
 
 @dataclass
@@ -168,6 +194,14 @@ def _body_ids(store: Store, fid: str) -> set[str]:
     return {b.id for b in store.feature_body(fid)}
 
 
+def prose_blocks(store: Store, fid: str) -> list[Block]:
+    """The feature's blocks that are the document. A comment hangs off words
+    rather than standing among them, so writing one is not editing the prose:
+    it must not ink the feature, turn it `edited`, or offer a hand-off of a
+    note (01 §6)."""
+    return [b for b in store.feature_body(fid) if in_flow(b.kind)]
+
+
 def ink(store: Store, fid: str) -> list[Claim]:
     """Human live segments beyond the realized frontier: ``unsent`` past the
     hand-off frontier, ``sent`` between the two. Adjacent segments merge only
@@ -175,7 +209,7 @@ def ink(store: Store, fid: str) -> list[Claim]:
     never reads as sent because it touches one typed before."""
     w = store.watermarks(fid)
     out: list[Claim] = []
-    for b in store.feature_body(fid):
+    for b in prose_blocks(store, fid):
         for f in text_fields(b.kind):
             t = b.text(f)
             lt = t.live_text()
@@ -211,7 +245,7 @@ def ground(store: Store, fid: str) -> list[Claim]:
         return not in_frontier(op_id, w.handoff) and store.position.get(op_id, -1) > since
 
     out: list[Claim] = []
-    for b in store.feature_body(fid):
+    for b in prose_blocks(store, fid):
         for f in text_fields(b.kind):
             t = b.text(f)
             i = 0
@@ -234,7 +268,7 @@ def plan_claims(store: Store, fid: str) -> list[Claim]:
     out: list[Claim] = []
     open_plans = {p.id for p in store.plans.values() if p.status == "open"}
     mark_ops = plan_mark_ops(store, open_plans)
-    for b in store.feature_body(fid):
+    for b in prose_blocks(store, fid):
         for f in text_fields(b.kind):
             t = b.text(f)
             lt = t.live_text()
@@ -252,13 +286,37 @@ def plan_claims(store: Store, fid: str) -> list[Claim]:
                 if o.payload.get("bid") != b.id or o.payload.get("path", "text") != f or o.payload.get("kind") == SUGGEST_DEL:
                     continue
                 stage = "marked" if o.payload.get("on", True) else "unmarked"
+                gone = [Mark.from_json(rj) for rj in o.payload.get("removed") or []]
                 for mj in (o.payload.get("added") if stage == "marked" else o.payload.get("removed")) or []:
                     mk = Mark.from_json(mj)
                     if not (t.holds(mk.start) and t.holds(mk.end)):
                         continue
                     span = t.live_span(mk, offsets)
-                    if span:
-                        out.append(Claim(b.id, f, span[0], span[1], "plan", stage, o.actor, f"{mk.kind}:{lt[span[0]:span[1]]}"))
+                    if not span:
+                        continue
+                    # Widening a mark records the WHOLE merged one; what the plan
+                    # proposed is the part that was not marked already.
+                    holes = [s for g in gone if stage == "marked" and g.same(mk)
+                             and t.holds(g.start) and t.holds(g.end) and (s := t.live_span(g, offsets))]
+                    for lo, hi in _minus(span, holes):
+                        out.append(Claim(b.id, f, lo, hi, "plan", stage, o.actor, f"{mk.kind}:{lt[lo:hi]}"))
+    return out
+
+
+def _minus(span: tuple[int, int], holes: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """``span`` with ``holes`` cut out of it, in order."""
+    out = [span]
+    for lo, hi in holes:
+        nxt: list[tuple[int, int]] = []
+        for a, b in out:
+            if hi <= a or lo >= b:
+                nxt.append((a, b))
+                continue
+            if a < lo:
+                nxt.append((a, lo))
+            if hi < b:
+                nxt.append((hi, b))
+        out = nxt
     return out
 
 
@@ -388,7 +446,7 @@ def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[
             reads.append(said)
         if kind.lower is None:
             continue
-        old = {k: (markdown(_at_realized(v, w.realized), "rejected", store)
+        old = {k: (markdown(_at_realized(store, v, w.realized), "rejected", store)
                    if isinstance(v, Text) and k in text_fields(b.kind) else v)
                for k, v in b.content.items()}
         for o in reversed(store.ops_on([b.id])):
@@ -403,26 +461,33 @@ def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[
     return reads, asks
 
 
-def _at_realized(text: Text, realized: dict) -> Text:
-    """The field as the last realization read it: characters minted since are
-    not there yet, and a kill since has not happened. By identity — no diff."""
+def _at_realized(store: Store, text: Text, realized: dict) -> Text:
+    """The field without what a PERSON changed since the last realization: their
+    characters are not there yet and their kills have not happened. By identity,
+    no diff. Only a person's, because `lower` speaks for the author — a diagram
+    the loop lifted from the code is already in the code, and telling the agent
+    "the author drew that edge" about it contradicts the `consult` line beside
+    it."""
     t = text.clone()
-    t.segs = [s for s in t.segs if in_frontier(s.op, realized)]
+    t.segs = [s for s in t.segs if in_frontier(s.op, realized) or not _by_human(store, s.op)]
     for s in t.segs:
-        if s.dead and not in_frontier(s.dead, realized):
+        if s.dead and not in_frontier(s.dead, realized) and _by_human(store, s.dead):
             s.dead = None
     t.marks = [m for m in t.marks if t.holds(m.start) and t.holds(m.end)]
     return t
 
 
+def _by_human(store: Store, op_id: OpId) -> bool:
+    o = store.by_id.get(op_id)
+    return o is not None and is_human(o.actor)
+
+
 def _human_changes(store: Store, fid: str, w: Watermarks) -> list[str]:
     out = []
     for c in ink(store, fid):
-        if c.stage == "sent" and in_flow(store.blocks[c.bid].kind):
+        if c.stage == "sent":
             out.append(f"added: \"{c.text}\"")
-    for b in store.feature_body(fid):
-        if not in_flow(b.kind):
-            continue
+    for b in prose_blocks(store, fid):
         for f in text_fields(b.kind):
             for s in b.text(f).segs:
                 if s.dead:

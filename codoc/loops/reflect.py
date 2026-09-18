@@ -35,7 +35,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from codoc.calculus import ops as K
-from codoc.calculus.derive import phase
+from codoc.calculus.derive import GATE_HUMAN, GATE_MACHINE, HELD, block_written_by, phase
 from codoc.calculus.doc import HEADING, PARAGRAPH, text_fields
 from codoc.calculus.ids import START, new_block_id
 from codoc.calculus.ingest import Ingest
@@ -44,14 +44,11 @@ from codoc.calculus.store import Store
 from codoc.calculus.text import SUGGEST_DEL
 from codoc.graph.graph import Graph
 from codoc.loop.diff import ChangeSet, ChunkRef
-from codoc.loops.context import block_written_by, impacted_features, owner_of, select_context
+from codoc.loops.context import impacted_features, owner_of, select_context
 from codoc.substrate.workspace import Workspace
 
 LOOP = "loop"
 MAX_ADDED_PER_CALL = 25
-GATE_MACHINE = 0.5      # deleted fraction above which a loop repair becomes a plan
-GATE_HUMAN = 0.15       # …when a person last wrote the block
-HELD = ("edited", "queued", "planned")
 
 
 @dataclass

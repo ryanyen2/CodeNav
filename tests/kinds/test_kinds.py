@@ -33,12 +33,16 @@ def test_add_and_write_block_attribute_text_fields_and_set_the_rest(tmp_path):
     blk = ws.store.blocks[w.bid]
     assert blk.content["asset"] == ".codoc/media/ui.png" and markdown(blk.text("caption")) == "Before the **fix**."
     assert [r.actor for r in attribution(blk.text("alt"))] == ["human:local"]
-    # An agent's write goes through the same boundary, as the agent.
+    # An agent's write goes through the same boundary, as the agent — and the
+    # feature holds the person's unsent ink, so the agent's words are a proposal
+    # on the page rather than prose on the trunk (01 §4 rule 8).
     w2 = write_block(ws, w.bid, {"caption": "Before the **fix**, after login.", "source": "agent"}, actor="agent:claude-code")
     assert w2.ok
     assert blk.content["source"] == "agent"
     authors = {(r.actor, blk.text("caption").live_text()[r.start:r.end]) for r in attribution(blk.text("caption"))}
     assert ("agent:claude-code", ", after login") in authors and ("human:local", "Before the fix") in authors
+    proposed = [p for p in ws.store.plans.values() if p.status == "open" and p.actor == "agent:claude-code"]
+    assert len(proposed) == 1, [p.to_json() for p in ws.store.plans.values()]
     # Unknown fields and dead blocks are refused before anything is written.
     n = len(ws.store.ops)
     assert write_block(ws, w.bid, {"nope": 1}, actor="loop").refused == [("", "unknown field 'nope'")]
@@ -48,7 +52,7 @@ def test_add_and_write_block_attribute_text_fields_and_set_the_rest(tmp_path):
                   after=w.bid, actor="human:local")
     assert c.ok
     md = export_markdown(ws.store)
-    assert "```codoc:image" in md and '"caption": "Before the **fix**, after login."' in md and "Really?" not in md
+    assert "```codoc:image" in md and '"caption": "Before the **fix**."' in md and "Really?" not in md
 
 
 def test_diagram_lifts_from_the_graph_and_lowers_an_edge_delta(tmp_path):
