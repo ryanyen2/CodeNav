@@ -965,3 +965,37 @@ describe('L. which feature a block belongs to, after a gesture', () => {
         expect(paintsIn(m, 'p1')).toEqual(['codoc-ink-unsent']);     // now B's
     });
 });
+
+// ── M. adoption in place ─────────────────────────────────────────────────────
+describe('M. a projection that changed only words', () => {
+    it('replaces the blocks it changed and leaves the rest of the document alone', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one'), block('p2', 'paragraph', 'two')]);
+        const before = m.view.state.doc;
+        m.handle.adopt(proj([block('h', 'heading', 'T'), block('p1', 'paragraph', 'ONE', 0, 9),
+                             block('p2', 'paragraph', 'two')], { head: 20 }));
+        expect(texts(m.view.state.doc)).toEqual(['T', 'ONE', 'two']);
+        // The untouched nodes are the SAME nodes: nothing was rebuilt around them.
+        expect(m.view.state.doc.child(0)).toBe(before.child(0));
+        expect(m.view.state.doc.child(2)).toBe(before.child(2));
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it('keeps the caret on the character it sat after, through the replacement', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one two')]);
+        select(m.view, posIn(m.view, 'p1', 7));                       // after "two"
+        const run = (m.proj.blocks[1].fields.text as TextField).runs[0];
+        m.handle.adopt(proj([block('h', 'heading', 'T'),
+                             para('p1', 9, [['X', { op: 'other:1', actor: 'human:b' }],
+                                            ['one two', { op: run.op, actor: run.actor }]])], { head: 20 }));
+        expect(texts(m.view.state.doc)[1]).toBe('Xone two');
+        expect(m.view.state.selection.from).toBe(posIn(m.view, 'p1', 8));   // still after "two"
+    });
+
+    it('still rebuilds when a block arrived, left or moved', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one')]);
+        m.handle.adopt(proj([block('h', 'heading', 'T'), block('p2', 'paragraph', 'new'),
+                             block('p1', 'paragraph', 'one')], { head: 20 }));
+        expect(ids(m.view.state.doc)).toEqual(['heading:h', 'paragraph:p2', 'paragraph:p1']);
+        expect(shadowFaults(m)).toEqual([]);
+    });
+});

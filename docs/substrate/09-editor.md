@@ -186,6 +186,11 @@ An adoption also ignores a projection whose `head` is lower than the one it
 has: the host's reads are asynchronous and can finish out of order, and the
 store's position only grows.
 
+**An adoption that changes only WORDS replaces those blocks in place**, which
+is the common one — every other actor's settle, every ack that carries a
+keystroke. A block arriving, leaving or moving still rebuilds the document,
+because the structure is what the rebuild is for.
+
 ## 7. Drawing
 
 Everything drawn is a decoration computed from the projection's per-block

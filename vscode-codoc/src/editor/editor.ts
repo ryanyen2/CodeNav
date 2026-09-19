@@ -19,7 +19,7 @@ import { InputRule, inputRules } from '@tiptap/pm/inputrules';
 
 import { adoptionPlan, blockNode, docFrom, flowBlocks } from '../calc/adopt';
 import { inFrontier, paintsFor, type Paint } from '../calc/claims';
-import { NO_WATERMARKS, nfc, type Ack, type OpBody, type Projection, type Submission } from '../calc/projection';
+import { NO_WATERMARKS, nfc, type Ack, type CharRef, type OpBody, type Projection, type Submission } from '../calc/projection';
 import { Recorder, reconcile, scalarOffset } from '../calc/recorder';
 import type { Shadow } from '../calc/shadow';
 import { GESTURE_CIDS, RECORDED, REPLACED, deleteFeature, deleteSelection, headingFromRule, mergeBackward, mergeForward, moveBlock, pasteBlocks, relevel, selectedBlocks, splitBlock, type Env } from './commands';
@@ -559,6 +559,33 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         // The caret by character identity (§6): the character it sits after
         // keeps its place through a replacement, whatever changed before it.
         const caretRef = caretBid && caretOff > 0 ? shadows.get(caretBid)?.refs[caretOff - 1] : undefined;
+        const moved = new Set<string>();       // whose paints this projection can have changed
+        // When only WORDS changed — no block added, removed or re-ranked — the
+        // page's structure is already right and each changed block can be
+        // replaced in place. That is the common adoption: every other actor's
+        // settle, every ack that carries someone's keystroke. Replacing the
+        // whole document instead costs a full decoration rebuild (mapping
+        // three thousand decorations through a whole-document replace measured
+        // five times worse than rebuilding, so `REPLACED` rebuilds), which is
+        // 45 of its 60 ms at 1,500 features; in place it is under 6.
+        if (plan.every(st => st.kind === 'replace')) {
+            let tr = view.state.tr;
+            for (const st of plan) {
+                const b = next.blocks.find(x => x.id === st.bid);
+                if (!b) continue;
+                const { node, shadow } = blockNode(schema, b);
+                if (shadow) shadows.set(b.id, shadow);
+                let at = -1;
+                tr.doc.forEach((n, pos) => { if (n.attrs.bid === b.id) at = pos; });
+                if (at < 0) continue;
+                tr = tr.replaceWith(at, at + tr.doc.nodeAt(at)!.nodeSize, node);
+                moved.add(b.id);
+            }
+            markDirty(adoptDirty(prev, next, moved, false, wasRealizing));
+            tr = tr.setMeta(RECORDED, []).setMeta(decoKey, true);
+            view.dispatch(restoreCaret(tr, caretBid, caretOff, caretRef));
+            return;
+        }
         // Rebuild the document in the projection's order, keeping held blocks' nodes.
         const currentNodes = new Map<string, PMNode>();
         view.state.doc.forEach(n => currentNodes.set(n.attrs.bid as string, n));
@@ -569,7 +596,6 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         // their hands and then undo the undo on the next publish.
         const order: string[] = [];
         const nodeFor = new Map<string, PMNode>();
-        const moved = new Set<string>();       // whose paints this projection can have changed
         for (const b of flowBlocks(next)) {
             const cur = currentNodes.get(b.id);
             if (held.has(b.id) && !cur) continue;                        // the page removed it
@@ -593,17 +619,20 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         for (const bid of currentNodes.keys()) if (!nodeFor.has(bid)) { shadows.delete(bid); lastOp.delete(bid); }
         markDirty(adoptDirty(prev, next, moved, order.join(' ') !== page.join(' '), wasRealizing));
         const newDoc = schema.nodes.doc.create(null, nodes);
-        let tr = view.state.tr.replaceWith(0, view.state.doc.content.size, newDoc.content)
+        const tr = view.state.tr.replaceWith(0, view.state.doc.content.size, newDoc.content)
             .setMeta(RECORDED, []).setMeta(REPLACED, true).setMeta(decoKey, true);
-        // Restore the caret by block and scalar offset.
-        if (caretBid) {
-            const moved = caretRef ? shadows.get(caretBid)?.indexOf(caretRef) ?? -1 : -1;
-            const off = moved >= 0 ? moved + 1 : caretOff;
-            let pos = 0;
-            tr.doc.forEach((n, p) => { if (n.attrs.bid === caretBid) pos = p + 1 + unitOffset(n, off); });
-            if (pos) tr = tr.setSelection(TextSelection.create(tr.doc, Math.min(pos, tr.doc.content.size)));
-        }
-        view.dispatch(tr);
+        view.dispatch(restoreCaret(tr, caretBid, caretOff, caretRef));
+    }
+
+    /** Put the caret back where the person had it: the block it was in, and the
+     *  character it sat after, found by identity through whatever moved. */
+    function restoreCaret(tr: Transaction, bid: string | null, off: number, ref: CharRef | undefined): Transaction {
+        if (!bid) return tr;
+        const at = ref ? shadows.get(bid)?.indexOf(ref) ?? -1 : -1;
+        const want = at >= 0 ? at + 1 : off;
+        let pos = 0;
+        tr.doc.forEach((n, p) => { if (n.attrs.bid === bid) pos = p + 1 + unitOffset(n, want); });
+        return pos ? tr.setSelection(TextSelection.create(tr.doc, Math.min(pos, tr.doc.content.size))) : tr;
     }
 
     function featureBlockAt(pos: number): string | null {
