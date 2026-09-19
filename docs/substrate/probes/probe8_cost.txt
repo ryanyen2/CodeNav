@@ -1,0 +1,15 @@
+mount (3,000 blocks): 390.0 ms  [paintsFor 6.6/3000, buildDecorations 73.2/1, decorationsFor 0.0/0]
+keystroke median of 8 (12.3,11.0,11.1,9.4,9.3,9.4,11.2,9.5): 11.0 ms  [paintsFor 0.1/7, buildDecorations 0.0/0, decorationsFor 1.8/7] (accumulators: sum over 8)
+  keystroke split: EditorState.apply (all plugins) 2.6 ms; view.updateState (jsdom DOM) 8.6 ms
+adopt, nothing changed: 5.0 ms  [paintsFor 0.0/0, buildDecorations 0.0/0, decorationsFor 0.0/0]
+adopt, one block changed: 17.1 ms  [paintsFor 0.0/1, buildDecorations 0.0/0, decorationsFor 0.2/1]
+  one block replaced in place (a per-block adoption's transaction), median of 5: 9.5 ms  [paintsFor 0.0/0, buildDecorations 0.0/0, decorationsFor 0.0/0]
+adopt, one block inserted: 83.9 ms  [paintsFor 3.4/3001, buildDecorations 59.5/1, decorationsFor 0.0/0]
+adopt, one block changed, one held: 15.0 ms  [paintsFor 0.0/2, buildDecorations 0.0/0, decorationsFor 0.2/1]
+ack (one cid; one block repainted in the kept set): 3.8 ms  [paintsFor 0.0/1, buildDecorations 0.0/0, decorationsFor 0.2/1]
+ack (one refusal → re-adopt one block): 13.1 ms  [paintsFor 0.0/1, buildDecorations 0.0/0, decorationsFor 0.2/1]
+adopt, only `plans` changed (no head, no phase): 2.7 ms  [paintsFor 0.0/0, buildDecorations 0.0/0, decorationsFor 0.0/0]
+History on (author paints for every block): 211.0 ms  [paintsFor 9.1/3001, buildDecorations 96.2/1, decorationsFor 0.0/0]
+selection move (no doc change), median of 6: 0.13 ms
+  structure(doc) once: 0.21 ms (×4 per keystroke = 0.8 ms of EditorState.apply)
+app.ts: projection at 1,500 features (adopt into an existing page + tree pane) 860 ms; a later projection with one block changed, median of 3: 40 ms; one feature's phase changed: 52 ms; rows: 1500
