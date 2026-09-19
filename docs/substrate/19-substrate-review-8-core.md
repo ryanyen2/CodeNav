@@ -627,3 +627,66 @@ says. Etherpad's one-value-per-key-per-character, Peritext's non-growing anchors
 Baseline's "failure is the signal", Kleppmann's move-op with "their move stands" all hold
 as round 7 found them; nothing this round found contradicts them, and (a)–(c) are each
 the same principle applied to a place it had not yet reached.
+
+---
+
+## Applied (2026-09-18)
+
+Every ranked change is in, across five commits (`df44e0b`..`6a8a20e`); the suite is
+**347 Python tests, 159 TypeScript, 3 skipped**. Measured after (`probes/perf8.py`,
+one run; this machine varies ±40% between runs):
+
+| | review | now |
+|---|---|---|
+| `settled_prefix` on a fully drifted tree | **0 of 13,521 ops (0%)** | **13,521 of 13,521 (100%)** |
+| `Publisher.phases()` COLD, 0 / 1,500 / 3,000 decided plans | 41 / 126 / 195 ms | **22 / 24 / 28** |
+| `Publisher.publish` COLD, 3,000 decided plans | 306 | **236** |
+| `Publisher.publish` COLD, drifted tree | 260 | 212 |
+
+**§G was right twice, and the second time is the round's whole result.** §G(a) said
+round 7 adopted Eg-walker's critical version for the fold's BOUNDARY and not the
+per-character metadata it depends on, and that the closed form is the one 01 §7.5
+already stated for insertions: **put on the thing what the reader needs**. Automerge's
+element carries its `succ` op ids and its `OpId` is `counter@actor`, so the deleter's
+identity survives compaction with the character; codoc's is `session:seq` — one file,
+many actors — which is exactly why the killer's name lived only on the op. So:
+`Seg.dead_actor` and `Seg.dead_at`, `Mark.at`, `Watermarks.code_at` and `realized_at`,
+`Block.detached`. The directive's `removed:` and `Focus:` read the text and the marks,
+`ground`'s "since" and `_drifted` are clock comparisons, a phantom's settle reads the
+block — and `reads_its_ops` is one clause. The fold went from folding nothing after any
+reflect pass to folding everything.
+
+§G(b) said three rounds of special cases in the authority policy had a closed form with
+none: in Google Docs a suggester's every edit IS the suggestion, so taking back words
+you proposed is the suggestion getting smaller and there is no untagged op to authorize.
+`text.delete` and `text.restore` are `PLANNABLE`, the applier holds them to the plan's
+own characters, and D1/D2/D3/D4 close by construction — including the one the hub's door
+could not evaluate, because the policy is a function of the plans again.
+
+Three of the ranked changes were made differently:
+
+- **§F 2** proposed `_new_marks` reading marks and `Seg.dead_actor`. Both shipped, and
+  the fold's frontier had to be folded into the store's too — otherwise every watermark
+  taken after a fold covered nothing, and A3's probe passed only because it did.
+- **§F 3** offered "rotate when our file moved" or the `closed` stamp; the stamp shipped
+  (§G d), because it deletes the question rather than answering it, and a crash then
+  leaves a file in `log/` where it is still read.
+- **§F 5**'s `suggest_del` segments are recorded in the mark's own `attrs` rather than a
+  parallel structure, so the record travels with the thing it describes — the same move
+  as the rest of the round.
+
+§A5 (`history` differs across a fold) is a **spec edit, not a code change**: `history`
+and the timeline are views of the LOG, and a fold is the log ending. 01 §7.5 and
+`snapshot.py` now say "every derived view of the DOCUMENT" and name the exception.
+§F1 was a question and the code moved: a person who only deleted words has pending
+intent, so `phase` is `edited` (`ink` stays ink — 09-editor §7 draws removals not at all).
+
+Four probes still fail, all on premises the fixes removed:
+
+- **A5** as above.
+- **D1/D2** submit the withdraw UNTAGGED, which is what round 7 allowed and round 8
+  refuses outright; the property they assert (no revival after the verdict) holds by
+  construction and is pinned through the real drain path in
+  `test_a_contributor_cannot_revive_words_they_withdrew_once_the_plan_is_decided`.
+- **G1** asserts the cut lands at the oldest unsettled feature's `block.add`, which was
+  true when a drifted feature was unsettled.

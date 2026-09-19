@@ -501,3 +501,48 @@ surface mechanism was fixed by adding a rule at the place the last fault appeare
 next fault appeared at the place the rule did not reach. The forms above are each *one*
 rule evaluated in *one* place — a version compare in adoption, a derivation over the
 viewport, a sequence on one stream, a keyed list — and each is smaller than what it replaces.
+
+---
+
+## Applied (2026-09-18)
+
+Every ranked change is in, across three commits (`27359e3`..`182618e`); the suite is
+**159 TypeScript tests, 347 Python, 3 skipped**, and all 11 hub probes pass.
+
+**§A1 was a fault in something round 7 shipped, and the report is right about why:** the
+frontier rule was in `ack()`, which decides which released blocks to re-read, while the
+re-reading is `adopt()`, whose hold set was "unacked" alone. One predicate now — *held is
+unacked, or acked past this projection's frontier* — evaluated where the decision is
+made, and `caughtUp` is deleted. **§A2 is the same shape and worse:** the CSS drag handle
+shipped last round did nothing in a browser, because ProseMirror's own `dragstart` runs
+after a custom handler that returns false, clears the payload and takes the drag for the
+selection. It shipped green because nothing drove the DOM path; three tests do now.
+
+**§C's per-block adoption is in, with its measurement.** Round 7 rejected mapping the
+paint set through a whole-document replace (5× worse) and left this "for a round that
+needs it"; round 8 measured what that costs, and an adoption whose every step is a
+`replace` now replaces in place:
+
+| operation | review | now |
+|---|---|---|
+| adopt, one block changed | 61 ms | **14** |
+| adopt, one changed while one held | 47 | **12** |
+| ack, one refusal → re-adopt | 46 | **10** |
+| keystroke, median of 8 | 6.1–6.4 | 8.0 (same, within this machine's noise) |
+
+Anything structural still rebuilds, which is what the rebuild is for.
+
+Two items were made differently:
+
+- **§F 5** asked for `still_allowed` from the app. The generator also asks the tracked
+  roles table itself, because that is what a revocation WRITES and a caller can forget
+  to pass a callback.
+- **§F 6** separated the two `pattern` rules rather than narrowing one: a Glob's pattern
+  is a place (absolute or `..`-climbing, both confined), a Grep's is a regex and is not a
+  path at all.
+
+**B3 still fails, and should:** it asserts that a projection in which only `plans`
+changed re-paints, which `adoptDirty` does not do — deliberately, resting on a contract
+the probe itself names (a verdict touches every block the plan's ops landed in, so those
+heads move; `probe8_hub` H10 pins that today). The contract is now written at
+`adoptDirty`, which is what was missing.
