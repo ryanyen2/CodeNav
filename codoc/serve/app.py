@@ -26,6 +26,7 @@ from codoc.substrate import log as L
 from codoc.substrate.log import Submission
 
 STATE_COOKIE = "codoc_oauth_state"
+MAX_SUBS = 200                     # one settle is a few ops; the rate limit counts requests
 LOCAL = Session("local", "local", MAINTAINER, 0.0)
 
 
@@ -125,7 +126,8 @@ def build_app(codoc_dir: str, *, static_dir: str | None = None, auth: AuthContex
             return JSONResponse({"error": "rate limited"}, status_code=429)
         from sse_starlette.sse import EventSourceResponse
         from codoc.serve.push import event_source
-        return EventSourceResponse(event_source(cd, inbox_of(s), is_disconnected=request.is_disconnected))
+        return EventSourceResponse(event_source(cd, inbox_of(s), is_disconnected=request.is_disconnected,
+                                                still_allowed=lambda: session(request) is not None))
 
     @app.post("/api/message")
     async def message(request: Request) -> JSONResponse:
@@ -179,6 +181,11 @@ def handle_message(cd: Path, s: Session, m: dict) -> JSONResponse:
         subs = m.get("subs") or []
         if not isinstance(subs, list) or not all(isinstance(x, dict) for x in subs):
             return JSONResponse({"error": "subs must be a list of submissions"}, status_code=400)
+        if len(subs) > MAX_SUBS:
+            # The rate limit counts REQUESTS, so one POST is one request however
+            # much it carries. A settle is a few ops; anything of this size is
+            # not a person typing.
+            return JSONResponse({"error": f"at most {MAX_SUBS} submissions per message"}, status_code=413)
         L.submit(cd, inbox_of(s), [Submission(
             cid=str(x.get("cid") or ""), kind=str(x.get("kind") or ""), target=dict(x.get("target") or {}),
             payload=dict(x.get("payload") or {}), batch=str(x.get("batch") or ""), plan=x.get("plan") or None,

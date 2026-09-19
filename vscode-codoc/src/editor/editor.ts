@@ -77,6 +77,13 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
     let history = false;
     /** Client ids awaiting an ack, by block. */
     const unacked = new Map<string, Set<string>>();
+    // Block → the newest op the daemon applied for it. With `unacked` this is
+    // the whole hold rule: the page is right about a block while its ops are
+    // in flight, AND while the projection in hand predates the last one that
+    // landed. A projection whose frontier covers that op already contains the
+    // gesture, so its word is newer than the page's; one that does not would
+    // undo the person's typing under their hands.
+    const lastOp = new Map<string, string>();
     /** Submissions not yet flushed. */
     let pending: Submission[] = [];
     let batch = newBatch();
@@ -106,8 +113,13 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
                 // mapping three thousand decorations through that costs far
                 // more than building them again — so `REPLACED` rebuilds the
                 // SET even when only a few blocks' paints had to be recomputed.
-                const dirty = paintsAll || tr.getMeta(REPLACED) || (tr.docChanged && !sameStructure(tr.before, tr.doc))
-                    ? null : new Set(paintsDirty);
+                // A block arriving or leaving changes which feature LATER blocks
+                // belong to, and `paintFid` is that index — so a structural
+                // change rebuilds the map, not only the set. Without it the
+                // paragraph every Enter creates has no entry and is never
+                // painted, and a dragged one keeps its old feature's colour.
+                if (tr.docChanged && (tr.getMeta(REPLACED) || !sameStructure(tr.before, tr.doc))) paintsAll = true;
+                const dirty = paintsAll ? null : new Set(paintsDirty);
                 const map = paintMap(state.doc);          // clears the dirty set
                 if (dirty === null) {
                     return { set: buildDecorations(state.doc, map, projection.phases, realizing) };
@@ -251,7 +263,6 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
 
     function ack(acks: Ack[]): void {
         const refused = new Map<string, string>();
-        const released = new Map<string, string[]>();      // block → the ops its acks named
         for (const a of acks) {
             const waiting: string[] = [];
             for (const [bid, set] of unacked) {
@@ -259,51 +270,24 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
                     waiting.push(bid);
                     repaint(bid);
                     if (a.conflict) refused.set(bid, a.conflict);
-                    if (a.op) released.set(bid, [...(released.get(bid) ?? []), a.op]);
                     if (set.size === 0) unacked.delete(bid);
                 }
             }
             // Only the blocks that were waiting on this cid hold its characters.
-            if (a.op && !a.conflict) for (const bid of waiting) shadows.get(bid)?.resolve(a.cid, a.op);
+            if (a.op && !a.conflict) {
+                for (const bid of waiting) { shadows.get(bid)?.resolve(a.cid, a.op); lastOp.set(bid, a.op); }
+            }
         }
         if (refused.size) {
             // The op did nothing in the store: the block's shadow lies. Take the
             // projection's word for that block again (09-editor §5).
             for (const [bid, code] of refused) host.onConflict?.(bid, code);
-            adopt(projection, realizing, new Set(refused.keys()));
-            return;
         }
-        const stale = caughtUp(released);
-        if (stale.size) { adopt(projection, realizing, stale); return; }
-        view.dispatch(view.state.tr.setMeta(decoKey, true));
-    }
-
-    /** The blocks this ack released whose projected `head` the page has not read.
-     *
-     *  `adopt` leaves a held block alone — the page is right about it and the
-     *  projection may predate the gesture. Nothing re-read it afterwards, so
-     *  another actor's letter in the paragraph you are typing in, an agent's
-     *  plan there, and your own Backspace coming back as the plan's
-     *  strike-through all waited for an unrelated publish. On the hub they
-     *  waited forever: its feed sends the projection before the acks, so the
-     *  hold is always still on when the projection lands.
-     *
-     *  The frontier is what makes this safe. A projection whose frontier covers
-     *  every op the acks named already CONTAINS this block's gesture, so its
-     *  word is newer than the page's. One that does not predates the gesture
-     *  and adopting it would undo the person's typing under their hands. */
-    function caughtUp(released: ReadonlyMap<string, string[]>): Set<string> {
-        const out = new Set<string>();
-        if (!released.size) return out;
-        const heads = new Map(projection.blocks.map(b => [b.id, b.head]));
-        view.state.doc.forEach(n => {
-            const bid = n.attrs.bid as string;
-            const ops = released.get(bid);
-            if (!ops || (unacked.get(bid)?.size ?? 0) > 0) return;
-            if (!ops.every(op => inFrontier(op, projection.frontier))) return;
-            if (heads.get(bid) !== undefined && heads.get(bid) !== n.attrs.head) out.add(bid);
-        });
-        return out;
+        // Adopt unconditionally: `held` below is the one predicate, so a block
+        // this ack released is re-read exactly when the projection already
+        // contains its op, and a block it did not release is left alone. An
+        // adoption that changes nothing costs one dispatch.
+        adopt(projection, realizing, new Set(refused.keys()));
     }
 
     // ── gestures ───────────────────────────────────────────────────────────
@@ -509,7 +493,14 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
      *  tree, and a projection almost never changes what most blocks are
      *  painted: a block's paints come from its own projected fields and from
      *  its feature's phase, claims and watermarks. What IS every block is a
-     *  reorder (a block's feature is where it sits) and the realizing set. */
+     *  reorder (a block's feature is where it sits) and the realizing set.
+     *
+     *  The plans list is deliberately NOT compared, and that rests on a
+     *  contract: a verdict touches every block the plan's ops landed in, so
+     *  those blocks' `head`s move and `moved` already holds them. If the
+     *  applier ever stops touching a block on a verdict, a plan's gray would
+     *  survive its own answer — so `_touch_plan` is the thing to keep, and
+     *  `tests/serve` pins it. */
     function adoptDirty(prev: Projection, next: Projection, moved: Set<string>, reordered: boolean,
                         wasRealizing: ReadonlySet<string>): Set<string> | null {
         if (reordered || paintsAll) return null;
@@ -536,13 +527,26 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
     };
 
     function adopt(next: Projection, nowRealizing: ReadonlySet<string> = new Set(), force: ReadonlySet<string> = new Set()): void {
+        // The host reads `projection.json` and `status.json` asynchronously and
+        // the watcher can fire twice for one atomic write, so a projection can
+        // arrive after a newer one. `head` is the store's own position and only
+        // grows; an older one has nothing to tell this page. (A forced
+        // re-adoption is the conflict path, which wants the projection it has.)
+        if (!force.size && next.head < projection.head) return;
         flush();
         const prev = projection, wasRealizing = realizing;
         projection = next;
         realizing = nowRealizing;
         const current: Array<{ bid: string; head: number }> = [];
         view.state.doc.forEach(n => current.push({ bid: n.attrs.bid as string, head: force.has(n.attrs.bid) ? -1 : n.attrs.head as number }));
-        const held = new Set([...unacked.keys()].filter(b => (unacked.get(b)?.size ?? 0) > 0 && !force.has(b)));
+        const stale = (bid: string) => {
+            const op = lastOp.get(bid);
+            return op !== undefined && !inFrontier(op, next.frontier);
+        };
+        const held = new Set<string>();
+        for (const bid of new Set([...unacked.keys(), ...lastOp.keys()])) {
+            if (!force.has(bid) && ((unacked.get(bid)?.size ?? 0) > 0 || stale(bid))) held.add(bid);
+        }
         const plan = adoptionPlan(current, next, held);
         if (!plan.length) {
             markDirty(adoptDirty(prev, next, new Set(), false, wasRealizing));
@@ -586,7 +590,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             order.splice(at >= 0 ? at + 1 : 0, 0, bid);
         });
         const nodes = order.map(id => nodeFor.get(id)!);
-        for (const bid of currentNodes.keys()) if (!nodeFor.has(bid)) shadows.delete(bid);
+        for (const bid of currentNodes.keys()) if (!nodeFor.has(bid)) { shadows.delete(bid); lastOp.delete(bid); }
         markDirty(adoptDirty(prev, next, moved, order.join(' ') !== page.join(' '), wasRealizing));
         const newDoc = schema.nodes.doc.create(null, nodes);
         let tr = view.state.tr.replaceWith(0, view.state.doc.content.size, newDoc.content)

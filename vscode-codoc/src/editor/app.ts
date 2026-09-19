@@ -329,7 +329,9 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
                     me: () => ({ actor, decides: decides() }),
                 });
             } else {
-                editor.adopt(m.proj, realizing);
+                // Inside `paint()` like the rest: a throw here used to skip
+                // every pane below, and `projection` has already advanced.
+                paint('the document', () => editor!.adopt(m.proj!, realizing));
             }
             // Each pane is an independent view of ONE projection, so a throw in
             // one must not cost the others their update: a single bad tree row

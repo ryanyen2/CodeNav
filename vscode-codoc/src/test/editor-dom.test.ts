@@ -765,3 +765,203 @@ describe('I. what a page must not lose to an arriving projection', () => {
         expect(m.view.dom.querySelectorAll('.codoc-marker').length).toBe(2);
     });
 });
+
+// ── J. the drag handle as a browser delivers it ──────────────────────────────
+//
+// The handle is a CSS `::before` on the block, so a drag is four DOM events and
+// no decoration. Nothing tested that path — the other drag tests call
+// `handle.moveBlock`, which is the API *under* the drop — and what shipped in
+// round 7 did nothing at all in a browser: ProseMirror's own `dragstart` runs
+// after a custom handler that returns false, calls `dataTransfer.clearData()`,
+// and takes the drag for the selection.
+class FakeDataTransfer {
+    private d = new Map<string, string>();
+    effectAllowed = 'uninitialized';
+    dropEffect = 'none';
+    get types(): string[] { return [...this.d.keys()]; }
+    setData(t: string, v: string): void { this.d.set(t, v); }
+    getData(t: string): string { return this.d.get(t) ?? ''; }
+    clearData(t?: string): void { if (t) this.d.delete(t); else this.d.clear(); }
+}
+
+function domOf(m: Mounted, bid: string): Element {
+    const el = m.view.dom.querySelector(`[data-bid="${bid}"]`);
+    if (!el) throw new Error(`no DOM for ${bid}`);
+    return el;
+}
+
+function dragEvent(type: string, target: Element, dt: FakeDataTransfer, clientY = 10): Event {
+    const ev = new window.Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, 'dataTransfer', { value: dt });
+    Object.defineProperty(ev, 'clientX', { value: 5 });
+    Object.defineProperty(ev, 'clientY', { value: clientY });
+    target.dispatchEvent(ev);
+    return ev;
+}
+
+/** A drag as Chrome delivers it: mousedown in the handle strip (x is negative,
+ *  which is where the `::before` sits), then dragstart on the block, dragover
+ *  and drop on the target, dragend on the source. */
+function dragBlock(m: Mounted, from: string, to: string): FakeDataTransfer {
+    const src = domOf(m, from);
+    src.dispatchEvent(new window.MouseEvent('mousedown',
+        { bubbles: true, cancelable: true, button: 0, clientX: -30, clientY: 5 }));
+    const dt = new FakeDataTransfer();
+    dragEvent('dragstart', src, dt);
+    const tgt = domOf(m, to);
+    dragEvent('dragover', tgt, dt);
+    dragEvent('drop', tgt, dt);
+    dragEvent('dragend', src, dt);
+    return dt;
+}
+
+describe('J. the drag handle', () => {
+    it('moves the block, and the payload survives ProseMirror\'s own dragstart', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one'), block('p2', 'paragraph', 'two')]);
+        const dt = dragBlock(m, 'p1', 'p2');
+        expect(dt.getData('application/x-codoc-bid')).toBe('p1');
+        expect(ids(m.view.state.doc)).toEqual(['heading:h', 'paragraph:p2', 'paragraph:p1']);
+        expect(m.view.dragging).toBeNull();               // ProseMirror did not take the drag as its own
+        m.handle.flush();
+        expect(kinds(m.submitted)).toEqual(['block.move']);
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it('with words selected elsewhere, is still a block move and not a move of those words', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one'), block('p2', 'paragraph', 'two')]);
+        select(m.view, posIn(m.view, 'p2', 0), posIn(m.view, 'p2', 3));        // "two" selected
+        dragBlock(m, 'p1', 'p2');
+        expect(texts(m.view.state.doc)).toEqual(['T', 'two', 'one']);
+        expect(m.view.dragging).toBeNull();
+        m.handle.flush();
+        expect(kinds(m.submitted)).toEqual(['block.move']);
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it('does nothing when the pointer went down in the text rather than the handle', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one'), block('p2', 'paragraph', 'two')]);
+        const src = domOf(m, 'p1');
+        src.dispatchEvent(new window.MouseEvent('mousedown',
+            { bubbles: true, cancelable: true, button: 0, clientX: 20, clientY: 5 }));
+        const dt = new FakeDataTransfer();
+        dragEvent('dragstart', src, dt);
+        expect(dt.getData('application/x-codoc-bid')).toBe('');
+        expect((src as HTMLElement).draggable).toBe(false);
+    });
+});
+
+// ── K. the hold predicate ────────────────────────────────────────────────────
+//
+// Round 7 put the frontier rule in `ack()`, which decides which released blocks
+// to re-read — but the re-reading is `adopt()`, whose hold set was "unacked"
+// alone. So any block just released whose op the projection does not cover was
+// replaced by that older projection the next time `adopt()` ran for any reason.
+describe('K. a block is held while the projection predates its last op', () => {
+    /** Two blocks, each with one op in flight, and Bob's projection which
+     *  predates both (its frontier covers neither). */
+    function twoInFlight() {
+        const m = mount([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one'), block('p2', 'paragraph', 'two')]);
+        select(m.view, posIn(m.view, 'p1', 3));
+        typeText(m.view, 'x');
+        m.handle.flush();
+        select(m.view, posIn(m.view, 'p2', 3));
+        typeText(m.view, 'y');
+        m.handle.flush();
+        const [cidA, cidB] = m.submitted.map(s => s.cid);
+        const bob = proj([block('h', 'heading', 'T'), block('p1', 'paragraph', 'Bone', 0, 9),
+                          block('p2', 'paragraph', 'Btwo', 0, 9)], { frontier: { bob: 1 }, head: 20 });
+        return { m, cidA, cidB, bob };
+    }
+
+    it('holds a clean block acked alongside a refused one', () => {
+        const { m, cidA, cidB, bob } = twoInFlight();
+        m.handle.adopt(bob);
+        m.handle.ack([{ cid: cidA, op: 'h:5', conflict: 'unknown_anchor' },
+                      { cid: cidB, op: 'h:6', conflict: null }]);
+        expect(texts(m.view.state.doc)[2]).toBe('twoy');     // p2's own word, not Bob's older one
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it('holds a released block when the same projection arrives twice', () => {
+        const { m, cidA, bob } = twoInFlight();
+        m.handle.adopt(bob);
+        m.handle.ack([{ cid: cidA, op: 'h:5', conflict: null }]);
+        m.handle.adopt(bob);                                  // the watcher fires twice for one write
+        expect(texts(m.view.state.doc)[1]).toBe('onex');
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it('holds one block and re-reads the other when one ack is covered and one is not', () => {
+        const { m, cidA, cidB } = twoInFlight();
+        const covering = proj([block('h', 'heading', 'T'), block('p1', 'paragraph', 'Bonex', 0, 9),
+                               block('p2', 'paragraph', 'Btwo', 0, 9)], { frontier: { bob: 1, h: 5 }, head: 21 });
+        m.handle.adopt(covering);
+        m.handle.ack([{ cid: cidA, op: 'h:5', conflict: null }, { cid: cidB, op: 'h:6', conflict: null }]);
+        expect(texts(m.view.state.doc)[1]).toBe('Bonex');     // covered: the projection's word is newer
+        expect(texts(m.view.state.doc)[2]).toBe('twoy');      // not covered: the page keeps its own
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it('does not adopt a projection older than the one it has', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one')]);
+        m.handle.adopt(proj([block('h', 'heading', 'T'), block('p1', 'paragraph', 'newer', 0, 9)], { head: 20 }));
+        expect(texts(m.view.state.doc)[1]).toBe('newer');
+        m.handle.adopt(proj([block('h', 'heading', 'T'), block('p1', 'paragraph', 'older', 0, 5)], { head: 11 }));
+        expect(texts(m.view.state.doc)[1]).toBe('newer');
+    });
+});
+
+// ── L. the paint map follows the structure ───────────────────────────────────
+//
+// `paintFid` is the block→feature index the paints read, and it was rebuilt
+// only on a full repaint — so a block born by Enter had no entry and was never
+// painted, and a dragged one kept its old feature's watermark.
+const paintsIn = (m: Mounted, bid: string) =>
+    Array.from((m.view.dom.querySelector(`[data-bid="${bid}"]`) as HTMLElement).querySelectorAll('.codoc-paint'))
+        .map(e => Array.from(e.classList).filter(c => c !== 'codoc-paint').join(' ')).sort();
+
+/** A projected paragraph built from runs, so a projection can keep the
+ *  identity of characters the page already has. */
+function para(id: string, head: number, parts: Array<[string, { op: string; actor: string; k0?: number; plan?: string | null }]>): ProjectedBlock {
+    let at = 0;
+    const runs = parts.map(([text, r]) => {
+        const start = at;
+        at += Array.from(text).length;
+        return { op: r.op, k0: r.k0 ?? 0, start, end: at, actor: r.actor, at: '1', plan: r.plan ?? null };
+    });
+    return { id, kind: 'paragraph', level: 0, rank: id, head,
+             fields: { text: { text: parts.map(x => x[0]).join(''), runs, spans: [], suggest_del: [] } } };
+}
+
+describe('L. which feature a block belongs to, after a gesture', () => {
+    it('inks the paragraph an Enter created', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one two')]);
+        expect(paintsIn(m, 'p1')).toEqual(['codoc-ink-unsent']);
+        select(m.view, posIn(m.view, 'p1', 3));
+        key(m.view, 'Enter', 13);
+        m.handle.flush();
+        const nid = ids(m.view.state.doc)[2].split(':')[1];
+        const cid = m.submitted[0].cid;
+        const mine = (m.proj.blocks[1].fields.text as TextField).runs[0];
+        m.handle.adopt(proj([block('h', 'heading', 'T'),
+                             para('p1', 5, [['one', { op: mine.op, actor: mine.actor }]]),
+                             para(nid, 5, [[' two', { op: mine.op, actor: mine.actor, k0: 3 }]])],
+                            { frontier: { h: 5 }, head: 20 }));
+        m.handle.ack([{ cid, op: 'h:5', conflict: null }]);
+        expect(texts(m.view.state.doc)).toEqual(['T', 'one', ' two']);
+        expect(paintsIn(m, nid)).toEqual(['codoc-ink-unsent']);
+    });
+
+    it("re-paints a paragraph dragged under another feature as that feature's", () => {
+        const m = mount([block('h1', 'heading', 'A'),
+                         para('p1', 1, [['a-body', { op: 'w:1', actor: 'human:a' }]]),
+                         block('h2', 'heading', 'B'),
+                         para('p2', 1, [['b-body', { op: 'w:2', actor: 'human:a' }]])],
+                        { watermarks: { h1: { handoff: { w: 1 }, realized: {} } } });
+        expect(paintsIn(m, 'p1')).toEqual(['codoc-ink-sent']);       // A was handed off
+        expect(paintsIn(m, 'p2')).toEqual(['codoc-ink-unsent']);     // B was not
+        m.handle.moveBlock('p1', 'p2');
+        expect(ids(m.view.state.doc)).toEqual(['heading:h1', 'heading:h2', 'paragraph:p2', 'paragraph:p1']);
+        expect(paintsIn(m, 'p1')).toEqual(['codoc-ink-unsent']);     // now B's
+    });
+});

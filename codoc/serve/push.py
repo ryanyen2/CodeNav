@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 from codoc.substrate import log as L
+from codoc.substrate.workspace import NONE, Roles
 
 PROJECTION, STATUS, CONFIG, HISTORY = "projection.json", "status.json", "config.json", "history.json"
 
@@ -77,8 +78,15 @@ class Feed:
         size = ack.stat().st_size if ack.exists() else 0
         self.ack_offset = size
         if size and replay:
-            complete = ack.read_bytes().split(b"\n")[:-1]        # whole lines only
-            self.ack_offset = size - sum(len(line) + 1 for line in complete[-replay:])
+            # Count back from the end of the last COMPLETE line, not from the
+            # end of the file: a daemon caught mid-append leaves a half-written
+            # tail, and subtracting the complete lines from the file's size
+            # lands the offset that many bytes inside the oldest replayed line —
+            # which then parses as garbage and takes its ack with it.
+            data = ack.read_bytes()
+            complete = data.split(b"\n")[:-1]
+            whole = sum(len(line) + 1 for line in complete)
+            self.ack_offset = whole - sum(len(line) + 1 for line in complete[-replay:])
 
     def pending(self) -> list[dict]:
         # Acks FIRST, which is the order on disk: the daemon acks during the
@@ -147,11 +155,26 @@ class Feed:
         return out
 
 
-async def event_source(codoc_dir: str | Path, client: str, *, is_disconnected=None, poll_s: float = 0.5):
+async def event_source(codoc_dir: str | Path, client: str, *, is_disconnected=None,
+                       still_allowed=None, poll_s: float = 0.5):
     """Async generator of SSE events; polls the few files it cares about (a
-    watch on ``.codoc`` would also wake on every index write)."""
+    watch on ``.codoc`` would also wake on every index write).
+
+    The door is re-asked every tick, because a stream is a long-lived READ of
+    the whole tree and the door was only checked at connect: a collaborator
+    removed from the repository kept receiving every projection until they
+    closed the tab, for as long as the browser held it open. Two questions —
+    the tracked roles table, which is what a revocation writes and is asked
+    here, and ``still_allowed``, which the app fills in with its own session
+    check. A revoked viewer's stream ends; their next request meets the door.
+    """
     feed = Feed(codoc_dir, client)
+    actor = L.actor_for(client)
     while True:
+        if still_allowed is not None and not still_allowed():
+            return
+        if actor and Roles.load(codoc_dir).role(actor) == NONE:
+            return
         for m in feed.pending():
             yield {"event": m["kind"], "data": json.dumps(m, ensure_ascii=False)}
         if is_disconnected is not None and await is_disconnected():

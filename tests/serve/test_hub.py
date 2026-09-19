@@ -307,3 +307,51 @@ def test_a_revoked_collaborator_recorded_as_none_is_not_a_suggester(tmp_path):
     ])
     assert all(o.conflict == "authority" for o in ws.drain_inbox())
     ws.close()
+
+
+def test_a_revoked_collaborators_open_stream_stops_carrying_the_tree(tmp_path):
+    """Review 8: `/api/events` checked the session once, at connect. A stream
+    is a long-lived READ of the whole tree, so a collaborator taken off the
+    repository kept receiving every projection until they closed the tab — and
+    the browser reopens it by itself. Their writes were refused at the next
+    POST; their reading was not."""
+    import asyncio
+
+    from codoc.serve.auth import NONE, record_role
+    from codoc.serve.push import event_source
+    cd = workspace(tmp_path)
+    (cd / "config.json").write_text(json.dumps({"roles": {"human:gh:eve": SUGGEST}}))
+
+    async def run():
+        async def connected():
+            return False
+        gen = event_source(cd, client_name("eve"), is_disconnected=connected, poll_s=0.01)
+        assert [(await asyncio.wait_for(gen.__anext__(), 2))["event"] for _ in range(2)] == ["projection", "status"]
+        record_role(cd, "eve", NONE)                      # the recheck found them removed
+        ws = Workspace(cd)
+        t = ws.store.blocks["p1"].text()
+        ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                    "payload": {"after": list(t.last_live_ref()), "text": " More."}}], actor="human:local")
+        publish(cd, ws.store, root_dir=str(tmp_path))
+        ws.close()
+        try:
+            return (await asyncio.wait_for(gen.__anext__(), 2))["event"]
+        except StopAsyncIteration:
+            return None
+
+    assert asyncio.run(run()) is None
+
+
+def test_one_message_may_not_carry_an_unbounded_number_of_submissions(tmp_path):
+    """The rate limit counts REQUESTS, so one POST is one request however much
+    it carries: 5,000 inserts in one body were 5,000 drains, and for a
+    suggester 5,000 plans."""
+    from codoc.serve.app import MAX_SUBS
+    cd = workspace(tmp_path)
+    c = TestClient(build_app(str(cd)))
+    one = {"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": "START", "text": "x"}}
+    ok = c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "submit", "subs": [dict(one, cid=f"c{i}") for i in range(MAX_SUBS)]})
+    assert ok.status_code == 200
+    too_many = c.post("/api/message", headers={"x-codoc-csrf": "1"},
+                      json={"kind": "submit", "subs": [dict(one, cid=f"d{i}") for i in range(MAX_SUBS + 1)]})
+    assert too_many.status_code == 413

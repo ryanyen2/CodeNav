@@ -230,3 +230,19 @@ def test_the_live_sdk_run_gates_every_tool_through_a_hook(monkeypatch):
 def test_every_github_credential_is_scrubbed_from_the_agents_environment():
     from codoc.serve.realize_agent import _GH_TOKEN_KEYS
     assert {"CODOC_GITHUB_TOKEN", "CODOC_GITHUB_CLIENT_SECRET", "GITHUB_TOKEN", "GH_TOKEN"} <= set(_GH_TOKEN_KEYS)
+
+
+def test_a_grep_pattern_is_a_regex_and_a_glob_pattern_is_a_path():
+    """Review 8: the `pattern` check round 7 added for `Glob` also read
+    `Grep`'s, which is a REGEX — so an agent searching for `/api/message`, or
+    any literal starting with a slash, was refused. And a Glob that climbs out
+    with `..` was not confined at all."""
+    wt = "/srv/repo/.codoc/worktrees/codoc-realize-s-9"
+    policy = realize_tool_policy(["c.py"], consult_allowlist=frozenset(), resolve=lambda h: [], root=wt)
+    assert policy("Grep", {"pattern": "/api/message"}) == (True, "")
+    assert policy("Grep", {"pattern": "^~/.*$"}) == (True, "")
+    assert policy("Grep", {"pattern": "oauth", "path": os.path.expanduser("~")})[0] is False
+    assert policy("Glob", {"pattern": "**/*.py"}) == (True, "")
+    assert policy("Glob", {"pattern": "/Users/*/.config/gh/*"})[0] is False
+    assert policy("Glob", {"pattern": "../../etc/*"})[0] is False
+    assert policy("Glob", {"pattern": "src/../../../etc/*"})[0] is False

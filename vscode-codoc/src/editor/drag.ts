@@ -52,7 +52,14 @@ export function dragPlugin(move: (bid: string, after: string | 'START') => void)
                     if (!el || el !== armed || !el.dataset.bid) return false;
                     ev.dataTransfer?.setData(MIME, el.dataset.bid);
                     if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'move';
-                    return false;
+                    // TRUE, or ProseMirror's own dragstart runs next and calls
+                    // `dataTransfer.clearData()` — erasing the block id — then
+                    // sets `view.dragging` to a slice of the SELECTION. The
+                    // handle would do nothing with an empty selection, and with
+                    // words selected anywhere would move those words to the
+                    // drop point as an edit the recorder attributes to the
+                    // person. This drag is ours from here.
+                    return true;
                 },
                 dragend() { clear(); disarm(); return false; },
                 dragover(view: EditorView, ev: DragEvent) {

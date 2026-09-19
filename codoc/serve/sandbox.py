@@ -12,7 +12,7 @@ instruction. This module is the pure, fully-tested policy:
     confusion) past PR review.
   • ``under_root`` — every path a tool names stays inside the worktree: a
     ``file_path`` or ``path``, and a ``Glob``'s ``pattern``, which is a path
-    too. A Read of ``~/.config/gh/hosts.yml`` is one hop
+    too (a ``Grep``'s is a regex and is not). A Read of ``~/.config/gh/hosts.yml`` is one hop
     from the token that opens the PR, and Write is confined to files the
     directive already names, so an unconfined Read is an exfiltration path with
     a publisher attached.
@@ -83,7 +83,8 @@ def _posix(path: str, root: str | None = None) -> str:
 
 def _static_prefix(pattern: str) -> str:
     """The part of a glob before its first wildcard — the deepest directory it
-    is certainly rooted at. ``/Users/*/.ssh/*`` is a question about ``/Users``."""
+    is certainly rooted at. ``/Users/*/.ssh/*`` is a question about ``/Users``;
+    ``../../etc/*`` is one about ``../../etc``, which `under_root` resolves."""
     head = pattern.split("*")[0].split("?")[0].split("[")[0]
     return head if head.endswith("/") else head.rsplit("/", 1)[0] + "/"
 
@@ -149,15 +150,17 @@ def can_use_tool(tool_name: str, tool_input: dict | None, *,
         return False, f"tool '{tool_name}' is not permitted for remote-originated realization"
     target = ""
     if tool_input:
-        # `pattern` too: a Glob takes its target there, and an absolute pattern
-        # lists files anywhere. `Read` still refuses them, so what leaks is
-        # names — which key files exist under `~/.ssh` — and a boundary that
+        # A GLOB takes its target in `pattern` too, and a pattern that names a
+        # place — absolute, or climbing out with `..` — lists files anywhere.
+        # `Read` still refuses them, so what leaks is names, and a boundary that
         # answers "no" to the contents has no business answering "yes" to the
-        # listing. Only its static prefix is a path; the glob part is not.
+        # listing. Only the static prefix is a path; the glob part is not. A
+        # GREP's `pattern` is a regex and means nothing of the sort: reading it
+        # as a path refused an agent searching for `/api/message`.
         target = tool_input.get("file_path") or tool_input.get("path") or ""
-        if not target:
+        if not target and tool_name == "Glob":
             pat = str(tool_input.get("pattern") or "")
-            if pat.startswith("/") or pat.startswith("~"):
+            if pat.startswith("/") or pat.startswith("~") or pat.startswith("../") or "/../" in pat:
                 target = _static_prefix(pat)
     # Every path a tool names is inside the worktree. A tool that names none
     # (a Glob or Grep with no `path`) runs from the worktree, which is the

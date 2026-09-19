@@ -34,16 +34,22 @@ export class Timeline {
     }
 
     setWindow(w: HistoryWindow, proj: Projection): void {
-        // "At now" is a position the person chose, not a number. A new op makes
-        // the old number a moment in the PAST, so reading it back flipped the
-        // page into a reconstruction nobody asked for, with the live editor
-        // hidden under it — every time anyone else edited anything.
-        const atNow = Number(this.range.value) >= (this.window?.ops.length ?? 0);
+        // The scrubber holds a MOMENT, not a number. The window is the newest
+        // 200 ops, so every publish slides it by one: reading the index back
+        // showed the next moment each time anybody edited, and reading "now"
+        // back as an index flipped the page into the past entirely. At now,
+        // stay at now; parked on a moment, find that moment again by its op id
+        // and fall back to now when it has slid out of the window.
+        const at = Number(this.range.value);
+        const was = this.window;
+        const pinned = was && at < was.ops.length ? was.ops[at].id : null;
         this.window = w;
         this.proj = proj;
         this.range.max = String(w.ops.length);
-        if (atNow) { this.range.value = String(w.ops.length); this.show(w.ops.length); }
-        else if (!this.bar.hidden) this.show(Number(this.range.value));
+        const found = pinned === null ? -1 : w.ops.findIndex(o => o.id === pinned);
+        const p = pinned === null || found < 0 ? w.ops.length : found;
+        this.range.value = String(p);
+        if (!this.bar.hidden || p >= w.ops.length) this.show(p);
     }
 
     toggle(on: boolean): void {

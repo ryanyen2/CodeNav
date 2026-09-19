@@ -169,18 +169,22 @@ follows, rather than jumping to the top.
 There is no baseline citation and no whole-document diff: the projection is
 the truth for every block the person is not holding.
 
-**A skipped projection is read again when the hold lifts.** A block held
-through an adoption keeps the page's word for it, and the ack that releases it
-does not by itself say what the projection meanwhile said — so the ack asks:
-if every op the acks named is inside the projection's `frontier`, the
-projection already CONTAINS this block's gesture, its word is newer than the
-page's, and that block alone is adopted. A projection whose frontier does not
-cover the op predates the gesture and must not be re-read; adopting it would
-undo the person's typing under their hands. Without the rule, another actor's
-words in the paragraph you are in, an agent's plan there, and your own
-Backspace coming back as the plan's strike-through all waited for an unrelated
-publish — and on the hub, whose feed once sent the projection before the acks,
-they waited for ever.
+**Held is one predicate, and adoption is what evaluates it:** a block is held
+while its ops are in flight, **or** while the projection in hand predates the
+last op that landed for it. The second half is the frontier — a projection
+whose frontier covers that op already CONTAINS the gesture, so its word is
+newer than the page's; one that does not would undo the person's typing under
+their hands. Without the first half, a released block waits for an unrelated
+publish to show another actor's words, an agent's plan, or the contributor's
+own Backspace as a strike-through (and on the hub, whose feed once sent the
+projection before the acks, waits for ever). Without the second, the next
+adoption for ANY reason — a conflict on a different block, the same projection
+delivered twice by a watcher, two acks of which only one is covered — replaces
+the block with words that lack its op.
+
+An adoption also ignores a projection whose `head` is lower than the one it
+has: the host's reads are asynchronous and can finish out of order, and the
+store's position only grows.
 
 ## 7. Drawing
 
