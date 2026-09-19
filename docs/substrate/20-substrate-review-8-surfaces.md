@@ -546,3 +546,33 @@ changed re-paints, which `adoptDirty` does not do — deliberately, resting on a
 the probe itself names (a verdict touches every block the plan's ops landed in, so those
 heads move; `probe8_hub` H10 pins that today). The contract is now written at
 `adoptDirty`, which is what was missing.
+
+### §G's four closed forms: three in, one measured and rejected
+
+**G1 (the version compare) is A1's fix**, and the report is right that it collapses
+`caughtUp`, the special case and the §6 paragraph into one predicate. **G3 (one sequence
+per stream)** is in as far as it goes without a transport rewrite: the feed is in disk
+order, the editor drops a projection whose `head` it has passed, the tails notice
+truncation, and the replay offset counts from the last complete line. **G4 (keyed cards)**
+is in: one element per thread, rebuilt only when the thread changed, which deletes
+`drafts()`, the focus save/restore and the `ta.value = ''` guard, and makes round 7's A5
+unreproducible rather than fixed.
+
+**G2 (CodeMirror 6's viewport-derived decorations) was built and reverted, on the
+measurement.** The form is right and the deletion is real — `paintsOut`, `paintFid`,
+`paintsDirty`, `paintsAll`, `repaint`, `adoptDirty`, `markDirty` and the `REPLACED` branch
+all go for one function — but it rests on the derivation being bounded, and the way to
+bound it here is not available. CodeMirror does not measure blocks: it computes its
+viewport from `scrollTop` and a height oracle it maintains, never touching a DOM rect per
+block. ProseMirror has no such oracle, so `onScreen()` has to ask each block for its
+rect — and 3,000 `getBoundingClientRect` calls per transaction cost **150× what painting
+all 3,000 blocks costs**: a keystroke went from 7 ms to 1,230 ms, and every other row with
+it. (It is not a jsdom artifact; per-element rects force layout in a browser too, which is
+why CM6 avoids them.)
+
+So the honest version of §G2 is: the closed form is a viewport-derived derivation **plus a
+height oracle**, and the oracle is a substantial addition, not a deletion. Round 8 keeps
+the cache and the invalidation rule F.3 asked for — knowing, and now recording, that it is
+the third rule on that cache. The measurement is the thing to carry forward: whoever
+reaches for this next should build the oracle first and re-measure, not bound the
+derivation by asking the DOM.

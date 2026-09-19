@@ -26,6 +26,13 @@ export interface Thread {
 
 export const COMMENT = 'comment';
 
+/** Everything a card DRAWS. A card whose key is unchanged is the same card and
+ *  is left alone — with whatever its reader had typed into it. */
+function threadKey(t: Thread): string {
+    return [t.anchor, t.anchorText, t.scope, t.status, t.messages.length,
+            t.messages.map(m => `${m.actor}\u0000${m.body}`).join('\u0001')].join('|');
+}
+
 /** Where each thread's words are now: the block holding its `comment` mark.
  *  The `anchor` field is the hint the thread was written with; the mark is the
  *  anchor of record, and it travels with the words through a split or a merge. */
@@ -122,34 +129,32 @@ export class Margin {
         (this.el.querySelector('.codoc-card.is-draft textarea') as HTMLTextAreaElement | null)?.focus();
     }
 
-    /** Half-written replies, by card, across a rebuild. A card's `textarea`
-     *  value lives only in the DOM and every settle anywhere in the tree
-     *  publishes a projection that lands here, so without this the sentence
-     *  somebody is composing is wiped by a stranger's keystroke. */
-    private drafts(): Map<string, string> {
-        const out = new Map<string, string>();
-        for (const card of this.el.querySelectorAll('.codoc-card')) {
-            const ta = card.querySelector('textarea') as HTMLTextAreaElement | null;
-            if (ta?.value) out.set((card as HTMLElement).dataset.thread || 'draft', ta.value);
-        }
-        return out;
-    }
+    /** One element per thread, kept across updates and keyed by its id.
+     *
+     *  The margin used to rebuild every card from scratch on every update, and
+     *  every consequence of that was patched in turn: the half-written reply
+     *  wiped by a stranger's keystroke (a `textarea`'s value lives only in the
+     *  DOM), the focus lost with it, the caret jumping to the end. A card that
+     *  is never replaced has none of those questions — which is how every
+     *  keyed-list renderer, and Google Docs' own comment gutter, has always
+     *  done it. Only a card whose THREAD changed is rebuilt. */
+    private cards = new Map<string, { el: HTMLElement; key: string }>();
 
     private render(): void {
-        const typed = this.drafts();
-        const active = document.activeElement;
-        const focused = active instanceof HTMLTextAreaElement
-            ? (active.closest('.codoc-card') as HTMLElement | null)?.dataset.thread || 'draft' : null;
-        this.el.replaceChildren();
-        if (this.draft) this.el.append(this.card(null, this.draft));
-        for (const t of this.threads) this.el.append(this.card(t, null));
-        for (const card of this.el.querySelectorAll('.codoc-card')) {
-            const key = (card as HTMLElement).dataset.thread || 'draft';
-            const ta = card.querySelector('textarea') as HTMLTextAreaElement | null;
-            if (!ta) continue;
-            const was = typed.get(key);
-            if (was !== undefined) ta.value = was;
-            if (key === focused) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+        const want = new Map<string, Thread | null>();
+        if (this.draft) want.set('draft', null);
+        for (const t of this.threads) want.set(t.id, t);
+        for (const [id, held] of this.cards) {
+            if (!want.has(id)) { held.el.remove(); this.cards.delete(id); }
+        }
+        for (const [id, t] of want) {
+            const key = id === 'draft' ? `draft:${this.draft?.anchor}:${this.draft?.anchorText}` : threadKey(t!);
+            const held = this.cards.get(id);
+            if (held && held.key === key) { this.el.append(held.el); continue; }   // append = move into order
+            const el = this.card(t, t ? null : this.draft);
+            held?.el.replaceWith(el);
+            if (!held) this.el.append(el);
+            this.cards.set(id, { el, key });
         }
         this.layout();
     }
@@ -187,7 +192,7 @@ export class Margin {
             if (!body) return;
             if (t) this.host.submit(replyOps(t, this.host.newBid(), body));
             else { const d = draft!; this.host.submit(newThreadOps(this.host.newBid(), d.anchor, d.anchorText, body, scope, d.start, d.end)); this.draft = null; }
-            ta.value = '';                          // posted: `drafts()` must not carry it back
+            ta.value = '';
             this.render();
         };
         if (t) {

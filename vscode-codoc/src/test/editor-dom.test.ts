@@ -731,9 +731,15 @@ describe('I. what a page must not lose to an arriving projection', () => {
         margin.compose('p1', 'one', ['s:x', 0], ['s:x', 2]);
         (page.querySelector('.codoc-card.is-draft textarea') as HTMLTextAreaElement).value = 'please split this sentence';
         (page.querySelector('.codoc-card:not(.is-draft) textarea') as HTMLTextAreaElement).value = 'agreed, and rename it';
+        const draftEl = page.querySelector('.codoc-card.is-draft');
+        const replyEl = page.querySelector('.codoc-card:not(.is-draft)');
         margin.update(p);                                          // someone else typed elsewhere
         expect((page.querySelector('.codoc-card.is-draft textarea') as HTMLTextAreaElement | null)?.value).toBe('please split this sentence');
         expect((page.querySelector('.codoc-card:not(.is-draft) textarea') as HTMLTextAreaElement | null)?.value).toBe('agreed, and rename it');
+        // …because the cards were not rebuilt at all: a card is keyed by its
+        // thread, so nothing a reader typed into one can be lost to a redraw.
+        expect(page.querySelector('.codoc-card.is-draft')).toBe(draftEl);
+        expect(page.querySelector('.codoc-card:not(.is-draft)')).toBe(replyEl);
         expect(posted).toEqual([]);
     });
 
