@@ -42,8 +42,8 @@ def run_ingest(store: Store, m: Mint, bid: str, new_md: str, actor="loop", plan=
             insert_ids.append(op.id)
         ops.append(op)
     # Marks may reference inserts by ordinal; resolve then apply in order.
-    bodies = [o.payload for o in ops]
-    resolve_pending_refs([{"payload": p} for p in bodies], insert_ids)
+    for o in ops:
+        resolve_pending_refs(o.payload, insert_ids)
     applied = [apply(store, o) for o in ops]
     return res, applied
 

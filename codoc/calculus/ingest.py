@@ -1,8 +1,10 @@
-"""``ingest``: the one boundary where a diff decides (spec §4).
+"""Content → op bodies. The one place a diff decides anything.
 
-A person types ops. Everyone else — the loop's LLM pass, a translator, a
-Markdown import, an agent's ``codoc_write_block`` — hands in whole new text for
-one Text field. This module turns that into ops, once, under the rules:
+A person types ops. A model, a translator or an agent hands in content, and it
+becomes ops here, two ways:
+
+- ``block_bodies(specs)``: new blocks. Nothing to diff; each field is inserted whole.
+- ``ingest(text, new_md)``: new text for one existing Text field, under these rules:
 
 1. The caller states the text it was shown (``base_text``). It must equal the
    field's current live text; otherwise the call is refused as ``stale_base``
@@ -44,11 +46,13 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
 from codoc.calculus import ops as K
-from codoc.calculus.ids import REWRITERS, START, CharRef, actor_kind, is_human
+from codoc.calculus.block_md import BlockSpec
+from codoc.calculus.doc import is_source_field, text_fields
+from codoc.calculus.ids import REWRITERS, START, CharRef, actor_kind, is_human, new_block_id
 from codoc.calculus.inline_md import Span, parse
-from codoc.calculus.text import BOLD, CITE, GROWS_AFTER, LINK, Mark, Text, nfc
+from codoc.calculus.text import BOLD, CITE, CODE, GROWS_AFTER, LINK, Mark, Text, nfc
 
-VISIBLE_MARKS = frozenset({BOLD, LINK, CITE})     # the kinds Markdown can express
+VISIBLE_MARKS = frozenset({BOLD, CODE, LINK, CITE})     # the kinds Markdown can express
 
 
 @dataclass
@@ -84,14 +88,16 @@ def _unspaced(word: str) -> bool:
 
 
 def ingest(text: Text, *, bid: str, path: str, base_text: str, new_md: str, actor: str,
-           trunk: bool = True, multiline: bool = False) -> Ingest:
+           trunk: bool = True, multiline: bool = False, raw: bool = False) -> Ingest:
     """Compute the ops that turn ``text`` (live: ``base_text``) into the prose
     and marks of ``new_md``. See the module docstring for the rules.
-    ``trunk`` says the ops will land on the trunk (the human-mark refusal
-    applies); ``multiline`` is set for a kind's Text field whose newlines are
-    content (a diagram's source); prose refuses them."""
+
+    ``trunk``: the ops will land on the trunk, so the human-mark refusal applies.
+    ``multiline``: newlines are content (a kind's field); prose refuses them.
+    ``raw``: ``new_md`` is taken as written, not parsed as inline Markdown (a
+    table's rows, a diagram's or a snippet's source)."""
     res = Ingest()
-    new_plain, new_spans = parse(nfc(new_md))
+    new_plain, new_spans = (nfc(new_md), []) if raw else parse(nfc(new_md))
     if "\n" in new_plain and not multiline:
         res.refused = "multi_paragraph"
         return res
@@ -223,6 +229,46 @@ def _ref_for(offset: int, survivors: dict[int, CharRef], inserts: list[tuple[Cha
     raise AssertionError(f"offset {offset} maps to neither a survivor nor an insert")
 
 
+def block_bodies(specs: list[BlockSpec], *, after: str, keep_ids: bool = False) -> tuple[list[dict], list[str]]:
+    """Op bodies that add ``specs`` as new blocks after ``after``, in order,
+    and the block ids they use (a spec's own id when ``keep_ids``, else fresh).
+
+    A new block has no base text, so nothing is diffed: each Text field is one
+    ``text.insert`` and its marks are ``text.mark`` over ``["$ins", i, k]``, the
+    k-th character of the i-th insert in the returned list. Submit the list
+    as one batch and unchanged; ``$ins`` counts inserts from its start."""
+    bodies: list[dict] = []
+    ids: list[str] = []
+    inserts = 0
+    for spec in specs:
+        bid = spec.id if keep_ids and spec.id else new_block_id()
+        fields = text_fields(spec.kind)
+        payload: dict = {"kind": spec.kind, "after": after}
+        if spec.level:
+            payload["level"] = spec.level
+        plain = {k: v for k, v in spec.content.items() if k not in fields}
+        if plain:
+            payload["content"] = plain
+        bodies.append({"kind": K.BLOCK_ADD, "target": {"bid": bid}, "payload": payload})
+        texts = {fields[0]: spec.text} if spec.text and fields else {}
+        texts.update({f: spec.content[f] for f in fields if isinstance(spec.content.get(f), str)})
+        for path, md in texts.items():
+            plain_text, spans = (nfc(md), []) if is_source_field(spec.kind, path) else parse(nfc(md))
+            if not plain_text:
+                continue
+            target = {"bid": bid, "path": path}
+            bodies.append({"kind": K.TEXT_INSERT, "target": target, "payload": {"after": START, "text": plain_text}})
+            for sp in spans:
+                if sp.end > sp.start:
+                    bodies.append({"kind": K.TEXT_MARK, "target": target,
+                                   "payload": {"kind": sp.kind, "attrs": dict(sp.attrs), "on": True,
+                                               "start": ["$ins", inserts, sp.start], "end": ["$ins", inserts, sp.end - 1]}})
+            inserts += 1
+        ids.append(bid)
+        after = bid
+    return bodies, ids
+
+
 def as_plan_bodies(bodies: list[dict], plan: str) -> list[dict]:
     """A plan proposes; it never kills. Every ``text.delete`` an ingest produced
     becomes a ``suggest_del`` mark tagged with the plan, so the words stay live
@@ -239,12 +285,15 @@ def as_plan_bodies(bodies: list[dict], plan: str) -> list[dict]:
     return out
 
 
-def resolve_pending_refs(bodies: list[dict], insert_ids: list[str]) -> None:
-    """Replace ``["$ins", i, k]`` anchors with real char refs once the i-th
-    insert body has been minted as ``insert_ids[i]``. Mutates in place."""
-    for b in bodies:
-        p = b["payload"]
-        for key in ("start", "end", "after"):
-            v = p.get(key)
-            if isinstance(v, list) and len(v) == 3 and v[0] == "$ins":
-                p[key] = [insert_ids[v[1]], v[2]]
+PENDING = "$ins"
+_ANCHOR_KEYS = ("start", "end", "after", "from", "to", "at")
+
+
+def resolve_pending_refs(payload: dict, insert_ids: list[str], *, as_ref=lambda op_id, k: [op_id, k]) -> None:
+    """Replace each ``["$ins", i, k]`` anchor in ``payload`` once the batch's
+    i-th insert is known as ``insert_ids[i]``. Mutates ``payload``. An index
+    past the inserts seen so far is left as is and fails as an unknown anchor."""
+    for key in _ANCHOR_KEYS:
+        v = payload.get(key)
+        if isinstance(v, list) and len(v) == 3 and v[0] == PENDING and isinstance(v[1], int) and 0 <= v[1] < len(insert_ids):
+            payload[key] = as_ref(insert_ids[v[1]], v[2])

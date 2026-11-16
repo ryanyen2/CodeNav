@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from codoc.calculus.derive import block_entry, ground, ink, open_plans, phase, plan_claims, projection
-from codoc.calculus.export import export_block, export_markdown
+from codoc.calculus.export import export_markdown, export_spec
 from codoc.calculus.store import Store
 from codoc.calculus.window import history_window
 from codoc.loops.realize import queued, write_queue
@@ -54,7 +54,7 @@ class Publisher:
     root_dir: str = "."
     doc_language: object = None
     _entries: dict[str, tuple] = field(default_factory=dict)    # bid -> (key, entry)
-    _lines: dict[str, tuple] = field(default_factory=dict)      # bid -> (key, lines)
+    _specs: dict[str, tuple] = field(default_factory=dict)      # bid -> (key, export spec)
     _phases: dict[str, tuple] = field(default_factory=dict)     # fid -> (key, phase)
     _claims: dict[str, tuple] = field(default_factory=dict)     # fid -> (key, claims)
     _written: tuple | None = None                               # (store.pos, realizing lease)
@@ -108,8 +108,8 @@ class Publisher:
         return p
 
     def export(self, store: Store) -> str:
-        return export_markdown(store, lines=lambda s, b: self._memo(
-            self._lines, self._block_key(s, b.id), b.id, lambda: export_block(s, b)))
+        return export_markdown(store, spec=lambda s, b: self._memo(
+            self._specs, self._block_key(s, b.id), b.id, lambda: export_spec(s, b)))
 
     # ── files ──────────────────────────────────────────────────────────────
     def publish(self, store: Store, *, realizing: set[str] = frozenset(), force: bool = False) -> dict:
@@ -139,7 +139,7 @@ class Publisher:
     def invalidate(self) -> None:
         """Forget everything (a rebuild replaced the store)."""
         self._entries.clear()
-        self._lines.clear()
+        self._specs.clear()
         self._phases.clear()
         self._claims.clear()
         self._written = None

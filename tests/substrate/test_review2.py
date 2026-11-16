@@ -8,7 +8,7 @@ from codoc.calculus import ops as K
 from codoc.calculus.apply import apply
 from codoc.calculus.derive import directive, ground, history, ink, phase, plan_claims
 from codoc.calculus.doc import HEADING, PARAGRAPH
-from codoc.calculus.export import export_markdown, import_markdown
+from codoc.calculus.export import export_markdown
 from codoc.calculus.ids import START
 from codoc.calculus.inline_md import Span, parse, render
 from codoc.calculus.ops import covered
@@ -24,7 +24,7 @@ from codoc.substrate.daemon import Daemon
 from codoc.substrate.log import Submission
 from codoc.substrate.workspace import Roles, Workspace
 from tests.calculus.test_apply import Mint, heading, paragraph
-from tests.calculus.test_derive_export import build
+from tests.calculus.test_derive_export import build, import_markdown
 from tests.calculus.test_ingest import run_ingest
 from tests.loops.test_reflect import chunk, seed
 

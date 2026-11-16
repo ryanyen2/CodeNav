@@ -25,7 +25,9 @@ from __future__ import annotations
 from dataclasses import replace
 
 from codoc.calculus import ops as K
-from codoc.calculus.doc import HEADING, PARAGRAPH, Block, clamp_level, empty_content, is_text_field, text_fields
+from codoc.calculus.doc import (
+    HEADING, ITEMS, LEVELLED, PARAGRAPH, Block, clamp_level, empty_content, is_text_field, level_for, text_fields,
+)
 from codoc.calculus.ids import END, START, CharRef, OpId, ref_from_json, ref_to_json
 from codoc.calculus.ops import Op, OpBody, body, covered, frontier_union
 from codoc.calculus.rank import RankError
@@ -359,7 +361,7 @@ def _h_block_add(store: Store, op: Op, touched: set[str]):
     if bid in store.blocks:
         raise Conflict("duplicate_block", bid)
     kind = op.payload["kind"]
-    level = clamp_level(op.payload.get("level", 1)) if kind == HEADING else 0
+    level = level_for(kind, op.payload.get("level"))
     after = op.payload.get("after", START)
     anchor = _after(store, after)
     content = empty_content(kind, op.payload.get("content"))
@@ -408,13 +410,15 @@ def _h_block_set(store: Store, op: Op, touched: set[str]):
         if set(text_fields(value)) != set(text_fields(b.kind)):
             raise Conflict("kind_incompatible", f"{b.kind}->{value}")
         prev_kind, prev_level = b.kind, b.level
+        # bullet <-> numbered keeps the depth; any other change starts at level 1 unless told.
+        keep = prev_level if prev_kind in ITEMS and value in ITEMS else None
         b.kind = value
-        b.level = clamp_level(op.payload.get("level", prev_level or 1)) if value == HEADING else 0
+        b.level = level_for(value, op.payload.get("level") or keep)
         canonical.update({"prev": prev_kind, "prev_level": prev_level, "level": b.level, "_structural": True})
         inverse = [body(K.BLOCK_SET, {"bid": bid, "path": "kind"}, {"value": prev_kind, "level": prev_level})]
     elif path == "level":
-        if b.kind != HEADING:
-            raise Conflict("not_heading", bid)
+        if b.kind not in LEVELLED:
+            raise Conflict("no_level", bid)
         prev = b.level
         b.level = clamp_level(value)
         canonical.update({"value": b.level, "prev": prev, "_structural": True})
@@ -454,14 +458,15 @@ def _h_block_split(store: Store, op: Op, touched: set[str]):
     new_text, keep_text = (text, tail) if new_first else (tail, text)
     b.content[path] = keep_text
     new_kind = PARAGRAPH if b.kind == HEADING else b.kind
+    new_level = b.level if new_kind in ITEMS else 0      # a list item splits into two at the same depth
     rank = op.payload.get("rank") or (store.rank_before(b.id) if new_first else store.rank_after(b.id))
     if existing is not None:
-        existing.dead, existing.kind, existing.level = None, new_kind, 0
+        existing.dead, existing.kind, existing.level = None, new_kind, new_level
         existing.content[path] = new_text
         store.set_rank(new, rank)
         nb = existing
     else:
-        nb = Block(new, new_kind, rank, 0, empty_content(new_kind))
+        nb = Block(new, new_kind, rank, new_level, empty_content(new_kind))
         nb.content[path] = new_text
         store.add_block(nb)
     store.index_text(b.id, path, keep_text)
@@ -798,7 +803,7 @@ def _undo_plan_op(store: Store, o: Op, by: OpId, touched: set[str], record: dict
                "level": b.level}
         if path == "kind":
             b.kind = inv["value"]
-            b.level = clamp_level(inv.get("level", 1)) if inv["value"] == HEADING else 0
+            b.level = level_for(inv["value"], inv.get("level"))
         elif path == "level":
             b.level = clamp_level(inv["value"])
         else:
@@ -1032,7 +1037,7 @@ def _h_plan_reopen(store: Store, op: Op, touched: set[str]):
         if entry["path"] == "kind":
             undid["sets"].append({"bid": b.id, "path": "kind", "value": b.kind, "level": b.level})
             b.kind = entry["value"]
-            b.level = int(entry.get("level", 0)) if entry["value"] == HEADING else 0
+            b.level = level_for(entry["value"], entry.get("level"))
         elif entry["path"] == "level":
             undid["sets"].append({"bid": b.id, "path": "level", "value": b.level})
             b.level = clamp_level(entry["value"])

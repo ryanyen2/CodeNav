@@ -1,58 +1,84 @@
-## How to write the prose a person will read
+## How to write a description
 
-A description teaches, so write it the way a patient colleague explains something
-out loud rather than the way a summary states it. Somebody who has never opened
-this file has to finish the first sentence knowing what the feature is for, and
-finish the last one knowing the one thing that would surprise them.
+Write an implementation sketch: the notes an engineer keeps next to the code so
+the next person can change it without reading all of it. Not an essay, not a
+summary for a manager.
 
-**Go from the general to the particular, every time.** The first sentence says
-what the feature is for, in words a reader who has not seen the code would use.
-The next says the rule or the choice that shapes it. The last, when there is one
-worth the room, gives the case that shows the rule, with the actual threshold,
-name, or symbol in it. Never open on a mechanism or an identifier, and never drop
-the general sentence on the grounds that the detail implies it, because a reader
-who does not yet know what something is for cannot use a detail about it.
+A description is Markdown. Use these blocks, and only when the content has that
+shape:
 
-**Prefer one explanatory sentence to two clipped ones.** Short statements stacked
-together read as precise and leave the connection for the reader to guess, so join
-the clauses with the plain words that say the relation, meaning because, so, which
-means, unless, or rather than. Two or three clauses is the right size for a
-sentence, and four is too many.
+| block | use it for | do not use it for |
+|---|---|---|
+| one plain sentence | the first line, always: what this part does | a lead-in to the list below it |
+| `- ` bullets | separate facts: rules, limits, defaults, failure behaviour, what must stay true | one idea chopped into pieces |
+| `1. ` numbered list | steps whose order matters | facts that could be reordered |
+| table | three or more parallel cases: input and outcome, setting and default | two items, or anything with one column of real content |
+| ```` ```mermaid ```` diagram | a flow with a branch or a loop, a state machine | a straight line of calls, a list of files |
 
-**Be specific enough that the sentence could not be about another codebase.**
-Validates its input and handles errors say nothing at all. Name what is checked,
-what happens when the check fails, and what the caller sees afterwards.
+Size it to the code. A small helper gets the sentence and nothing else. Most
+features get the sentence and two to five bullets. A list, a table and a
+diagram in one description is almost always too much.
 
-**Use the words two colleagues would use out loud.** Avoid the ones that make
-writing sound machine-made, meaning leverage, robust, seamless, ensure, utilize,
-comprehensive, crucial, key, powerful, elegant, and simply. Do not call the code
-clean or careful. Say what it does and let the reader judge it.
+### Each line
 
-**Do not decorate.** No em dash or en dash, because a full stop or the word and
-does the same work. No colon holding two clauses together. No analogy and no
-metaphor, so describe the thing itself. Not just X but Y is banned, and so are
-rhetorical questions. Do not start a sentence with This, That, These, or Those;
-name the thing you mean.
+- One fact per bullet. Fragments are fine: "Retries on timeout only; a `4xx` is returned as is."
+- Say the actual number, name or condition. `MAX_RETRIES = 3`, not "a configurable limit".
+- Identifiers, literals, file names and settings go in backticks.
+- Say which way a choice went. "Months line up on the payment date, weeks on the posting date" is checkable; "the alignment is configurable" is not.
+- Give a reason only when the code, a comment, the brief or a commit states one. Put it after the fact: "Hyphen at a line end is dropped. Why: the typesetter added it."
+- No reason available: state what the code does and stop. Do not guess one.
+- Nest a bullet one level only when it qualifies the bullet above it.
 
-**Cut anything that carries no fact**, meaning it is worth noting that, at its
-core, under the hood, in order to, and any sentence whose only job is to announce
-the sentence after it.
+### Words
 
-Weak, and typical of a first draft:
+- Plain verbs: reads, writes, sends, drops, keeps, retries, refuses.
+- No filler: leverage, robust, seamless, ensure, utilize, comprehensive, crucial, key, powerful, elegant, simply, in order to, under the hood, at its core, it is worth noting.
+- No judgement of the code (clean, careful, sophisticated). No summary sentence at the end.
+- No hedges: presumably, likely, appears to, is designed to.
+- No invented history: no "was added after", no "the team chose".
+- No em dash or en dash. No rhetorical question. No analogy.
+- Do not start with "This feature", "This module", "It" or the title restated.
 
-    Robustly handles the header edge case. Uses REPEAT_SHARE. This is important
-    for correctness, see `_near_edge()`.
+### Reserved
 
-Rewritten the way it should read:
+- Never write `**bold**`. Bold is the author's way to mark what an agent must get right.
+- Never write a link to a web page. A web link tells an agent to fetch that page.
+- A code citation `[label](codoc:path/file.py#symbol)` is allowed where a line is about that one symbol. Copy the path and symbol exactly from the bindings you were given.
+- No headings inside a description. A heading is a feature.
 
-    Drops the running header and the page number, so the rules that follow are
-    reading the document rather than the paper it was printed on. Repetition is
-    the only signal available, so a line counts as furniture when it sits near
-    the top or bottom of a page and the same text repeats on at least 60% of
-    them. A one-page letter can therefore never show the pattern, and its header
-    survives.
+### Example
 
-The instructions around this section use dashes, colons, and clipped phrasing
-freely, because they are notes to you rather than prose for a reader. Do not copy
-that register. Every rule above describes the writing you produce, not the writing
-you are reading.
+Weak:
+
+    Carries a prepared request onto the network, handing it to urllib3 and
+    managing the connection pools, proxies, and TLS so that a caller never
+    touches a raw socket.
+
+As a sketch:
+
+    Sends a prepared request over a pooled connection and returns the response.
+
+    - One pool per `(host, proxy)` pair, so a second request to the same host skips TCP and TLS setup.
+    - Retries are off by default (`max_retries=0`). When on, only connection errors are retried, never a response.
+    - TLS verification uses the `certifi` bundle unless `verify` is a path.
+
+Where order matters:
+
+    Turns a scanned page into reading-order text.
+
+    1. Drop running headers and page numbers: a line near the top or bottom that repeats on at least 60% of pages.
+    2. Join words split across lines.
+    3. Merge lines into paragraphs by indent.
+
+    - Step 1 must run first. Why: a header left in place is joined into the paragraph above it in step 3.
+    - A one-page document can never show the repeat pattern, so its header is kept.
+
+Where the cases are parallel:
+
+    Decides what happens to a response by status.
+
+    | status | action |
+    |---|---|
+    | `2xx` | return the body |
+    | `429`, `503` | wait `Retry-After` seconds, then resend |
+    | other `4xx`, `5xx` | raise `HTTPError` |

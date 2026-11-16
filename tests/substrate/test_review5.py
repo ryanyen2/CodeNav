@@ -387,7 +387,7 @@ def test_written_by_treats_a_loop_lifted_diagram_as_machine_prose(tmp_path):
     from codoc.kinds.write import add_block
     from codoc.loops.context import block_written_by, written_by
     ws = Workspace(tmp_path / ".codoc"); seed(ws, actor="loop")
-    w = add_block(ws, "diagram", {"source": "flowchart TB\n  a --> b", "caption": ""}, after="p1", actor="loop")
+    w = add_block(ws, "diagram", {"source": "flowchart TB\n  a --> b"}, after="p1", actor="loop")
     assert w.ok
     assert written_by(ws.store, "h1") == "loop"
     c = add_block(ws, "comment", {"thread": "t1", "anchor": "p1", "anchor_text": "Retries", "body": "why once?"}, after="p1", actor=H)

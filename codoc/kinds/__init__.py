@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from codoc.calculus.doc import Block, register_kind, text_fields
+from codoc.calculus.doc import Block, is_one_line, register_kind, text_fields
 from codoc.calculus.store import Binding, Store
 from codoc.calculus.text import Text
 
@@ -81,8 +81,8 @@ _REGISTRY: dict[str, Kind] = {}
 
 
 def register(kind: Kind) -> Kind:
-    if kind.name in ("heading", "paragraph"):
-        raise ValueError(f"{kind.name} is built into the calculus")
+    if is_one_line(kind.name):
+        raise ValueError(f"{kind.name} is a prose kind of the calculus")
     _REGISTRY[kind.name] = kind
     register_kind(kind.name, kind.text_fields, exported=kind.exported, in_flow=kind.in_flow)
     return kind
@@ -97,14 +97,12 @@ def kinds() -> list[Kind]:
 
 
 def plain(block: Block, store: Store | None = None, mode: str = "rejected") -> dict:
-    """A block's content with its Text fields rendered as Markdown: what a
-    codec sees. ``mode`` is the read mode (an open plan's words are not the
-    content until accepted)."""
-    from codoc.calculus.derive import markdown
-    out: dict = {}
-    for k, v in block.content.items():
-        out[k] = markdown(v, mode, store) if isinstance(v, Text) and k in text_fields(block.kind) else v
-    return out
+    """A block's content as a codec sees it: each Text field as a string (raw
+    for a source field, inline Markdown otherwise) in the read mode ``mode``."""
+    from codoc.calculus.derive import field_text
+    fields = text_fields(block.kind)
+    return {k: field_text(block, k, mode, store) if k in fields and isinstance(v, Text) else v
+            for k, v in block.content.items()}
 
 
 from codoc.kinds import builtins as _builtins  # noqa: E402  (registers the shipped kinds)

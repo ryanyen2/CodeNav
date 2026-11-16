@@ -15,7 +15,8 @@ from tests.loops.test_reflect import seed
 
 
 def test_registration_declares_text_fields_and_schema_validation():
-    assert text_fields("diagram") == ("source", "caption") and text_fields("image") == ("alt", "caption")
+    assert text_fields("diagram") == text_fields("table") == text_fields("code") == ("source",)
+    assert text_fields("image") == ("alt", "caption")
     img = get("image")
     assert img.validate({"asset": ".codoc/media/a.png", "alt": "x"}) is None
     assert img.validate({"alt": "x"}) == "asset is required"
@@ -60,18 +61,22 @@ def test_diagram_lifts_from_the_graph_and_lowers_an_edge_delta(tmp_path):
     seed(ws)
     ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": "c.py::retry"}}], actor="loop")
     g = Graph([{"src_symbol": "c.py::send", "dst_name": "retry", "dst_symbol": "c.py::retry", "kind": "call", "src_file": "c.py", "internal": True}])
-    d = add_block(ws, "diagram", {"source": ""}, after="p1", actor="loop")
+    d = add_block(ws, "diagram", {"source": "", "derived": True}, after="p1", actor="loop")
     assert lift_pass(ws, g) == 1
     src = ws.store.blocks[d.bid].text("source").live_text()
     assert "send --> retry" in src and lift_pass(ws, g) == 0          # idempotent
     # The person draws an edge: the directive names it; a freeform node asks instead.
     old = plain(ws.store.blocks[d.bid], ws.store)
     ctx = LowerContext("h1", [b for b in ws.store.bindings.values() if b.feature == "h1"])
-    new = {"source": old["source"] + "\n  retry --> log"}
+    new = {**old, "source": old["source"] + "\n  retry --> log"}
     assert diagram_lower(old, new, ctx) == "Add a dependency or call from `retry` to `log` (the author drew that edge)."
     assert edges_of(new["source"]) == {("send", "retry"), ("retry", "log")}
-    assert "Ask the author" in diagram_lower(old, {"source": old["source"] + "\n  node[Label]"}, ctx)
+    assert "Ask the author" in diagram_lower(old, {**old, "source": old["source"] + "\n  node[Label]"}, ctx)
     assert diagram_lower(old, old, ctx) is None
+    # An authored diagram is explanation: the loop never redraws it and an edit to it asks for nothing.
+    a = add_block(ws, "diagram", {"source": "sequenceDiagram\n  A->>B: hi"}, after=d.bid, actor="human:local")
+    assert lift_pass(ws, g) == 0 and ws.store.blocks[a.bid].text("source").live_text().startswith("sequenceDiagram")
+    assert diagram_lower({"source": "a --> b"}, {"source": "a --> c"}, ctx) is None
     # A held feature's diagram is not lifted over the person's edit.
     t = ws.store.blocks["p1"].text()
     ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": list(t.last_live_ref()), "text": " Mine."}}], actor="human:local")
@@ -93,7 +98,7 @@ def test_a_lift_lands_on_the_trunk_however_much_of_the_picture_changed(tmp_path)
     seed(ws)
     for sym in ("retry", "backoff", "jitter"):
         ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": f"c.py::{sym}"}}], actor="loop")
-    d = add_block(ws, "diagram", {"source": ""}, after="p1", actor="loop")
+    d = add_block(ws, "diagram", {"source": "", "derived": True}, after="p1", actor="loop")
     assert d.ok and lift_pass(ws, graph()) == 1 and "jitter" in ws.store.blocks[d.bid].text("source").live_text()
     for sym in ("send", "retry", "backoff", "jitter"):                # every symbol it drew is gone
         ws.submit([{"kind": K.BIND_DETACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": f"c.py::{sym}"}}], actor="loop")
@@ -112,7 +117,7 @@ def test_an_accepted_plan_on_a_diagram_reaches_the_directive(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
     seed(ws)
     ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": "c.py::retry"}}], actor="loop")
-    d = add_block(ws, "diagram", {"source": ""}, after="p1", actor="loop")
+    d = add_block(ws, "diagram", {"source": "", "derived": True}, after="p1", actor="loop")
     assert d.ok and lift_pass(ws, Graph([])) == 1                     # no edges in the code yet
     base = ws.store.blocks[d.bid].text("source").live_text()
     pid = ws.open_plan(actor="agent:claude-code", kind="edit", target=d.bid, note="wire the retry")
@@ -132,14 +137,16 @@ def test_mcp_write_block_adds_and_edits_as_the_agent(tmp_path):
     ws = Workspace(cd)
     seed(ws)
     ws.close()
-    r = tools.write_block(str(cd), kind="diagram", feature_id="h1", content={"source": "flowchart TB\n  a --> b", "caption": "Calls"})
+    r = tools.write_block(str(cd), kind="diagram", feature_id="h1", content={"source": "flowchart TB\n  a[Start] --> b"})
     assert r["ok"] and r["ingested"] and all(i["refused"] is None for i in r["ingested"])
     st = Workspace(cd, readonly=True).store
     blk = st.blocks[r["bid"]]
-    assert blk.kind == "diagram" and blk.text("source").live_text() == "flowchart TB\n  a --> b"
+    # a source field is raw: brackets and asterisks are text, not markup
+    assert blk.kind == "diagram" and blk.text("source").live_text() == "flowchart TB\n  a[Start] --> b"
+    assert blk.text("source").marks == []
     assert {s.actor for s in blk.text("source").segs} == {"agent:claude-code"}
-    r2 = tools.write_block(str(cd), bid=r["bid"], content={"caption": "Calls, now"})
-    assert r2["ok"] and Workspace(cd, readonly=True).store.blocks[r["bid"]].text("caption").live_text() == "Calls, now"
+    r2 = tools.write_block(str(cd), bid=r["bid"], content={"source": "flowchart TB\n  a[Start] --> c"})
+    assert r2["ok"] and Workspace(cd, readonly=True).store.blocks[r["bid"]].text("source").live_text().endswith("--> c")
     assert tools.write_block(str(cd), bid=r["bid"], content={"nope": 1})["error"] == "unknown field 'nope'"
     assert "unknown kind" in tools.write_block(str(cd), kind="gif", feature_id="h1", content={})["error"]
 
@@ -157,20 +164,21 @@ def test_a_feature_carrying_media_survives_every_whole_feature_pass(tmp_path):
 
     ws = Workspace(tmp_path / ".codoc")
     seed(ws)
-    d = add_block(ws, "diagram", {"source": "flowchart TB\n  a --> b", "caption": "Calls"}, after="p1", actor="loop")
+    d = add_block(ws, "diagram", {"source": "flowchart TB\n  a --> b"}, after="p1", actor="loop")
     c = add_block(ws, "comment", {"thread": "t1", "anchor": "p1", "anchor_text": "once", "body": "Twice?"},
                   after=d.bid, actor="human:local")
     assert block_written_by(ws.store, d.bid) == "loop" and block_written_by(ws.store, c.bid) == "human"
     # The comment is a request about the prose, not the prose: the feature is
     # still machine-written, which is what the amend gate and translate read.
     assert written_by(ws.store, "h1") == "loop"
-    assert description(ws.store, "h1") == "Retries once before giving up."       # prose only
+    # the description is the prose and the diagram; the comment is not part of what the feature says
+    assert description(ws.store, "h1") == "Retries once before giving up.\n\n```mermaid\nflowchart TB\n  a --> b\n```"
     ws.close()
     blame = tools.read_history(str(tmp_path / ".codoc"), "h1")["attribution"]
     assert f"{d.bid}.source" in blame and f"{c.bid}.body" in blame and "p1" in blame
     ws = Workspace(tmp_path / ".codoc")
     struck = _strike(ws.store, [b.id for b in ws.store.feature_body("h1")], "p-1")
-    assert sorted(b["target"]["path"] for b in struck) == ["body", "caption", "source", "text", "text"]
+    assert sorted(b["target"]["path"] for b in struck) == ["body", "source", "text", "text"]
     propose = lambda payload, lang, **kw: {p["id"]: ("客户端", "放弃前重试一次。") for p in payload}
     res = translate_tree(ws, tmp_path / ".codoc", language=resolve("zh-Hans"), propose=propose)
     assert res.translated == 1 and ws.store.blocks[c.bid].text("body").live_text() == "Twice?"
@@ -178,20 +186,19 @@ def test_a_feature_carrying_media_survives_every_whole_feature_pass(tmp_path):
 
 
 def test_the_directive_speaks_through_the_kind_codecs(tmp_path):
-    """03 §5.1: `consult` is what the realizing agent reads and `lower` runs
-    when a hand-off renders. A diagram reaches the prompt as a diagram, not as
-    raw mermaid in the person's ink; an open comment thread reaches it once, as
-    the request its codec words."""
+    """A diagram reaches the agent inside the description, as a mermaid fence.
+    An edit to a derived one also reaches it as the dependency request `lower`
+    words. An open comment thread reaches it once, as the request its codec words."""
     from codoc.calculus.derive import directive
     ws = Workspace(tmp_path / ".codoc")
     seed(ws)
     ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": "c.py::send"}}], actor="loop")
-    add_block(ws, "diagram", {"source": "flowchart TB\n  send --> recv"}, after="p1", actor="human:local")
+    add_block(ws, "diagram", {"source": "flowchart TB\n  send --> recv", "derived": True}, after="p1", actor="human:local")
     add_block(ws, "comment", {"thread": "t1", "anchor": "p1", "anchor_text": "once", "body": "Twice?", "scope": "code"},
               after="p1", actor="human:local")
     handoff(ws, "h1", actor="human:local")
     d = directive(ws.store, "h1")
-    assert "Diagram of this feature's code (mermaid):\nflowchart TB\n  send --> recv" in d, d
+    assert d.count("```mermaid derived\nflowchart TB\n  send --> recv\n```") == 1, d
     assert "Add a dependency or call from `send` to `recv` (the author drew that edge)." in d, d
     assert d.count('Comment on "once": Twice?') == 1, d
     # the comment's words are a request, never the feature's prose changing

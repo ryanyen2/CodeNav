@@ -22,7 +22,7 @@ from pathlib import Path
 from codoc.calculus import ops as K
 from codoc.calculus.apply import apply, replay_recorded
 from codoc.calculus.derive import GATE_HUMAN, GATE_MACHINE, HELD, block_written_by, phase
-from codoc.calculus.doc import HEADING, PARAGRAPH, is_text_field
+from codoc.calculus.doc import is_one_line, is_source_field, is_text_field
 from codoc.calculus.ids import MACHINE_KINDS, actor_kind, new_batch_id, new_plan_id, new_session_id, op_id
 from codoc.calculus.ingest import Ingest, as_plan_bodies, ingest, resolve_pending_refs
 from codoc.calculus.ops import Op, frontier_union
@@ -323,11 +323,19 @@ class Workspace:
     def submit(self, bodies: list[dict], *, actor: str, batch: str | None = None, plan: str | None = None,
                base: dict | None = None, caused_by: str | None = None) -> list[Op]:
         """Mint, apply and log a batch of op bodies ``{kind, target, payload}``
-        (see the module note on atomicity)."""
+        (see the module note on atomicity). An anchor ``["$ins", i, k]`` names
+        the k-th character of the i-th ``text.insert`` in ``bodies``."""
         batch = batch or new_batch_id()
-        out = [self._apply(self._mint(b["kind"], b.get("target", {}), b.get("payload", {}), actor=actor, batch=batch,
-                                      plan=b.get("plan", plan), base=base, caused_by=b.get("caused_by", caused_by)))
-               for b in bodies]
+        out: list[Op] = []
+        insert_ids: list[str] = []
+        for b in bodies:
+            payload = dict(b.get("payload", {}))
+            resolve_pending_refs(payload, insert_ids)
+            op = self._apply(self._mint(b["kind"], b.get("target", {}), payload, actor=actor, batch=batch,
+                                        plan=b.get("plan", plan), base=base, caused_by=b.get("caused_by", caused_by)))
+            if b["kind"] == K.TEXT_INSERT:
+                insert_ids.append(op.id)
+            out.append(op)
         self._sync()
         return out
 
@@ -352,7 +360,7 @@ class Workspace:
         if not is_text_field(block.kind, path):
             return Ingest(refused="not_text")
         return ingest(block.text(path), bid=bid, path=path, base_text=base_text, new_md=new_md, actor=actor,
-                      trunk=trunk, multiline=block.kind not in (HEADING, PARAGRAPH))
+                      trunk=trunk, multiline=not is_one_line(block.kind), raw=is_source_field(block.kind, path))
 
     def commit_ingest(self, res: Ingest, *, actor: str, plan: str | None = None, batch: str | None = None,
                       base: dict | None = None, caused_by: str | None = None) -> list[Op]:
@@ -362,20 +370,8 @@ class Workspace:
         if res.refused:
             return []
         bodies = as_plan_bodies(res.bodies, plan) if plan else res.bodies
-        batch = batch or plan or new_batch_id()
-        base = base if base is not None else dict(self.store.frontier)
-        ops: list[Op] = []
-        insert_ids: list[str] = []
-        for b in bodies:
-            body = {"kind": b["kind"], "target": b["target"], "payload": dict(b["payload"])}
-            resolve_pending_refs([body], insert_ids)      # inserts precede the marks that name them
-            op = self._apply(self._mint(body["kind"], body["target"], body["payload"], actor=actor, batch=batch,
-                                        plan=plan, base=base, caused_by=caused_by))
-            if b["kind"] == K.TEXT_INSERT:
-                insert_ids.append(op.id)
-            ops.append(op)
-        self._sync()
-        return ops
+        return self.submit(bodies, actor=actor, plan=plan, batch=batch or plan,
+                           base=base if base is not None else dict(self.store.frontier), caused_by=caused_by)
 
     def ingest(self, bid: str, path: str, *, base_text: str, new_md: str, actor: str, base: dict | None = None,
                plan: str | None = None, caused_by: str | None = None, batch: str | None = None,

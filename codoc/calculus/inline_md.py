@@ -1,19 +1,20 @@
 """Inline Markdown ⇄ (plain text, marks by offset).
 
-The three inline forms codoc's prose uses, and one escape:
-
     **bold**                         → bold
+    `code`                           → code
     [label](https://host/path)       → link{href}
     [label](codoc:file.py#Symbol)    → cite{file, symbol}
-    \\X  for X in  * [ ] \\ # `        → the literal character
+    \\X  for X in ESCAPABLE           → the literal character
 
-Parsing is a left-to-right scan: an escape pair is always a literal, a link is
-tried before bold at each position, a link's label may hold bold, bold may not
-hold a link. Anything that is not one of these forms is plain text. The
-calculus keeps link and cite exclusive and merges same-kind overlaps, so a bold
-that crosses a link edge is rendered as two bolds and parses back to two marks
-that ``set_mark`` merges. ``parse(render(text, spans))`` reproduces
-``(text, spans)`` for every state the store can hold (fuzzed in the tests).
+Nesting is link ⊃ bold ⊃ code: a label may hold bold and code, bold may hold
+code, code holds nothing. Inside code the only escapes are ``\\``` and ``\\\\``,
+so ``list[int]`` and ``**kwargs`` read as typed.
+
+The store allows any overlap of marks; Markdown does not. ``render`` cuts a
+bold at every link edge and a code at every link and bold edge, and the pieces
+parse back as adjacent same-kind spans, which ``Text.set_mark`` merges.
+``parse(render(text, spans))`` therefore reproduces ``(text, spans)`` up to
+that merge, for every state the store can hold (fuzzed in the tests).
 
 Offsets are Unicode scalar offsets into the plain text, half-open ``[start, end)``.
 """
@@ -22,11 +23,14 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from codoc.calculus.text import BOLD, CITE, LINK
+from codoc.calculus.text import BOLD, CITE, CODE, LINK
 
-ESCAPABLE = frozenset("*[]\\#`")
-_LINK = re.compile(r"\[(?P<label>(?:[^\]\n\\]|\\.)*)\]\((?P<target>codoc:[^)\s]+|https?://[^)\s]+)\)")
-_BOLD = re.compile(r"\*\*(?P<bold>(?:[^*\n\\]|\\.|\*(?!\*))+?)\*\*")
+# Inline markup, plus the characters that open a block when a line starts with
+# them (``# ``, ``- ``, ``+ ``, ``1. ``, ``|``). ``render`` escapes those at the
+# start of the text, so a paragraph never reads as a heading, an item or a row.
+ESCAPABLE = frozenset("*[]\\#`-+.|")
+_CODE_ESCAPABLE = frozenset("`\\")
+_TARGET = re.compile(r"\((codoc:[^)\s]+|https?://[^)\s]+)\)")
 
 
 @dataclass(frozen=True)
@@ -38,97 +42,141 @@ class Span:
 
 
 def parse(md: str) -> tuple[str, list[Span]]:
-    """Plain text and its spans, in document order (a label's bold follows the
-    link that holds it)."""
-    text, spans = _scan(md, links=True)
-    return "".join(text), spans
-
-
-def _scan(md: str, *, links: bool) -> tuple[list[str], list[Span]]:
+    """Plain text and its spans. A span that holds others comes before them."""
     out: list[str] = []
     spans: list[Span] = []
-    i = n = 0
+    _scan(md, 0, None, out, spans, links=True, bold=True)
+    return "".join(out), spans
+
+
+def _scan(md: str, i: int, stop: str | None, out: list[str], spans: list[Span], *, links: bool, bold: bool) -> int:
+    """Scan from ``i`` until ``stop`` (``]`` or ``**``) or the end. Appends
+    characters to ``out`` and spans to ``spans``. Returns the index of the stop
+    marker, or -1 when a stop was wanted and the text ended first."""
     n = len(md)
-    length = 0
     while i < n:
         c = md[i]
         if c == "\\" and i + 1 < n and md[i + 1] in ESCAPABLE:
             out.append(md[i + 1])
-            length += 1
             i += 2
-            continue
-        if c == "[" and links and (m := _LINK.match(md, i)):
-            label, inner = _scan(m.group("label"), links=False)
-            plain = "".join(label)
-            target = m.group("target")
-            if target.startswith("codoc:"):
-                file, _, symbol = target[len("codoc:"):].partition("#")
-                spans.append(Span(CITE, {"file": file, "symbol": symbol}, length, length + len(plain)))
-            else:
-                spans.append(Span(LINK, {"href": target}, length, length + len(plain)))
-            spans.extend(Span(s.kind, s.attrs, s.start + length, s.end + length) for s in inner)
-            out.append(plain)
-            length += len(plain)
-            i = m.end()
-            continue
-        if c == "*" and (m := _BOLD.match(md, i)):
-            inner_text, _ = _scan(m.group("bold"), links=False)
-            plain = "".join(inner_text)
-            spans.append(Span(BOLD, {}, length, length + len(plain)))
-            out.append(plain)
-            length += len(plain)
-            i = m.end()
-            continue
-        out.append(c)
-        length += 1
-        i += 1
-    return out, spans
+        elif c == "`" and (end := _code_end(md, i + 1)) > 0:
+            start = _length(out)
+            out.append(_unescape_code(md[i + 1:end]))
+            spans.append(Span(CODE, {}, start, _length(out)))
+            i = end + 1
+        elif stop == "]" and c == "]":
+            return i
+        elif stop == "**" and md.startswith("**", i):
+            return i
+        elif c == "[" and links and (j := _link(md, i, out, spans)) > 0:
+            i = j
+        elif bold and md.startswith("**", i) and (j := _bold(md, i, out, spans)) > 0:
+            i = j
+        else:
+            out.append(c)
+            i += 1
+    return -1 if stop else n
+
+
+def _length(out: list[str]) -> int:
+    return sum(len(s) for s in out)
+
+
+def _code_end(md: str, i: int) -> int:
+    """Index of the backtick closing a code span whose content starts at
+    ``i``, or -1 (no closing backtick on this line, or an empty span)."""
+    j = i
+    while j < len(md) and md[j] != "\n":
+        if md[j] == "\\" and j + 1 < len(md) and md[j + 1] in _CODE_ESCAPABLE:
+            j += 2
+        elif md[j] == "`":
+            return j if j > i else -1
+        else:
+            j += 1
+    return -1
+
+
+def _unescape_code(raw: str) -> str:
+    return re.sub(r"\\([`\\])", r"\1", raw)
+
+
+def _link(md: str, i: int, out: list[str], spans: list[Span]) -> int:
+    """``[label](target)`` at ``i``: append it and return the index after it,
+    or -1 when this bracket does not open a link."""
+    label: list[str] = []
+    inner: list[Span] = []
+    close = _scan(md, i + 1, "]", label, inner, links=False, bold=True)
+    if close < 0 or not (m := _TARGET.match(md, close + 1)):
+        return -1
+    start, plain, target = _length(out), "".join(label), m.group(1)
+    if target.startswith("codoc:"):
+        file, _, symbol = target[len("codoc:"):].partition("#")
+        spans.append(Span(CITE, {"file": file, "symbol": symbol}, start, start + len(plain)))
+    else:
+        spans.append(Span(LINK, {"href": target}, start, start + len(plain)))
+    spans.extend(Span(s.kind, s.attrs, s.start + start, s.end + start) for s in inner)
+    out.append(plain)
+    return m.end()
+
+
+def _bold(md: str, i: int, out: list[str], spans: list[Span]) -> int:
+    """``**text**`` at ``i``: append it and return the index after it, or -1
+    when it is not closed on this line or holds nothing."""
+    text: list[str] = []
+    inner: list[Span] = []
+    close = _scan(md, i + 2, "**", text, inner, links=False, bold=False)
+    plain = "".join(text)
+    if close < 0 or not plain or "\n" in plain:
+        return -1
+    start = _length(out)
+    spans.append(Span(BOLD, {}, start, start + len(plain)))
+    spans.extend(Span(s.kind, s.attrs, s.start + start, s.end + start) for s in inner)
+    out.append(plain)
+    return close + 2
 
 
 def render(text: str, spans: list[Span]) -> str:
-    """Markdown for ``text`` with ``spans``. Plain characters that would read
-    as markup, next to what the renderer emits or on their own, are escaped;
-    a bold crossing a link edge is split there."""
+    """Markdown for ``text`` with ``spans``. Characters that would read as
+    markup are escaped."""
     links = sorted((s for s in spans if s.kind in (LINK, CITE) and s.end > s.start), key=lambda s: s.start)
-    bolds: list[Span] = []
-    for b in (s for s in spans if s.kind == BOLD and s.end > s.start):
-        cuts = sorted({b.start, b.end} | {p for l in links for p in (l.start, l.end) if b.start < p < b.end})
-        bolds.extend(Span(BOLD, {}, lo, hi) for lo, hi in zip(cuts, cuts[1:]))
+    bolds = _cut(spans, BOLD, [p for l in links for p in (l.start, l.end)])
+    codes = _cut(spans, CODE, [p for s in links + bolds for p in (s.start, s.end)])
     opens: dict[int, list[Span]] = {}
     closes: dict[int, list[Span]] = {}
-    for s in links + bolds:
+    for s in links + bolds + codes:
         opens.setdefault(s.start, []).append(s)
         closes.setdefault(s.end, []).append(s)
-    in_label = [False] * (len(text) + 1)
-    for l in links:
-        for i in range(l.start, l.end):
-            in_label[i] = True
+    in_label = _covered(len(text), links)
+    in_code = _covered(len(text), codes)
     bold_edge = {i for s in bolds for i in (s.start, s.end)}
     out: list[str] = []
     for i in range(len(text) + 1):
-        # close bold before the link that holds it; open a link before its bold
-        for s in sorted(closes.get(i, []), key=lambda s: s.kind != BOLD):
-            out.append("**" if s.kind == BOLD else _close_link(s))
-        for s in sorted(opens.get(i, []), key=lambda s: s.kind == BOLD):
-            out.append("**" if s.kind == BOLD else "[")
+        for s in sorted(closes.get(i, []), key=lambda s: _DEPTH[s.kind], reverse=True):   # innermost first
+            out.append(_CLOSE[s.kind](s))
+        for s in sorted(opens.get(i, []), key=lambda s: _DEPTH[s.kind]):                  # outermost first
+            out.append(_OPEN[s.kind])
         if i < len(text):
-            out.append(_escaped(text, i, in_label[i], i in bold_edge or (i + 1) in bold_edge))
+            out.append(_escaped(text, i, in_label[i], in_code[i], i in bold_edge or (i + 1) in bold_edge))
     return "".join(out)
 
 
-def _escaped(text: str, i: int, in_label: bool, at_bold_edge: bool) -> str:
-    c = text[i]
-    if c == "\\":
-        return "\\\\"
-    if c == "*" and (at_bold_edge or (i > 0 and text[i - 1] == "*") or (i + 1 < len(text) and text[i + 1] == "*")):
-        return "\\*"
-    if c == "]" and in_label:
-        return "\\]"
-    if c == "[":
-        return "\\["          # a plain bracket never opens a link, whatever follows it
-    if i == 0 and c in "#`":
-        return "\\" + c
-    return c
+def _cut(spans: list[Span], kind: str, edges: list[int]) -> list[Span]:
+    """The spans of ``kind``, each cut at every edge that falls inside it."""
+    out: list[Span] = []
+    for s in spans:
+        if s.kind != kind or s.end <= s.start:
+            continue
+        cuts = sorted({s.start, s.end} | {p for p in edges if s.start < p < s.end})
+        out.extend(Span(kind, {}, lo, hi) for lo, hi in zip(cuts, cuts[1:]))
+    return out
+
+
+def _covered(length: int, spans: list[Span]) -> list[bool]:
+    flags = [False] * (length + 1)
+    for s in spans:
+        for i in range(s.start, s.end):
+            flags[i] = True
+    return flags
 
 
 def _close_link(s: Span) -> str:
@@ -136,3 +184,35 @@ def _close_link(s: Span) -> str:
         sym = s.attrs.get("symbol") or ""
         return f"](codoc:{s.attrs.get('file', '')}{'#' + sym if sym else ''})"
     return f"]({s.attrs.get('href', '')})"
+
+
+_DEPTH = {LINK: 0, CITE: 0, BOLD: 1, CODE: 2}
+_OPEN = {LINK: "[", CITE: "[", BOLD: "**", CODE: "`"}
+_CLOSE = {LINK: _close_link, CITE: _close_link, BOLD: lambda s: "**", CODE: lambda s: "`"}
+
+
+def _escaped(text: str, i: int, in_label: bool, in_code: bool, at_bold_edge: bool) -> str:
+    c = text[i]
+    if in_code:
+        return "\\" + c if c in _CODE_ESCAPABLE else c
+    if c == "\\":
+        return "\\\\"
+    if c == "*" and (at_bold_edge or (i > 0 and text[i - 1] == "*") or (i + 1 < len(text) and text[i + 1] == "*")):
+        return "\\*"
+    if c == "]" and in_label:
+        return "\\]"
+    if c in "[`":
+        return "\\" + c       # a plain bracket never opens a link, a plain backtick never opens code
+    if _opens_block(text, i):
+        return "\\" + c
+    return c
+
+
+def _opens_block(text: str, i: int) -> bool:
+    """Would ``text[i]`` make the line read as a heading, a list item or a
+    table row? True for a leading ``#`` or ``|``, a leading ``-``/``+``/``*``
+    before a space, and the dot of a leading ``12. ``."""
+    c = text[i]
+    if i == 0:
+        return c in "#|" or (c in "-+*" and text[1:2] == " ")
+    return c == "." and i <= 9 and text[:i].isdigit() and text[i + 1:i + 2] == " "

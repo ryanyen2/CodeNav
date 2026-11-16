@@ -31,20 +31,20 @@ from dataclasses import dataclass, field, replace
 
 from codoc.calculus.ids import END, START, CharRef, OpId
 
-# Mark kinds. ``GROWS_AFTER`` kinds extend over text typed at their end (Peritext
-# "after" expansion); every other kind is a fixed anchor (I2). ``EXCLUSIVE``
-# kinds cannot overlap one another with different attrs; turning one on
-# displaces the other. ``WHOLE`` kinds are toggled off only as an exact match —
-# a half-resolved comment has no meaning. Every kind merges with an adjacent
-# mark of the same kind and attrs.
-BOLD, LINK, CITE, COMMENT, SUGGEST_DEL = "bold", "link", "cite", "comment", "suggest_del"
-# A plan's mark toggle, recorded BESIDE the trunk's marks rather than applied to
-# them: `attrs` carries the plan, the kind it proposes, the attrs that kind
-# needs, and whether it proposes turning the mark on or off. A verdict is then
-# the only thing that ever touches a trunk mark on the plan's behalf — accept
-# applies the toggle, reject drops the record — and neither has to find a mark
-# that a merge, a split or another plan has moved since. (Google Docs keeps a
-# style suggestion beside the style for the same reason.)
+# Mark kinds.
+#   bold          focus; grows over text typed at its end
+#   code          an identifier or literal; fixed anchor
+#   link{href}    an external reference; fixed anchor; exclusive with cite
+#   cite{file, symbol}   a reference into the code; fixed anchor; exclusive with link
+#   comment{block}       anchors a comment thread; removed whole
+#   suggest_del{plan}    characters an open plan proposes to delete; removed whole
+#   suggest_mark{plan, mark, on, a:*}   a mark toggle an open plan proposes; removed whole
+# Every kind merges with an adjacent mark of the same kind and attrs.
+#
+# A plan's mark toggle is a suggest_mark record beside the document's marks, not
+# a change to them. Accept applies the toggle, reject drops the record, so a
+# verdict never has to find a mark that a split, a merge or another plan moved.
+BOLD, CODE, LINK, CITE, COMMENT, SUGGEST_DEL = "bold", "code", "link", "cite", "comment", "suggest_del"
 SUGGEST_MARK = "suggest_mark"
 GROWS_AFTER = frozenset({BOLD})
 EXCLUSIVE = frozenset({LINK, CITE})

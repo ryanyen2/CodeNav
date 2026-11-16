@@ -4,25 +4,31 @@ from codoc.calculus.apply import apply
 from codoc.calculus.derive import (
     attribution, description, directive, ground, history, ink, markdown, phase, plan_claims, projection,
 )
-from codoc.calculus.export import export_markdown, import_markdown
+from codoc.calculus import block_md
+from codoc.calculus.export import export_markdown
 from codoc.calculus.ids import START
-from codoc.calculus.ingest import resolve_pending_refs
+from codoc.calculus.ingest import block_bodies, resolve_pending_refs
 from codoc.calculus.store import Store
 from codoc.calculus.text import BOLD, SUGGEST_DEL
 
 from tests.calculus.test_apply import Mint, heading, paragraph
 
 
+def import_markdown(md: str) -> list[dict]:
+    """Op bodies that build the document ``md`` describes, keeping the ids it carries."""
+    return block_bodies(block_md.parse(md), after=START, keep_ids=True)[0]
+
+
 def build(store: Store, m: Mint, bodies: list[dict], actor="import"):
-    """Apply import bodies, resolving ``$ins`` mark anchors per block."""
-    insert_by_block: dict[str, str] = {}
+    """Apply a batch of bodies the way ``Workspace.submit`` does, resolving ``$ins`` anchors."""
+    insert_ids: list[str] = []
     for b in bodies:
-        if b["kind"] == K.TEXT_MARK:
-            resolve_pending_refs([b], [insert_by_block[b["target"]["bid"]]])
-        op = apply(store, m.op(b["kind"], b["target"], b["payload"], actor=actor))
+        payload = dict(b["payload"])
+        resolve_pending_refs(payload, insert_ids)
+        op = apply(store, m.op(b["kind"], b["target"], payload, actor=actor))
         assert op.conflict is None, (b, op.conflict)
         if b["kind"] == K.TEXT_INSERT:
-            insert_by_block[b["target"]["bid"]] = op.id
+            insert_ids.append(op.id)
 
 
 SAMPLE = """# Networking {#b-000000000001}
@@ -35,8 +41,19 @@ Second paragraph.
 
 Exponential, capped.
 
-```codoc:diagram {#b-000000000003}
-{"source": "graph TD; A-->B"}
+```mermaid
+graph TD; A-->B
+```
+
+- one **point**
+    1. a step under it
+
+| a | b |
+|---|---|
+| 1 | 2 |
+
+```codoc:url {#b-000000000003}
+{"url": "https://example.org/spec"}
 ```
 
 # Storage {#b-000000000004}

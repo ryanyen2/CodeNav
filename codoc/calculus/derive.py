@@ -10,7 +10,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from codoc.calculus import ops as K
-from codoc.calculus.doc import HEADING, PARAGRAPH, Block, TreeNode, fold_tree, in_flow, text_fields
+from codoc.calculus import block_md
+from codoc.calculus.block_md import BlockSpec
+from codoc.calculus.doc import (
+    HEADING, PROSE, SOURCE, Block, TreeNode, fold_tree, in_flow, is_exported, is_source_field, text_fields,
+)
 from codoc.calculus.ids import OpId, is_human
 from codoc.calculus.inline_md import Span, render
 from codoc.calculus.ops import Op, covered, in_frontier
@@ -43,57 +47,85 @@ def live_spans(text: Text, kinds: frozenset | None = None) -> list[Span]:
     return out
 
 
-def markdown(text: Text, mode: str = "live", store: Store | None = None) -> str:
-    """The field as Markdown. ``mode``: ``live`` (what the trunk says, which is
-    what the page shows under the proposals drawn over it), ``accepted`` (every
-    open plan taken), ``rejected`` (every open plan dropped, which is what a
-    directive is rendered from).
-
-    A plan's mark toggle is a record beside the trunk's marks, never a change to
-    them (01 §3), so ``live`` and ``rejected`` agree about marks and only
-    ``accepted`` has anything to apply. What differs between live and rejected
-    is the words: a plan's insertions are on the page and not in the document
-    without it."""
-    # A field no plan has touched reads the same in all three modes, and most
-    # fields in a tree are that field. Say so before cloning it and before
-    # scanning the plans — a cold publish renders every field twice.
+def _in_mode(text: Text, mode: str, store: Store | None) -> Text:
+    """``text`` as it reads in a read mode. ``live``: the field as stored, an
+    open plan's words included. ``rejected``: without any open plan's words.
+    ``accepted``: with every open plan taken. Returns ``text`` itself when the
+    mode changes nothing, else a clone."""
     if mode == "live" or store is None or not (
             any(s.live and s.plan for s in text.segs) if mode == "rejected" else text.proposals()):
-        return render(text.live_text(), live_spans(text))
+        return text
     view = text.clone()
     open_plans = store.open_plans
     if mode == "rejected":
-        # An open plan's words are not the document's; its proposal records are
-        # not marks at all, and `live_spans` already leaves them out.
         for s in view.segs:
             if s.live and s.plan in open_plans:
                 s.dead = "view"
-    elif mode == "accepted":
-        for m in view.proposals():
-            if m.attrs.get("plan") not in open_plans:
-                continue
-            if m.kind == SUGGEST_DEL:
-                view.delete(m.start, m.end, by="view")
-            else:
-                view.set_mark(m.attrs.get("mark", ""), {k[2:]: v for k, v in m.attrs.items() if k.startswith("a:")},
-                              m.start, m.end, bool(m.attrs.get("on")), actor=m.actor, op=m.op)
-            view.marks.remove(m)
+        return view
+    for m in view.proposals():
+        if m.attrs.get("plan") not in open_plans:
+            continue
+        if m.kind == SUGGEST_DEL:
+            view.delete(m.start, m.end, by="view")
+        else:
+            view.set_mark(m.attrs.get("mark", ""), {k[2:]: v for k, v in m.attrs.items() if k.startswith("a:")},
+                          m.start, m.end, bool(m.attrs.get("on")), actor=m.actor, op=m.op)
+        view.marks.remove(m)
+    return view
+
+
+def markdown(text: Text, mode: str = "live", store: Store | None = None) -> str:
+    """An inline field as Markdown in a read mode."""
+    view = _in_mode(text, mode, store)
     return render(view.live_text(), live_spans(view))
 
+
+def text_string(kind: str, path: str, text: Text, mode: str = "live", store: Store | None = None) -> str:
+    """A Text field as a string: the raw text of a source field, inline
+    Markdown for any other."""
+    if is_source_field(kind, path):
+        return _in_mode(text, mode, store).live_text()
+    return markdown(text, mode, store)
+
+
+def field_text(block: Block, path: str, mode: str = "live", store: Store | None = None) -> str:
+    return text_string(block.kind, path, block.text(path), mode, store)
 
 
 def title(store: Store, fid: str, mode: str = "live") -> str:
     return markdown(store.blocks[fid].text(), mode, store)
 
 
+def block_spec(store: Store, b: Block, mode: str = "live") -> BlockSpec | None:
+    """``b`` as Markdown says it, or None when it says nothing in this mode: an
+    empty paragraph or item, an empty source, a block holding only an open
+    plan's words under ``rejected``, a kind left out of the export."""
+    if b.kind == HEADING:
+        md = markdown(b.text(), mode, store)
+        if b.text().live_len() and not md.strip():
+            return None            # a proposed node: its title is an open plan's words
+        return BlockSpec(HEADING, b.level, md, id=b.id)
+    if b.kind in PROSE:
+        md = markdown(b.text(), mode, store)
+        return BlockSpec(b.kind, b.level, md) if md.strip() else None
+    if not is_exported(b.kind):
+        return None
+    plain = {k: v for k, v in b.content.items() if k not in text_fields(b.kind)}
+    if b.kind in SOURCE:
+        source = field_text(b, "source", mode, store)
+        return BlockSpec(b.kind, text=source, content=plain) if source.strip() else None
+    texts = {f: field_text(b, f, mode, store) for f in text_fields(b.kind)}
+    return BlockSpec(b.kind, content={**plain, **{f: t for f, t in texts.items() if t}}, id=b.id)
+
+
 def description(store: Store, fid: str, mode: str = "live") -> str:
-    parts = []
-    for b in store.feature_body(fid)[1:]:
-        if b.kind == PARAGRAPH:
-            md = markdown(b.text(), mode, store)
-            if md.strip():
-                parts.append(md)
-    return "\n\n".join(parts)
+    """The feature's own body as Markdown: its paragraphs, list items, tables,
+    diagrams and code, up to its first child heading. Other kinds (an image, a
+    reference, a comment) are not part of what the feature says."""
+    specs = [s for b in store.feature_body(fid)[1:]
+             if b.kind in PROSE or b.kind in SOURCE
+             if (s := block_spec(store, b, mode)) is not None]
+    return block_md.render(specs).rstrip("\n")
 
 
 def tree(store: Store) -> list[TreeNode]:
@@ -454,7 +486,7 @@ def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[
             reads.append(said)
         if kind.lower is None:
             continue
-        old = {k: (markdown(_at_realized(store, v, w.realized), "rejected", store)
+        old = {k: (text_string(b.kind, k, _at_realized(store, v, w.realized), "rejected", store)
                    if isinstance(v, Text) and k in text_fields(b.kind) else v)
                for k, v in b.content.items()}
         for o in reversed(store.ops_on([b.id])):

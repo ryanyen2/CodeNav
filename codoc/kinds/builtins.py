@@ -1,4 +1,11 @@
-"""The shipped kinds: diagram, image, url, pdf, screenshot, comment.
+"""The shipped kinds.
+
+    table        source: pipe-table rows
+    code         source: a snippet; lang
+    diagram      source: mermaid; derived (redrawn from the code graph when true)
+    url, pdf     a reference, fetched or extracted once, then consulted
+    image, screenshot   a file under .codoc/media the agent is told about
+    comment      one message of a thread, anchored by a comment mark
 
 Each is a declaration. ``lift`` reads code (or a local file, or a guarded
 fetch) and returns new content or None; ``lower`` maps a person's edit to a
@@ -17,7 +24,15 @@ from codoc.kinds import Kind, LiftContext, LowerContext, register
 EXCERPT_MAX = 2000
 RETRY_COOLDOWN_S = 300
 
-# ── diagram: a mermaid flowchart of the feature's bound code ────────────────
+# ── table, code: authored source. Both are part of the feature's description,
+#    so the agent reads them there and neither needs a `consult`.
+
+TABLE = Kind(name="table", text_fields=("source",))
+
+CODE = Kind(name="code", text_fields=("source",), schema={"lang": {"type": "string"}})
+
+# ── diagram: mermaid. Authored by default. `derived` marks a flowchart of the
+#    feature's bound code: the loop redraws it, and an edit to it is a dependency request.
 
 _EDGE = re.compile(r"^\s*([\w.:]+)\s*-->\s*(?:\|[^|]*\|\s*)?([\w.:]+)\s*$")
 
@@ -47,7 +62,7 @@ def _freeform(source: str) -> bool:
 
 def diagram_lift(ctx: LiftContext) -> dict | None:
     symbols = [b.symbol for b in ctx.bindings]
-    if ctx.graph is None or not symbols:
+    if not ctx.block.content.get("derived") or ctx.graph is None or not symbols:
         return None
     lines = ["flowchart TB"]
     seen: set[tuple[str, str]] = set()
@@ -69,7 +84,9 @@ def diagram_lift(ctx: LiftContext) -> dict | None:
 
 
 def diagram_lower(old: dict, new: dict, ctx: LowerContext) -> str | None:
-    if not ctx.bindings:
+    """An edit to a derived diagram is a dependency request. An authored
+    diagram is explanation; the agent reads it through ``consult``."""
+    if not new.get("derived") or not ctx.bindings:
         return None
     a, b = edges_of(old.get("source", "")), edges_of(new.get("source", ""))
     added, removed = b - a, a - b
@@ -84,9 +101,8 @@ def diagram_lower(old: dict, new: dict, ctx: LowerContext) -> str | None:
 
 
 DIAGRAM = Kind(
-    name="diagram", text_fields=("source", "caption"),
+    name="diagram", text_fields=("source",), schema={"derived": {"type": "boolean"}},
     lift=diagram_lift, lower=diagram_lower,
-    consult=lambda c: f"Diagram of this feature's code (mermaid):\n{c.get('source', '')}" + (f"\nCaption: {c['caption']}" if c.get("caption") else ""),
 )
 
 # ── url / pdf: a reference fetched or extracted once, then consulted ────────
@@ -222,7 +238,7 @@ COMMENT = Kind(
     exported=False, in_flow=False,
 )
 
-ALL = (DIAGRAM, URL, PDF, IMAGE, SCREENSHOT, COMMENT)
+ALL = (TABLE, CODE, DIAGRAM, URL, PDF, IMAGE, SCREENSHOT, COMMENT)
 
 
 def register_all() -> None:

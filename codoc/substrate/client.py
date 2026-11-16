@@ -31,6 +31,8 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from codoc.calculus.ingest import resolve_pending_refs
+from codoc.calculus.ops import TEXT_INSERT
 from codoc.substrate import log as L
 from codoc.substrate.daemon import daemon_running
 from codoc.substrate.log import Submission
@@ -121,9 +123,17 @@ def write(codoc_dir: str | Path, *, client: str, bodies: list[dict], root_dir: s
             publish(codoc_dir, ws.store, root_dir=root_dir or str(codoc_dir.parent))
         return [{"cid": None, "op": o.id, "conflict": o.conflict} for o in ops]
     release(codoc_dir)
-    subs = [Submission(cid=f"{client}-{uuid.uuid4().hex[:12]}", kind=b["kind"], target=b.get("target", {}),
-                       payload=b.get("payload", {}), batch=batch or "", plan=b.get("plan", plan),
-                       caused_by=b.get("caused_by", caused_by)) for b in bodies]
+    subs: list[Submission] = []
+    insert_cids: list[str] = []
+    for b in bodies:
+        cid = f"{client}-{uuid.uuid4().hex[:12]}"
+        payload = dict(b.get("payload", {}))
+        # The daemon resolves ["$cid", cid, k]; a batch-local ["$ins", i, k] becomes that.
+        resolve_pending_refs(payload, insert_cids, as_ref=lambda c, k: ["$cid", c, k])
+        if b["kind"] == TEXT_INSERT:
+            insert_cids.append(cid)
+        subs.append(Submission(cid=cid, kind=b["kind"], target=b.get("target", {}), payload=payload,
+                               batch=batch or "", plan=b.get("plan", plan), caused_by=b.get("caused_by", caused_by)))
     L.submit(codoc_dir, client, subs)
     return wait_for_acks(codoc_dir, client, [s.cid for s in subs], wait_s)
 
