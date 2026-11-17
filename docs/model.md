@@ -23,7 +23,7 @@ Frontier   := { Session: seq }              a set of ops: every op of each sessi
 Rank       := base-62 fraction, as a string
 
 Doc        := Block[]                       sorted by (rank, id); live and dead
-Block      := { id, kind, rank, level, content, dead?, dead_actor?, dead_at?, detached? }
+Block      := { id, kind, rank, level, content, dead?, dead_actor?, dead_at?, dead_in?, detached? }
 content    := { field: Text | JSON }        which fields are Text is fixed by the kind
 Text       := { segs: Seg[], marks: Mark[] }       segs in document order, live and dead
 Seg        := { op, k0, chars, actor, at, plan?, dead?, dead_actor?, dead_at? }
@@ -37,7 +37,9 @@ Plan       := { id, actor,                  actor: who opened it
                 note,
                 status,                     open, then accepted | rejected; plan.reopen returns it to open
                 ops: OpId[],                the ops applied under the plan, in apply order
-                opened_by, decided_by }     the plan.open op; the actor of the verdict
+                opened_by,                  the plan.open op
+                build,                      accepting it hands off its features (an agent's codoc_propose)
+                decided_by }                the actor of the verdict
 
 Watermarks := { handoff: Frontier,          the ops the person has handed to the agent
                 realized: Frontier,         the ops a realization has settled
@@ -76,6 +78,8 @@ Op         := { id, at, actor,              set by the applier; actor from the c
 | `level` | Outline depth of a heading, indent depth of a list item, both 1..6. 0 for any other kind. |
 | `content` | A `Text` field is edited by text ops. Any other field is a JSON value replaced whole by `block.set`. |
 | `dead` | The op that killed the block. Absent while it is live. |
+| `dead_actor`, `dead_at` | Who killed it and when. |
+| `dead_in` | The feature whose description it was removed from, read when it died. A block that dies with its heading records that heading; a block merged into its neighbour, or added by a plan that was rejected, records none, since no words were removed. `removed:` and the `edited` phase read it, so where the dead block sits later does not matter. |
 | `detached` | On a dead heading: the bindings it owned when it died. |
 
 ### Block kinds
@@ -344,7 +348,7 @@ op's clock. `bind.attach` does not: a relocation is not drift.
 
 | op | target | wire payload | canonical payload adds | inverse |
 |---|---|---|---|---|
-| `plan.open` | `pid` | `kind` (default `edit`), `target`, `note` | | none |
+| `plan.open` | `pid` | `kind` (default `edit`), `target`, `note`, `build?` (honoured from an agent only) | | none |
 | `plan.accept` | `pid` | `subset: OpId[]?` | `accepted`, `rejected`, `deleted_blocks`, and everything it changed | `plan.reopen` |
 | `plan.reject` | `pid` | none | everything it changed | `plan.reopen` |
 | `plan.reopen` | `pid` | the verdict's record | `undid: {moved, sets}` | the verdict it undid |

@@ -327,6 +327,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToPage>) => {
                     onFeature: fid => { if (fid && fid !== selected) select(fid); },
                     openCite: (file, symbol) => send({ kind: 'open-cite', file, symbol }),
                     onConflict: (bid, conflict) => notify(bid ? `an edit could not apply (${conflict}); the block was reloaded` : conflict),
+                    actor: () => actor,
                 });
                 timeline = new Timeline(page, () => editor?.view.dom ?? null);
                 margin = new Margin(page, () => editor?.view ?? null, {

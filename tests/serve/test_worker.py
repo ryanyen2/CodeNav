@@ -3,7 +3,6 @@ import os
 import time
 
 from codoc.calculus import ops as K
-from codoc.loops.realize import handoff
 from codoc.serve.realize_agent import realize_tool_policy
 from codoc.serve.sandbox import (
     can_use_tool,
@@ -20,7 +19,7 @@ from codoc.serve.worker import (
     realize_one,
 )
 from codoc.workspace import Workspace
-from tests.helpers import seed_loop
+from tests.helpers import handoff, seed_loop
 
 
 def ready(tmp_path):

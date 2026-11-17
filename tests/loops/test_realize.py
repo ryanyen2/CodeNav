@@ -9,7 +9,6 @@ from codoc.index.changes import ChangeSet, ChunkRef
 from codoc.index.graph import Graph
 from codoc.loops.realize import (
     directive,
-    handoff,
     queued,
     render_queue,
     settle,
@@ -17,7 +16,7 @@ from codoc.loops.realize import (
 )
 from codoc.loops.reflect import reflect
 from codoc.workspace import Workspace
-from tests.helpers import H, Mint, chunk, heading, paragraph, seed, seed_loop
+from tests.helpers import chunk, H, handoff, heading, Mint, paragraph, seed, seed_loop
 
 
 def test_handoff_queues_directive_and_reflect_under_it_realizes(tmp_path):

@@ -23,7 +23,7 @@ One process applies ops at a time. It is called the applier.
   applier lock. A daemonless writer that applied before that is in the logs it reads.
   A writer that saw no daemon and got the lock after the pidfile was written checks for
   a daemon again under the lock and submits through the inbox instead.
-- Every write from any process, applied directly or drained from an inbox, goes through
+- Every client submission, applied directly or drained from an inbox, goes through
   `Workspace.apply_submission`: what a client may assert, how a suggester's edit becomes
   a plan, and what an amend or an ingest answers are decided there.
 - With a daemon alive, no other process applies. A writer appends to
@@ -516,9 +516,9 @@ store as the folded ops left it:
 
 | op | one per | carries | actor |
 |---|---|---|---|
-| `block.add` | block, live or dead | `rank`, `level`, the full Text of each Text field (segments with actors, clocks and killers; marks), other fields, `dead`, `detached`, `bound_once`, `code_at`, `realized_at` | `import` |
+| `block.add` | block, live or dead | `rank`, `level`, the full Text of each Text field (segments with actors, clocks and killers; marks), other fields, `dead`, `dead_actor`, `dead_at`, `dead_in`, `detached`, `bound_once`, `code_at`, `realized_at` | `import` |
 | `bind.attach` | binding | the hashes | `import` |
-| `plan.open` | plan | `kind`, `target`, `note`, `ops`, `opened_by` | the plan's actor |
+| `plan.open` | plan | `kind`, `target`, `note`, `ops`, `opened_by`, `build` | the plan's actor |
 | `plan.accept` or `plan.reject` | plan | | the actor who decided |
 | `feature.handoff` | feature with a hand-off | `covers`, and `asked`, `delete_code` of the latest hand-off | that hand-off's actor |
 | `feature.realized` | feature with a realization | `covers` | `import` |

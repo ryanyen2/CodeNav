@@ -353,6 +353,22 @@ def test_a_deleted_child_features_words_were_not_removed_from_its_parent():
     assert [b.id for b in s.removed_body("h1")] == ["p1"]
 
 
+def test_a_removed_paragraph_stays_with_its_feature_when_a_heading_lands_in_front_of_it():
+    """The paragraph records the feature it died in. A heading added between
+    the feature's last live block and the dead paragraph, then deleted, moves
+    nothing; nor does a fold."""
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Top")
+    paragraph(m, s, "p1", "kept", after="h1")
+    paragraph(m, s, "p2", "removed", after="p1")
+    apply(s, m.op(K.BLOCK_DELETE, {"bid": "p2"}, {}))
+    heading(m, s, "h2", "Stray", after="p1")
+    assert [b.id for b in s.removed_body("h1")] == ["p2"] and s.removed_body("h2") == []
+    apply(s, m.op(K.BLOCK_DELETE, {"bid": "h2"}, {}))
+    assert [b.id for b in s.removed_body("h1")] == ["p2"]
+    assert [b.id for b in replay(s).removed_body("h1")] == ["p2"]
+
+
 def test_a_handoff_records_no_commit_and_one_that_named_a_commit_still_applies():
     m, s = Mint(), Store()
     heading(m, s, "h1", "Top")

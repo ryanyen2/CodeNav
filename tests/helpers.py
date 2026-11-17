@@ -167,6 +167,12 @@ def bold_chars(text) -> set:
 
 # ── a Workspace ─────────────────────────────────────────────────────────────
 
+def handoff(ws: Workspace, fid: str, *, actor: str, asked: str = "", delete_code: bool = False) -> Op:
+    """A hand-off of ``fid`` applied directly, as the CLI's ``codoc handoff`` sends it."""
+    return ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": fid},
+                       "payload": {"asked": asked, "delete_code": delete_code}}], actor=actor)[0]
+
+
 def seed(ws: Workspace, actor=H, bind=True):
     """``Client`` / ``Retries once.`` written by ``actor``; the loop binds ``c.py::send``."""
     ws.submit([

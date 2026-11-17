@@ -34,7 +34,7 @@ import { EditorView } from '@tiptap/pm/view';
 
 import { docFrom } from '../calc/adopt';
 import { newBid, newCid } from '../calc/ids';
-import { isOneLine, kindOf, type Ack, type CharRef, type Projection, type Submission } from '../calc/projection';
+import { isOneLine, isProvisional, kindOf, pathOf, textField, type Ack, type CharRef, type Projection, type Submission } from '../calc/projection';
 import { scalarOffset } from '../calc/recorder';
 import { adopter, type Adopt } from './adoption';
 import { RECORDED, deleteFeature, deleteSelection, moveBlock, pasteBlocks, selectedBlocks, type Env } from './commands';
@@ -58,6 +58,8 @@ export interface EditorHost {
     /** A gesture was not performed (`bid` is empty and `conflict` says why), or
      *  the daemon refused an op and its block was reloaded. */
     onConflict?(bid: string, conflict: string): void;
+    /** The viewer's actor as the projection's runs name it (`status.actor`). */
+    actor?(): string;
 }
 
 export interface EditorHandle {
@@ -79,7 +81,12 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
     const schema = codocSchema();
     const { doc, shadows } = docFrom(schema, proj);
     const shown: Shown = { projection: proj, realizing: new Set(), history: false };
-    const env: Env = { shadows, nextBid: newBid, nextCid: newCid, refuse: why => host.onConflict?.('', why), projection: () => shown.projection };
+    const env: Env = {
+        shadows, nextBid: newBid, nextCid: newCid, refuse: why => host.onConflict?.('', why), projection: () => shown.projection,
+        // Unacked, applied for this page, or in a projected run by the viewer.
+        mine: r => isProvisional(r) || outbox.applied.has(r[0]) || shown.projection.blocks.some(b =>
+            textField(b, pathOf(b.kind))?.runs.some(x => x.op === r[0] && x.actor === host.actor?.())),
+    };
     const paints = new Paints(shown);
     const outbox = new Outbox(shadows, subs => host.submit(subs), bid => paints.mark(bid));
     /** Record what a finished IME composition left on the page. */

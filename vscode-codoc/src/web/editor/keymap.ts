@@ -83,8 +83,17 @@ export function gestureKeys(env: Env, openLink: () => boolean): Plugin[] {
                 return run(view!, $from.parent.attrs.level > 1 ? indent(state, env, -1) : setKind(state, env, 'paragraph'));
             }
             if (empty && $from.parentOffset === 0 && caretKind(state) === 'heading') {
-                // A heading that owns no code becomes a paragraph, so a stray `# ` is undone in one key.
-                if (!env.projection?.().bindings.by_feature[$from.parent.attrs.bid]?.length) return run(view!, setKind(state, env, 'paragraph'));
+                // A plain heading becomes a paragraph, so a stray `# ` is undone in one key. One that
+                // owns code, has a child heading, or is queued or proposed is a feature to keep.
+                const h = $from.parent, proj = env.projection?.();
+                let next: number | null = null;
+                for (let i = $from.index(0) + 1; i < state.doc.childCount && next === null; i++) {
+                    if (state.doc.child(i).type.name === 'heading') next = state.doc.child(i).attrs.level;
+                }
+                const phase = proj?.phases[h.attrs.bid];
+                const plain = !proj?.bindings.by_feature[h.attrs.bid]?.length && !(next !== null && next > h.attrs.level)
+                    && (phase === undefined || phase === 'edited' || phase === 'synced');
+                if (plain) return run(view!, setKind(state, env, 'paragraph'));
                 env.refuse?.('Delete feature from the / menu');
                 return true;
             }

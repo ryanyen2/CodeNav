@@ -17,7 +17,7 @@ from codoc.workspace import Workspace
 from codoc.workspace import log as L
 from codoc.workspace.clock import Clock, fmt
 from codoc.workspace.log import Submission
-from tests.helpers import H, T, refs, seed, seed_loop, ws_paragraph
+from tests.helpers import H, T, refs, seed, seed_loop, write_roles, ws_paragraph
 
 
 def test_session_log_is_written_validated_and_rebuilt(tmp_path):
@@ -467,6 +467,42 @@ def test_a_mark_naming_an_op_that_placed_no_mark_is_the_senders(tmp_path):
         "actor": H, "op": owners.id, "at": owners.at})])
     ws.drain_inbox()
     assert [(m.kind, m.actor) for m in ws.store.blocks["p1"].text().marks] == [(BOLD, "agent:claude-code")]
+    ws.close()
+
+
+def test_undoing_the_removal_of_a_widened_mark_gives_it_back_to_its_placer(tmp_path):
+    """Widening a mark keeps its placer and takes the widener's clock. The undo
+    of its removal is the inverse the applier recorded, so it is honoured."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    r = refs(ws, "p1")
+
+    def bold(on: bool, end: int) -> dict:
+        return {"kind": K.TEXT_MARK, "target": {"bid": "p1", "path": "text"},
+                "payload": {"kind": BOLD, "start": list(r[0]), "end": list(r[end]), "on": on}}
+
+    ws.submit([bold(True, 6)], actor="loop")
+    ws.submit([bold(True, 11)], actor=H)
+    removal = ws.submit([bold(False, 11)], actor=H)[0]
+    assert not ws.store.blocks["p1"].text().marks
+    undo = removal.inverse[0]
+    ws.apply_submissions("ide", H, [Submission(cid="u1", kind=undo["kind"], target=undo["target"],
+                                               payload=undo["payload"])])
+    assert [(m.kind, m.actor) for m in ws.store.blocks["p1"].text().marks] == [(BOLD, "loop")]
+    ws.close()
+
+
+def test_only_a_coding_agents_plan_asks_for_a_build(tmp_path):
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws); ws.close()
+    write_roles(cd, {"human:gh:bob": "suggest"})
+    ws = Workspace(cd)
+    opened = {"kind": "edit", "target": "h1", "build": True}
+    ws.apply_submissions("hub-bob", "human:gh:bob", [Submission(cid="b", kind=K.PLAN_OPEN, target={"pid": "pb"},
+                                                                payload=dict(opened))])
+    ws.apply_submissions("mcp", "agent:claude-code", [Submission(cid="a", kind=K.PLAN_OPEN, target={"pid": "pa"},
+                                                                 payload=dict(opened))])
+    assert not ws.store.plans["pb"].build and ws.store.plans["pa"].build
     ws.close()
 
 

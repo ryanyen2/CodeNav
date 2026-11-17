@@ -47,6 +47,8 @@ export class Outbox {
     private readonly composed = new Set<string>();
     /** Blocks one of whose ops the daemon refused, waiting to be re-read. */
     private readonly stale = new Set<string>();
+    /** Every op the daemon applied for this page. */
+    readonly applied = new Set<string>();
 
     /** `onHoldChange` is told each block whose hold changed, so its paints can be redrawn. */
     constructor(private readonly shadows: Map<string, Shadow>,
@@ -174,6 +176,7 @@ export class Outbox {
                 }
             }
             if (a.op && !a.conflict) {
+                this.applied.add(a.op);
                 for (const bid of waiting) { this.shadows.get(bid)?.resolve(a.cid, a.op); this.lastOp.set(bid, a.op); }
             }
         }

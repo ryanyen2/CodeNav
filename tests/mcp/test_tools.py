@@ -11,10 +11,9 @@ from codoc.calculus.ids import START
 from codoc.calculus.text import BOLD
 from codoc.daemon import client
 from codoc.daemon.publish import publish
-from codoc.loops.realize import handoff
 from codoc.mcp import tools
 from codoc.workspace import Workspace
-from tests.helpers import H, refs, seed
+from tests.helpers import H, handoff, refs, seed
 
 
 def workspace(tmp_path):
@@ -169,6 +168,26 @@ def test_accepting_a_proposal_builds_but_accepting_a_reflection_does_not(tmp_pat
         assert accept_handoffs(st, st.plans[refl["planned"]["plan_id"]]) == []
         jitter = next(h.id for h in st.headings() if h.text().live_text() == "Jitter")
         assert accept_handoffs(st, st.plans[prop["plan_id"]]) == [jitter]
+    finally:
+        client.release(cd)
+
+
+def test_a_proposal_that_writes_nothing_says_so_and_leaves_no_plan(tmp_path):
+    """A second rewording of a paragraph that holds the first proposal's words
+    is refused. The call reports it, and the empty plan is taken back, so the
+    person is not asked to accept (and build) nothing."""
+    cd, ws = workspace(tmp_path)
+    ws.close()
+    try:
+        def reword(text: str) -> dict:
+            return tools.propose(str(cd), ops=[{"kind": "amend", "feature_id": "h1",
+                                                "blocks": [{"id": "p1", "text": text}]}], root_dir=str(tmp_path))
+
+        assert reword("Retries twice.")["ok"]
+        second = reword("Retries three times.")
+        assert not second["ok"] and "open_plan" in second["error"]
+        st = client.read(cd).store
+        assert [p for p in st.open_plans.values() if not p.ops] == []
     finally:
         client.release(cd)
 

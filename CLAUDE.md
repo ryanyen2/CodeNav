@@ -16,7 +16,7 @@ codoc init                       # index, build the first tree, install the Clau
 codoc watch                      # the daemon, the only applier
 codoc status | sync | realize    # where things stand; one pass; build the queue now
 codoc handoff <feature> --asked  # hand a feature off (the editor's ⌘S)
-codoc accept | reject <plan>     # verdicts; accept also hands off unless --no-build
+codoc accept | reject <plan>     # verdicts; accepting a codoc_propose plan also hands off
 codoc done <feature>             # mark a hand-off realized when the build moved no bound symbol
 codoc history <feature>          # ops and per-word attribution
 codoc lang [tag] | translate     # the authoring language; convert existing prose

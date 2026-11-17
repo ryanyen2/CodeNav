@@ -8,11 +8,10 @@ from codoc.calculus.ids import START
 from codoc.daemon.daemon import Daemon
 from codoc.daemon.epoch import read_activity, write_activity
 from codoc.index.changes import ChangeSet, ChunkRef
-from codoc.loops.realize import handoff
 from codoc.workspace import Workspace
 from codoc.workspace import log as L
 from codoc.workspace.log import Submission
-from tests.helpers import T, seed_loop
+from tests.helpers import handoff, seed_loop, T
 
 
 def make(tmp_path, changesets: list):

@@ -5,7 +5,8 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { bodies, block, ids, key, kindBlock, kinds, mount, pasteText, posIn, select, shadowFaults, shape, texts, typeRule, typeText,
+import type { ProjectedBlock, Projection } from '../../../web/calc/projection';
+import { bodies, block, ids, key, kindBlock, kinds, mount, para, pasteText, posIn, select, shadowFaults, shape, texts, typeRule, typeText,
          type Mounted } from './harness';
 
 const ctrl = { ctrlKey: true };
@@ -173,15 +174,23 @@ describe('Backspace at the start of a heading', () => {
         expect(shadowFaults(m)).toEqual([]);
     });
 
-    it('on a heading that owns code does nothing but say how', () => {
-        const m = mount([block('a', 'heading', 'A'), block('f', 'heading', 'F'), block('p', 'paragraph', 'x')],
-                        { bindings: { by_feature: { f: [{ file: 'a.py', symbol: 'a.py::f' }] }, by_file: {} } });
-        select(m.view, posIn(m.view, 'f', 0));
-        key(m.view, 'Backspace', 8);
-        expect(sent(m)).toEqual([]);
-        expect(m.conflicts).toEqual(['Delete feature from the / menu']);
-        expect(m.view.state.selection.from).toBe(posIn(m.view, 'f', 0));
-    });
+    // A heading that owns code, a theme with a child under it, a feature queued for a build.
+    const cases: Array<[string, ProjectedBlock[], Partial<Projection>]> = [
+        ['owns code', [block('f', 'heading', 'F'), block('p', 'paragraph', 'x')],
+         { bindings: { by_feature: { f: [{ file: 'a.py', symbol: 'a.py::f' }] }, by_file: {} } }],
+        ['has a child heading', [block('f', 'heading', 'Theme'), block('c', 'heading', 'Child', 2)], {}],
+        ['is queued', [block('f', 'heading', 'New'), block('p', 'paragraph', 'x')], { phases: { f: 'queued' } }],
+    ];
+    for (const [name, blocks, extra] of cases) {
+        it(`on a heading that ${name} does nothing but say how`, () => {
+            const m = mount([block('a', 'heading', 'A'), ...blocks], extra);
+            select(m.view, posIn(m.view, 'f', 0));
+            key(m.view, 'Backspace', 8);
+            expect(sent(m)).toEqual([]);
+            expect(m.conflicts).toEqual(['Delete feature from the / menu']);
+            expect(m.view.state.selection.from).toBe(posIn(m.view, 'f', 0));
+        });
+    }
 
     it('Delete in an empty heading moves into the next block and leaves the title empty', () => {
         const m = mount([block('h', 'heading', ''), block('p', 'paragraph', 'body')]);
@@ -231,12 +240,27 @@ describe('source blocks from a marker', () => {
         expect(shadowFaults(m)).toEqual([]);
     });
 
-    it('a row the projection already holds then Enter makes a table too', () => {
-        const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', '|a|b|')]);
-        select(m.view, posIn(m.view, 'p', 5));
+    it('the viewer\'s own row makes a table once acked, and once the projection holds it', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', '')]);
+        select(m.view, posIn(m.view, 'p', 0));
+        typeText(m.view, '|a|b|');
+        m.handle.flush();
+        m.handle.ack([{ cid: m.submitted[0].cid, op: 'v:7', conflict: null }]);    // acked, not yet in a projection
         key(m.view, 'Enter', 13);
         expect(shape(m.view.state.doc)).toEqual(['heading:1', 'table']);
-        expect(sent(m)[1].payload).toEqual({ kind: 'table', after: 'h', content: {} });
+        const m2 = mount([block('h', 'heading', 'T'), para('p', 1, [['|a|b|', { op: 'v:7', actor: 'human:a' }]])]);   // human:a is the viewer
+        select(m2.view, posIn(m2.view, 'p', 5));
+        key(m2.view, 'Enter', 13);
+        expect(shape(m2.view.state.doc)).toEqual(['heading:1', 'table']);
+        expect(sent(m2)[1].payload).toEqual({ kind: 'table', after: 'h', content: {} });
+    });
+
+    it('another actor\'s row stays a paragraph and splits', () => {
+        const m = mount([block('h', 'heading', 'T'), para('p', 1, [['| a | b |', { op: 'o:3', actor: 'human:bob' }]])]);
+        select(m.view, posIn(m.view, 'p', 9));
+        key(m.view, 'Enter', 13);
+        expect(sent(m).map(o => o.kind)).toEqual(['block.split']);
+        expect(shape(m.view.state.doc)).toEqual(['heading:1', 'paragraph', 'paragraph']);
     });
 
     it('Enter after prose that starts with a bar splits as usual', () => {

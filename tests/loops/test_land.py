@@ -4,10 +4,9 @@ from codoc.calculus.derive import block_written_by
 from codoc.index.changes import ChangeSet
 from codoc.index.graph import Graph
 from codoc.loops.edits import Compiler
-from codoc.loops.realize import handoff
 from codoc.loops.reflect import ReflectResult, _land, _Pass, reflect
 from codoc.workspace import Workspace
-from tests.helpers import H, T, chunk, seed, seed_loop
+from tests.helpers import chunk, H, handoff, seed, seed_loop, T
 
 
 def test_a_machine_rewrite_never_deletes_an_open_plans_words(tmp_path):

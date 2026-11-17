@@ -399,7 +399,8 @@ def _h_block_add(store: Store, op: Op, touched: set[str]):
         store.bound_once.add(bid)        # a snapshot restoring a feature that once had code
     block = Block(bid, kind, rank, level, content)
     if op.payload.get("dead"):               # a snapshot restoring a block with its killer
-        block.kill(op.payload["dead"], op.payload.get("dead_actor", ""), op.payload.get("dead_at", ""))
+        block.kill(op.payload["dead"], op.payload.get("dead_actor", ""), op.payload.get("dead_at", ""),
+                   op.payload.get("dead_in", ""))
     if op.payload.get("detached"):
         block.detached = [dict(e) for e in op.payload["detached"]]
     if op.payload.get("code_at") or op.payload.get("realized_at"):
@@ -631,13 +632,9 @@ def _h_block_delete(store: Store, op: Op, touched: set[str]):
         if b is None or not b.live:
             raise Conflict("no_block", bid)
         ids = store.body_ids(bid)
-    killed = []
-    for i in ids:
-        b = store.blocks[i]
-        if b.live:
-            b.kill(op.id, op.actor, op.at)
-            killed.append(i)
-        touched.add(i)
+    killed = [i for i in ids if store.blocks[i].live]
+    store.kill(killed, op.id, op.actor, op.at)
+    touched.update(ids)
     detached = _detach_dead(store, [i for i in killed if store.blocks[i].kind == HEADING], touched)
     canonical = {"ids": ids, "killed": killed, "detached": detached}
     return canonical, [body(K.BLOCK_RESTORE, dict(op.target), {"ids": killed, "by": op.id, "bindings": detached})]
@@ -962,10 +959,9 @@ def _h_plan_accept(store: Store, op: Op, touched: set[str]):
     # A feature the person deleted by hand before answering the proposal is
     # already gone: the verdict agrees with them rather than conflicting.
     if plan.kind == "delete" and plan.target and store.blocks[plan.target].live:
-        for i in store.body_ids(plan.target):
-            store.blocks[i].kill(op.id, op.actor, op.at)
-            deleted.append(i)
-            touched.add(i)
+        deleted = store.body_ids(plan.target)
+        store.kill(deleted, op.id, op.actor, op.at)
+        touched.update(deleted)
         record["detached"] = _detach_dead(store, [plan.target], touched)
     plan.status, plan.decided_by = "accepted", op.actor
     store.open_plans.pop(pid, None)

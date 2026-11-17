@@ -7,10 +7,9 @@ from codoc.calculus.ids import START
 from codoc.calculus.text import BOLD
 from codoc.index.changes import ChangeSet
 from codoc.index.graph import Graph
-from codoc.loops.realize import handoff
 from codoc.loops.reflect import reflect
 from codoc.workspace import Workspace
-from tests.helpers import H, T, chunk, md_of, seed, seed_loop
+from tests.helpers import chunk, H, handoff, md_of, seed, seed_loop, T
 
 
 def test_a_malformed_attach_does_not_make_a_feature_one_that_lost_its_code(tmp_path):

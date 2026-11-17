@@ -36,14 +36,6 @@ from codoc.workspace import Workspace
 from codoc.workspace.layout import REALIZE, atomic_write
 
 
-def handoff(ws: Workspace, fid: str, *, actor: str, asked: str = "", delete_code: bool = False) -> Op:
-    """Hand a feature's edits to the agent. What it covers is not stated: the
-    applier fills it with its own frontier, which is the only one that includes
-    the ops arriving in the same batch as this one."""
-    return ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": fid},
-                       "payload": {"asked": asked, "delete_code": delete_code}}], actor=actor)[0]
-
-
 def queued(store: Store) -> list[str]:
     """Features whose hand-off frontier is not covered by their realized
     frontier, in document order; dead headings with a pending removal come

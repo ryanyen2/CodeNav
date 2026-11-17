@@ -15,6 +15,7 @@ its bodies before submitting.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -472,7 +473,21 @@ class Workspace:
             # provenance card and `settle` read it. A person's client does not
             # get to assert it about itself.
             s = replace(s, caused_by=None)
-        s = replace(s, payload=client_payload(self.store, s.kind, s.payload))
+        s = replace(s, payload=client_payload(self.store, s.kind, s.payload, actor))
+        if s.kind == K.PLAN_OPEN and s.payload.get("build") and actor_kind(actor) != "agent":
+            # A build request is a coding agent's proposal made before the
+            # code. A suggester's plan is about words, whoever accepts it.
+            s = replace(s, payload={k: v for k, v in s.payload.items() if k != "build"})
+        if s.kind == "amend":
+            # The amend decides its own plan, so no suggester plan is opened for it.
+            p = s.payload
+            done = self.amend(str(p.get("fid") or ""), actor=actor, note=str(p.get("note") or ""), caused_by=s.caused_by,
+                              rewrites=[(r["bid"], r.get("path", "text"), r["new_md"], r.get("base_text"))
+                                        for r in p.get("rewrites") or []],
+                              bodies=p.get("bodies") or [], strikes=p.get("strikes") or [],
+                              structural=bool(p.get("structural")))
+            return Applied(done.ops, "; ".join(f"{b}: {why}" for b, why in done.refused) or None,
+                           (f"plan:{done.plan}" if done.plan else "trunk") if done.ops else "unchanged")
         if s.kind != "ingest":
             # Resolve first: `_as_proposal` asks which plan minted the
             # characters a range names, and a `$cid` ref answers nothing. The
@@ -482,15 +497,6 @@ class Workspace:
         s = self._as_proposal(actor, s)
         plan = s.plan or self._suggester_plan(actor, s.kind if s.kind != "ingest" else K.TEXT_INSERT,
                                               s.target, s.payload, batch)
-        if s.kind == "amend":
-            p = s.payload
-            done = self.amend(str(p.get("fid") or ""), actor=actor, note=str(p.get("note") or ""), caused_by=s.caused_by,
-                              rewrites=[(r["bid"], r.get("path", "text"), r["new_md"], r.get("base_text"))
-                                        for r in p.get("rewrites") or []],
-                              bodies=p.get("bodies") or [], strikes=p.get("strikes") or [],
-                              structural=bool(p.get("structural")))
-            return Applied(done.ops, "; ".join(f"{b}: {why}" for b, why in done.refused) or None,
-                           (f"plan:{done.plan}" if done.plan else "trunk") if done.ops else "unchanged")
         if s.kind == "ingest":
             # A whole-text write from another process: the boundary diff runs
             # here, in the applier. The ack names the first op.
@@ -543,36 +549,45 @@ class Applied:
     status: str | None = None
 
 
-def client_payload(store: Store, kind: str, payload: dict) -> dict:
-    """``payload`` as a client may send it.
+def client_payload(store: Store, kind: str, payload: dict, actor: str = "") -> dict:
+    """``payload`` as ``actor`` may send it.
 
     - Snapshot-only fields are removed, from an amend's bodies too; a body
       keeps only its kind, target and payload, since the amend decides the plan.
-    - A mark keeps a restore's ``actor``/``op``/``at`` only when ``op`` is a
-      ``text.mark`` op that actor recorded at that clock (an undo restoring a
-      mark someone placed). Otherwise the mark is the sender's own.
-    - A proposed deletion's ``chars`` never come from the client: the applier
-      records the characters its range names, and a restore takes them from
-      the op that placed it."""
+    - A mark that names its placer (``actor``/``op``/``at``) is honoured only
+      as the inverse the applier recorded for one of the sender's own ops: an
+      undo of their removal of a mark someone else placed. The recorded body
+      is used, ``chars`` included. Any other mark is the sender's own, and a
+      proposed deletion's ``chars`` are the ones the applier reads from its range."""
     out = {k: v for k, v in payload.items() if k not in K.SNAPSHOT_ONLY.get(kind, ())}
     if kind == "amend":
         out["bodies"] = [{"kind": b["kind"], "target": b.get("target") or {},
-                          "payload": client_payload(store, b["kind"], b.get("payload") or {})}
+                          "payload": client_payload(store, b["kind"], b.get("payload") or {}, actor)}
                          for b in out.get("bodies") or []]
     if kind != K.TEXT_MARK:
         return out
-    placed = store.by_id.get(str(out.get("op") or ""))
-    restore = (placed is not None and placed.kind == K.TEXT_MARK
-               and (placed.actor, placed.at) == (out.get("actor"), out.get("at")))
-    if not restore:
-        for k in ("actor", "op", "at"):
-            out.pop(k, None)
+    if any(k in out for k in ("actor", "op", "at")) and (recorded := _recorded_restore(store, actor, out)):
+        return dict(recorded)
+    for k in ("actor", "op", "at"):
+        out.pop(k, None)
     if out.get("kind") == SUGGEST_DEL:
-        attrs = {k: v for k, v in (out.get("attrs") or {}).items() if k != "chars"}
-        if restore and (chars := (placed.payload.get("attrs") or {}).get("chars")):
-            attrs["chars"] = chars
-        out["attrs"] = attrs
+        out["attrs"] = {k: v for k, v in (out.get("attrs") or {}).items() if k != "chars"}
     return out
+
+
+def _recorded_restore(store: Store, actor: str, payload: dict) -> dict | None:
+    """The ``text.mark`` payload that an op of ``actor`` recorded in its
+    inverse and that ``payload`` repeats (``chars`` aside), or None."""
+    def key(p: dict) -> str:
+        return json.dumps({**p, "attrs": {k: v for k, v in (p.get("attrs") or {}).items() if k != "chars"}},
+                          sort_keys=True)
+    want = key(payload)
+    for o in reversed(store.ops):
+        if o.actor == actor and o.conflict is None:
+            for b in o.inverse:
+                if b.get("kind") == K.TEXT_MARK and key(b.get("payload") or {}) == want:
+                    return b["payload"]
+    return None
 
 
 def _resolve_provisional(payload: dict, minted: dict[str, str], sent: dict[str, str] | None = None) -> dict:

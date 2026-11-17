@@ -113,16 +113,20 @@ class Block:
     # directive says so after the op that did it has been folded away.
     dead_actor: str = ""
     dead_at: str = ""
+    # The feature whose description the block was removed from, read when it
+    # died. "" when no words were removed: a block merged into its neighbour,
+    # or one a rejected plan had added.
+    dead_in: str = ""
 
     @property
     def live(self) -> bool:
         return self.dead is None
 
-    def kill(self, op: OpId, actor: str = "", at: str = "") -> None:
-        self.dead, self.dead_actor, self.dead_at = op, actor, at
+    def kill(self, op: OpId, actor: str = "", at: str = "", feature: str = "") -> None:
+        self.dead, self.dead_actor, self.dead_at, self.dead_in = op, actor, at, feature
 
     def revive(self) -> None:
-        self.dead, self.dead_actor, self.dead_at = None, "", ""
+        self.dead, self.dead_actor, self.dead_at, self.dead_in = None, "", "", ""
 
     def text(self, path: str = "text") -> Text:
         t = self.content.get(path)
@@ -137,6 +141,8 @@ class Block:
             d["dead"] = self.dead
             if self.dead_actor:
                 d["dead_actor"], d["dead_at"] = self.dead_actor, self.dead_at
+            if self.dead_in:
+                d["dead_in"] = self.dead_in
         if self.detached:
             d["detached"] = [dict(e) for e in self.detached]
         return d
@@ -148,7 +154,8 @@ class Block:
         for k, v in (d.get("content") or {}).items():
             content[k] = Text.from_json(v) if k in text_fields(kind) else v
         return cls(d["id"], kind, d["rank"], int(d.get("level") or 0), content, d.get("dead"),
-                   [dict(e) for e in (d.get("detached") or [])], d.get("dead_actor", ""), d.get("dead_at", ""))
+                   [dict(e) for e in (d.get("detached") or [])], d.get("dead_actor", ""), d.get("dead_at", ""),
+                   d.get("dead_in", ""))
 
 
 def empty_content(kind: str, content: dict | None = None) -> dict:

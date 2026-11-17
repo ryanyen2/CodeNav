@@ -269,8 +269,11 @@ def _write_plans(codoc_dir: str, store, changes: list[Change], *, note: str, cau
     failed = next((r for r in results if not r.get("ok")), None)
     if failed:
         return failed
-    return {"ok": True, "plan_id": results[0]["plan_id"], "plan_ids": [r["plan_id"] for r in results],
-            "ops": sum(r["ops"] for r in results), "note": results[0]["note"]}
+    out = {"ok": True, "plan_id": results[0]["plan_id"], "plan_ids": [r["plan_id"] for r in results],
+           "ops": sum(r["ops"] for r in results), "note": results[0]["note"]}
+    if refused := [x for r in results for x in r.get("refused", [])]:
+        out["refused"] = refused
+    return out
 
 
 def _write_plan(codoc_dir: str, store, changes: list[Change], *, note: str, caused_by: str | None,
@@ -287,24 +290,34 @@ def _write_plan(codoc_dir: str, store, changes: list[Change], *, note: str, caus
         batch=pid, caused_by=caused_by, root_dir=root_dir)
     if opened and opened[0].get("conflict"):
         return _err(f"plan.open refused: {opened[0]['conflict']}")
-    written = 0
+    refusals: list[str | None] = []          # one per submission: why it was refused, or None
     for c in changes:
         if c.bodies:
-            written += len(client.write(codoc_dir, client=AGENT, bodies=c.bodies, plan=pid, batch=pid,
-                                        caused_by=caused_by, root_dir=root_dir))
+            refusals += [a["conflict"] for a in client.write(codoc_dir, client=AGENT, bodies=c.bodies, plan=pid,
+                                                              batch=pid, caused_by=caused_by, root_dir=root_dir)]
         for r in c.rewrites:
             base = store.blocks[r.bid].text(r.path).live_text()
-            client.ingest(codoc_dir, client=AGENT, bid=r.bid, path=r.path, base_text=base, new_md=r.new_md,
-                          plan=pid, caused_by=caused_by, root_dir=root_dir)
-            written += 1
+            got = client.ingest(codoc_dir, client=AGENT, bid=r.bid, path=r.path, base_text=base, new_md=r.new_md,
+                                plan=pid, caused_by=caused_by, root_dir=root_dir)
+            refusals.append(f"{r.bid}: {got['refused']}" if got["refused"] else None)
         strikes = strike_bodies(store, c.strikes, pid)
         if strikes:
-            written += len(client.write(codoc_dir, client=AGENT, bodies=strikes, plan=pid, batch=pid,
-                                        caused_by=caused_by, root_dir=root_dir))
-    return {"ok": True, "plan_id": pid, "ops": written,
-            "note": "The person accepts or rejects this plan in the editor. "
-                    + ("Accepting it queues the work for you." if build and kind != "delete" else
-                       "Accepting it takes the words only; nothing is queued.")}
+            refusals += [a["conflict"] for a in client.write(codoc_dir, client=AGENT, bodies=strikes, plan=pid,
+                                                              batch=pid, caused_by=caused_by, root_dir=root_dir)]
+    refused = [r for r in refusals if r]
+    if refusals and len(refused) == len(refusals):
+        # Nothing landed: take the empty plan back, or the person is asked to
+        # accept nothing (and, with build, to queue a build of nothing).
+        client.write(codoc_dir, client=AGENT, bodies=[{"kind": K.PLAN_REJECT, "target": {"pid": pid}, "payload": {}}],
+                     batch=pid, root_dir=root_dir)
+        return _err("nothing was written: " + "; ".join(refused))
+    out = {"ok": True, "plan_id": pid, "ops": len(refusals) - len(refused),
+           "note": "The person accepts or rejects this plan in the editor. "
+                   + ("Accepting it queues the work for you." if build else
+                      "Accepting it takes the words only; nothing is queued.")}
+    if refused:
+        out["refused"] = refused
+    return out
 
 
 def write_block(codoc_dir: str, *, content: dict, bid: str | None = None, kind: str | None = None,

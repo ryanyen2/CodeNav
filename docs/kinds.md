@@ -68,10 +68,9 @@ Content written to a kind block goes through `codoc/kinds/write.py`
   returns one `block.set` body per changed non-Text field and one ingest request
   `(field, base_text, new_md)` per Text field named. Fields not named are left alone. A
   dead or missing block, an unknown kind or a schema error is a refusal.
-- `add_body(kind, content, after)` returns the `block.add` body for a new kind block,
-  validated with `required`. Its Text fields are written after it through `plan_write`.
-- `write_block` and `add_block` run those against a `Workspace`, with the caller's actor,
-  plan and `caused_by`.
+- A new kind block is a `block.add` built with `ingest.block_bodies`, its Text fields
+  in the same batch. `mcp.tools.write_block` runs both against the workspace, with the
+  agent's actor, plan and `caused_by`.
 
 | writer | how | actor | lands |
 |---|---|---|---|

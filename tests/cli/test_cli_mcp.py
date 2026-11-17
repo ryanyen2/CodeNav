@@ -148,3 +148,13 @@ def test_accepting_a_plan_that_adds_features_queues_each_of_them(tmp_path):
     st = client.read(cd).store
     added = [h.id for h in st.headings() if tools.title(st, h.id) in ("Retry policy", "Back-off")]
     assert len(added) == 2 and sorted(queued(st)) == sorted(added), (added, queued(st))
+
+
+def test_a_daemon_that_starts_before_the_lock_gets_a_message_not_a_traceback(tmp_path, monkeypatch):
+    """The commands that apply themselves learn about a daemon under the lock."""
+    root, cd = seeded(tmp_path)
+    monkeypatch.setattr(client, "daemon_running", lambda _cd: True)
+    for cmd, says in (("rebuild", "A daemon is watching"), ("snapshot", "Stop the daemon"),
+                      ("translate", "Stop the daemon")):
+        r = runner.invoke(app, [cmd, "--root", str(root)] + (["--to", "fr"] if cmd == "translate" else []))
+        assert r.exit_code == 1 and says in r.output, (cmd, r.output, r.exception)

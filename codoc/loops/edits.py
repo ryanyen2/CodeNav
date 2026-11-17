@@ -149,7 +149,6 @@ class Compiler:
         self.hashes = hashes or {}
         self.bindable = bindable
         self.minted: dict[str, str] = {}                 # temporary id -> heading id
-        self.added: set[str] = set()                     # heading ids minted here
 
     # ── entry ──────────────────────────────────────────────────────────────
     def compile(self, raw: dict) -> Change:
@@ -200,7 +199,6 @@ class Compiler:
         bodies += [self._bind(fid, f, s) for f, s in binds]
         if raw.get("id"):
             self.minted[raw["id"]] = fid
-        self.added.add(fid)
         return Change("add_node", fid, bodies=bodies, bound=binds, structural=True)
 
     def _amend(self, raw: dict) -> Change:
@@ -255,12 +253,10 @@ class Compiler:
 
     # ── helpers ────────────────────────────────────────────────────────────
     def _feature(self, ref: str | None) -> str | None:
-        """A feature id from a real id or a temporary one; None when it names
-        no live heading (a node minted here counts as live)."""
+        """A feature id from a temporary one this compiler minted, or from a
+        live heading's id; None otherwise."""
         if ref in self.minted:
             return self.minted[ref]
-        if ref in self.added:
-            return ref
         b = self.store.blocks.get(ref) if ref else None
         return ref if b is not None and b.live and b.kind == HEADING else None
 

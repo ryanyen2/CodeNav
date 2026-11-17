@@ -391,7 +391,8 @@ def test_snapshot_folds_and_rebuilds_identically(tmp_path):
     verdicts, and the watermarks (with what the person asked) all survive it."""
     from codoc.calculus import ops as K
     from codoc.calculus.derive import phase
-    from codoc.loops.realize import directive, handoff
+    from codoc.loops.realize import directive
+    from tests.helpers import handoff
 
     ws = Workspace(tmp_path / ".codoc")
     bootstrap(ws, ROWS, Graph(), propose_file=fake_file, propose_org=fake_org, propose_the_brief=lambda *a, **k: {}, concurrency=1)

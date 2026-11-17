@@ -92,7 +92,8 @@ export function mountProj(p: Projection): Mounted {
     document.body.append(container);
     const submitted: Submission[] = [];
     const conflicts: string[] = [];
-    const handle = mountEditor(container, p, { submit: s => submitted.push(...s), onConflict: (_b, c) => conflicts.push(c) });
+    // The viewer is human:a, the actor `block` mints its runs as.
+    const handle = mountEditor(container, p, { submit: s => submitted.push(...s), onConflict: (_b, c) => conflicts.push(c), actor: () => 'human:a' });
     if (!captured) throw new Error('the docFrom mock did not capture the shadows');
     return { handle, view: handle.view, shadows: captured, submitted, conflicts, proj: p, container };
 }

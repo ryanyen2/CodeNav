@@ -248,24 +248,22 @@ class Store:
         return out
 
     def removed_body(self, fid: str) -> list[Block]:
-        """The dead non-heading blocks that sit in a live heading's body: what
-        was deleted from its description, in document order. A block behind a
-        dead heading that died no later than that heading was the dead
-        heading's own (a deleted child feature's words), and is left out."""
-        h = self.blocks[fid]
-        if not h.live:
+        """What was deleted from a live heading's description, in document
+        order: the dead non-heading blocks that recorded ``fid`` when they
+        died. Where they sit now does not matter, so a heading added or
+        deleted among them later moves none of them to another feature."""
+        if not self.blocks[fid].live:
             return []
-        out = []
-        heading_died = ""          # when the latest dead heading passed so far died
-        for j in range(self._index_of(fid) + 1, len(self.order)):
-            n = self.blocks[self.order[j][1]]
-            if n.kind == HEADING:
-                if n.live:
-                    break
-                heading_died = max(heading_died, n.dead_at)
-            elif not n.live and (not heading_died or n.dead_at > heading_died):
-                out.append(n)
-        return out
+        return [b for b in (self.blocks[i] for _, i in self.order)
+                if not b.live and b.kind != HEADING and b.dead_in == fid]
+
+    def kill(self, ids: list[str], op: OpId, actor: str, at: str) -> None:
+        """Kill ``ids``, each recording the feature it was in. Read for all of
+        them first: a heading's body was in that heading, not in the feature
+        above it once the heading is dead."""
+        features = {i: self.feature_of(i) or "" for i in ids}
+        for i in ids:
+            self.blocks[i].kill(op, actor, at, features[i])
 
     def feature_range(self, fid: str) -> list[Block]:
         h = self.blocks[fid]

@@ -8,9 +8,9 @@ from codoc.kinds import LowerContext, get, plain
 from codoc.kinds.builtins import diagram_lower, edges_of
 from codoc.kinds.lift import lift_pass
 from codoc.kinds.write import write_block
-from codoc.loops.realize import directive, handoff
+from codoc.loops.realize import directive
 from codoc.workspace import Workspace
-from tests.helpers import kind_block, seed_loop
+from tests.helpers import handoff, kind_block, seed_loop
 
 
 def test_registration_declares_text_fields_and_schema_validation():

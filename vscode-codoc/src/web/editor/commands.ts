@@ -16,7 +16,7 @@
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { type EditorState, Selection, TextSelection, type Transaction } from '@tiptap/pm/state';
 
-import { ITEMS, PROSE, SOURCE, START, isOneLine, kindOf, nfc, pathOf, type CharRef, type OpBody,
+import { ITEMS, PROSE, SOURCE, START, isOneLine, isProvisional, kindOf, nfc, pathOf, type CharRef, type OpBody,
          type Projection, type Span } from '../calc/projection';
 import { inlineNodes } from '../calc/adopt';
 import { SENT_MARKS, deleteOf, scalarOffset } from '../calc/recorder';
@@ -43,8 +43,10 @@ export interface Env {
     nextCid: () => string;
     /** Told why a gesture was not performed; the page shows it as a one-line notice. */
     refuse?: (why: string) => void;
-    /** The projection in hand, for the features' bindings. */
+    /** The projection in hand, for the features' bindings and phases. */
     projection?: () => Projection;
+    /** Whether the viewer wrote this character. Without it, only unacked characters count. */
+    mine?: (r: CharRef) => boolean;
 }
 
 /** One block as it arrives in a paste: inline Markdown already read into
@@ -382,9 +384,9 @@ export function insertSource(state: EditorState, env: Env, kind: string, content
 
 /**
  * Enter at the end of a paragraph that holds only ```` ```lang ```` or one
- * table row (`|…|…|`): the paragraph becomes a code block (a diagram for
- * `mermaid`) or a table holding that row. Prose such as `|x| is the absolute
- * value` does not end with a bar and splits as usual.
+ * table row (`|…|…|`) the viewer wrote: the paragraph becomes a code block (a
+ * diagram for `mermaid`) or a table holding that row. Prose such as `|x| is
+ * the absolute value`, or another actor's row, splits as usual.
  */
 export function sourceFromMarker(state: EditorState, env: Env): Gesture | null {
     const { $from, empty } = state.selection;
@@ -396,7 +398,10 @@ export function sourceFromMarker(state: EditorState, env: Env): Gesture | null {
         return lang === 'mermaid' ? insertSource(state, env, 'diagram', {}, '', text.length)
             : insertSource(state, env, 'code', lang ? { lang } : {}, '', text.length);
     }
-    return /^\|.*\|.*\|$/.test(text) ? insertSource(state, env, 'table', {}, text, text.length) : null;
+    if (!/^\|.*\|.*\|$/.test(text)) return null;
+    // Only the viewer's own row: replacing another actor's paragraph would re-author their words.
+    const mine = env.shadows.get($from.parent.attrs.bid as string)?.refs.every(r => env.mine?.(r) ?? isProvisional(r));
+    return mine ? insertSource(state, env, 'table', {}, text, text.length) : null;
 }
 
 /** An empty paragraph after the caret's block: the way out of a source block. */
