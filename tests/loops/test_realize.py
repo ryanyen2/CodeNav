@@ -1,11 +1,11 @@
 """Hand-off → queue → realization watermark (spec §3 watermarks, 02 §1)."""
 from codoc.calculus import ops as K
 from codoc.calculus.derive import phase
-from codoc.graph.graph import Graph
-from codoc.loop.diff import ChangeSet, ChunkRef
+from codoc.index.graph import Graph
+from codoc.index.changes import ChangeSet, ChunkRef
 from codoc.loops.realize import handoff, queued, render_queue, settle, write_queue
 from codoc.loops.reflect import reflect
-from codoc.substrate.workspace import Workspace
+from codoc.workspace import Workspace
 
 from tests.loops.test_reflect import seed
 

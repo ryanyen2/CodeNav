@@ -1,16 +1,17 @@
 """Block kinds on the extension interface (`03-extensions.md`)."""
 from codoc.calculus import ops as K
-from codoc.calculus.derive import attribution, directive, markdown
+from codoc.calculus.derive import attribution, markdown
+from codoc.loops.realize import directive
 from codoc.calculus.doc import text_fields
 from codoc.calculus.export import export_markdown
 from codoc.calculus.ids import START
-from codoc.graph.graph import Graph
+from codoc.index.graph import Graph
 from codoc.kinds import LowerContext, get, plain
 from codoc.kinds.builtins import diagram_lower, edges_of
 from codoc.kinds.lift import lift_pass
 from codoc.kinds.write import add_block, write_block
 from codoc.loops.realize import handoff
-from codoc.substrate.workspace import Workspace
+from codoc.workspace import Workspace
 from tests.loops.test_reflect import seed
 
 
@@ -189,7 +190,7 @@ def test_the_directive_speaks_through_the_kind_codecs(tmp_path):
     """A diagram reaches the agent inside the description, as a mermaid fence.
     An edit to a derived one also reaches it as the dependency request `lower`
     words. An open comment thread reaches it once, as the request its codec words."""
-    from codoc.calculus.derive import directive
+    from codoc.loops.realize import directive
     ws = Workspace(tmp_path / ".codoc")
     seed(ws)
     ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": "c.py::send"}}], actor="loop")

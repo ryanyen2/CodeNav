@@ -1,4 +1,4 @@
-"""realize_agent.py — the ENFORCED sandbox for hub-triggered realization (U7/U11 wiring).
+"""The sandboxed agent that realizes a hand-off on the hub.
 
 ``sandbox.py`` is the pure policy (allowed tools, scope, secret-read/edit denylist);
 ``consult.py`` is the pure SSRF-hardened Consult-URL gate. This module is the live
@@ -13,7 +13,7 @@ only touch what it is allowed to:
   • the agent runs with ``HUB_ALLOWED_TOOLS`` (Read/Edit/Write/Glob/Grep + a
     consult-gated WebFetch — NO Bash) and its environment SCRUBBED of every GitHub
     token, so it can never push or authenticate as the maintainer (the orchestrator in
-    ``realize_pr.py`` holds the token and opens the PR);
+    ``worker.py`` holds the token and opens the PR);
   • FAIL-SAFE: if the SDK cannot be loaded or the canUseTool hook cannot be installed,
     the agent runs NOTHING and reports zero changes rather than falling back to an
     unsandboxed run.
@@ -106,7 +106,7 @@ def build_directive_prompt(directive: dict, scope) -> str:
 
 def make_sandboxed_agent(*, consult_allowlist=None, resolve=None, run_capture=None):
     """Return an ``agent(directive, worktree_path, scope) -> list[str]`` for
-    :func:`codoc.serve.realize_pr.realize_directive`.
+    :func:`codoc.serve.worker.realize_one`.
 
     The returned agent runs the directive on a Claude-Agent-SDK session bound to
     :func:`realize_tool_policy` and ``HUB_ALLOWED_TOOLS``, in a token-scrubbed env, and
@@ -196,7 +196,7 @@ def _run_sandboxed_sdk(*, prompt: str, worktree_path: str, policy) -> bool:
     # Scrub GitHub credentials from the env the SDK's agent subprocess inherits, so the
     # agent can never authenticate/push as the maintainer (the orchestrator holds the
     # token and opens the PR). Restored after the run — the orchestrator's `gh` calls
-    # in realize_pr run later, in the hub process, and still need it.
+    # in ``worker.py`` run later, in the hub process, and still need it.
     saved = {k: os.environ.pop(k) for k in _GH_TOKEN_KEYS if k in os.environ}
     try:
         asyncio.run(_drive())

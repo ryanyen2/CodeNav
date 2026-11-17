@@ -31,7 +31,7 @@ class LiftContext:
     block: Block
     feature: str | None
     bindings: list[Binding]
-    graph: object | None = None          # codoc.graph.graph.Graph when the loop has one
+    graph: object | None = None          # codoc.index.graph.Graph when the loop has one
     codoc_dir: str | None = None
 
 

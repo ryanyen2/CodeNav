@@ -4,14 +4,13 @@ import sqlite3
 from codoc.calculus.derive import description, title, tree
 from codoc.calculus.doc import fold_tree
 from codoc.doclang import resolve
-from codoc.graph.graph import Graph
+from codoc.index.graph import Graph
 from codoc.loops.bootstrap import bootstrap
 from codoc.loops.translate import translate_tree
-from codoc.pipelines.indexing.reader import ChunkRow
-from codoc.substrate import log as L
-from codoc.substrate.import_v1 import import_v1
-from codoc.substrate.snapshot import write_snapshot
-from codoc.substrate.workspace import Workspace
+from codoc.index.reader import ChunkRow
+from codoc.workspace import log as L
+from codoc.workspace.snapshot import write_snapshot
+from codoc.workspace import Workspace
 
 
 def row(file, sym, src="def f(): ...", th="t"):
@@ -129,7 +128,8 @@ def test_snapshot_folds_and_rebuilds_identically(tmp_path):
     """A fold is the state, re-expressed: blocks, bindings, plans with their
     verdicts, and the watermarks (with what the person asked) all survive it."""
     from codoc.calculus import ops as K
-    from codoc.calculus.derive import directive, phase
+    from codoc.calculus.derive import phase
+    from codoc.loops.realize import directive
     from codoc.loops.realize import handoff
 
     ws = Workspace(tmp_path / ".codoc")
@@ -163,31 +163,6 @@ def test_snapshot_folds_and_rebuilds_identically(tmp_path):
     assert phase(ws3.store, fid) == before_phase
     assert "make it retry twice" in directive(ws3.store, fid) == before_directive
     assert all(o.conflict is None for o in ws3.store.ops), [o.conflict for o in ws3.store.ops if o.conflict]
-
-
-def test_import_v1_writes_one_batch_with_writer_roles(tmp_path):
-    db = tmp_path / "codoc.db"
-    con = sqlite3.connect(db)
-    con.executescript("""
-    CREATE TABLE features (id TEXT PRIMARY KEY, title TEXT, description TEXT, parent_id TEXT, rank TEXT,
-                           lifecycle TEXT, created_at TEXT);
-    CREATE TABLE bindings (feature_id TEXT, file TEXT, symbol_path TEXT, fingerprint TEXT, types_hash TEXT);
-    CREATE TABLE feature_writers (feature_id TEXT PRIMARY KEY, writer TEXT, role TEXT, at TEXT);
-    INSERT INTO features VALUES ('f-1','Top','First para.\n\nSecond para.',NULL,'V','active','1');
-    INSERT INTO features VALUES ('f-2','Child','Body.','f-1','V','active','2');
-    INSERT INTO features VALUES ('f-3','Gone','x','f-1','W','retired','3');
-    INSERT INTO bindings VALUES ('f-2','a.py','a.py::f','fp','th');
-    INSERT INTO feature_writers VALUES ('f-1','ryan','human','1');
-    """)
-    con.commit(); con.close()
-    ws = Workspace(tmp_path / ".codoc")
-    res = import_v1(ws, db)
-    assert res["features"] == 2 and res["bindings"] == 1
-    roots = fold_tree(ws.store.headings())
-    assert title(ws.store, roots[0].id) == "Top" and [title(ws.store, c.id) for c in roots[0].children] == ["Child"]
-    assert description(ws.store, roots[0].id) == "First para.\n\nSecond para."
-    assert all(s.actor == "human:import" for s in ws.store.blocks[roots[0].id].text().segs)
-    assert all(s.actor == "loop" for s in ws.store.blocks[roots[0].children[0].id].text().segs)
 
 
 def test_translate_says_when_it_skipped_a_feature_for_an_open_plan(tmp_path):

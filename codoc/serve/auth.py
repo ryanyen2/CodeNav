@@ -17,7 +17,6 @@ push access), never the visitor's. The browser holds only an opaque cookie.
 """
 from __future__ import annotations
 
-import json
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -128,8 +127,8 @@ def record_role(codoc_dir: str | Path, login: str, role: str) -> None:
     machine applies that contributor's ops under the same authority. The actor
     is ``log.hub_actor``, never a bare ``human:<login>``, so no GitHub login can
     name the maintainer's own identity."""
-    from codoc.doclang import read_config, write_config
-    from codoc.substrate.log import hub_actor
+    from codoc.workspace.config import read_config, write_config
+    from codoc.workspace.log import hub_actor
     roles = dict(read_config(codoc_dir).get("roles") or {})
     if roles.get(hub_actor(login)) == role:
         return                       # a tracked file: signing in is not a change
@@ -138,6 +137,6 @@ def record_role(codoc_dir: str | Path, login: str, role: str) -> None:
 
 
 def read_roles(codoc_dir: str | Path) -> dict[str, str]:
-    from codoc.doclang import read_config
+    from codoc.workspace.config import read_config
     d = read_config(codoc_dir).get("roles")
     return {str(k): str(v) for k, v in d.items()} if isinstance(d, dict) else {}

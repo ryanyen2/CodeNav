@@ -8,10 +8,9 @@ import asyncio
 import json
 from pathlib import Path
 
-from codoc.substrate import log as L
-from codoc.substrate.workspace import NONE, Roles
-
-PROJECTION, STATUS, CONFIG, HISTORY = "projection.json", "status.json", "config.json", "history.json"
+from codoc.workspace import log as L
+from codoc.workspace.layout import CONFIG, HISTORY, PROJECTION, STATUS
+from codoc.workspace.roles import NONE, Roles
 
 
 def _read(path: Path) -> str | None:
@@ -44,7 +43,7 @@ def status_message(codoc_dir: Path, actor: str = "") -> dict | None:
         cfg = json.loads(_read(codoc_dir / CONFIG) or "{}")
     except ValueError:
         return None
-    from codoc.substrate.workspace import OWNER, Roles
+    from codoc.workspace.roles import OWNER, Roles
     role = Roles.from_config(cfg).role(actor) if actor else OWNER
     return {"kind": "status", "status": {**status, "doc_language": cfg.get("doc_language", "en"),
                                          "actor": actor, "role": role}}

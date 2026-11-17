@@ -1,4 +1,4 @@
-"""consult.py — SSRF-hardened Consult-URL allowlist (U8).
+"""The Consult-URL gate for a hub-triggered realize run.
 
 A feature description can carry external `[label](https://…)` links that the
 realizing agent WebFetches. On a remote-triggered run those links are attacker-
@@ -11,21 +11,9 @@ also disable HTTP redirects (or re-validate each hop).
 """
 from __future__ import annotations
 
-import ipaddress
 from urllib.parse import urlparse
 
-_CGNAT = ipaddress.ip_network("100.64.0.0/10")
-
-
-def _blocked_ip(ip_str: str) -> bool:
-    try:
-        ip = ipaddress.ip_address(ip_str)
-    except ValueError:
-        return True  # unparseable → refuse
-    if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-            or ip.is_multicast or ip.is_unspecified):
-        return True
-    return ip.version == 4 and ip in _CGNAT
+from codoc.kinds.fetch_guard import blocked_ip
 
 
 def consult_url_allowed(url: str, allowlist, *, resolve) -> tuple[bool, str]:
@@ -51,6 +39,6 @@ def consult_url_allowed(url: str, allowlist, *, resolve) -> tuple[bool, str]:
     if not ips:
         return False, "host did not resolve"
     for ip in ips:
-        if _blocked_ip(ip):
+        if blocked_ip(ip):
             return False, f"host resolves to a blocked address ({ip})"
     return True, ""

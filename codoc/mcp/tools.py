@@ -1,7 +1,7 @@
-"""The agent's read and write surface (v2), used by the MCP server.
+"""The agent's read and write surface, used by the MCP server.
 
 Reads replay the logs into a read-only workspace and derive from it. Writes
-go through ``substrate.client`` (the daemon's inbox when a daemon owns the
+go through ``daemon.client`` (the daemon's inbox when a daemon owns the
 checkout, the applier otherwise) and are stamped ``actor=agent:<id>`` by the
 receiving side, never by the agent.
 
@@ -16,7 +16,6 @@ Two writes:
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from codoc.calculus import ops as K
@@ -26,14 +25,16 @@ from codoc.calculus.derive import (
 from codoc.calculus.doc import HEADING, PARAGRAPH, fold_tree, text_fields
 from codoc.calculus.ids import START, new_batch_id, new_block_id, new_plan_id
 from codoc.calculus.text import SUGGEST_DEL
+from codoc.daemon import client
+from codoc.daemon.publish import read_status as published_status
+from codoc.daemon.publish import realizing_is_fresh, write_realizing
 from codoc.doclang import detect_prose_language, workspace_doc_language
-from codoc.graph.graph import Graph
-from codoc.loop.ask import AskStep, build_walkthrough, clear_walkthrough, read_walkthrough, write_walkthrough
+from codoc.index.graph import Graph
+from codoc.llm.prompt import titles_outline
 from codoc.loops.context import select_context, written_by
 from codoc.loops.realize import queued
-from codoc.substrate import client
-from codoc.substrate.daemon import GRAPH_CACHE
-from codoc.substrate.publish import STATUS_FILE, atomic_write
+from codoc.mcp.walkthrough import AskStep, build_walkthrough, clear_walkthrough, read_walkthrough, write_walkthrough
+from codoc.workspace.layout import GRAPH_CACHE
 
 AGENT = "mcp"
 
@@ -61,22 +62,6 @@ def _lang(text: str, default) -> dict:
     return {"lang": got.code} if got.code != default.code else {}
 
 
-def _outline(all_titles: list[dict]) -> str:
-    by_parent: dict[str | None, list[dict]] = {}
-    for t in all_titles:
-        by_parent.setdefault(t.get("parent_id"), []).append(t)
-    lines: list[str] = []
-
-    def emit(parent, depth):
-        for t in by_parent.get(parent, []):
-            mark = " (planned)" if t.get("planned") else ""
-            lines.append("  " * depth + f"- [{t['id']}] {t['title']}{mark}")
-            emit(t["id"], depth + 1)
-
-    emit(None, 0)
-    return "\n".join(lines)
-
-
 # ── reads ────────────────────────────────────────────────────────────────────
 
 def read_context(codoc_dir: str, *, files: list[str] | None = None, feature_id: str | None = None,
@@ -100,7 +85,7 @@ def read_context(codoc_dir: str, *, files: list[str] | None = None, feature_id: 
         row.update(_lang(" ".join(b["text"] for b in row.get("blocks", [])) or row["title"], default))
         if not include_bindings:
             row["binding_count"] = len(row.pop("bindings", []))
-    return {"ok": True, "subtree": subtree, "titles_outline": _outline(all_titles), "graph": ctx,
+    return {"ok": True, "subtree": subtree, "titles_outline": titles_outline(all_titles), "graph": ctx,
             "doc_language": doc_language_block(codoc_dir)}
 
 
@@ -157,15 +142,16 @@ def read_status(codoc_dir: str) -> dict:
     store = ws.store
     heads = store.headings()
     phases = {h.id: phase(store, h.id) for h in heads}
-    try:
-        st = json.loads((Path(codoc_dir) / STATUS_FILE).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        st = {}
     q = queued(store)
+    state = published_status(codoc_dir).get("state", "synced")
+    if state == "realizing" and not realizing_is_fresh(codoc_dir):
+        # The lease lapsed, or it is the lease of the pass this agent belongs to:
+        # either way no other pass is working the queue.
+        state = "queued" if q else "synced"
     known = {(b.file, b.symbol) for b in store.bindings.values()}
     dead = [{"block": bid, "file": m.attrs.get("file"), "symbol": m.attrs.get("symbol")} for bid, m in dead_cites(store, known)]
     edited = [f for f, p in phases.items() if p == "edited"]
-    return {"ok": True, "state": st.get("state", "synced"), "features": len(heads), "queued": len(q),
+    return {"ok": True, "state": state, "features": len(heads), "queued": len(q),
             "queued_list": [{"feature_id": f, "title": title(store, f, "rejected")} for f in q[:20]],
             "edited": len(edited), "edited_list": [{"feature_id": f, "title": title(store, f)} for f in edited[:20]],
             "proposals": len(open_plans(store)),
@@ -413,15 +399,9 @@ def _fresh_block(codoc_dir: str, bid: str):
 
 def realize_progress(codoc_dir: str, *, done: int, total: int, current: str = "") -> dict:
     """Renew the realizing lease so the editor shows 'implementing n of m'."""
-    path = Path(codoc_dir) / STATUS_FILE
-    try:
-        d = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        d = {}
     shown = min(done + 1, total)
-    d.update({"state": "realizing", "pending": max(0, total - done),
-              "detail": f"implementing {shown} of {total}" + (f" — {current}" if current else "")})
-    atomic_write(path, json.dumps(d))
+    write_realizing(codoc_dir, pending=max(0, total - done),
+                    detail=f"implementing {shown} of {total}" + (f" — {current}" if current else ""))
     return {"ok": True}
 
 

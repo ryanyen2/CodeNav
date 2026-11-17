@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from codoc.core.tree_walk import walk
-from codoc.lang import detect_language, get_adapter
+from codoc.index.tree_walk import walk
+from codoc.index.lang import detect_language, get_adapter
 
 
 def fingerprint_chunk(source: str, adapter) -> str:

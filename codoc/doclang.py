@@ -1,85 +1,65 @@
-"""Doc language — the natural language codoc AUTHORS its prose in.
+"""Doc language: the natural language codoc authors its prose in.
 
-Two different things share the word "language" in this repo, and confusing them
-will waste an afternoon:
+Not ``codoc/index/lang``, which is the *programming* languages of the code
+under analysis. This module is the *authoring* language of the tree: what
+titles, descriptions and directives are written in. The two are independent; a
+Python repo can have a Mandarin tree.
 
-* ``codoc/lang/`` — **programming** languages (tree-sitter adapters). What the
-  code under analysis is written in.
-* this module — the **authoring** language of the feature tree: what the titles,
-  descriptions, and realize directives are written in. Orthogonal to the above;
-  a Python repo can have a Mandarin tree.
+The doc language is a property of the workspace, kept in the tracked
+``.codoc/config.json`` (``doc_language``) so that every contributor's daemon
+writes the same language. ``CODOC_DOC_LANGUAGE`` overrides it for one process.
 
-A repo's doc language is a durable property of the *workspace*, not a preference
-of whoever's shell happens to launch the daemon. If it lived only in an env var,
-a contributor running ``codoc watch`` without it would start appending English
-descriptions into a Chinese tree — silent corruption of authored intent, which is
-the one thing codoc is supposed to protect. So it is persisted in
-``.codoc/config.json`` (tracked in git, unlike the rest of ``.codoc/``) and an
-env var only *overrides* it.
+Two halves:
 
-Two halves, deliberately kept apart:
+**Profiles** (:class:`DocLanguage`, :func:`resolve`,
+:func:`workspace_doc_language`, :func:`prompt_directive`): how to ask a model
+to write a language. Configuration-driven.
 
-**The profile half** (:class:`DocLanguage`, :func:`resolve`,
-:func:`workspace_doc_language`) — cold paths only: assembling prompts, choosing
-the embedder, reporting state to the IDE/MCP. Configuration-driven.
-
-**The script half** (:func:`norm_key`, :func:`terms`, :func:`tokens`,
-:func:`clause_chars`, :func:`char_budget`) — hot paths, and deliberately
-*configuration-free*: each function infers what it needs from the text in front
-of it. That is not laziness about plumbing. A tree mid-migration holds English
-and Chinese nodes side by side, so a single per-repo setting would be the wrong
-answer for half of them; and inferring per-string means the lexical heuristics
-improve on a Chinese tree nobody remembered to configure. It also keeps
-``norm_key`` free of file IO, which matters because it runs per feature per pass.
+**Script helpers** (:func:`norm_key`, :func:`char_budget`,
+:func:`detect_prose_language`): these read nothing but the text in front of
+them. A tree can hold English and Chinese nodes side by side, so one per-repo
+setting would be the wrong answer for some of them.
 """
 from __future__ import annotations
 
-import json
 import os
 import re
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
-from codoc.loop.filenames import CONFIG_FILENAME
+from codoc.workspace.config import read_config
 
 # ---------------------------------------------------------------------------
 # Scripts
 # ---------------------------------------------------------------------------
-# Every lexical heuristic in the loop was written for a script that puts spaces
-# between words and needs ~6 characters to say one. Both assumptions are local to
-# Latin. What the heuristics actually want to know is two things — "can I find
-# word boundaries?" and "how much text is one word?" — so that is what a script
-# class carries, rather than a language name.
+# A constant written in characters means something different in a script that
+# needs two characters to say a word instead of six, and a string's script is
+# the first evidence of its language. A script class carries the word length.
 
 
 @dataclass(frozen=True)
 class ScriptClass:
     name: str
-    # Character n-gram width for segmentation, or 0 when whitespace/punctuation
-    # already marks word boundaries.
-    ngram: int
     # Mean characters per word, INCLUDING the separator for spaced scripts. This
-    # is the number that ports a "how long is a clause" or "how big is a prompt
-    # budget" constant across scripts.
+    # is the number that ports a character budget across scripts.
     chars_per_word: float
 
 
 # Latin, Cyrillic, Greek, Arabic, Hebrew, Devanagari … — anything that delimits
 # words with whitespace and averages a Latin-ish word length.
-SPACED = ScriptClass("spaced", ngram=0, chars_per_word=6.0)
+SPACED = ScriptClass("spaced", chars_per_word=6.0)
 # Han + kana: word boundaries are unmarked and a "word" is one or two characters.
-LOGOGRAPHIC = ScriptClass("logographic", ngram=2, chars_per_word=2.0)
-# Thai, Khmer, Lao, Myanmar: unspaced like Han, but alphabetic — a word is
-# several characters, so bigrams would shred it. Wider n-grams behave.
-UNSPACED_ALPHA = ScriptClass("unspaced_alpha", ngram=4, chars_per_word=5.0)
-# Hangul is spaced (word boundaries are findable) but a syllable block packs what
-# Latin spends 2–3 characters on, so it needs its own word length.
-HANGUL = ScriptClass("hangul", ngram=0, chars_per_word=3.5)
+LOGOGRAPHIC = ScriptClass("logographic", chars_per_word=2.0)
+# Thai, Khmer, Lao, Myanmar: unspaced like Han, but alphabetic, so a word is
+# several characters.
+UNSPACED_ALPHA = ScriptClass("unspaced_alpha", chars_per_word=5.0)
+# Hangul is spaced, but a syllable block packs what Latin spends 2–3 characters
+# on, so it needs its own word length.
+HANGUL = ScriptClass("hangul", chars_per_word=3.5)
 
 # Codepoint ranges per non-default script class. Order matters only for reading;
-# the ranges are disjoint. Anything unlisted is SPACED, which is both the common
-# case and the safe default (it reproduces today's behavior exactly).
+# the ranges are disjoint. Anything unlisted is SPACED, the common case.
 _RANGES: tuple[tuple[int, int, ScriptClass], ...] = (
     (0x3040, 0x30FF, LOGOGRAPHIC),    # hiragana + katakana
     (0x31F0, 0x31FF, LOGOGRAPHIC),    # katakana phonetic extensions
@@ -111,8 +91,7 @@ def script_mix(text: str) -> dict[str, float]:
     """Fraction of the *letters* in ``text`` belonging to each script class.
 
     Digits, punctuation, and whitespace are excluded: they appear in every script
-    and would dilute the signal toward SPACED, which is exactly the bias that
-    made the Latin-shaped heuristics misread CJK prose in the first place.
+    and would dilute the signal toward SPACED.
     """
     counts: dict[str, int] = {}
     total = 0
@@ -130,19 +109,6 @@ def script_mix(text: str) -> dict[str, float]:
 _BY_NAME = {c.name: c for c in (SPACED, LOGOGRAPHIC, UNSPACED_ALPHA, HANGUL)}
 
 
-def dominant_script(text: str) -> ScriptClass:
-    """The script class most of ``text``'s letters are in; SPACED when empty.
-
-    Used where one answer is needed for the whole string (which segmenter to
-    run). Where a *blended* answer is meaningful, :func:`chars_per_word` weights
-    the mix instead of picking a winner.
-    """
-    mix = script_mix(text)
-    if not mix:
-        return SPACED
-    return _BY_NAME[max(mix.items(), key=lambda kv: kv[1])[0]]
-
-
 def chars_per_word(text: str) -> float:
     """Mean characters per word for ``text``, blended across its scripts.
 
@@ -157,16 +123,6 @@ def chars_per_word(text: str) -> float:
     return sum(_BY_NAME[name].chars_per_word * frac for name, frac in mix.items())
 
 
-def has_cjk(text: str) -> bool:
-    """Whether ``text`` contains any character from an unspaced script.
-
-    The name says CJK because that is what callers mean; Hangul is excluded
-    precisely because it *is* space-delimited and needs no special segmentation.
-    """
-    return any(script_of(ch) in (LOGOGRAPHIC, UNSPACED_ALPHA)
-               for ch in text or "" if ch.isalpha())
-
-
 # ---------------------------------------------------------------------------
 # Normalization
 # ---------------------------------------------------------------------------
@@ -174,17 +130,14 @@ def has_cjk(text: str) -> bool:
 def norm_key(text: str | None) -> str:
     """The identity key for a title: NFKC + casefold + collapsed whitespace.
 
-    The two dedup gates (``loop_a``/``loop_b`` ``_norm_title``) key on this, so
-    what it folds together is what codoc considers "the same title". NFKC is the
-    load-bearing addition for CJK input: an IME emits full-width forms (``，``
-    ``（`` ``ａ``) that are visually identical to their ASCII twins in the tree,
-    so without NFKC two titles a person cannot tell apart get two nodes — the
-    duplicate-node failure the single-LLM-pass design exists to prevent, arriving
-    through the keyboard instead of the model.
+    What it folds together is what codoc considers "the same title". NFKC
+    matters for CJK input: an IME emits full-width forms (``，`` ``（`` ``ａ``)
+    that look identical to their ASCII twins in the tree, so without it two
+    titles a person cannot tell apart count as different.
 
     ``casefold`` rather than ``lower`` because it is the correct case-insensitive
     fold for non-English text (German ``ß``, Greek final sigma) and identical to
-    ``lower`` for ASCII, so no existing key changes.
+    ``lower`` for ASCII.
 
     Simplified vs Traditional Han is deliberately NOT folded: 简体/繁體 are a
     localization choice, not a spelling variant, and a repo that authors in one
@@ -196,150 +149,8 @@ def norm_key(text: str | None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Segmentation
+# Script-scaled budgets
 # ---------------------------------------------------------------------------
-# ``\w`` is Unicode-aware in Python 3, so ``[^\W_]`` is "letter or digit, not
-# underscore" in every script. This replaces the old ``[A-Za-z0-9]`` /
-# ``[a-z0-9]`` classes, which silently dropped every non-ASCII character — the
-# bug that made a Chinese prompt produce zero terms.
-_WORDISH = re.compile(r"[^\W_]+", re.UNICODE)
-
-# Words too common to signal that a prompt is about a particular change. Moved
-# here from ``loop.intent`` so both lexical consumers share one list.
-_STOP_SPACED = frozenset("""
-the a an and or but if then this that these those with without for from into
-you your we our it its is are was were be been being do does did done make
-made add adds added fix fixes fixed use uses used can could should would will
-please just also now new old code file files test tests run running why what
-how when where which who all any some more most other another
-""".split())
-
-# The logographic equivalent: characters that carry grammar rather than content
-# (particles, copulas, common prepositions and demonstratives). They matter more
-# here than English stopwords do, because in unigram mode a single such character
-# matches almost any sentence.
-_STOP_LOGOGRAPHIC = frozenset(
-    # particles, copulas, prepositions, demonstratives, pronouns, modals
-    "的了是在和与对及或把被就都也很更中上下不无有为以之其这那此個个我你他她它們们"
-    "並并於于從从會会能將将可要還还只再又"
-    # light verbs — the counterparts of the make/add/use/fix/run the Latin list
-    # drops. As a lone character these state that something was done, not what.
-    "让使令用做加改修跑"
-)
-
-
-def _ngrams(run: str, n: int) -> set[str]:
-    if len(run) <= n:
-        return {run} if run else set()
-    return {run[i:i + n] for i in range(len(run) - n + 1)}
-
-
-def _segment(text: str, *, unigrams: bool) -> set[str]:
-    """Split ``text`` into comparable units, per-run by script.
-
-    Per *run* and not per string: a Chinese description citing ``parse_tree``
-    must yield both Chinese n-grams and the Latin identifier, since the whole
-    point of the lexical heuristics is to bridge authored prose and code symbols.
-    Splitting on the dominant script alone would throw one side away.
-    """
-    out: set[str] = set()
-    for word in _WORDISH.findall(text or ""):
-        # A "word" here may be a mixed run (``解析parse_tree``); walk it and
-        # group maximal same-script stretches.
-        start = 0
-        cur = script_of(word[0])
-        for i in range(1, len(word) + 1):
-            nxt = script_of(word[i]) if i < len(word) else None
-            if nxt is cur and i < len(word):
-                continue
-            run = word[start:i]
-            if cur.ngram:
-                out |= _ngrams(run, cur.ngram)
-                if unigrams:
-                    out |= {c for c in run if c not in _STOP_LOGOGRAPHIC}
-            else:
-                out.add(run)
-            start, cur = i, nxt
-    return out
-
-
-def terms(text: str) -> set[str]:
-    """Content terms of a prompt, title, or symbol path — for *matching*.
-
-    camelCase and snake_case are split first: symbols are the bridge between a
-    prompt and a change, and an author who wrote "make the ollama client retry"
-    shares ``ollama`` and ``client`` with ``OllamaClient.complete`` only once both
-    sides are broken into words.
-
-    Unspaced scripts contribute n-grams but NOT single characters, because this
-    set is used for precision (does this prompt name this symbol?) and one Han
-    character matches nearly everything. Compare :func:`tokens`.
-    """
-    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", text or "")
-    raw = _segment(spaced, unigrams=False)
-    out: set[str] = set()
-    for t in raw:
-        low = t.casefold()
-        if has_cjk(t):
-            # n-grams are already short by construction, so no length floor — but
-            # a one-character run reaches here whole (there is no bigram to take),
-            # and a lone particle would match every sentence in the tree.
-            if len(t) > 1 or t not in _STOP_LOGOGRAPHIC:
-                out.add(t)
-        elif len(low) >= _min_term_chars(t) and low not in _STOP_SPACED:
-            out.add(low)
-    return out
-
-
-def _min_term_chars(token: str) -> int:
-    """Shortest token worth matching on, in ``token``'s script.
-
-    The original floor — longer than two characters — is "more than half a Latin
-    word", and it was doing two jobs: dropping abbreviations too generic to
-    identify anything, and dropping fragments. Both are proportional to word
-    length, so a Hangul syllable block (which packs what Latin spends 2–3
-    characters on) needs a lower one, or every two-syllable Korean word — most of
-    them — is discarded as too short.
-    """
-    return 3 if dominant_script(token) is SPACED else 2
-
-
-def tokens(text: str) -> set[str]:
-    """A lenient token set for similarity scoring — for *overlap*.
-
-    Deliberately more generous than :func:`terms`: the consumer
-    (``divergence.text_overlap``) uses a low overlap score to *flag* a
-    realization as divergent, so under-counting shared meaning raises a false
-    alarm on the author's screen. Unspaced runs therefore contribute both
-    n-grams and content characters, which keeps a reworded-but-equivalent
-    Chinese sentence scoring high.
-    """
-    return {t.casefold() for t in _segment(text or "", unigrams=True)}
-
-
-# ---------------------------------------------------------------------------
-# Script-scaled magic numbers
-# ---------------------------------------------------------------------------
-# Both helpers below exist because a constant expressed in *characters* silently
-# means something different in another script. They convert such a constant into
-# what its author actually meant, which was always a count of words.
-
-# ``apply._MIN_PRESERVED_RUN`` was 24 characters ≈ four Latin words: long enough
-# to be a preserved clause rather than shared vocabulary.
-PRESERVED_CLAUSE_WORDS = 4.0
-
-
-def clause_chars(text: str, *, words: float = PRESERVED_CLAUSE_WORDS) -> int:
-    """How many characters make up ``words`` words of ``text``'s script.
-
-    For Latin prose this returns 24 — the constant it replaces, unchanged. For
-    Chinese it returns ~8, which is the whole point: a 24-character contiguous
-    run in Chinese is an entire sentence, so the old constant made
-    ``preserved_ratio`` score every real amend at ~0 and pushed every one of them
-    into the review queue.
-    """
-    return max(4, round(words * chars_per_word(text)))
-
 
 def char_budget(base_chars: int, text: str) -> int:
     """A character cap written for Latin prose, rescaled for ``text``'s script.
@@ -368,21 +179,13 @@ class DocLanguage:
     script: ScriptClass
     title_rule: str      # the shape of a good title, in this language's units
     prose_rule: str      # register + punctuation notes; "" when nothing to add
-    embedder: str        # sentence-transformers model that understands it
 
     @property
     def is_default(self) -> bool:
-        """English — the language every prompt was written in. The directive is
-        empty for it, so an English repo's prompts stay byte-identical to before
-        this feature existed (no cache invalidation, no behavior change)."""
+        """English, the language every prompt is written in. The directive is
+        empty for it, so an English repo's prompts carry no extra section."""
         return self.code == "en"
 
-
-# The English default embedder, kept as-is so nothing changes for English repos.
-_EN_EMBEDDER = "all-MiniLM-L6-v2"
-# Understands 50+ languages in ONE shared vector space, so it also scores a
-# Chinese title against an English one — the state a repo is in while migrating.
-_MULTILINGUAL_EMBEDDER = "paraphrase-multilingual-MiniLM-L12-v2"
 
 _CJK_PUNCT = (
     "Use this language's own punctuation (。，；：、「」《》) rather than ASCII "
@@ -391,11 +194,9 @@ _CJK_PUNCT = (
     "keeps identifiers selectable."
 )
 
-# Register. Every other CJK profile carried one of these and Chinese did not — Japanese
-# was told である/だ体, Korean 해라체, and Chinese got punctuation advice only. With no
-# instruction, a model asked for "documentation" in Chinese writes 书面语, and the result
-# is prose a native reader finds HARDER to read than the English it came from: nominalized,
-# 被-heavy, and shaped around English clause order.
+# Register. With no instruction, a model asked for "documentation" in Chinese writes
+# 书面语, and the result is prose a native reader finds HARDER to read than the English
+# it came from: nominalized, 被-heavy, and shaped around English clause order.
 #
 # The concrete DON'Ts are not decoration. An abstract "write plainly" loses to the specific
 # constraints elsewhere in a prompt; naming the exact constructions — the light verbs, the
@@ -446,29 +247,27 @@ _PROFILES: dict[str, DocLanguage] = {
     "en": DocLanguage(
         code="en", name="English", script=SPACED,
         title_rule="a 3–6 word sentence-case noun phrase",
-        prose_rule="", embedder=_EN_EMBEDDER,
+        prose_rule="",
     ),
     "zh-hans": DocLanguage(
         code="zh-Hans", name="Simplified Chinese / 简体中文", script=LOGOGRAPHIC,
         title_rule=_ZH_TITLE,
-        prose_rule=_CJK_PUNCT + _ZH_HANS_REGISTER, embedder=_MULTILINGUAL_EMBEDDER,
+        prose_rule=_CJK_PUNCT + _ZH_HANS_REGISTER,
     ),
     "zh-hant": DocLanguage(
         code="zh-Hant", name="Traditional Chinese / 繁體中文", script=LOGOGRAPHIC,
         title_rule=_ZH_HANT_TITLE,
-        prose_rule=_CJK_PUNCT + _ZH_HANT_REGISTER, embedder=_MULTILINGUAL_EMBEDDER,
+        prose_rule=_CJK_PUNCT + _ZH_HANT_REGISTER,
     ),
     "ja": DocLanguage(
         code="ja", name="Japanese / 日本語", script=LOGOGRAPHIC,
         title_rule="a 4–16 character noun phrase (体言止め), no trailing punctuation",
         prose_rule=_CJK_PUNCT + " Write descriptions in である/だ体, not です・ます体.",
-        embedder=_MULTILINGUAL_EMBEDDER,
     ),
     "ko": DocLanguage(
         code="ko", name="Korean / 한국어", script=HANGUL,
         title_rule="a 2–5 word noun phrase, no trailing punctuation",
         prose_rule="Write descriptions in the plain declarative (해라체/-다) form.",
-        embedder=_MULTILINGUAL_EMBEDDER,
     ),
 }
 
@@ -485,7 +284,6 @@ _GENERIC_NAMES: dict[str, str] = {
     "tr": "Turkish / Türkçe", "uk": "Ukrainian / Українська", "vi": "Vietnamese / Tiếng Việt",
 }
 
-DEFAULT_CODE = "en"
 #: Env var that overrides the workspace setting (a one-off run in another
 #: language, or a CI job that wants English output).
 ENV_VAR = "CODOC_DOC_LANGUAGE"
@@ -507,7 +305,7 @@ def _generic(code: str) -> DocLanguage:
         title_rule=("a short noun phrase of about 3–6 words"
                     if script is SPACED else
                     "a short noun phrase, no trailing punctuation"),
-        prose_rule="", embedder=_MULTILINGUAL_EMBEDDER,
+        prose_rule="",
     )
 
 
@@ -543,50 +341,6 @@ def resolve(code: str | None) -> DocLanguage:
         return _PROFILES["zh-hant"] if any(
             p in ("hant", "tw", "hk", "mo") for p in parts) else _PROFILES["zh-hans"]
     return _generic(raw)
-
-
-def known_codes() -> list[str]:
-    """Tags with a bespoke profile — for CLI help and error messages. Any other
-    BCP-47 tag is still accepted (see :func:`_generic`)."""
-    return [p.code for p in _PROFILES.values()]
-
-
-# ---------------------------------------------------------------------------
-# Workspace configuration
-# ---------------------------------------------------------------------------
-
-def config_path(codoc_dir: str | Path) -> Path:
-    return Path(codoc_dir) / CONFIG_FILENAME
-
-
-def read_config(codoc_dir: str | Path) -> dict:
-    """The workspace config, or ``{}`` when absent/unreadable.
-
-    Never raises: this is read on the daemon's hot path and from the CC hook,
-    where a hand-mangled config must degrade to defaults rather than break the
-    author's turn.
-    """
-    try:
-        return json.loads(config_path(codoc_dir).read_text(encoding="utf-8")) or {}
-    except Exception:  # noqa: BLE001 — missing, empty, or malformed: all defaults
-        return {}
-
-
-def write_config(codoc_dir: str | Path, **updates) -> dict:
-    """Merge ``updates`` into the workspace config and persist it.
-
-    Merge rather than replace so a future setting added by another writer is not
-    dropped by an older one, and ``ensure_ascii=False`` so a Chinese value stays
-    readable to the human who has to review this file in a diff.
-    """
-    from codoc.loop.fsio import atomic_write_text
-
-    cfg = read_config(codoc_dir)
-    cfg.update({k: v for k, v in updates.items() if v is not None})
-    atomic_write_text(config_path(codoc_dir),
-                      json.dumps(cfg, indent=2, ensure_ascii=False,
-                                 sort_keys=True) + "\n")
-    return cfg
 
 
 def workspace_doc_language(codoc_dir: str | Path | None) -> DocLanguage:
@@ -638,8 +392,7 @@ SCRIPT_FLOOR = 0.30
 #: characters where the English term beside it is ten, so character share
 #: systematically overweights the Latin. "使用 tree-sitter 解析 Python 与
 #: TypeScript。" is 16% Han characters and unmistakably a Chinese sentence; a
-#: symmetric floor called it English, which is exactly backwards for the writing
-#: this feature exists to support.
+#: symmetric floor would call it English.
 UNSPACED_FLOOR = 0.10
 #: …but not from a single stray character: an English description citing one
 #: product name in Han is still English.
@@ -732,22 +485,6 @@ def detect_prose_language(text: str, default: DocLanguage) -> DocLanguage:
         if lang.script is script:
             return lang
     return default
-
-
-def language_tag_for(text: str, default: DocLanguage) -> str:
-    """The BCP-47 tag to stamp on ``text`` when displaying it (a ``lang``
-    attribute). Correct per-node tagging is what lets one view render a bilingual
-    tree properly — the browser picks fonts, line-breaking, and quotation
-    conventions per element, and cannot do any of that from a document-level tag
-    that half the content contradicts."""
-    return detect_prose_language(text, default).code
-
-
-def embedder_model_for(codoc_dir: str | Path | None) -> str:
-    """The sentence-transformers model that can actually compare this repo's
-    titles. The English default is monolingual, so semantic title dedup is inert
-    on a Chinese tree until this switches — a silent no-op, not an error."""
-    return workspace_doc_language(codoc_dir).embedder
 
 
 # ---------------------------------------------------------------------------

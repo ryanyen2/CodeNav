@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from codoc.loop.ask import (
+from codoc.mcp.walkthrough import (
     ASK_TTL_SECONDS,
     MAX_NOTE_CHARS,
     MAX_STEPS,

@@ -13,9 +13,8 @@ import sys
 import time
 from pathlib import Path
 
-from codoc.substrate.daemon import daemon_running
-
-OWNER_LOCK = "serve.lock"
+from codoc.daemon.pidfile import daemon_running, pid_alive
+from codoc.workspace.layout import SERVE_LOCK
 
 
 class OwnershipError(RuntimeError):
@@ -23,15 +22,7 @@ class OwnershipError(RuntimeError):
 
 
 def _lock(codoc_dir: str) -> Path:
-    return Path(codoc_dir) / OWNER_LOCK
-
-
-def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+    return Path(codoc_dir) / SERVE_LOCK
 
 
 def _owner(codoc_dir: str) -> dict | None:
@@ -50,7 +41,7 @@ def acquire_owner(codoc_dir: str) -> bool:
             fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError:
             pid = (_owner(codoc_dir) or {}).get("pid")
-            if isinstance(pid, int) and pid != os.getpid() and _alive(pid):
+            if isinstance(pid, int) and pid != os.getpid() and pid_alive(pid):
                 return False
             try:
                 path.unlink()
@@ -74,8 +65,7 @@ def release_owner(codoc_dir: str) -> None:
 
 
 def _spawn(root: str) -> subprocess.Popen:
-    return subprocess.Popen([sys.executable, "-m", "codoc.cli.main", "watch", "--root", root],
-                            env={**os.environ, "CODOC_WATCH_OWNER": "serve"})
+    return subprocess.Popen([sys.executable, "-m", "codoc.cli.main", "watch", "--root", root])
 
 
 class DaemonSupervisor:
@@ -86,7 +76,7 @@ class DaemonSupervisor:
 
     def start(self) -> None:
         if not acquire_owner(self.codoc_dir):
-            raise OwnershipError(f"another codoc hub already owns {self.codoc_dir} ({OWNER_LOCK})")
+            raise OwnershipError(f"another codoc hub already owns {self.codoc_dir} ({SERVE_LOCK})")
         self.owned = True
         if not daemon_running(Path(self.codoc_dir)):
             self.child = self._spawn(self.root)

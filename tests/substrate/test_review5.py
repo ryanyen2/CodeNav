@@ -8,14 +8,15 @@ import shutil
 from pathlib import Path
 
 from codoc.calculus import ops as K
-from codoc.calculus.derive import directive, markdown, phase
+from codoc.calculus.derive import markdown, phase
+from codoc.loops.realize import directive
 from codoc.calculus.doc import HEADING, PARAGRAPH
 from codoc.calculus.ids import START
 from codoc.calculus.store import Store
 from codoc.calculus.text import BOLD, SUGGEST_DEL
-from codoc.substrate import log as L
-from codoc.substrate.snapshot import write_snapshot
-from codoc.substrate.workspace import Roles, Workspace
+from codoc.workspace import log as L
+from codoc.workspace.snapshot import write_snapshot
+from codoc.workspace import Roles, Workspace
 
 H = "human:local"
 
@@ -60,7 +61,7 @@ def bold_chars(text) -> set:
 
 
 def write_roles(cd: Path, roles: dict):
-    from codoc.doclang import write_config
+    from codoc.workspace.config import write_config
     write_config(cd, roles=roles)
 
 
@@ -285,8 +286,8 @@ def test_a_deleted_bound_feature_with_delete_code_can_be_settled(tmp_path):
     follows sees `removed` chunks whose bindings the delete already detached,
     writes no `bind.*` op for the phantom, and `settle` never fires: the phantom
     is queued forever, and `codoc done` cannot name a dead heading by title."""
-    from codoc.loop.diff import ChangeSet, ChunkRef
-    from codoc.graph.graph import Graph
+    from codoc.index.changes import ChangeSet, ChunkRef
+    from codoc.index.graph import Graph
     from codoc.loops import realize as R
     from codoc.loops.reflect import reflect
     cd = tmp_path / ".codoc"
@@ -329,7 +330,7 @@ def test_ingest_of_identical_text_reports_the_same_thing_on_both_paths(tmp_path)
     """Daemonless: {refused: None, ops: []}. Through the inbox the ack carries
     conflict='unchanged' and client.ingest returns {refused: 'unchanged'}. One
     fact, two answers to the agent."""
-    from codoc.substrate import client
+    from codoc.daemon import client
     cd = tmp_path / ".codoc"
     ws = Workspace(cd); seed(ws); ws.close()
     direct = client.ingest(cd, client="mcp", bid="p1", path="text", base_text="Retries once.", new_md="Retries once.")
@@ -402,8 +403,8 @@ def test_a_phantom_with_delete_code_can_still_settle_after_a_fold(tmp_path):
     delete_code, then the agent removes the code and the pass settles it. The
     settle reads the delete's `detached` from the log; a fold between the
     hand-off and the build discards that record."""
-    from codoc.graph.graph import Graph
-    from codoc.loop.diff import ChangeSet, ChunkRef
+    from codoc.index.graph import Graph
+    from codoc.index.changes import ChangeSet, ChunkRef
     from codoc.loops import realize as R
     from codoc.loops.reflect import reflect
     cd = tmp_path / ".codoc"
@@ -563,7 +564,7 @@ def test_a_contributor_typing_over_several_settles_leaves_one_proposal(tmp_path)
     maintainer four verdicts to give on one sentence."""
     cd = tmp_path / ".codoc"
     ws = Workspace(cd)
-    from codoc.doclang import write_config
+    from codoc.workspace.config import write_config
     write_config(cd, roles={"human:gh:alice": "suggest"})
     ws.roles = Roles.load(cd)
     ws.store.policy = ws.roles.policy
@@ -753,8 +754,8 @@ def test_a_second_daemonless_writer_does_not_lose_the_firsts_work(tmp_path):
     import subprocess
     import sys
 
-    from codoc.substrate import client
-    from codoc.substrate.publish import PROJECTION_FILE
+    from codoc.daemon import client
+    from codoc.workspace.layout import PROJECTION as PROJECTION_FILE
     cd = tmp_path / ".codoc"
     ws = Workspace(cd); seed(ws); ws.close()
 
@@ -767,8 +768,8 @@ def test_a_second_daemonless_writer_does_not_lose_the_firsts_work(tmp_path):
     assert here(" A.")[0]["conflict"] is None                  # this process is now the applier, and holds it
     other = subprocess.run([sys.executable, "-c", f"""
 import sys; sys.path.insert(0, {str(Path.cwd())!r})
-from codoc.substrate import client
-from codoc.substrate.workspace import Workspace
+from codoc.daemon import client
+from codoc.workspace import Workspace
 ws = Workspace({str(cd)!r}, readonly=True)
 r = list(ws.store.blocks["p1"].text().live_refs())
 print(client.write({str(cd)!r}, client="cli", bodies=[{{"kind": "text.insert", "target": {{"bid": "p1", "path": "text"}},
@@ -837,7 +838,7 @@ def test_a_fold_does_not_orphan_the_session_a_held_applier_is_still_writing(tmp_
     replays. A file says when its writer CLOSED it now, and only a closed file
     is archived: the question "did my file move" is deleted rather than
     answered."""
-    from codoc.substrate import client
+    from codoc.daemon import client
     cd = tmp_path / ".codoc"
     ws = Workspace(cd); seed(ws); ws.close()
     r = list(client.read(cd).store.blocks["p1"].text().live_refs())
@@ -864,7 +865,7 @@ def test_a_held_appliers_reads_see_what_another_process_wrote(tmp_path):
     import subprocess
     import sys
 
-    from codoc.substrate import client
+    from codoc.daemon import client
     cd = tmp_path / ".codoc"
     ws = Workspace(cd); seed(ws); ws.close()
     r = list(client.read(cd).store.blocks["p1"].text().live_refs())
@@ -872,7 +873,7 @@ def test_a_held_appliers_reads_see_what_another_process_wrote(tmp_path):
                                             "payload": {"after": list(r[-1]), "text": " A."}}])
     other = subprocess.run([sys.executable, "-c", f"""
 import sys; sys.path.insert(0, {str(Path.cwd())!r})
-from codoc.substrate import client
+from codoc.daemon import client
 ws = client.read({str(cd)!r})
 r = list(ws.store.blocks["p1"].text().live_refs())
 client.write({str(cd)!r}, client="cli", bodies=[{{"kind": "text.insert", "target": {{"bid": "p1", "path": "text"}},

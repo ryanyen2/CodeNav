@@ -189,6 +189,17 @@ def render(specs: list[BlockSpec], *, ids: bool = False) -> str:
     return "\n".join(out) + "\n" if out else ""
 
 
+def render_one(s: BlockSpec) -> str:
+    """One block on its own, as a block-keyed prompt shows it: a list item
+    keeps its own indent and a numbered one reads ``1.``. ``parse`` of the
+    result gives the same kind and text; an item's level is not recoverable
+    from one block, so a caller that rewrites an existing block keeps the
+    level it has."""
+    if s.kind in ITEMS:
+        return f"{INDENT * (max(1, s.level) - 1)}{'1.' if s.kind == NUMBERED else '-'} {s.text}"
+    return "\n".join(_block(s, ids=False))
+
+
 def _block(s: BlockSpec, ids: bool) -> list[str]:
     if s.kind == HEADING:
         tail = f" {{#{s.id}}}" if ids and s.id else ""

@@ -3,11 +3,11 @@ import json
 import time
 
 from codoc.calculus import ops as K
-from codoc.loop.activity import write_activity, read_activity
-from codoc.loop.diff import ChangeSet, ChunkRef
-from codoc.substrate import log as L
-from codoc.substrate.daemon import Daemon
-from codoc.substrate.log import Submission
+from codoc.daemon.epoch import write_activity, read_activity
+from codoc.index.changes import ChangeSet, ChunkRef
+from codoc.workspace import log as L
+from codoc.daemon.daemon import Daemon
+from codoc.workspace.log import Submission
 
 from tests.loops.test_reflect import seed
 
@@ -74,8 +74,8 @@ def test_a_warm_publisher_writes_what_a_cold_one_would(tmp_path):
     import random
     from codoc.calculus.doc import PARAGRAPH
     from codoc.calculus.ids import START
-    from codoc.substrate.publish import Publisher
-    from codoc.substrate.workspace import Workspace
+    from codoc.daemon.publish import Publisher
+    from codoc.workspace import Workspace
 
     ws = Workspace(tmp_path / ".codoc")
     seed(ws)

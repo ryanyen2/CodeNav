@@ -1,4 +1,4 @@
-"""Relevance selection for an LLM pass or an agent read (was ``loop/subtree.py``).
+"""Relevance selection for an LLM pass or an agent read.
 
 Seeds are the features bound in the touched files (plus any changed symbols),
 expanded one hop along the code graph, plus each feature's parent and
@@ -13,10 +13,9 @@ paragraph it changes (spec §4, rule 2).
 from __future__ import annotations
 
 from codoc.calculus.derive import block_written_by, markdown, phase
-from codoc.calculus.doc import PARAGRAPH, in_flow, parent_of, text_fields
-from codoc.calculus.ids import is_human
+from codoc.calculus.doc import PARAGRAPH, in_flow, parent_of
 from codoc.calculus.store import Store
-from codoc.graph.graph import Graph
+from codoc.index.graph import Graph
 
 
 def owner_of(store: Store, symbol: str) -> str | None:

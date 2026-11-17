@@ -6,11 +6,11 @@ this is what reads a pull request's session logs before they are merged.
 import json
 
 from codoc.calculus import ops as K
-from codoc.serve.validate import Finding, refused_verdicts, validate_logs
-from codoc.substrate import log as L
-from codoc.substrate.log import Submission
-from codoc.substrate.snapshot import write_snapshot
-from codoc.substrate.workspace import Roles, Workspace
+from codoc.workspace.validate import Finding, refused_verdicts, validate_logs
+from codoc.workspace import log as L
+from codoc.workspace.log import Submission
+from codoc.workspace.snapshot import write_snapshot
+from codoc.workspace import Roles, Workspace
 from tests.substrate.test_review5 import H, seed, write_roles
 
 

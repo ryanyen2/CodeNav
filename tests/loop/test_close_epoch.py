@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 
-from codoc.loop.activity import EPOCH_UI_TTL_SECONDS, activity_path, close_epoch
+from codoc.daemon.epoch import EPOCH_STALE_SECONDS, activity_path, close_epoch
 
 
 def _write(codoc_dir, *, open: bool, epoch_id: str, features: dict | None = None) -> None:
@@ -69,7 +69,7 @@ def test_refuses_when_same_id_but_freshly_rewritten(tmp_path):
     mtime = activity_path(codoc_dir).stat().st_mtime
 
     # `now` is only just past the write → within stale_after → treated as fresh.
-    assert close_epoch(codoc_dir, "ep-1", now=mtime + 1, stale_after=EPOCH_UI_TTL_SECONDS) is False
+    assert close_epoch(codoc_dir, "ep-1", now=mtime + 1, stale_after=EPOCH_STALE_SECONDS) is False
     assert json.loads(activity_path(codoc_dir).read_text())["epoch"]["open"] is True
 
 
@@ -79,8 +79,8 @@ def test_closes_same_id_when_confirmed_stale_under_lock(tmp_path):
     _write(codoc_dir, open=True, epoch_id="ep-1")
     mtime = activity_path(codoc_dir).stat().st_mtime
 
-    assert close_epoch(codoc_dir, "ep-1", now=mtime + EPOCH_UI_TTL_SECONDS + 1,
-                       stale_after=EPOCH_UI_TTL_SECONDS) is True
+    assert close_epoch(codoc_dir, "ep-1", now=mtime + EPOCH_STALE_SECONDS + 1,
+                       stale_after=EPOCH_STALE_SECONDS) is True
     assert json.loads(activity_path(codoc_dir).read_text())["epoch"]["open"] is False
 
 

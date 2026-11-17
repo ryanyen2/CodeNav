@@ -14,12 +14,12 @@ ops, actors or plans.
 """
 from __future__ import annotations
 
-import json
 import re
 import time
 from pathlib import Path
 
 from codoc.kinds import Kind, LiftContext, LowerContext, register
+from codoc.workspace.layout import CODOC_DIR, MEDIA_DIR
 
 EXCERPT_MAX = 2000
 RETRY_COOLDOWN_S = 300
@@ -159,7 +159,7 @@ def media_path(codoc_dir: str, ref: str) -> Path | None:
     """A ``.codoc/media/…`` reference as an absolute path, or None when it
     escapes the media directory or does not exist."""
     root = Path(codoc_dir).parent.resolve()
-    media = (root / ".codoc" / "media").resolve()
+    media = (root / CODOC_DIR / MEDIA_DIR).resolve()
     p = (root / ref).resolve()
     return p if media in p.parents and p.is_file() else None
 

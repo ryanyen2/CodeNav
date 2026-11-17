@@ -1,4 +1,4 @@
-"""tunnel.py — expose the hub over a Cloudflare named tunnel (U6).
+"""Expose the hub over a Cloudflare named tunnel.
 
 The hub binds localhost; remote reach is provided by an OUTBOUND tunnel, so no
 inbound port is opened and the home machine has no public IP. The default is a

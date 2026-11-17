@@ -1,4 +1,4 @@
-"""sandbox.py — the enforced realize-sandbox policy (U11).
+"""The enforced sandbox policy for a hub-triggered realize run.
 
 A remote-triggered realization runs with the maintainer's keys on a git worktree,
 so its filesystem + tool scope must be an ENFORCED boundary, not a prompt
@@ -36,7 +36,7 @@ import fnmatch
 import os
 
 # Read/Edit/Write/Glob/Grep only — no Bash. WebFetch is allowed only through the
-# SSRF-hardened Consult path (U8), gated separately.
+# Consult gate (``consult.py``), wired separately.
 ALLOWED_TOOLS = ("Read", "Edit", "Write", "Glob", "Grep")
 
 _DENY_EDIT_DIRS = (".github", ".claude", ".codoc")
@@ -51,12 +51,12 @@ _DENY_EDIT_FILES = frozenset({
     ".npmrc", ".yarnrc", ".yarnrc.yml", "requirements.txt", "requirements-dev.txt",
 })
 
-# Names secrets actually have, not words that appear in a source file's name.
-# The rule used to be a substring test, which refused `tokenizer.py` and
-# `auth/password_reset.py` — a feature bound to a file named after what it
-# implements was then un-buildable for ever, and the agent could not even read
-# it. Confinement to the worktree (``under_root``) is what keeps the machine's
-# own credentials out of reach; this list is for the repo's own.
+# Names secrets actually have, not words that appear in a source file's name:
+# a substring test would refuse `tokenizer.py` and `auth/password_reset.py`,
+# and a feature bound to a file named after what it implements could then
+# never be built or even read. Confinement to the worktree (``under_root``) is
+# what keeps the machine's own credentials out of reach; this list is for the
+# repo's own.
 _SECRET_GLOBS = (".env", ".env.*", "*.pem", "*.key", "*.keystore", "id_rsa", "id_ed25519",
                  "hosts.yml", ".netrc", ".npmrc", ".pypirc", ".pgpass", ".htpasswd",
                  "credentials", "credentials.*", "secrets", "secrets.*", "*.secrets",

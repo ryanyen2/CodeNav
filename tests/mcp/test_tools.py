@@ -11,9 +11,9 @@ from codoc.calculus.ids import START
 from codoc.calculus.text import BOLD
 from codoc.loops.realize import handoff
 from codoc.mcp import tools
-from codoc.substrate import client
-from codoc.substrate.publish import publish
-from codoc.substrate.workspace import Workspace
+from codoc.daemon import client
+from codoc.daemon.publish import publish
+from codoc.workspace import Workspace
 from tests.substrate.test_review5 import H, refs, seed
 
 

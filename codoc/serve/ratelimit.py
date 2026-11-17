@@ -1,4 +1,4 @@
-"""ratelimit.py — per-identity request rate limiting for the hub (U6).
+"""Per-identity request rate limiting for the hub.
 
 A remote user (or a misconfiguration window past the Access edge) must not be
 able to flood the write/SSE endpoints — each write wakes the daemon and fans out

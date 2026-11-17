@@ -4,10 +4,10 @@ import json
 from codoc.calculus import ops as K
 from codoc.calculus.doc import HEADING, PARAGRAPH
 from codoc.calculus.ids import START
-from codoc.substrate import log as L
-from codoc.substrate.clock import Clock, fmt
-from codoc.substrate.log import Submission
-from codoc.substrate.workspace import Workspace
+from codoc.workspace import log as L
+from codoc.workspace.clock import Clock, fmt
+from codoc.workspace.log import Submission
+from codoc.workspace import Workspace
 
 
 def seed(ws: Workspace, actor="human:local"):

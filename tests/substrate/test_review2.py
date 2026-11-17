@@ -6,7 +6,8 @@ import pytest
 
 from codoc.calculus import ops as K
 from codoc.calculus.apply import apply
-from codoc.calculus.derive import directive, ground, history, ink, phase, plan_claims
+from codoc.calculus.derive import ground, history, ink, phase, plan_claims
+from codoc.loops.realize import directive
 from codoc.calculus.doc import HEADING, PARAGRAPH
 from codoc.calculus.export import export_markdown
 from codoc.calculus.ids import START
@@ -14,15 +15,15 @@ from codoc.calculus.inline_md import Span, parse, render
 from codoc.calculus.ops import covered
 from codoc.calculus.store import Store
 from codoc.calculus.text import BOLD, CITE, LINK
-from codoc.graph.graph import Graph
-from codoc.loop.activity import read_activity, write_activity
-from codoc.loop.diff import ChangeSet
+from codoc.index.graph import Graph
+from codoc.daemon.epoch import read_activity, write_activity
+from codoc.index.changes import ChangeSet
 from codoc.loops.realize import handoff, settle
 from codoc.loops.reflect import reflect
-from codoc.substrate import log as L
-from codoc.substrate.daemon import Daemon
-from codoc.substrate.log import Submission
-from codoc.substrate.workspace import Roles, Workspace
+from codoc.workspace import log as L
+from codoc.daemon.daemon import Daemon
+from codoc.workspace.log import Submission
+from codoc.workspace import Roles, Workspace
 from tests.calculus.test_apply import Mint, heading, paragraph
 from tests.calculus.test_derive_export import build, import_markdown
 from tests.calculus.test_ingest import run_ingest

@@ -10,7 +10,7 @@ import os
 
 from fastmcp import FastMCP
 
-from codoc.agent.paths import find_codoc_dir
+from codoc.workspace.layout import find_codoc_dir
 from codoc.mcp import tools
 
 mcp = FastMCP("codoc")

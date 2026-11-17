@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from tests.graph.conftest import FakeRow
-from codoc.graph.extract import (
+from codoc.index.extract import (
     _build_indices,
     _contain_edges,
     _file_to_module,

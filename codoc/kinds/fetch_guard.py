@@ -1,19 +1,19 @@
-"""fetch_guard.py — the one SSRF chokepoint for local block `lift` fetches.
+"""The guarded fetch a block kind's ``lift`` uses, and the address test every
+outbound fetch shares.
 
-Only ever called from a block plugin's `lift` (``codoc/kinds/builtins.py``),
-dispatched by Loop A on the maintainer's own daemon against locally-authored block
-content — never from the hub, which has no reason to import this and
-never fetches on behalf of a remote suggestion (a hub-submitted url/pdf block just
-carries the raw reference until the maintainer's own daemon lifts it on a later
-pass). That is a deliberate trust-boundary decision: the fetch is trusted because
-it runs locally against content the daemon's own store already holds, not because
-the URL itself is trusted.
+``safe_get`` is only called from a kind's ``lift`` (``codoc/kinds/builtins.py``),
+run by the maintainer's own daemon against block content the workspace already
+holds. The hub never calls it and never fetches on behalf of a remote
+suggestion: a hub-submitted url or pdf block carries the raw reference until
+the maintainer's daemon lifts it. That is the trust boundary: the fetch is
+trusted because it runs locally, not because the URL is. ``blocked_ip`` is also
+what the hub's Consult gate (``serve/consult.py``) refuses addresses with.
 
 Guards, in order:
 - scheme allowlist (``http``/``https`` only — no ``file://``, no ``data:``, …).
 - DNS-resolve the hostname and reject if ANY resolved address is
   private/loopback/link-local/multicast/reserved/unspecified (the ``ipaddress``
-  module's own classification). This is what stops a bare-IP or DNS-rebinding SSRF
+  module's own classification) or carrier-grade NAT. This is what stops a bare-IP or DNS-rebinding SSRF
   attempt aimed at cloud metadata endpoints (169.254.169.254), localhost, or an
   internal service — a check on the literal hostname string alone would not catch
   a hostname that *resolves* to one of those.
@@ -48,15 +48,20 @@ _DEFAULT_TIMEOUT = 8.0
 _USER_AGENT = "codoc-block-fetch/1.0"
 
 
-def _is_blocked_ip(ip: str) -> bool:
+_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+
+
+def blocked_ip(ip: str) -> bool:
+    """Whether an address is one a fetch must not reach: anything that is not a
+    public, routable host. An unparsable address is refused."""
     try:
         addr = ipaddress.ip_address(ip)
     except ValueError:
-        return True  # unparsable → fail closed
-    return (
-        addr.is_private or addr.is_loopback or addr.is_link_local
-        or addr.is_multicast or addr.is_reserved or addr.is_unspecified
-    )
+        return True
+    if (addr.is_private or addr.is_loopback or addr.is_link_local
+            or addr.is_multicast or addr.is_reserved or addr.is_unspecified):
+        return True
+    return addr.version == 4 and addr in _CGNAT
 
 
 def _host_is_safe(hostname: str) -> bool:
@@ -67,7 +72,7 @@ def _host_is_safe(hostname: str) -> bool:
         return False
     if not infos:
         return False
-    return all(not _is_blocked_ip(info[4][0]) for info in infos)
+    return all(not blocked_ip(info[4][0]) for info in infos)
 
 
 def _url_is_safe(url: str) -> bool:

@@ -1,6 +1,6 @@
-"""First run: build the tree from the code (was ``loop/bootstrap_hier.py``).
+"""First run: build the tree from the code.
 
-Three LLM passes, all with the v1 prompts: a brief from the project's own
+Three LLM passes: a brief from the project's own
 prose, one call per source file proposing that file's features, and one
 organizing pass grouping top-level features under themes. Their answers become
 ops with ``actor=loop`` on the trunk: a first tree is not a suggestion, there
@@ -17,17 +17,17 @@ import os
 from collections import Counter
 from dataclasses import dataclass, field
 
-from codoc.agent.bootstrap_agent import (
-    propose_brief, propose_file_features_raw, propose_organization_raw,
-)
 from codoc.calculus import ops as K
 from codoc.calculus.derive import LOOP, description, title
 from codoc.calculus.doc import HEADING, PARAGRAPH
 from codoc.calculus.ids import START, new_batch_id, new_block_id
-from codoc.graph.flows import flow_lines
-from codoc.graph.graph import Graph
+from codoc.doclang import char_budget
+from codoc.index.flows import flow_lines
+from codoc.index.git import commit_rationales
+from codoc.index.graph import Graph
+from codoc.llm.passes import propose_brief, propose_file_features_raw, propose_organization_raw
 from codoc.loops.context import owner_of
-from codoc.substrate.workspace import Workspace
+from codoc.workspace import Workspace
 
 SOURCE_CAP = 1200
 CALLS_CAP = 6
@@ -68,10 +68,8 @@ def bootstrap(ws: Workspace, rows: list, graph: Graph, *, repo_name: str = "code
         try:
             brief = propose_the_brief(readme, headers, repo_name=repo_name, config=config, doc_language=doc_language) or {}
             res.calls += 1
-        except Exception as exc:  # noqa: BLE001 — a bootstrap without a brief is the old behaviour
+        except Exception as exc:  # noqa: BLE001 — a bootstrap without a brief still works
             say(f"  ⚠ could not read the project's own prose ({exc})")
-    from codoc.loop.why import commit_rationales
-
     titles: list[str] = [title(ws.store, h.id) for h in ws.store.headings()]
     step = max(1, len(files) // 40)
     failures: list[tuple[str, Exception | None]] = []
@@ -83,7 +81,7 @@ def bootstrap(ws: Workspace, rows: list, graph: Graph, *, repo_name: str = "code
             frows = sorted(by_file[file], key=lambda r: r.symbol_path)
             chunks = [{"symbol_path": r.symbol_path, "source": (r.source or "")[:SOURCE_CAP]} for r in frows]
             edges = _file_edges(frows, graph)
-            why = commit_rationales(root_dir, [file]) if root_dir else []
+            why = commit_rationales(root_dir, [file], cap=char_budget) if root_dir else []
             prepared.append((file, frows, chunks, edges, why))
 
         def call(item):

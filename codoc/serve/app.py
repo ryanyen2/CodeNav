@@ -13,7 +13,6 @@ owner (``hub-local`` → ``human:local``).
 """
 from __future__ import annotations
 
-import json
 import secrets
 from pathlib import Path
 
@@ -22,8 +21,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.staticfiles import StaticFiles
 
 from codoc.serve.auth import COOKIE_NAME, MAINTAINER, NONE, AuthContext, Session, authorize, record_role
-from codoc.substrate import log as L
-from codoc.substrate.log import Submission
+from codoc.workspace import log as L
+from codoc.workspace.log import Submission
 
 STATE_COOKIE = "codoc_oauth_state"
 MAX_SUBS = 200                     # one settle is a few ops; the rate limit counts requests
@@ -195,7 +194,8 @@ def handle_message(cd: Path, s: Session, m: dict) -> JSONResponse:
         if s.role != MAINTAINER:
             return JSONResponse({"error": "only a maintainer changes the tree's language"}, status_code=403)
         tag = str(m.get("tag") or "").strip()
-        from codoc.doclang import is_language_tag, write_config
+        from codoc.doclang import is_language_tag
+        from codoc.workspace.config import write_config
         if not is_language_tag(tag):
             return JSONResponse({"error": "a BCP 47 language tag is required"}, status_code=400)
         # Atomically, like every other writer of the tracked config: the daemon

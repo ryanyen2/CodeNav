@@ -20,7 +20,7 @@ from codoc.calculus.ids import new_block_id
 from codoc.calculus.ops import Op
 from codoc.calculus.text import Text
 from codoc.kinds import Kind, get
-from codoc.substrate.workspace import Workspace
+from codoc.workspace import Workspace
 
 
 @dataclass

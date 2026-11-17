@@ -53,6 +53,8 @@ from codoc.calculus.inline_md import Span, parse
 from codoc.calculus.text import BOLD, CITE, CODE, GROWS_AFTER, LINK, Mark, Text, nfc
 
 VISIBLE_MARKS = frozenset({BOLD, CODE, LINK, CITE})     # the kinds Markdown can express
+PENDING = "$ins"                                        # ["$ins", i, k]: char k of the batch's i-th text.insert
+_ANCHOR_KEYS = ("start", "end", "after", "from", "to", "at")
 
 
 @dataclass
@@ -262,11 +264,28 @@ def block_bodies(specs: list[BlockSpec], *, after: str, keep_ids: bool = False) 
                 if sp.end > sp.start:
                     bodies.append({"kind": K.TEXT_MARK, "target": target,
                                    "payload": {"kind": sp.kind, "attrs": dict(sp.attrs), "on": True,
-                                               "start": ["$ins", inserts, sp.start], "end": ["$ins", inserts, sp.end - 1]}})
+                                               "start": [PENDING, inserts, sp.start], "end": [PENDING, inserts, sp.end - 1]}})
             inserts += 1
         ids.append(bid)
         after = bid
     return bodies, ids
+
+
+def concat_bodies(first: list[dict], more: list[dict]) -> list[dict]:
+    """``first + more`` as one batch: the ``$ins`` anchors in ``more`` are
+    shifted past the inserts ``first`` already holds."""
+    shift = sum(1 for b in first if b["kind"] == K.TEXT_INSERT)
+    if not shift:
+        return first + more
+    out = list(first)
+    for b in more:
+        payload = dict(b["payload"])
+        for key in _ANCHOR_KEYS:
+            v = payload.get(key)
+            if isinstance(v, list) and len(v) == 3 and v[0] == PENDING:
+                payload[key] = [PENDING, v[1] + shift, v[2]]
+        out.append({**b, "payload": payload})
+    return out
 
 
 def as_plan_bodies(bodies: list[dict], plan: str) -> list[dict]:
@@ -283,10 +302,6 @@ def as_plan_bodies(bodies: list[dict], plan: str) -> list[dict]:
         else:
             out.append(b)
     return out
-
-
-PENDING = "$ins"
-_ANCHOR_KEYS = ("start", "end", "after", "from", "to", "at")
 
 
 def resolve_pending_refs(payload: dict, insert_ids: list[str], *, as_ref=lambda op_id, k: [op_id, k]) -> None:

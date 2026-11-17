@@ -4,12 +4,12 @@ import json
 from typer.testing import CliRunner
 
 from codoc.cli.main import app
-from codoc.graph.graph import Graph
+from codoc.index.graph import Graph
 from codoc.loops.bootstrap import bootstrap
 from codoc.mcp import tools
-from codoc.substrate import client
-from codoc.substrate.publish import publish
-from codoc.substrate.workspace import Workspace
+from codoc.daemon import client
+from codoc.daemon.publish import publish
+from codoc.workspace import Workspace
 
 from tests.loops.test_bootstrap_translate import ROWS, fake_file, fake_org
 

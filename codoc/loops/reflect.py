@@ -1,4 +1,4 @@
-"""Code → document (was ``loop_a.py``, 1,561 lines; the decision table's rows 1–6).
+"""Code → document: the reflect pass.
 
 Given a change set from the index, the pass:
 
@@ -42,11 +42,11 @@ from codoc.calculus.ingest import Ingest
 from codoc.calculus.ops import Op, covered
 from codoc.calculus.store import Store
 from codoc.calculus.text import SUGGEST_DEL
-from codoc.graph.graph import Graph
-from codoc.loop.diff import ChangeSet, ChunkRef
+from codoc.index.graph import Graph
+from codoc.index.changes import ChangeSet, ChunkRef
 from codoc.loops.bootstrap import title_from_file
 from codoc.loops.context import impacted_features, owner_of, select_context
-from codoc.substrate.workspace import Workspace
+from codoc.workspace import Workspace
 
 MAX_ADDED_PER_CALL = 25
 

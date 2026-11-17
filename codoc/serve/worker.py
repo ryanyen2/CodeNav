@@ -23,13 +23,13 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from codoc.calculus.derive import directive, title
-from codoc.loops.realize import queued
+from codoc.calculus.derive import title
+from codoc.daemon import client
+from codoc.loops.realize import directive, queued
 from codoc.serve.realize_agent import make_sandboxed_agent
 from codoc.serve.sandbox import out_of_scope_changes
-from codoc.substrate import client
+from codoc.workspace.layout import HUB_PRS, STATUS, atomic_write
 
-LEDGER = "cache/hub-prs.json"
 # A hand-off whose branch carries the agent's commit but has no pull request
 # yet: `built:<branch>:<attempts>`. The next pass resumes from the push rather
 # than paying for another model session.
@@ -50,20 +50,16 @@ def pr_create_command(branch: str, title_text: str, body: str, *, base: str = "m
 
 def read_ledger(codoc_dir: str | Path) -> dict[str, str]:
     try:
-        d = json.loads((Path(codoc_dir) / LEDGER).read_text(encoding="utf-8"))
+        d = json.loads((Path(codoc_dir) / HUB_PRS).read_text(encoding="utf-8"))
         return {str(k): str(v) for k, v in d.items()} if isinstance(d, dict) else {}
     except (OSError, ValueError):
         return {}
 
 
 def record_pr(codoc_dir: str | Path, handoff_id: str, branch: str) -> None:
-    path = Path(codoc_dir) / LEDGER
-    path.parent.mkdir(parents=True, exist_ok=True)
     table = read_ledger(codoc_dir)
     table[handoff_id] = branch
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(table, indent=2, sort_keys=True), encoding="utf-8")
-    tmp.replace(path)
+    atomic_write(Path(codoc_dir) / HUB_PRS, json.dumps(table, indent=2, sort_keys=True))
 
 
 @dataclass
@@ -168,7 +164,7 @@ def _run(argv, cwd=None) -> int:
 def _published_head(codoc_dir: str) -> int | None:
     """The store position the daemon last published, or None when unreadable."""
     try:
-        return int(json.loads((Path(codoc_dir) / "status.json").read_text(encoding="utf-8"))["head"])
+        return int(json.loads((Path(codoc_dir) / STATUS).read_text(encoding="utf-8"))["head"])
     except (OSError, ValueError, KeyError, TypeError):
         return None
 

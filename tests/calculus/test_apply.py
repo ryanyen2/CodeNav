@@ -321,7 +321,7 @@ def _live_view_from(fp):
 
 
 def test_reopen_never_binds_code_to_a_dead_heading(tmp_path):
-    from codoc.substrate.workspace import Workspace
+    from codoc.workspace import Workspace
     from tests.substrate.test_review5 import H, seed
     """01 §3 block.delete: 'a dead heading owns no code'. plan.reopen restores
     the bindings a reject removed without asking whether the heading is still

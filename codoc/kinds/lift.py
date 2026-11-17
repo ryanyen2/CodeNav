@@ -12,7 +12,7 @@ from __future__ import annotations
 from codoc.calculus.derive import HELD, phase
 from codoc.kinds import LiftContext, get, plain
 from codoc.kinds.write import write_block
-from codoc.substrate.workspace import Workspace
+from codoc.workspace import Workspace
 
 
 

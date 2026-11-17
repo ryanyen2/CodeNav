@@ -1,4 +1,4 @@
-"""Atomic control-file IO (`codoc/loop/fsio.py`).
+"""Atomic control-file IO (`codoc/workspace/layout.py`).
 
 The key property under test is the one that bit a user in the field: two writers of
 the same control file (two `codoc watch` daemons, or a daemon racing an MCP reflection)
@@ -12,30 +12,30 @@ import json
 
 import pytest
 
-from codoc.loop import fsio
+from codoc.workspace import layout as fsio
 
 
 def _tmps(d):
     return sorted(p.name for p in d.iterdir() if p.name.endswith(".tmp"))
 
 
-def test_atomic_write_text_writes_and_leaves_no_tmp(tmp_path):
+def test_atomic_write_writes_and_leaves_no_tmp(tmp_path):
     dest = tmp_path / "status.json"
-    fsio.atomic_write_text(dest, "hello")
+    fsio.atomic_write(dest, "hello")
     assert dest.read_text() == "hello"
     assert _tmps(tmp_path) == []  # the unique tmp was renamed away, none orphaned
 
 
-def test_atomic_write_json_roundtrips(tmp_path):
+def test_write_json_roundtrips(tmp_path):
     dest = tmp_path / "tree.bindings.json"
-    fsio.atomic_write_json(dest, {"version": 5, "holds": ["f-1"]})
+    fsio.write_json(dest, {"version": 5, "holds": ["f-1"]})
     assert json.loads(dest.read_text()) == {"version": 5, "holds": ["f-1"]}
     assert _tmps(tmp_path) == []
 
 
 def test_creates_missing_parent(tmp_path):
     dest = tmp_path / "nested" / "deep" / "out.json"
-    fsio.atomic_write_json(dest, {"ok": True})
+    fsio.write_json(dest, {"ok": True})
     assert json.loads(dest.read_text()) == {"ok": True}
 
 
@@ -45,7 +45,7 @@ def test_repeated_writes_never_collide_on_tmp(tmp_path):
     property that makes two concurrent daemons safe (here serialized for determinism)."""
     dest = tmp_path / "tree.bindings.json"
     for i in range(20):
-        fsio.atomic_write_json(dest, {"n": i})
+        fsio.write_json(dest, {"n": i})
     assert json.loads(dest.read_text()) == {"n": 19}
     assert _tmps(tmp_path) == []  # no orphaned tmp from any write
 
@@ -54,7 +54,7 @@ def test_serialization_error_writes_nothing(tmp_path):
     dest = tmp_path / "out.json"
     # json.dumps raises before any tmp is created → no tmp, no dest, error propagates.
     with pytest.raises(TypeError):
-        fsio.atomic_write_json(dest, {"bad": object()})
+        fsio.write_json(dest, {"bad": object()})
     assert _tmps(tmp_path) == []
     assert not dest.exists()
 
@@ -65,7 +65,7 @@ def test_failed_replace_cleans_up_tmp(tmp_path):
     dest = tmp_path / "adir"
     dest.mkdir()
     with pytest.raises(OSError):
-        fsio.atomic_write_text(dest, "x")
+        fsio.atomic_write(dest, "x")
     assert _tmps(tmp_path) == []
 
 

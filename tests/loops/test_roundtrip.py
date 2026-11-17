@@ -29,10 +29,10 @@ from pathlib import Path
 import pytest
 
 from codoc.calculus import ops as K
-from codoc.substrate import log as L
-from codoc.substrate.log import Submission
-from codoc.substrate.publish import publish
-from codoc.substrate.workspace import Workspace
+from codoc.workspace import log as L
+from codoc.workspace.log import Submission
+from codoc.daemon.publish import publish
+from codoc.workspace import Workspace
 
 EXT = Path(__file__).resolve().parents[2] / "vscode-codoc"
 needs_node = pytest.mark.skipif(not (EXT / "node_modules" / "vitest").exists(),

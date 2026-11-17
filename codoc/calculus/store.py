@@ -1,7 +1,7 @@
 """The in-memory state the applier mutates (spec §5).
 
 Everything here is a cache of the op log: ``replay(log)`` rebuilds it exactly
-(I6). Persistence lives in ``codoc.substrate``; this module knows no files.
+(I6). Persistence lives in ``codoc.workspace``; this module knows no files.
 
 Indexes the applier and the views need, all maintained in ``record`` or by the
 mutation that changes them:
@@ -21,7 +21,7 @@ mutation that changes them:
                       derived views: a block's own head advances whenever an op
                       changes it, the structural head on any add/delete/move/
                       level change, the plans head on any plan or verdict. A
-                      view keyed on these may be memoized (``substrate.publish``)
+                      view keyed on these may be memoized (``daemon.publish``)
 """
 from __future__ import annotations
 

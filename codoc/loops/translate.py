@@ -1,4 +1,4 @@
-"""Migrate an existing tree into another authoring language (was ``loop/translate.py``).
+"""Migrate an existing tree into another authoring language (``codoc translate``).
 
 Switching ``doc_language`` changes what codoc originates from then on; it never
 touches prose already on the page. This is the author-invoked conversion.
@@ -8,8 +8,8 @@ the translation of a machine-written block lands on the trunk (the author
 asked for exactly this rewrite), the translation of a human-written block opens
 a plan so the author's own words are never replaced without a look. ``ingest``
 already refuses a block whose translation would drop a citation, link or focus
-span (spec §4, rule 5), so the v1 validator collapses to two checks it does
-not make: did the prose actually change script, and does the title collide
+span (spec §4, rule 5), so this module adds only the two checks ``ingest``
+does not make: did the prose actually change script, and does the title collide
 with a sibling's. Blocks with an open translator plan are skipped, so a re-run
 never stacks a second translation. Selection is by detected language, so an
 interrupted run is safe to re-run.
@@ -21,16 +21,15 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from codoc.agent.translate import propose_translations
+from codoc.llm.passes import propose_translations
 from codoc.calculus.derive import HELD, markdown, phase
 from codoc.calculus.doc import PARAGRAPH
 from codoc.doclang import DocLanguage, detect_prose_language, norm_key, prose_letters, workspace_doc_language
 from codoc.loops.context import written_by
-from codoc.substrate.publish import atomic_write
-from codoc.substrate.workspace import Workspace
+from codoc.workspace import Workspace
+from codoc.workspace.layout import TRANSLATE, atomic_write
 
 BATCH = 12
-PROGRESS_FILE = "translate.json"
 LEASE_S = 300
 
 
@@ -109,7 +108,7 @@ def translate_tree(ws: Workspace, codoc_dir: str | Path, *, language: DocLanguag
     def progress(running: bool) -> None:
         if dry_run:
             return
-        atomic_write(Path(codoc_dir) / PROGRESS_FILE, json.dumps({
+        atomic_write(Path(codoc_dir) / TRANSLATE, json.dumps({
             "version": 2, "running": running, "target": lang.code, "target_name": lang.name,
             "total": len(pending), "translated": res.translated, "planned": res.planned,
             "skipped": [s.__dict__ for s in res.skipped], "pending": remaining, "at": time.time()}))

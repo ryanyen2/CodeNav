@@ -7,10 +7,10 @@ from codoc.calculus import ops as K
 from codoc.serve.app import build_app, client_name
 from codoc.serve.auth import COOKIE_NAME, MAINTAINER, SUGGEST, AuthContext, SessionStore, read_roles, role_for_permission
 from codoc.serve.push import Feed
-from codoc.substrate import log as L
-from codoc.substrate.log import Submission
-from codoc.substrate.publish import publish
-from codoc.substrate.workspace import Workspace
+from codoc.workspace import log as L
+from codoc.workspace.log import Submission
+from codoc.daemon.publish import publish
+from codoc.workspace import Workspace
 from tests.loops.test_reflect import seed
 
 
@@ -153,8 +153,8 @@ def test_a_contributor_and_the_person_edit_one_checkout_at_once(tmp_path):
     while the person types in VS Code, and only a maintainer's verdict lands it."""
     from codoc.calculus.derive import markdown, phase, plan_claims
     from codoc.calculus.ids import START
-    from codoc.doclang import write_config
-    from codoc.substrate.publish import Publisher
+    from codoc.workspace.config import write_config
+    from codoc.daemon.publish import Publisher
 
     cd = tmp_path / ".codoc"
     cd.mkdir()

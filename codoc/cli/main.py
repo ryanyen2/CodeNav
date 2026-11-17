@@ -12,7 +12,8 @@
     codoc translate   rewrite an existing tree into that language
     codoc rebuild     replay the logs into the cache
     codoc snapshot    fold the logs into one file
-    codoc import-v1   bring a v1 workspace (codoc.db) into the log
+    codoc validate-logs   check log files this workspace did not write
+    codoc serve       the hub: serve the tree to GitHub-authorized people
     codoc install-hooks
 """
 from __future__ import annotations
@@ -22,12 +23,14 @@ from pathlib import Path
 
 import typer
 
+from codoc.workspace.layout import CODOC_DIR, LOG_DIR, REALIZE
+
 app = typer.Typer(add_completion=False, no_args_is_help=True, help=__doc__)
 ROOT = typer.Option(".", "--root", help="Repository root.")
 
 
 def _codoc(root: str) -> Path:
-    return Path(root) / ".codoc"
+    return Path(root) / CODOC_DIR
 
 
 def _require(root: str) -> Path:
@@ -65,24 +68,25 @@ def init(root: str = ROOT,
          doc_language: str = typer.Option("", "--doc-language", "--lang", help="Language to author the tree in (BCP-47)."),
          no_organize: bool = typer.Option(False, "--no-organize", help="Skip the theme-grouping pass.")):
     """Index the repo, build the first tree from the code, publish tree.codoc."""
-    from codoc.substrate.daemon import daemon_running
+    from codoc.daemon.pidfile import daemon_running
     cd = _codoc(root)
-    populated = (cd / "log").is_dir() and any((cd / "log").glob("*.jsonl"))
+    populated = (cd / LOG_DIR).is_dir() and any((cd / LOG_DIR).glob("*.jsonl"))
     if populated and daemon_running(cd):
         typer.echo("A codoc daemon is watching this repo — stop it before `codoc init`.", err=True)
         raise typer.Exit(1)
     if populated and not force:
         typer.echo("A codoc workspace already exists here. Re-run with --force to rebuild, or `codoc watch`.", err=True)
         raise typer.Exit(1)
-    if force and (cd / "log").is_dir():
+    if force and (cd / LOG_DIR).is_dir():
         import shutil
         shutil.rmtree(cd / "log.old", ignore_errors=True)
-        (cd / "log").rename(cd / "log.old")
+        (cd / LOG_DIR).rename(cd / "log.old")
         shutil.rmtree(cd / "cache", ignore_errors=True)
     cd.mkdir(parents=True, exist_ok=True)
     _write_gitignore(cd)
     if doc_language:
-        from codoc.doclang import resolve, write_config
+        from codoc.doclang import resolve
+        from codoc.workspace.config import write_config
         write_config(cd, doc_language=resolve(doc_language).code)
     typer.echo(f"Indexing {root} and bootstrapping the feature tree…")
     try:
@@ -97,7 +101,7 @@ def init(root: str = ROOT,
     typer.echo(f"  Open {cd}/tree.codoc in VS Code, then run `codoc watch`.")
     if hooks:
         try:
-            from codoc.agent.install_hooks import install_hooks
+            from codoc.claude.install_hooks import install_hooks
             cmds = install_hooks(root)
             typer.echo(f"  ✓ hooks, MCP server and {', '.join(cmds)} installed")
         except Exception as exc:  # noqa: BLE001
@@ -105,19 +109,19 @@ def init(root: str = ROOT,
 
 
 def _bootstrap(root: str, cd: Path, *, organize: bool):
+    from codoc.daemon.publish import publish
     from codoc.doclang import workspace_doc_language
-    from codoc.graph.graph import Graph
+    from codoc.index.graph import Graph
+    from codoc.index.reader import read_all_chunks
+    from codoc.index.runner import update_index
     from codoc.loops.bootstrap import BootstrapResult, bootstrap
-    from codoc.pipelines.indexing.reader import read_all_chunks
-    from codoc.pipelines.indexing.runner import update_index
-    from codoc.substrate.daemon import GRAPH_CACHE
-    from codoc.substrate.publish import publish
-    from codoc.substrate.workspace import Workspace
+    from codoc.workspace import Workspace
+    from codoc.workspace.layout import GRAPH_CACHE, atomic_write
     update_index(root, str(cd))
-    rows = read_all_chunks(str(cd), with_embeddings=False)
+    rows = read_all_chunks(str(cd))
     graph = Graph()
     graph.rebuild(rows)
-    graph.save(cd / GRAPH_CACHE)
+    atomic_write(cd / GRAPH_CACHE, graph.dumps())
     ws = Workspace(cd)
     try:
         if not rows:
@@ -136,9 +140,13 @@ def _bootstrap(root: str, cd: Path, *, organize: bool):
 def watch(root: str = ROOT,
           auto_realize: bool = typer.Option(False, "--auto-realize", help="Run the queue headless when no session is live.")):
     """The daemon: reflect code changes, apply edits, publish the derived files."""
-    from codoc.substrate.daemon import Daemon
+    from codoc.daemon.daemon import Daemon
     cd = _require(root)
-    Daemon(root, cd, printer=typer.echo, auto_realize=auto_realize).run()
+    after_batch = None
+    if auto_realize:
+        from codoc.claude.autorealize import auto_realizer
+        after_batch = auto_realizer(root, str(cd))
+    Daemon(root, cd, printer=typer.echo, after_batch=after_batch).run()
 
 
 @app.command()
@@ -160,7 +168,8 @@ def status(root: str = ROOT):
 @app.command()
 def sync(root: str = ROOT):
     """One pass: drain client edits, reflect every changed file, publish."""
-    from codoc.substrate.daemon import Daemon, daemon_running
+    from codoc.daemon.daemon import Daemon
+    from codoc.daemon.pidfile import daemon_running
     cd = _require(root)
     if daemon_running(cd):
         typer.echo("A daemon is watching; it syncs continuously.")
@@ -170,7 +179,7 @@ def sync(root: str = ROOT):
         note = d.process_batch([])
         note2 = d.reflect(set())
         typer.echo(f"▸ {note}; {note2}")
-        from codoc.substrate.publish import publish
+        from codoc.daemon.publish import publish
         publish(cd, d.ws.store, root_dir=root)
     finally:
         d.ws.close()
@@ -205,8 +214,8 @@ def handoff(feature: str, root: str = ROOT,
             delete_code: bool = typer.Option(False, "--delete-code", help="For a deleted feature: remove its code too.")):
     """Hand a feature's edits to the agent (what ⌘S does in the editor)."""
     from codoc.calculus import ops as K
-    from codoc.loop.gitref import head_sha
-    from codoc.substrate import client
+    from codoc.index.git import head_sha
+    from codoc.daemon import client
     cd = _require(root)
     ws = client.read(cd)
     fid = _resolve_feature(ws.store, feature)
@@ -241,8 +250,8 @@ def accept(plan: str, root: str = ROOT,
     person makes it.
     """
     from codoc.calculus import ops as K
-    from codoc.loop.gitref import head_sha
-    from codoc.substrate import client
+    from codoc.index.git import head_sha
+    from codoc.daemon import client
     cd = _require(root)
     ws = client.read(cd)
     pl = ws.store.plans.get(plan)
@@ -259,8 +268,8 @@ def done(feature: str, root: str = ROOT, summary: str = typer.Option("", "--summ
     """Mark a handed-off feature realized by hand (when the build moved no bound
     symbol, so the daemon saw no evidence)."""
     from codoc.calculus import ops as K
-    from codoc.loop.gitref import head_sha
-    from codoc.substrate import client
+    from codoc.index.git import head_sha
+    from codoc.daemon import client
     cd = _require(root)
     ws = client.read(cd)
     fid = _resolve_feature(ws.store, feature)
@@ -273,7 +282,7 @@ def done(feature: str, root: str = ROOT, summary: str = typer.Option("", "--summ
 def reject(plan: str, root: str = ROOT):
     """Reject a plan."""
     from codoc.calculus import ops as K
-    from codoc.substrate import client
+    from codoc.daemon import client
     cd = _require(root)
     _report(client.write(cd, client="cli", root_dir=root,
                          bodies=[{"kind": K.PLAN_REJECT, "target": {"pid": plan}, "payload": {}}]), "rejected")
@@ -283,7 +292,7 @@ def reject(plan: str, root: str = ROOT):
 def history(feature: str, root: str = ROOT, limit: int = typer.Option(15, "--limit")):
     """One feature's history (who, when, what) and current attribution."""
     from codoc.mcp.tools import read_history
-    from codoc.substrate import client
+    from codoc.daemon import client
     cd = _require(root)
     fid = _resolve_feature(client.read(cd).store, feature)
     h = read_history(str(cd), fid, limit)
@@ -298,7 +307,8 @@ def history(feature: str, root: str = ROOT, limit: int = typer.Option(15, "--lim
 @app.command()
 def lang(tag: str = typer.Argument("", help="BCP-47 tag to set; omit to show."), root: str = ROOT):
     """Show or set the language the tree is authored in (.codoc/config.json, tracked)."""
-    from codoc.doclang import resolve, workspace_doc_language, write_config
+    from codoc.doclang import resolve, workspace_doc_language
+    from codoc.workspace.config import write_config
     cd = _require(root)
     if tag:
         write_config(cd, doc_language=resolve(tag).code)
@@ -313,10 +323,10 @@ def translate(root: str = ROOT, to: str = typer.Option("", "--to"), dry_run: boo
               limit: int = typer.Option(0, "--limit")):
     """Rewrite the tree's prose into the authoring language, block by block; human-written nodes become plans."""
     from codoc.doclang import resolve
+    from codoc.daemon.pidfile import daemon_running
+    from codoc.daemon.publish import publish
     from codoc.loops.translate import translate_tree
-    from codoc.substrate.daemon import daemon_running
-    from codoc.substrate.publish import publish
-    from codoc.substrate.workspace import Workspace
+    from codoc.workspace import Workspace
     cd = _require(root)
     if daemon_running(cd):
         typer.echo("Stop the daemon before translating (it is the applier).", err=True)
@@ -336,10 +346,10 @@ def translate(root: str = ROOT, to: str = typer.Option("", "--to"), dry_run: boo
 @app.command()
 def rebuild(root: str = ROOT):
     """Replay the logs into the cache and re-publish the derived files."""
-    from codoc.substrate.publish import publish
-    from codoc.substrate.workspace import Workspace
+    from codoc.daemon.publish import publish
+    from codoc.workspace import Workspace
     cd = _require(root)
-    from codoc.serve.validate import refused_verdicts
+    from codoc.workspace.validate import refused_verdicts
     ws = Workspace(cd)
     try:
         publish(cd, ws.store, root_dir=root)
@@ -363,8 +373,8 @@ def validate_logs_cmd(paths: list[str] = typer.Argument(None, help="Log files to
     forged success in a stranger's log lands on every clone that rebuilds. Run
     this before merging one.
     """
-    from codoc.serve.validate import changed_logs, validate_logs
-    from codoc.substrate.workspace import Roles, Workspace
+    from codoc.workspace.validate import changed_logs, validate_logs
+    from codoc.workspace import Roles, Workspace
     cd = _require(root)
     files = [Path(p) for p in paths] if paths else changed_logs(root, base)
     if not files:
@@ -381,9 +391,9 @@ def validate_logs_cmd(paths: list[str] = typer.Argument(None, help="Log files to
 @app.command()
 def snapshot(root: str = ROOT):
     """Fold the logs into one snapshot file and archive the rest."""
-    from codoc.substrate import client
-    from codoc.substrate.daemon import daemon_running
-    from codoc.substrate.snapshot import write_snapshot
+    from codoc.daemon import client
+    from codoc.daemon.pidfile import daemon_running
+    from codoc.workspace.snapshot import write_snapshot
     cd = _require(root)
     if daemon_running(cd):
         typer.echo("Stop the daemon before snapshotting.", err=True)
@@ -400,37 +410,15 @@ def snapshot(root: str = ROOT):
     typer.echo(f"✓ {path.name}")
 
 
-@app.command(name="import-v1")
-def import_v1_cmd(db: str = typer.Argument("", help="Path to the v1 codoc.db (default: .codoc/codoc.db)."), root: str = ROOT):
-    """Bring a v1 workspace into the log as one batch."""
-    from codoc.substrate.import_v1 import import_v1
-    from codoc.substrate.publish import publish
-    from codoc.substrate.workspace import Workspace
-    cd = _codoc(root)
-    src = Path(db) if db else cd / "codoc.db"
-    if not src.exists():
-        typer.echo(f"no v1 database at {src}", err=True)
-        raise typer.Exit(1)
-    cd.mkdir(parents=True, exist_ok=True)
-    _write_gitignore(cd)
-    ws = Workspace(cd)
-    try:
-        res = import_v1(ws, src)
-        publish(cd, ws.store, root_dir=root)
-    finally:
-        ws.close()
-    typer.echo(f"✓ imported {res['features']} features and {res['bindings']} bindings")
-
-
 @app.command()
 def realize(root: str = ROOT, engine: str = typer.Option("auto", "--engine", help="auto | sdk | cli"),
             permission_mode: str = typer.Option("acceptEdits", "--permission-mode")):
     """Implement the queued hand-offs now, in the foreground."""
     import subprocess
-    from codoc.loop.autorealize import find_claude
-    from codoc.loop.sdk_realize import resolve_engine, run_sdk_realize, sdk_available
+    from codoc.claude.autorealize import find_claude
+    from codoc.claude.sdk_realize import resolve_engine, run_sdk_realize, sdk_available
     cd = _require(root)
-    if not (cd / "realize.md").exists():
+    if not (cd / REALIZE).exists():
         typer.echo("Nothing queued — edit the tree and hand off (⌘S in the editor, or `codoc handoff`).")
         raise typer.Exit(0)
     engine = resolve_engine(engine)
@@ -449,7 +437,7 @@ def realize(root: str = ROOT, engine: str = typer.Option("auto", "--engine", hel
 @app.command(name="install-hooks")
 def install_hooks_cmd(root: str = ROOT):
     """(Re)install the Claude Code hooks, the /codoc:* commands and the MCP registration."""
-    from codoc.agent.install_hooks import install_hooks
+    from codoc.claude.install_hooks import install_hooks
     cmds = install_hooks(root)
     typer.echo(f"✓ installed {', '.join(cmds)} and the codoc MCP server")
 

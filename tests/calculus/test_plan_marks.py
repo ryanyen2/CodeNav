@@ -10,7 +10,7 @@ from codoc.calculus import ops as K
 from codoc.calculus.derive import block_entry, live_spans, markdown, plan_claims
 from codoc.calculus.inline_md import parse
 from codoc.calculus.text import BOLD, CITE, COMMENT, LINK, PROPOSALS, SUGGEST_DEL
-from codoc.substrate.workspace import Workspace
+from codoc.workspace import Workspace
 from tests.substrate.test_review5 import H, T, bold_chars, ins, mark, refs, seed
 
 

@@ -5,7 +5,8 @@ import shutil
 
 from codoc.calculus import ops as K
 from codoc.calculus.apply import apply
-from codoc.calculus.derive import directive, history, markdown, phase, plan_claims
+from codoc.calculus.derive import history, markdown, phase, plan_claims
+from codoc.loops.realize import directive
 from codoc.calculus.doc import PARAGRAPH
 from codoc.calculus.export import export_markdown
 from codoc.calculus.ids import START
@@ -14,15 +15,15 @@ from codoc.calculus.ops import covered
 from codoc.calculus.store import Store
 from codoc.calculus.text import BOLD, CITE, LINK
 from codoc.doclang import resolve
-from codoc.graph.graph import Graph
-from codoc.loop.diff import ChangeSet
+from codoc.index.graph import Graph
+from codoc.index.changes import ChangeSet
 from codoc.loops.realize import handoff, settle
 from codoc.loops.reflect import reflect
 from codoc.loops.translate import translate_tree
-from codoc.substrate import log as L
-from codoc.substrate.daemon import Daemon
-from codoc.substrate.log import Submission
-from codoc.substrate.workspace import Roles, Workspace
+from codoc.workspace import log as L
+from codoc.daemon.daemon import Daemon
+from codoc.workspace.log import Submission
+from codoc.workspace import Roles, Workspace
 from tests.calculus.test_apply import Mint, heading, paragraph
 from tests.calculus.test_ingest import run_ingest
 from tests.loops.test_reflect import chunk, seed
@@ -277,7 +278,7 @@ def test_rebuild_with_equal_pos_publishes_fresh_files(tmp_path):
 # ── A10: roles live in the tracked config ────────────────────────────────────
 
 def test_roles_from_config_make_every_clone_agree(tmp_path):
-    from codoc.doclang import write_config
+    from codoc.workspace.config import write_config
     cd = tmp_path / ".codoc"
     cd.mkdir()
     write_config(cd, roles={"human:alice": "maintainer"})
@@ -412,7 +413,7 @@ def test_a_handoff_covers_what_arrived_with_it(tmp_path):
 
 
 def test_a_later_demotion_does_not_rewrite_what_was_written(tmp_path):
-    from codoc.doclang import write_config
+    from codoc.workspace.config import write_config
     cd = tmp_path / ".codoc"
     cd.mkdir()
     write_config(cd, roles={"human:alice": "maintainer"})

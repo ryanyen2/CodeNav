@@ -1,8 +1,9 @@
-"""The codoc calculus — the attributed edit substrate.
+"""The codoc calculus: the attributed edit model of the document.
 
 Spec: ``docs/substrate/01-calculus.md``. Everything in this package is pure
-Python over in-memory structures; persistence (the log, the SQLite cache) and
-IO live in ``codoc.substrate``. Nothing here reads a file or a clock.
+Python over in-memory structures; persistence (the log) and IO live in
+``codoc.workspace``. Nothing here reads a file or a clock, and nothing here
+imports the rest of codoc.
 
 Module map:
 
@@ -15,4 +16,10 @@ Module map:
 - ``store``  — the in-memory state the applier mutates.
 - ``apply``  — ``apply(store, op)``: total, deterministic, O(touched blocks),
                records canonical payloads, inverses and conflicts.
+- ``ingest`` — whole new text for one field → ops: the one place a diff decides.
+- ``inline_md``, ``block_md`` — the Markdown codecs for text and for blocks.
+- ``derive`` — pure views over the store: what a feature says, who wrote which
+               word, the three channels, the phase, the projection.
+- ``export`` — the document as ``tree.codoc``.
+- ``window`` — the timeline window: the last ops and the text around them.
 """

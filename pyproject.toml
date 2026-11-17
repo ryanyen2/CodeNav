@@ -14,11 +14,9 @@ dependencies = [
     "tree-sitter-languages>=1.10.2",
     "cocoindex>=1.0.0",
     "lancedb>=0.30.0",
-    "numpy>=1.24.0",
     "openai>=1.50.0",            # also the Anthropic-compatible and local paths; the claude CLI needs no SDK
     "typer>=0.12.0",
     "python-dotenv>=1.0.0",
-    "filelock>=3.13.0",
     "watchfiles>=0.21.0",
     "fastmcp>=2.0.0",
 ]
@@ -45,11 +43,6 @@ media = [
     "trafilatura>=1.12.0",
     "pypdf>=5.0.0",
 ]
-embed = [
-    # The opt-in embedding column (CODOC_EMBED_CHUNKS=1); pulls torch, so it is
-    # never installed for the default lexical + graph selection.
-    "sentence-transformers>=3.0.0",
-]
 local = [
     "ollama>=0.3.0",             # provider="ollama"; imported only on that path
 ]
@@ -68,7 +61,7 @@ include = ["codoc*"]
 
 [tool.setuptools.package-data]
 "codoc" = ["py.typed"]
-"codoc.plugin" = ["**/*"]
+"codoc.claude.plugin" = ["**/*"]
 "codoc.prompts" = ["*.txt"]
 
 [tool.pytest.ini_options]

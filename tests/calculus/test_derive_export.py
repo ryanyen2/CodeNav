@@ -1,9 +1,8 @@
 """Derived views and the Markdown export fixed point (spec §6, §9)."""
 from codoc.calculus import ops as K
 from codoc.calculus.apply import apply
-from codoc.calculus.derive import (
-    attribution, description, directive, ground, history, ink, markdown, phase, plan_claims, projection,
-)
+from codoc.calculus.derive import attribution, description, ground, history, ink, markdown, phase, plan_claims, projection
+from codoc.loops.realize import directive
 from codoc.calculus import block_md
 from codoc.calculus.export import export_markdown
 from codoc.calculus.ids import START

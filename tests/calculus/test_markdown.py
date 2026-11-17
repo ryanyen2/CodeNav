@@ -144,6 +144,17 @@ def test_heading_ids_and_json_fence():
     assert block_md.render(specs, ids=True) == md
 
 
+def test_render_one_keeps_marker_and_indent():
+    assert block_md.render_one(BlockSpec(BULLET, 2, "nested")) == "    - nested"
+    assert block_md.render_one(BlockSpec(NUMBERED, 1, "step")) == "1. step"
+    assert block_md.render_one(BlockSpec(PARAGRAPH, text="plain")) == "plain"
+    table = BlockSpec(TABLE, text="| a |\n|---|")
+    assert block_md.parse(block_md.render_one(table)) == [table]
+    for spec in (BlockSpec(BULLET, 3, "x"), BlockSpec(NUMBERED, 2, "y")):
+        (back,) = block_md.parse(block_md.render_one(spec))
+        assert (back.kind, back.text) == (spec.kind, spec.text)
+
+
 def test_paragraph_that_looks_like_a_block_is_escaped():
     for text in ("- not a bullet", "1. not a step", "| not a table", "+ plus", "* star"):
         inline = render(text, [])

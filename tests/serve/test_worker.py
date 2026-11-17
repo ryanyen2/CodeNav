@@ -8,7 +8,7 @@ from codoc.loops.realize import handoff
 from codoc.serve.realize_agent import realize_tool_policy
 from codoc.serve.sandbox import can_use_tool, edit_allowed, is_secret_path, out_of_scope_changes
 from codoc.serve.worker import Request, branch_name, pending, process_ready, read_ledger, realize_one
-from codoc.substrate.workspace import Workspace
+from codoc.workspace import Workspace
 from tests.loops.test_reflect import seed
 
 

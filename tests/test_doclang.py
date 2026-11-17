@@ -13,31 +13,10 @@ import json
 import pytest
 
 from codoc import doclang as dl
+from codoc.workspace import config
 
 
 # ── script classification ───────────────────────────────────────────────────
-
-@pytest.mark.parametrize("text,expected", [
-    ("Index snapshot diff", dl.SPACED),
-    ("索引快照差异", dl.LOGOGRAPHIC),
-    ("インデックス差分", dl.LOGOGRAPHIC),
-    ("인덱스 스냅샷", dl.HANGUL),
-    ("การจัดทำดัชนี", dl.UNSPACED_ALPHA),
-    ("Индекс моментальных снимков", dl.SPACED),
-    ("", dl.SPACED),
-    ("123 456 !!!", dl.SPACED),      # no letters at all → the safe default
-])
-def test_dominant_script(text, expected):
-    assert dl.dominant_script(text) is expected
-
-
-def test_hangul_is_not_treated_as_unspaced():
-    """Korean puts spaces between words, so it must NOT get n-gram segmentation —
-    lumping it in with Han because both are 'CJK' would shred findable words."""
-    assert dl.HANGUL.ngram == 0
-    assert not dl.has_cjk("인덱스 스냅샷")
-    assert dl.terms("인덱스 스냅샷") == {"인덱스", "스냅샷"}
-
 
 def test_script_mix_ignores_punctuation_and_digits():
     """Digits and punctuation belong to every script, so counting them would bias
@@ -76,63 +55,7 @@ def test_norm_key_does_not_fold_simplified_and_traditional():
     assert dl.norm_key("程式碼") != dl.norm_key("代码")
 
 
-# ── segmentation ────────────────────────────────────────────────────────────
-
-def test_terms_matches_the_old_latin_behaviour():
-    """`intent._terms` fed a scoring function tuned on these exact outputs:
-    camel/snake split, stopwords dropped, nothing shorter than three characters."""
-    assert dl.terms("make the OllamaClient retry") == {"ollama", "client", "retry"}
-    assert dl.terms("compute_changeset") == {"compute", "changeset"}
-    assert dl.terms("the and for with") == set()
-
-
-def test_terms_is_non_empty_for_cjk():
-    """The whole bug: `[^A-Za-z0-9]+` split a Chinese prompt into nothing, so it
-    scored zero against every symbol and the author's stated why went unused."""
-    got = dl.terms("让 ollama 客户端在超时后重试")
-    assert got
-    assert "ollama" in got          # the identifier survives untranslated
-    assert "客户" in got            # and the prose is segmented, not dropped
-
-
-def test_terms_keeps_a_latin_identifier_inside_cjk_prose():
-    """Prose and identifier must BOTH survive: the lexical heuristics exist to
-    bridge authored prose and code symbols, so dropping either side defeats them."""
-    got = dl.terms("解析 parse_tree 的输出")
-    assert "parse" in got and "tree" in got
-    assert any(dl.has_cjk(t) for t in got)
-
-
-def test_terms_drops_lone_cjk_function_words():
-    """A single particle matches nearly every sentence in a tree, so it cannot be
-    allowed to act as a discriminator."""
-    assert "的" not in dl.terms("解析 的 输出")
-    assert "让" not in dl.terms("让 ollama 重试")
-
-
-def test_tokens_is_more_lenient_than_terms():
-    """`tokens` feeds a divergence check where under-counting shared meaning raises
-    a false alarm, so it keeps content characters that `terms` drops for precision."""
-    assert dl.tokens("添加") > dl.terms("添加")
-
-
-def test_tokens_matches_the_old_latin_behaviour():
-    assert dl.tokens("Add validation") == {"add", "validation"}
-
-
-# ── script-scaled constants ─────────────────────────────────────────────────
-
-def test_clause_chars_reproduces_the_latin_constant():
-    """24 was `apply._MIN_PRESERVED_RUN`. If this drifts, every English amend gate
-    silently re-tunes — so it is pinned exactly."""
-    assert dl.clause_chars("a plain English description of some feature") == 24
-
-
-def test_clause_chars_shrinks_for_logographic_text():
-    """24 characters of Chinese is a whole sentence, so the old constant scored
-    ~0 preserved for every real amend and pushed all of them into review."""
-    assert dl.clause_chars("索引快照差异计算与比较") == 8
-
+# ── script-scaled budgets ───────────────────────────────────────────────────
 
 def test_char_budget_is_identity_for_latin_and_scales_for_cjk():
     assert dl.char_budget(400, "an English commit subject line") == 400
@@ -173,14 +96,6 @@ def test_unknown_tag_resolves_to_a_usable_generic_profile():
 
 def test_generic_profile_knows_thai_is_unspaced():
     assert dl.resolve("th").script is dl.UNSPACED_ALPHA
-
-
-def test_non_english_profiles_use_a_multilingual_embedder():
-    """The English default is monolingual, so leaving it in place would make
-    semantic title dedup a coin flip rather than a conservative gate."""
-    assert dl.resolve("en").embedder == "all-MiniLM-L6-v2"
-    for tag in ("zh-Hans", "ja", "ko", "fr"):
-        assert "multilingual" in dl.resolve(tag).embedder
 
 
 # ── the prompt directive ────────────────────────────────────────────────────
@@ -232,12 +147,12 @@ def test_defaults_to_english_with_no_config(codoc_dir):
 
 
 def test_reads_the_committed_setting(codoc_dir):
-    dl.write_config(codoc_dir, doc_language="zh-Hans")
+    config.write_config(codoc_dir, doc_language="zh-Hans")
     assert dl.workspace_doc_language(codoc_dir).code == "zh-Hans"
 
 
 def test_env_var_overrides_the_committed_setting(codoc_dir, monkeypatch):
-    dl.write_config(codoc_dir, doc_language="zh-Hans")
+    config.write_config(codoc_dir, doc_language="zh-Hans")
     monkeypatch.setenv(dl.ENV_VAR, "ja")
     assert dl.workspace_doc_language(codoc_dir).code == "ja"
 
@@ -245,23 +160,23 @@ def test_env_var_overrides_the_committed_setting(codoc_dir, monkeypatch):
 def test_blank_env_var_does_not_override(codoc_dir, monkeypatch):
     """An exported-but-empty variable is not a choice, and treating it as one would
     silently reset a committed tree to English."""
-    dl.write_config(codoc_dir, doc_language="zh-Hans")
+    config.write_config(codoc_dir, doc_language="zh-Hans")
     monkeypatch.setenv(dl.ENV_VAR, "   ")
     assert dl.workspace_doc_language(codoc_dir).code == "zh-Hans"
 
 
 def test_write_config_merges_and_stays_readable(codoc_dir):
-    dl.write_config(codoc_dir, doc_language="zh-Hans")
-    dl.write_config(codoc_dir, some_other_setting=7)
-    raw = dl.config_path(codoc_dir).read_text(encoding="utf-8")
+    config.write_config(codoc_dir, doc_language="zh-Hans")
+    config.write_config(codoc_dir, some_other_setting=7)
+    raw = config.config_path(codoc_dir).read_text(encoding="utf-8")
     assert json.loads(raw) == {"doc_language": "zh-Hans", "some_other_setting": 7}
 
 
 def test_corrupt_config_degrades_to_the_default(codoc_dir):
     """Read on the daemon's hot path and from the CC hook, where raising would
     block the author's turn."""
-    dl.config_path(codoc_dir).write_text("{not json", encoding="utf-8")
-    assert dl.read_config(codoc_dir) == {}
+    config.config_path(codoc_dir).write_text("{not json", encoding="utf-8")
+    assert config.read_config(codoc_dir) == {}
     assert dl.workspace_doc_language(codoc_dir).code == "en"
 
 

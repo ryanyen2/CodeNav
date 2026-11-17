@@ -3,11 +3,11 @@ from codoc.calculus import ops as K
 from codoc.calculus.derive import description, phase, plan_claims, title
 from codoc.calculus.doc import HEADING, PARAGRAPH
 from codoc.calculus.ids import START
-from codoc.graph.graph import Graph
-from codoc.loop.diff import ChangeSet, ChunkRef
+from codoc.index.graph import Graph
+from codoc.index.changes import ChangeSet, ChunkRef
 from codoc.loops.realize import handoff
 from codoc.loops.reflect import reflect
-from codoc.substrate.workspace import Workspace
+from codoc.workspace import Workspace
 
 
 def seed(ws: Workspace):
