@@ -65,12 +65,9 @@ async function runSetup(context: vscode.ExtensionContext, state: Workspace): Pro
         await bootstrapCredentials(rootDir);
         log.appendLine('codoc: indexing the repo and building the feature tree…');
         if (!state.initialized) {
-            // A `.codoc/codoc.db` is a tree from before the op log; import it instead of starting over.
-            const legacy = path.join(rootDir, '.codoc', 'codoc.db');
-            const args = fs.existsSync(legacy) ? ['import-v1', '--root', rootDir] : ['init', '--root', rootDir];
             await vscode.window.withProgress(
                 { location: vscode.ProgressLocation.Notification, title: 'codoc: indexing your repo and building the feature tree…' },
-                () => runCodoc(execs.codoc, args, rootDir),
+                () => runCodoc(execs.codoc, ['init', '--root', rootDir], rootDir),
             );
         }
         log.appendLine('codoc: starting the daemon…');
