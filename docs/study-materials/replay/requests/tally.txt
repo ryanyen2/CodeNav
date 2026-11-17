@@ -1,2 +1,0 @@
-I want to manage the categories myself without touching the source, and I want
-to see spending at a finer grain than a whole month. Make that work.

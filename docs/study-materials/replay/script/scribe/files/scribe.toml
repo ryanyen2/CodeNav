@@ -1,8 +1,0 @@
-# Settings for scribe. Every value here is optional; leave one out and scribe
-# uses the value it always used.
-
-[document."survey.txt"]
-# The survey's appendix carries its own header over two of its five pages, which
-# is under the share a line has to repeat on before it counts as page furniture.
-# Every other document keeps the value it has always used.
-repeat_share = 0.4

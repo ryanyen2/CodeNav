@@ -44,20 +44,9 @@ vscode-codoc/bundled/*.whl
 # Packaged extension — a build artifact produced by `vsce package`, never committed.
 vscode-codoc/*.vsix
 
-# Root-level real-world corpora only (requests/, altair/, …); anchored so it does
-# NOT swallow nested source test dirs like vscode-codoc/src/test/.
+# Real-world corpora for trying codoc end to end (requests/, nanochat/, …); local
+# only. Anchored so it does not match vscode-codoc/src/test/.
 /test/
-# LaTeX build artifacts
-paper/main.aux
-paper/main.log
-paper/main.blg
-paper/main.out
-paper/main.pdf
-evals/work/
-evals/out/
-
-# Rendered by study-app/scripts/preview.mjs, for looking at the pages.
-study-app/preview/
 
 
 review.md
