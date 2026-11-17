@@ -11,7 +11,7 @@ from codoc.loops.realize import directive
 from codoc.workspace import Roles, Workspace
 from codoc.workspace import log as L
 from codoc.workspace.snapshot import write_snapshot
-from tests.helpers import ROWS, H, T, fake_file, fake_org, fold, ins, kind_block, mark, refs, seed
+from tests.helpers import ROWS, H, T, fake_file, fake_org, fold, ins, kind_block, mark, refs, seed, ws_paragraph
 
 
 def test_snapshot_keeps_the_fingerprint_when_a_dead_block_exists(tmp_path):
@@ -272,6 +272,32 @@ def test_a_fold_keeps_who_answered_and_who_asked(tmp_path):
     handoffs = [o for o in st.ops if o.kind == K.FEATURE_HANDOFF]
     assert [o.actor for o in verdicts] == [H], [(o.actor, o.kind) for o in verdicts]
     assert [o.actor for o in handoffs] == [H], [(o.actor, o.kind) for o in handoffs]
+
+
+def test_of_two_folds_the_one_covering_more_is_the_state(tmp_path):
+    """Clone Y writes more and folds first; clone X folds later without Y's
+    session. After the merge, Y's fold (the earlier name) covers more and is
+    the state, X's is the one reported, and nothing either clone wrote is lost."""
+    import shutil
+    x = tmp_path / "x" / ".codoc"
+    ws = Workspace(x); seed(ws); ws.close()
+    y = tmp_path / "y" / ".codoc"
+    shutil.copytree(x, y)
+    wy = Workspace(y)
+    ws_paragraph(wy, "py", "Only Y wrote this.", after="p1")
+    wy.close()
+    fold(y)
+    fold(x)
+    (snap_x,) = L.list_snapshots(x)
+    (snap_y,) = L.list_snapshots(y)
+    assert snap_x.name > snap_y.name                      # X folded later
+    shutil.copy(snap_y, x / "log" / snap_y.name)
+    for p in L.list_archived(y):
+        shutil.copy(p, x / "log" / "archive" / p.name)
+    merged = Workspace(x, readonly=True)
+    (problem,) = [p for p in merged.problems if "snapshots" in p.reason]
+    assert snap_x.name in problem.reason and snap_y.name not in problem.reason
+    assert T(merged.store, "py") == "Only Y wrote this." and T(merged.store, "p1") == "Retries once."
 
 
 def test_a_fold_never_folds_a_fold(tmp_path):

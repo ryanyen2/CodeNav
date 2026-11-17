@@ -75,33 +75,37 @@ class Workspace:
             if f.valid:
                 files.append(f)
         exclude = None
-        snaps = L.list_snapshots(self.codoc_dir)
+        snaps = [L.read_session(p) for p in L.list_snapshots(self.codoc_dir)]
+        for s in snaps:
+            self.problems.extend(s.problems)
+        valid = [s for s in snaps if s.valid]
+        # With two folds (two clones each folded, and a merge brought both), the
+        # one whose frontier covers more ops is the state, a tie going to the
+        # later name, so every clone that merges the same files picks the same.
+        snap = max(valid, key=lambda s: (sum((s.header.get("frontier") or {}).values()), s.path.name), default=None)
         if len(snaps) > 1:
-            # Two clones each folded and the merge brought both. Only one state
-            # can be the state, and the other's log is in `log/archive/`, which
-            # nothing reads. So report it and read the archive, rather than
-            # lose a feature with no message. Fold once, on one branch.
-            self.problems.append(L.LogProblem(str(snaps[-1]), 1, (
-                f"{len(snaps)} snapshots: {', '.join(p.name for p in snaps[:-1])} was folded by another clone; "
+            # The other fold's log is in `log/archive/`, which replay does not
+            # read; read it here, past the chosen frontier, rather than lose a
+            # feature with no message. Fold once, on one branch.
+            others = ", ".join(s.path.name for s in snaps if s is not snap)
+            self.problems.append(L.LogProblem(str(snap.path if snap else snaps[-1].path), 1, (
+                f"{len(snaps)} snapshots: {others} was folded by another clone; "
                 "replaying its archived log. Re-fold once, on one branch.")))
             for p in L.list_archived(self.codoc_dir):
                 f = L.read_session(p)
                 if f.valid and not f.header.get("snapshot"):
                     files.append(f)
-        if snaps:
-            snap = L.read_session(snaps[-1])
-            self.problems.extend(snap.problems)
-            if snap.valid:
-                exclude = snap.header.get("frontier") or {}
-                for op in snap.ops:
-                    self._replay_one(op)
-                # The folded ops ARE in this state, so the frontier has to say
-                # so. A frontier is a vector clock and a fold drops the folded
-                # sessions' entries from it; without this, everything a later
-                # watermark should cover reads as uncovered: a hand-off given
-                # after a fold would not carry the words the person removed
-                # before it, and `covered()` would call settled work in flight.
-                self.store.frontier = frontier_union(self.store.frontier, exclude)
+        if snap is not None:
+            exclude = snap.header.get("frontier") or {}
+            for op in snap.ops:
+                self._replay_one(op)
+            # The folded ops ARE in this state, so the frontier has to say
+            # so. A frontier is a vector clock and a fold drops the folded
+            # sessions' entries from it; without this, everything a later
+            # watermark should cover reads as uncovered: a hand-off given
+            # after a fold would not carry the words the person removed
+            # before it, and `covered()` would call settled work in flight.
+            self.store.frontier = frontier_union(self.store.frontier, exclude)
         for op in L.replay_order(files, exclude):
             self._replay_one(op)
 

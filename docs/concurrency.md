@@ -562,10 +562,11 @@ are views of the log and lose the folded ops.
 every op outside its frontier, whatever its `at`, and the snapshot keeps dead blocks and
 dead characters for those ops to anchor to.
 
-**Two snapshots** after a merge mean two clones each folded. The newest by file name is
-used, the rebuild reports the other, and the session files in `log/archive/` are
-replayed as well, so that the other clone's folded ops are not lost. Fold once, on one
-branch.
+**Two snapshots** after a merge mean two clones each folded. The one whose frontier
+covers more ops is the state (a tie goes to the later file name, so every clone that
+merges the same files picks the same one). The rebuild reports the other, and the session
+files in `log/archive/` are replayed past the chosen frontier, so that the other clone's
+folded ops are not lost. Fold once, on one branch.
 
 ## 13. The editor's side
 
@@ -616,6 +617,3 @@ It adopts each new projection block by block.
 - An exact snapshot cut. The cut is at the oldest op of a feature with an open plan,
   which can be earlier than the oldest op the verdict needs.
 
-## Open questions
-
-1. With two snapshots the rebuild uses the newest by file name, whichever fold covers more.
