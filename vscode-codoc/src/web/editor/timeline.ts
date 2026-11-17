@@ -1,10 +1,10 @@
 /**
- * timeline.ts — the History scrubber (09-editor §7): a read-only reconstruction
+ * timeline.ts — the History scrubber: a read-only reconstruction
  * of the page at a position in the window, with that moment's change marked.
  * It never touches the live editor: pushing Tuesday's prose through the
  * recorder would record the author reverting the tree.
  */
-import type { Projection } from '../calc/projection';
+import { pathOf, type Projection } from '../calc/projection';
 import { shapeAt, textAt, wordDiff, type HistoryWindow } from '../calc/window';
 
 export class Timeline {
@@ -83,7 +83,7 @@ export class Timeline {
             const was = shape.shape.get(bid);
             const b = live.get(bid) ?? { id: bid, kind: was?.kind ?? 'paragraph', level: was?.level ?? 0,
                                          rank: '', head: 0, fields: {} };
-            const f = b.fields.text as { text?: string } | undefined;
+            const f = b.fields[pathOf(b.kind)] as { text?: string } | undefined;
             const now = textAt(w, bid, p, f?.text ?? '');
             if (now === null) continue;
             const el = document.createElement(b.kind === 'heading' ? 'div' : 'p');

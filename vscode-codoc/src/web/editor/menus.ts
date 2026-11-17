@@ -1,27 +1,32 @@
 /**
- * menus.ts — the `/` block menu and the `@` citation picker (09-editor §8).
+ * menus.ts — the `/` block menu, the `@` citation picker, and the link field.
  *
- * Both are one popup: a trigger character typed into a textblock opens a list
- * under the caret, the characters typed after it filter the list, and Enter
- * picks. A pick is an ordinary transaction (a command for `/`, a replace of
- * the typed `@query` by a cite-marked label for `@`), so the recorder and the
- * commands do the recording; the menu decides nothing about ops.
+ * The menus are one popup: a trigger character typed into a textblock opens a
+ * list under the caret, the characters typed after it filter the list, and
+ * Enter picks. A pick is a command (commands.ts) or, for `@`, a replace of the
+ * typed `@query` by a cite-marked label, which the recorder reads; the menu
+ * decides nothing about ops.
+ *
+ * The link field (Mod-K) is an input over the selection. Enter puts a link on
+ * the selected words, or takes it off when the field is empty; the mark change
+ * is an ordinary transaction, so the recorder sends it.
  */
 import { TextSelection, type EditorState } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 
 import type { Projection } from '../calc/projection';
-import { makeHeading, makeParagraph, type Env } from './commands';
+import { deleteFeature, insertSource, setKind, type Env, type Gesture } from './commands';
 
 interface MenuItem { label: string; detail?: string; run: () => void }
 
 export interface Trigger { kind: '/' | '@'; from: number; query: string }
 
 /** The trigger the text before the caret spells, if any. `/` only counts at
- *  the start of a block (a slash mid-sentence is prose). */
+ *  the start of a block (a slash mid-sentence is prose), and neither counts
+ *  in a source block. */
 export function triggerAt(state: EditorState): Trigger | null {
     const { $from, empty } = state.selection;
-    if (!empty || $from.depth !== 1) return null;
+    if (!empty || $from.depth !== 1 || $from.parent.type.spec.code) return null;
     const before = $from.parent.textBetween(0, $from.parentOffset, '\n');
     const slash = /^\/(\S*)$/.exec(before);
     if (slash) return { kind: '/', from: $from.start(1), query: slash[1] };
@@ -112,11 +117,21 @@ export class Menus {
 
     private blockItems(t: Trigger): MenuItem[] {
         const marker = t.query.length + 1;
-        const all: MenuItem[] = [1, 2, 3].map(level => ({
-            label: `Heading ${level}`, detail: `${'#'.repeat(level)} `,
-            run: () => { const g = makeHeading(this.view.state, this.env, level, marker); if (g) this.view.dispatch(g.tr); },
-        }));
-        all.push({ label: 'Paragraph', detail: 'plain prose', run: () => { const g = makeParagraph(this.view.state, this.env, marker); if (g) this.view.dispatch(g.tr); } });
+        const item = (label: string, detail: string, g: (state: EditorState) => Gesture | null): MenuItem =>
+            ({ label, detail, run: () => { const r = g(this.view.state); if (r) this.view.dispatch(r.tr); } });
+        const all: MenuItem[] = [
+            ...[1, 2, 3].map(level => item(`Heading ${level}`, `${'#'.repeat(level)} `, s => setKind(s, this.env, 'heading', level, marker))),
+            item('Paragraph', 'plain prose', s => setKind(s, this.env, 'paragraph', undefined, marker)),
+            item('Bullet list', '- ', s => setKind(s, this.env, 'bullet', undefined, marker)),
+            item('Numbered list', '1. ', s => setKind(s, this.env, 'numbered', undefined, marker)),
+            item('Table', '| a | b |', s => insertSource(s, this.env, 'table', {}, '', marker)),
+            item('Code block', '```', s => insertSource(s, this.env, 'code', {}, '', marker)),
+            item('Diagram', '```mermaid', s => insertSource(s, this.env, 'diagram', {}, '', marker)),
+        ];
+        const caret = this.view.state.selection.$from.parent;
+        if (caret.type.name === 'heading') {
+            all.push(item('Delete feature', 'its heading and text', s => deleteFeature(s, this.env, caret.attrs.bid as string)));
+        }
         const q = t.query.toLowerCase();
         return all.filter(it => !q || it.label.toLowerCase().replace(/\s/g, '').includes(q.replace(/\s/g, '')));
     }
@@ -133,5 +148,66 @@ export class Menus {
                 this.view.dispatch(tr);
             },
         }));
+    }
+}
+
+/** The link field. `show` opens it over a selection, prefilled with the link
+ *  the selection already has. */
+export class LinkInput {
+    private readonly el: HTMLElement;
+    private readonly input: HTMLInputElement;
+
+    constructor(private readonly view: EditorView, parent: HTMLElement) {
+        this.el = document.createElement('div');
+        this.el.className = 'codoc-menu codoc-link-input';
+        this.el.hidden = true;
+        this.input = document.createElement('input');
+        this.input.className = 'codoc-find-input';
+        this.input.placeholder = 'https://…';
+        this.input.setAttribute('aria-label', 'Link address; empty removes the link');
+        this.el.append(this.input);
+        parent.append(this.el);
+        this.input.addEventListener('keydown', ev => {
+            if (ev.key === 'Enter') { ev.preventDefault(); this.apply(this.input.value.trim()); }
+            else if (ev.key === 'Escape') { ev.preventDefault(); this.close(); }
+        });
+        this.input.addEventListener('blur', () => { this.el.hidden = true; });
+    }
+
+    /** Open over the selection. False when nothing is selected. */
+    show(): boolean {
+        const { from, to, empty } = this.view.state.selection;
+        if (empty) return false;
+        const type = this.view.state.schema.marks.link;
+        let href = '';
+        this.view.state.doc.nodesBetween(from, to, n => { href ||= (type.isInSet(n.marks)?.attrs.href as string | undefined) ?? ''; });
+        const c = this.view.coordsAtPos(from);
+        const box = this.el.offsetParent?.getBoundingClientRect() ?? { left: 0, top: 0 };
+        this.el.style.left = `${c.left - box.left}px`;
+        this.el.style.top = `${c.bottom - box.top + 4}px`;
+        this.el.hidden = false;
+        this.input.value = href;
+        this.input.focus();
+        this.input.select();
+        return true;
+    }
+
+    /** Put a link to `raw` on the selected words, or take the link off when it is empty. */
+    apply(raw: string): void {
+        const { state } = this.view;
+        const { from, to, empty } = state.selection;
+        const type = state.schema.marks.link;
+        if (!empty) {
+            // The Markdown form reads only http(s) targets as links.
+            const href = raw && !/^https?:\/\//i.test(raw) ? `https://${raw}` : raw;
+            const tr = href ? state.tr.addMark(from, to, type.create({ href })) : state.tr.removeMark(from, to, type);
+            if (tr.docChanged) this.view.dispatch(tr);
+        }
+        this.close();
+    }
+
+    close(): void {
+        this.el.hidden = true;
+        this.view.focus();
     }
 }

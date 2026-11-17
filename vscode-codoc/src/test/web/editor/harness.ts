@@ -15,7 +15,7 @@ import { TextSelection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 import { vi } from 'vitest';
 
-import type { Projection, ProjectedBlock, Submission } from '../../../web/calc/projection';
+import { kindOf, pathOf, type Projection, type ProjectedBlock, type Submission } from '../../../web/calc/projection';
 import type { Shadow } from '../../../web/calc/shadow';
 import { mountEditor, type EditorHandle } from '../../../web/editor/editor';
 
@@ -45,11 +45,12 @@ document.elementFromPoint = () => null;
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 let opn = 0;
-export function block(id: string, kind: 'heading' | 'paragraph', text: string, level = 1, head = 1): ProjectedBlock {
+/** A projected block of any heading, prose or source kind, its text minted by one op. */
+export function block(id: string, kind: string, text: string, level = 1, head = 1, extra: Record<string, unknown> = {}): ProjectedBlock {
     const n = Array.from(text).length;
     return { id, kind, level, rank: id, head,
-             fields: { text: { text, runs: n ? [{ op: `s:${id}${opn++}`, k0: 0, start: 0, end: n, actor: 'human:a', at: '1', plan: null }] : [],
-                               spans: [], suggest_del: [] } } };
+             fields: { [pathOf(kind)]: { text, runs: n ? [{ op: `s:${id}${opn++}`, k0: 0, start: 0, end: n, actor: 'human:a', at: '1', plan: null }] : [],
+                                         spans: [], suggest_del: [] }, ...extra } };
 }
 
 /** A projected paragraph built from runs, so a projection can keep the
@@ -65,8 +66,9 @@ export function para(id: string, head: number, parts: Array<[string, { op: strin
              fields: { text: { text: parts.map(x => x[0]).join(''), runs, spans: [], suggest_del: [] } } };
 }
 
-export function kindBlock(id: string, kind = 'diagram'): ProjectedBlock {
-    return { id, kind, level: 0, rank: id, head: 1, fields: { source: { text: 'a->b', runs: [], spans: [], suggest_del: [] } } };
+/** A plugin block, which the editor shows read-only. */
+export function kindBlock(id: string, kind = 'image'): ProjectedBlock {
+    return { id, kind, level: 0, rank: id, head: 1, fields: { asset: 'a.png', caption: { text: '', runs: [], spans: [], suggest_del: [] } } };
 }
 
 export const proj = (blocks: ProjectedBlock[], extra: Partial<Projection> = {}): Projection =>
@@ -152,8 +154,36 @@ export function paste(m: Mounted, paras: string[], headingFirst = false): boolea
     return pasteSlice(m, new Slice(Fragment.from(nodes), 1, 1));
 }
 
-export function pasteSlice(m: Mounted, slice: Slice): boolean {
-    const handled = m.view.someProp('handlePaste', f => f(m.view, new window.Event('paste') as ClipboardEvent, slice)) ?? false;
+/** A paste whose clipboard holds `plain` (and `html`), with the slice
+ *  ProseMirror parses from plain text: one paragraph per line. */
+export function pasteText(m: Mounted, plain: string, html = ''): boolean {
+    const schema = m.view.state.schema;
+    const nodes = plain.split(/\r?\n+/).map(l => schema.nodes.paragraph.create(null, l ? schema.text(l) : undefined));
+    const data = { getData: (t: string) => (t === 'text/plain' ? plain : t === 'text/html' ? html : '') };
+    return pasteSlice(m, new Slice(Fragment.from(nodes), 1, 1), Object.assign(new window.Event('paste'), { clipboardData: data }));
+}
+
+export function pasteSlice(m: Mounted, slice: Slice, event: Event = new window.Event('paste')): boolean {
+    const handled = m.view.someProp('handlePaste', f => f(m.view, event as ClipboardEvent, slice)) ?? false;
     if (!handled) m.view.dispatch(m.view.state.tr.replaceSelection(slice));
     return !!handled;
 }
+
+/** Type `marker` at the start of block `bid`, then a space through the input
+ *  rules, as the keystroke would. Returns whether a rule took the space. */
+export function typeRule(view: EditorView, bid: string, marker: string): boolean {
+    select(view, posIn(view, bid, 0));
+    typeText(view, marker);
+    const at = posIn(view, bid, marker.length);
+    return view.someProp('handleTextInput', f => f(view, at, at, ' ', () => view.state.tr.insertText(' ', at, at))) ?? false;
+}
+
+/** The submissions as op bodies, without client and batch ids. */
+export const bodies = (subs: Submission[]) => subs.map(({ kind, target, payload }) => ({ kind, target, payload }));
+
+/** Each block as its store kind, with `:level` for a heading or a list item. */
+export const shape = (doc: PMNode): string[] => {
+    const out: string[] = [];
+    doc.forEach(n => out.push(n.attrs.level ? `${kindOf(n)}:${n.attrs.level}` : kindOf(n)));
+    return out;
+};

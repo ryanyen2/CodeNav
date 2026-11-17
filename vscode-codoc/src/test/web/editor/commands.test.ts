@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { docFrom } from '../../../web/calc/adopt';
 import { START, type Projection, type ProjectedBlock } from '../../../web/calc/projection';
-import { deleteFeature, headingFromRule, makeHeading, mergeBackward, moveBlock, relevel, splitBlock } from '../../../web/editor/commands';
+import { deleteFeature, indent, mergeBackward, moveBlock, setKind, splitBlock } from '../../../web/editor/commands';
 import { codocSchema } from '../../../web/editor/schema';
 
 const schema = codocSchema();
@@ -64,7 +64,7 @@ describe('structural commands', () => {
     it('## turns a paragraph into a heading and drops the marker characters', () => {
         const { doc, shadows } = docFrom(schema, proj([block('h', 'heading', 'T'), block('p', 'paragraph', '## New')]));
         const state = at(EditorState.create({ schema, doc }), 4 + 3);
-        const g = makeHeading(state, env(shadows), 2, 3)!;
+        const g = setKind(state, env(shadows), 'heading', 2, 3)!;
         expect(g.ops.map(o => o.kind)).toEqual(['text.delete', 'block.set']);
         expect(g.ops[1].payload).toEqual({ value: 'heading', level: 2 });
         expect(g.tr.doc.child(1).type.name).toBe('heading');
@@ -72,12 +72,15 @@ describe('structural commands', () => {
         expect(shadows.get('p')!.text()).toBe('New');
     });
 
-    it('Tab relevels; drag moves a heading with everything it dominates', () => {
+    it('Tab moves a heading in place one level deeper with its range; drag moves a heading with everything it dominates', () => {
         const { doc, shadows } = docFrom(schema, proj([block('a', 'heading', 'A'), block('p', 'paragraph', 'x'),
                                                         block('b', 'heading', 'B', 2), block('q', 'paragraph', 'y'), block('c', 'heading', 'C')]));
         const state = at(EditorState.create({ schema, doc }), 1);
-        const r = relevel(state, env(shadows), 1)!;
-        expect(r.ops).toEqual([{ kind: 'block.set', target: { bid: 'a', path: 'level' }, payload: { value: 2 } }]);
+        const r = indent(state, env(shadows), 1)!;
+        expect(r.ops).toEqual([{ kind: 'block.move', target: { bid: 'a' }, payload: { after: 'START', level_delta: 1 } }]);
+        const levels: number[] = [];
+        r.tr.doc.forEach(n => { if (n.type.name === 'heading') levels.push(n.attrs.level); });
+        expect(levels).toEqual([2, 3, 1]);
         const m = moveBlock(state, env(shadows), 'a', 'c')!;
         expect(m.ops).toEqual([{ kind: 'block.move', target: { bid: 'a' }, payload: { after: 'c', level_delta: 0 } }]);
         expect(ids(m.tr.doc)).toEqual(['heading:c', 'heading:a', 'paragraph:p', 'heading:b', 'paragraph:q']);
@@ -99,7 +102,7 @@ describe('structural commands', () => {
     it('the `## ` rule drops the hashes before the caret and keeps the words after them', () => {
         const { doc, shadows } = docFrom(schema, proj([block('p', 'paragraph', '##abc')]));
         const state = at(EditorState.create({ schema, doc }), 3);     // caret after "##"
-        const g = headingFromRule(state, env(shadows), /^(#{1,6})\s$/.exec('## ')!)!;
+        const g = setKind(state, env(shadows), 'heading', 2, 2)!;
         expect(g.tr.doc.child(0).textContent).toBe('abc');
         expect(g.tr.doc.child(0).type.name).toBe('heading');
         expect(shadows.get('p')!.text()).toBe('abc');

@@ -1,23 +1,26 @@
 /**
- * commands.ts — the structural gestures, each emitting its op and performing
- * the equivalent ProseMirror change (09-editor §4).
+ * commands.ts — the structural gestures, each emitting its ops and performing
+ * the equivalent ProseMirror change.
  *
- * Every command returns `{ tr, ops }` or null when the gesture does not apply
+ * Every command returns `{ tr, ops }`, or null when the gesture does not apply
  * (the keymap then lets the caret move or does nothing). The transaction is
- * tagged `RECORDED` so the recorder plugin skips it: the ops here are the
- * record. Shadows are advanced in step with the document.
+ * tagged `RECORDED` so the recorder skips it: the ops here are the record.
+ * Shadows are advanced in step with the document. Each op is one the applier
+ * accepts (docs/model.md, "Block ops"): only heading and prose blocks split,
+ * merge or change kind; a heading never merges with anything; a source or
+ * plugin block keeps its kind for life.
  *
- * The rules a gesture may not break: a heading never merges with prose in
- * either direction; a heading disappears only through `deleteFeature`; the
- * half of a split that keeps the block's id is the half that keeps its text.
+ * A gesture that is not performed for a reason the person should know says so
+ * through `Env.refuse`.
  */
-import type { Node as PMNode, Slice } from '@tiptap/pm/model';
-import { type EditorState, TextSelection, type Transaction } from '@tiptap/pm/state';
+import type { Node as PMNode } from '@tiptap/pm/model';
+import { type EditorState, Selection, TextSelection, type Transaction } from '@tiptap/pm/state';
 
-import { START, nfc, type OpBody } from '../calc/projection';
-import { scalarOffset } from '../calc/recorder';
+import { ITEMS, PROSE, SOURCE, START, isOneLine, kindOf, nfc, pathOf, type CharRef, type OpBody, type Span } from '../calc/projection';
+import { inlineNodes } from '../calc/adopt';
+import { SENT_MARKS, scalarOffset } from '../calc/recorder';
 import { Shadow } from '../calc/shadow';
-import { MAX_LEVEL } from './schema';
+import { MAX_LEVEL, clampLevel } from './schema';
 
 /** Transaction meta: the ops that record this transaction. The recorder skips
  *  a transaction that carries it, and the structural guard lets it through.
@@ -37,7 +40,14 @@ export interface Env {
     shadows: Map<string, Shadow>;
     nextBid: () => string;
     nextCid: () => string;
+    /** Told why a gesture was not performed; the page shows it as a one-line notice. */
+    refuse?: (why: string) => void;
 }
+
+/** One block as it arrives in a paste: inline Markdown already read into
+ *  plain `text` and `spans` for a heading or prose kind, raw text for a source
+ *  kind, whose `content` holds `lang` or `derived`. */
+export interface Piece { kind: string; level: number; text: string; spans: Span[]; content: Record<string, unknown> }
 
 function blockAt(state: EditorState, pos: number): { node: PMNode; pos: number; index: number } | null {
     const $p = state.doc.resolve(pos);
@@ -45,8 +55,8 @@ function blockAt(state: EditorState, pos: number): { node: PMNode; pos: number; 
     return { node: $p.node(1), pos: $p.before(1), index: $p.index(0) };
 }
 
-function tag(tr: Transaction, ops: OpBody[], cids: string[] = []): Transaction {
-    return tr.setMeta(RECORDED, ops).setMeta(GESTURE_CIDS, cids).setMeta('addToHistory', false);
+function done(tr: Transaction, ops: OpBody[], cids: string[] = []): Gesture {
+    return { tr: tr.setMeta(RECORDED, ops).setMeta(GESTURE_CIDS, cids).setMeta('addToHistory', false), ops, cids };
 }
 
 /** The position just past the top-level block with this id. */
@@ -56,6 +66,21 @@ function blockEnd(doc: PMNode, bid: string): number {
     return end;
 }
 
+const isLevelled = (kind: string): boolean => kind === 'heading' || ITEMS.has(kind);
+
+/** Node attributes for a heading or prose block of `kind`. */
+const lineAttrs = (kind: string, bid: string, head: number, level: number) =>
+    (isLevelled(kind) ? { bid, head, level } : { bid, head });
+
+/** A `text.delete` of the first `n` characters of a block, by identity. */
+function dropStart(bid: string, shadow: Shadow, n: number): OpBody {
+    const refs = shadow.delete(0, n);
+    return { kind: 'text.delete', target: { bid, path: 'text' }, payload: { from: refs[0], to: refs[n - 1] } };
+}
+
+/** The UTF-16 length of the first `n` scalars of `text`. */
+const units = (text: string, n: number): number => Array.from(text).slice(0, n).join('').length;
+
 /** The top-level blocks a selection touches, with the part of each it covers. */
 export function selectedBlocks(state: EditorState): Array<{ node: PMNode; pos: number; index: number; from: number; to: number }> {
     const { from, to } = state.selection;
@@ -63,67 +88,108 @@ export function selectedBlocks(state: EditorState): Array<{ node: PMNode; pos: n
     state.doc.forEach((node, pos, index) => {
         const start = pos + 1, end = pos + node.nodeSize - 1;
         if (end < from || start > to) return;
-        out.push({ node, pos, index, from: Math.max(from, start) - start, to: Math.min(to, end) - start });
+        out.push({ node, pos, index, from: Math.max(0, Math.max(from, start) - start), to: Math.max(0, Math.min(to, end) - start) });
     });
     return out;
 }
 
 /**
- * Delete what is selected, across blocks, as ops: the covered text of every
- * block it touches, the whole paragraphs it swallows, and a merge of the two
- * ends when both are paragraphs. A selection that touches a heading's title is
- * refused (`null`): a feature disappears only through `deleteFeature`, which is
- * the rule that keeps "why is this heading absent" from being a question.
+ * Delete what is selected, as ops. Inside one block, the covered text. Across
+ * blocks: the covered text of the first and the last block, a `block.delete`
+ * of every block between, and a `block.merge` of the last into the first when
+ * both are prose. A heading at either end is left alone when none of its
+ * characters is selected and deleted when all of them are; a selection that
+ * covers part of a heading is refused, because the rest of it could not join
+ * anything. A source block wholly selected at an end is deleted; partly
+ * selected, it loses the covered text. A selection that would take every
+ * block, or every feature, is refused.
  */
 export function deleteSelection(state: EditorState, env: Env): Gesture | null {
     if (state.selection.empty) return null;
     const parts = selectedBlocks(state);
     if (!parts.length) return null;
-    if (parts.length > 1 && parts.some(p => p.node.type.name === 'heading')) return null;
-    // Refuse before any shadow moves. A block with no shadow (a kind block in
-    // the middle of the selection) found after earlier shadows had advanced
-    // would leave those blocks saying one thing on the page and another to
-    // the store.
-    if (parts.some(p => !env.shadows.get(p.node.attrs.bid as string))) return null;
+    const refuse = (why: string): null => { env.refuse?.(why); return null; };
+    const last = parts.length - 1;
+    type Fate = 'cut' | 'delete' | 'keep';
+    const fates: Fate[] = [];
+    for (const [i, p] of parts.entries()) {
+        const kind = kindOf(p.node);
+        const covered = p.to > p.from;
+        const whole = covered && p.from === 0 && p.to === p.node.content.size;
+        if (p.node.isAtom || (i > 0 && i < last)) fates.push('delete');
+        else if (parts.length === 1) fates.push('cut');
+        else if (kind === 'heading') {
+            if (covered && !whole) return refuse('a selection that covers part of a heading is not deleted; select the whole heading');
+            fates.push(whole ? 'delete' : 'keep');
+        } else fates.push(SOURCE.has(kind) && whole ? 'delete' : 'cut');
+    }
+    if (parts.length === 1 && !env.shadows.get(parts[0].node.attrs.bid as string)) return null;
+    const gone = parts.filter((_p, i) => fates[i] === 'delete');
+    let headings = 0;
+    state.doc.forEach(n => { if (n.type.name === 'heading') headings++; });
+    if (gone.length === state.doc.childCount) return refuse('a selection that takes every block is not deleted');
+    if (headings && gone.filter(p => p.node.type.name === 'heading').length === headings) {
+        return refuse('a selection that takes every feature is not deleted');
+    }
+    const first = parts[0], tail = parts[last];
+    const merge = parts.length > 1 && fates[0] === 'cut' && fates[last] === 'cut'
+        && PROSE.has(kindOf(first.node)) && PROSE.has(kindOf(tail.node));
+
+    // Text first, by identity, before any shadow moves.
     const ops: OpBody[] = [];
-    // Text first, by identity, before any position moves.
-    for (const part of parts) {
-        const bid = part.node.attrs.bid as string;
+    for (const [i, p] of parts.entries()) {
+        if (fates[i] !== 'cut' || p.to <= p.from) continue;
+        const bid = p.node.attrs.bid as string;
         const shadow = env.shadows.get(bid)!;
-        const a = scalarOffset(part.node, part.from), z = scalarOffset(part.node, part.to);
-        if (z <= a) continue;
-        const refs = shadow.delete(a, z);
-        ops.push({ kind: 'text.delete', target: { bid, path: 'text' }, payload: { from: refs[0], to: refs[refs.length - 1] } });
+        const refs = shadow.delete(scalarOffset(p.node, p.from), scalarOffset(p.node, p.to));
+        if (refs.length) ops.push({ kind: 'text.delete', target: { bid, path: pathOf(kindOf(p.node)) }, payload: { from: refs[0], to: refs[refs.length - 1] } });
     }
-    const [head, ...rest] = parts;
-    const tailPart = rest[rest.length - 1];
-    // Whole blocks between the ends go; the two ends become one.
-    for (const mid of rest.slice(0, -1)) {
-        ops.push({ kind: 'block.delete', target: { bid: mid.node.attrs.bid }, payload: {} });
-        env.shadows.delete(mid.node.attrs.bid as string);
+    // One delete per block, naming it alone: a heading taken this way leaves
+    // the blocks after it to the feature before.
+    for (const p of gone) {
+        const bid = p.node.attrs.bid as string;
+        ops.push({ kind: 'block.delete', target: { bid }, payload: { ids: [bid] } });
+        env.shadows.delete(bid);
     }
-    if (tailPart) {
-        const into = head.node.attrs.bid as string, dying = tailPart.node.attrs.bid as string;
+    if (merge) {
+        const into = first.node.attrs.bid as string, dying = tail.node.attrs.bid as string;
         ops.push({ kind: 'block.merge', target: { into, bid: dying, path: 'text' }, payload: {} });
         env.shadows.get(into)!.append(env.shadows.get(dying)!);
         env.shadows.delete(dying);
     }
-    let tr = state.tr.deleteSelection();
-    if (tailPart) {
-        // ProseMirror joins the ends for us; make sure the survivor keeps the
-        // head's id (the calculus merged into it).
-        const $c = tr.doc.resolve(tr.selection.from);
-        if ($c.depth >= 1) tr = tr.setNodeMarkup($c.before(1), undefined, { ...head.node.attrs });
+
+    // The page: the two ends as they now read, nothing between.
+    const cut = (p: typeof first) => p.node.copy(p.node.content.cut(0, p.from).append(p.node.content.cut(p.to)));
+    const ends: PMNode[] = [];
+    let caret = -1;              // offset into `ends` where the caret goes
+    if (parts.length === 1 || merge) {
+        ends.push(first.node.copy(first.node.content.cut(0, first.from).append(tail.node.content.cut(tail.to))));
+        caret = 1 + first.from;
+    } else {
+        if (fates[0] !== 'delete') {
+            ends.push(fates[0] === 'cut' ? cut(first) : first.node);
+            if (fates[0] === 'cut') caret = 1 + first.from;
+        }
+        if (fates[last] !== 'delete') {
+            if (caret < 0) caret = (ends[0]?.nodeSize ?? 0) + 1;
+            ends.push(fates[last] === 'cut' ? cut(tail) : tail.node);
+        } else if (caret < 0 && ends.length) {
+            caret = ends[0].nodeSize - 1;          // the end of a heading left alone
+        }
     }
-    return { tr: tag(tr, ops), ops, cids: [] };
+    const start = first.pos, end = tail.pos + tail.node.nodeSize;
+    let tr = state.tr.replaceWith(start, end, ends);
+    tr = tr.setSelection(caret >= 0 ? TextSelection.create(tr.doc, start + caret) : Selection.near(tr.doc.resolve(Math.min(start, tr.doc.content.size))));
+    return done(tr, ops);
 }
 
-/** Enter: split the caret's block. */
+/** Enter: split the caret's heading or prose block. A list item splits into
+ *  two items at the same level, a heading into a heading and a paragraph. */
 export function splitBlock(state: EditorState, env: Env): Gesture | null {
     const { from, empty } = state.selection;
     if (!empty) return null;
     const b = blockAt(state, from);
-    if (!b) return null;
+    if (!b || !isOneLine(kindOf(b.node))) return null;
     const bid = b.node.attrs.bid as string;
     const shadow = env.shadows.get(bid);
     if (!shadow) return null;
@@ -149,10 +215,9 @@ export function splitBlock(state: EditorState, env: Env): Gesture | null {
         tr = tr.setNodeMarkup(tailStart, undefined, { ...tr.doc.nodeAt(tailStart)!.attrs, bid: nid, head: 0 });
     }
     // Splitting a heading yields a heading and a paragraph, and the heading is
-    // the half that keeps its text — so when the new block comes first, it is
+    // the half that keeps its text, so when the new block comes first it is
     // the new one that is the paragraph.
     if (isHeading && newFirst) {
-        // Empty head before a heading's text: the new empty block is a paragraph before the heading.
         tr = tr.setNodeMarkup(headPos, state.schema.nodes.paragraph, { bid: nid, head: 0 });
         tr = tr.setNodeMarkup(tailStart, state.schema.nodes.heading, { bid, head: b.node.attrs.head, level: b.node.attrs.level });
     }
@@ -160,11 +225,10 @@ export function splitBlock(state: EditorState, env: Env): Gesture | null {
     if (newFirst) { env.shadows.set(nid, shadow); env.shadows.set(bid, tail); }
     else env.shadows.set(nid, tail);
     tr = tr.setSelection(TextSelection.create(tr.doc, tailStart + 1));
-    const ops: OpBody[] = [{ kind: 'block.split', target: { bid, path: 'text' }, payload: { at, new: nid } }];
-    return { tr: tag(tr, ops), ops, cids: [] };
+    return done(tr, [{ kind: 'block.split', target: { bid, path: 'text' }, payload: { at, new: nid } }]);
 }
 
-/** Backspace at the start of a paragraph: merge into the previous paragraph. */
+/** Backspace at the start of a prose block: merge it into the prose block before. */
 export function mergeBackward(state: EditorState, env: Env): Gesture | null {
     const { from, empty } = state.selection;
     if (!empty) return null;
@@ -172,11 +236,11 @@ export function mergeBackward(state: EditorState, env: Env): Gesture | null {
     if ($from.depth !== 1 || $from.parentOffset !== 0 || $from.index(0) === 0) return null;
     const cur = $from.node(1);
     const prev = state.doc.child($from.index(0) - 1);
-    if (cur.type.name !== 'paragraph' || prev.type.name !== 'paragraph') return null;
+    if (!PROSE.has(kindOf(cur)) || !PROSE.has(kindOf(prev))) return null;
     return merge(state, env, prev, $from.before(1) - prev.nodeSize, cur, $from.before(1));
 }
 
-/** Delete at the end of a paragraph: merge the next paragraph into it. */
+/** Delete at the end of a prose block: merge the prose block after into it. */
 export function mergeForward(state: EditorState, env: Env): Gesture | null {
     const { from, empty } = state.selection;
     if (!empty) return null;
@@ -186,90 +250,188 @@ export function mergeForward(state: EditorState, env: Env): Gesture | null {
     if (idx + 1 >= state.doc.childCount) return null;
     const cur = $from.node(1);
     const next = state.doc.child(idx + 1);
-    if (cur.type.name !== 'paragraph' || next.type.name !== 'paragraph') return null;
+    if (!PROSE.has(kindOf(cur)) || !PROSE.has(kindOf(next))) return null;
     return merge(state, env, cur, $from.before(1), next, $from.after(1));
 }
 
+/** Merge `dying` into `into`. When `into` is an empty paragraph it is deleted
+ *  instead, so the block with the words keeps its id and its kind. */
 function merge(state: EditorState, env: Env, into: PMNode, intoPos: number, dying: PMNode, dyingPos: number): Gesture | null {
     const a = env.shadows.get(into.attrs.bid as string);
     const b = env.shadows.get(dying.attrs.bid as string);
     if (!a || !b) return null;
-    const joinAt = dyingPos;   // the boundary between the two blocks
+    if (into.type.name === 'paragraph' && a.length === 0) {
+        let tr = state.tr.delete(intoPos, intoPos + into.nodeSize);
+        tr = tr.setSelection(TextSelection.create(tr.doc, tr.mapping.map(dyingPos) + 1));
+        env.shadows.delete(into.attrs.bid as string);
+        return done(tr, [{ kind: 'block.delete', target: { bid: into.attrs.bid }, payload: {} }]);
+    }
     const caret = intoPos + into.nodeSize - 1;
-    let tr = state.tr.join(joinAt);
+    let tr = state.tr.join(dyingPos);
     tr = tr.setSelection(TextSelection.create(tr.doc, caret));
     a.append(b);
     env.shadows.delete(dying.attrs.bid as string);
-    const ops: OpBody[] = [{ kind: 'block.merge', target: { into: into.attrs.bid, bid: dying.attrs.bid, path: 'text' }, payload: {} }];
-    return { tr: tag(tr, ops), ops, cids: [] };
-}
-
-/** Turn the caret's block into a heading of `level` (the `## ` input rule),
- *  dropping the typed marker characters `markerLen` scalars long at the start. */
-export function makeHeading(state: EditorState, env: Env, level: number, markerLen: number): Gesture | null {
-    const b = blockAt(state, state.selection.from);
-    if (!b) return null;
-    const bid = b.node.attrs.bid as string;
-    const shadow = env.shadows.get(bid);
-    if (!shadow) return null;
-    const ops: OpBody[] = [];
-    let tr = state.tr;
-    if (markerLen > 0) {
-        const refs = shadow.delete(0, markerLen);
-        ops.push({ kind: 'text.delete', target: { bid, path: 'text' }, payload: { from: refs[0], to: refs[refs.length - 1] } });
-        tr = tr.delete(b.pos + 1, b.pos + 1 + markerLen);
-    }
-    const lvl = Math.min(MAX_LEVEL, Math.max(1, level));
-    ops.push({ kind: 'block.set', target: { bid, path: 'kind' }, payload: { value: 'heading', level: lvl } });
-    tr = tr.setNodeMarkup(b.pos, state.schema.nodes.heading, { bid, head: b.node.attrs.head, level: lvl });
-    return { tr: tag(tr, ops), ops, cids: [] };
-}
-
-/** Turn the caret's heading back into a paragraph (the `/` menu), dropping
- *  the typed marker characters. A heading with a body keeps its body: the
- *  paragraphs simply join the previous feature. */
-export function makeParagraph(state: EditorState, env: Env, markerLen: number): Gesture | null {
-    const b = blockAt(state, state.selection.from);
-    if (!b) return null;
-    const bid = b.node.attrs.bid as string;
-    const shadow = env.shadows.get(bid);
-    if (!shadow) return null;
-    const ops: OpBody[] = [];
-    let tr = state.tr;
-    if (markerLen > 0) {
-        const refs = shadow.delete(0, markerLen);
-        ops.push({ kind: 'text.delete', target: { bid, path: 'text' }, payload: { from: refs[0], to: refs[refs.length - 1] } });
-        tr = tr.delete(b.pos + 1, b.pos + 1 + markerLen);
-    }
-    if (b.node.type.name === 'heading') {
-        ops.push({ kind: 'block.set', target: { bid, path: 'kind' }, payload: { value: 'paragraph' } });
-        tr = tr.setNodeMarkup(b.pos, state.schema.nodes.paragraph, { bid, head: b.node.attrs.head });
-    }
-    if (!ops.length) return null;
-    return { tr: tag(tr, ops), ops, cids: [] };
+    return done(tr, [{ kind: 'block.merge', target: { into: into.attrs.bid, bid: dying.attrs.bid, path: 'text' }, payload: {} }]);
 }
 
 /**
- * The `## ` input rule: the hashes are already in the document (the space that
- * completed the rule is not), so exactly the hashes are dropped, by identity,
- * and the block becomes a heading of that level.
+ * Backspace or Delete in an empty block that has nothing to merge with on that
+ * side: an empty paragraph next to a heading, a source or a plugin block, or
+ * an empty source block next to anything. The block is deleted and the caret
+ * goes into its neighbour.
  */
-export function headingFromRule(state: EditorState, env: Env, match: RegExpMatchArray): Gesture | null {
-    const hashes = match[1].length;
-    const b = blockAt(state, state.selection.from);
-    if (!b || !env.shadows.get(b.node.attrs.bid as string)) return null;
-    return makeHeading(state, env, hashes, hashes);
+export function removeEmpty(state: EditorState, env: Env, dir: 'back' | 'forward'): Gesture | null {
+    const { $from, empty } = state.selection;
+    if (!empty || $from.depth !== 1 || $from.parent.content.size || state.doc.childCount < 2) return null;
+    const cur = $from.parent;
+    const kind = kindOf(cur);
+    if (kind !== 'paragraph' && !SOURCE.has(kind)) return null;
+    const n = $from.index(0) + (dir === 'back' ? -1 : 1);
+    if (n < 0 || n >= state.doc.childCount) return null;
+    if (kind === 'paragraph' && PROSE.has(kindOf(state.doc.child(n)))) return null;   // a merge does this
+    const bid = cur.attrs.bid as string;
+    if (!env.shadows.get(bid)) return null;
+    let tr = state.tr.delete($from.before(1), $from.after(1));
+    const near = dir === 'back' ? $from.before(1) - 1 : tr.mapping.map($from.after(1) + 1);
+    tr = tr.setSelection(Selection.near(tr.doc.resolve(Math.max(0, Math.min(near, tr.doc.content.size))), dir === 'back' ? -1 : 1));
+    env.shadows.delete(bid);
+    return done(tr, [{ kind: 'block.delete', target: { bid }, payload: {} }]);
 }
 
-/** Tab / Shift-Tab on a heading: one level deeper or shallower. */
-export function relevel(state: EditorState, _env: Env, delta: number): Gesture | null {
+/**
+ * Turn the caret's block into `kind`, a heading or a prose kind, dropping its
+ * first `markerUnits` UTF-16 units: the typed `## `, `- ` or `1. ` of an input
+ * rule, or the `/query` of the menu. `level` defaults to the block's own when
+ * a list item becomes the other list kind, and to 1 otherwise.
+ */
+export function setKind(state: EditorState, env: Env, kind: string, level?: number, markerUnits = 0): Gesture | null {
     const b = blockAt(state, state.selection.from);
-    if (!b || b.node.type.name !== 'heading') return null;
-    const level = Math.min(MAX_LEVEL, Math.max(1, (b.node.attrs.level as number) + delta));
-    if (level === b.node.attrs.level) return null;
-    const ops: OpBody[] = [{ kind: 'block.set', target: { bid: b.node.attrs.bid, path: 'level' }, payload: { value: level } }];
-    const tr = state.tr.setNodeMarkup(b.pos, undefined, { ...b.node.attrs, level });
-    return { tr: tag(tr, ops), ops, cids: [] };
+    if (!b || !isOneLine(kind) || !isOneLine(kindOf(b.node))) return null;
+    const bid = b.node.attrs.bid as string;
+    const shadow = env.shadows.get(bid);
+    if (!shadow) return null;
+    const cur = kindOf(b.node);
+    const lvl = !isLevelled(kind) ? 0
+        : clampLevel(level ?? (ITEMS.has(cur) && ITEMS.has(kind) ? b.node.attrs.level as number : 1));
+    const ops: OpBody[] = [];
+    let tr = state.tr;
+    const marker = scalarOffset(b.node, markerUnits);
+    if (marker > 0) {
+        ops.push(dropStart(bid, shadow, marker));
+        tr = tr.delete(b.pos + 1, b.pos + 1 + markerUnits);
+    }
+    if (cur !== kind || (lvl && lvl !== b.node.attrs.level)) {
+        ops.push({ kind: 'block.set', target: { bid, path: 'kind' }, payload: lvl ? { value: kind, level: lvl } : { value: kind } });
+        tr = tr.setNodeMarkup(b.pos, state.schema.nodes[kind], lineAttrs(kind, bid, b.node.attrs.head as number, lvl));
+    }
+    return ops.length ? done(tr, ops) : null;
+}
+
+/**
+ * A table, a diagram or a code block at the caret. When the caret's block is
+ * a paragraph holding nothing but the marker (```` ``` ````, a `|` row, or a
+ * `/query`), the paragraph is replaced: deleted, and the new block added after
+ * the block before it, in one batch, because a paragraph cannot become a
+ * source block. Otherwise the marker is dropped and the new block is added
+ * after the caret's block. `source` is the new block's first text.
+ */
+export function insertSource(state: EditorState, env: Env, kind: string, content: Record<string, unknown> = {},
+                             source = '', markerUnits = 0): Gesture | null {
+    const b = blockAt(state, state.selection.from);
+    if (!b || !SOURCE.has(kind) || !isOneLine(kindOf(b.node))) return null;
+    const bid = b.node.attrs.bid as string;
+    const shadow = env.shadows.get(bid);
+    if (!shadow) return null;
+    const marker = scalarOffset(b.node, markerUnits);
+    const replace = kindOf(b.node) === 'paragraph' && marker === shadow.length;
+    const text = nfc(source);
+    const nb = env.nextBid();
+    const node = state.schema.nodes.source.create({ bid: nb, head: 0, kind, lang: content.lang ?? null, derived: content.derived === true },
+                                                  text ? state.schema.text(text) : undefined);
+    const ops: OpBody[] = [];
+    let tr = state.tr;
+    let at: number;
+    if (replace) {
+        const prev = b.index > 0 ? state.doc.child(b.index - 1).attrs.bid as string : START;
+        ops.push({ kind: 'block.delete', target: { bid }, payload: {} });
+        ops.push({ kind: 'block.add', target: { bid: nb }, payload: { kind, after: prev, content } });
+        tr = tr.replaceWith(b.pos, b.pos + b.node.nodeSize, node);
+        env.shadows.delete(bid);
+        at = b.pos;
+    } else {
+        if (marker > 0) {
+            ops.push(dropStart(bid, shadow, marker));
+            tr = tr.delete(b.pos + 1, b.pos + 1 + markerUnits);
+        }
+        ops.push({ kind: 'block.add', target: { bid: nb }, payload: { kind, after: bid, content } });
+        at = b.pos + b.node.nodeSize - markerUnits;
+        tr = tr.insert(at, node);
+    }
+    const sh = new Shadow();
+    const cids: string[] = [];
+    if (text) {
+        const cid = env.nextCid();
+        ops.push({ kind: 'text.insert', target: { bid: nb, path: 'source' }, payload: { after: START, text } });
+        cids.push(cid);
+        sh.insert(0, text, cid);
+    }
+    env.shadows.set(nb, sh);
+    tr = tr.setSelection(TextSelection.create(tr.doc, at + 1 + node.content.size));
+    return done(tr, ops, cids);
+}
+
+/** Enter at the end of a paragraph that holds only ```` ```lang ```` or a
+ *  `|` row: the paragraph becomes a code block (a diagram for `mermaid`) or
+ *  a table holding that row. */
+export function sourceFromMarker(state: EditorState, env: Env): Gesture | null {
+    const { $from, empty } = state.selection;
+    if (!empty || $from.depth !== 1 || $from.parent.type.name !== 'paragraph' || $from.parentOffset !== $from.parent.content.size) return null;
+    const text = $from.parent.textContent;
+    const fence = /^```\s*([^\s`]*)\s*$/.exec(text);
+    if (fence) {
+        const lang = fence[1];
+        return lang === 'mermaid' ? insertSource(state, env, 'diagram', {}, '', text.length)
+            : insertSource(state, env, 'code', lang ? { lang } : {}, '', text.length);
+    }
+    if (text.startsWith('|')) return insertSource(state, env, 'table', {}, text, text.length);
+    return null;
+}
+
+/** An empty paragraph after the caret's block: the way out of a source block. */
+export function paragraphAfter(state: EditorState, env: Env): Gesture | null {
+    const b = blockAt(state, state.selection.from);
+    if (!b || !b.node.attrs.bid) return null;
+    const nb = env.nextBid();
+    const at = b.pos + b.node.nodeSize;
+    let tr = state.tr.insert(at, state.schema.nodes.paragraph.create({ bid: nb, head: 0 }));
+    tr = tr.setSelection(TextSelection.create(tr.doc, at + 1));
+    env.shadows.set(nb, new Shadow());
+    return done(tr, [{ kind: 'block.add', target: { bid: nb }, payload: { kind: 'paragraph', after: b.node.attrs.bid } }]);
+}
+
+/**
+ * Tab / Shift-Tab. A list item goes one level deeper or shallower. A heading
+ * does too, with everything under it: a `block.move` of the heading to where
+ * it already is, after the block before it, with `level_delta`, which the
+ * applier applies to every heading in the range. Anything else: null.
+ */
+export function indent(state: EditorState, env: Env, delta: 1 | -1): Gesture | null {
+    const b = blockAt(state, state.selection.from);
+    if (!b) return null;
+    const kind = kindOf(b.node);
+    const level = (b.node.attrs.level as number) + delta;
+    if (!isLevelled(kind) || level < 1 || level > MAX_LEVEL) return null;
+    const bid = b.node.attrs.bid as string;
+    if (ITEMS.has(kind)) {
+        const tr = state.tr.setNodeMarkup(b.pos, undefined, { ...b.node.attrs, level });
+        return done(tr, [{ kind: 'block.set', target: { bid, path: 'level' }, payload: { value: level } }]);
+    }
+    const after = b.index > 0 ? state.doc.child(b.index - 1).attrs.bid as string : START;
+    const g = moveBlock(state, env, bid, after, delta);
+    if (!g) return null;
+    const { anchor, head } = state.selection;
+    g.tr.setSelection(TextSelection.create(g.tr.doc, anchor, head));
+    return g;
 }
 
 /** The blocks a heading dominates in the document: itself and every following
@@ -286,48 +448,49 @@ function dominatedRange(doc: PMNode, index: number): [number, number] {
     return [index, end];
 }
 
-/** Drag: move a block (with what it dominates) to just after `afterBid` (or START). */
-export function moveBlock(state: EditorState, _env: Env, bid: string, afterBid: string | 'START', levelDelta = 0): Gesture | null {
+/** Move a block (with what it dominates) to just after `afterBid` (or START). */
+export function moveBlock(state: EditorState, _env: Env, bid: string, afterBid: string, levelDelta = 0): Gesture | null {
     const doc = state.doc;
     let idx = -1, afterIdx = -1;
     doc.forEach((n, _pos, i) => { if (n.attrs.bid === bid) idx = i; if (n.attrs.bid === afterBid) afterIdx = i; });
-    if (idx < 0 || (afterBid !== 'START' && afterIdx < 0)) return null;
+    if (idx < 0 || (afterBid !== START && afterIdx < 0)) return null;
     const [s, e] = dominatedRange(doc, idx);
-    if (afterBid !== 'START' && afterIdx >= s && afterIdx < e) return null;
+    if (afterBid !== START && afterIdx >= s && afterIdx < e) return null;
     const nodes: PMNode[] = [];
     let start = 0, end = 0;
     doc.forEach((n, pos, i) => { if (i === s) start = pos; if (i === e - 1) end = pos + n.nodeSize; if (i >= s && i < e) nodes.push(n); });
     const moved = nodes.map(n => n.type.name === 'heading' && levelDelta
-        ? n.type.create({ ...n.attrs, level: Math.min(MAX_LEVEL, Math.max(1, n.attrs.level + levelDelta)) }, n.content, n.marks)
+        ? n.type.create({ ...n.attrs, level: clampLevel(n.attrs.level + levelDelta) }, n.content, n.marks)
         : n);
-    let tr = state.tr.delete(start, end);
-    let insertAt: number;
-    if (afterBid === 'START') insertAt = 0;
-    else {
-        let p = -1;
-        tr.doc.forEach((n, pos) => { if (n.attrs.bid === afterBid) p = pos + n.nodeSize; });
-        insertAt = p;
+    let tr = state.tr;
+    if (afterBid === START ? s === 0 : afterIdx === s - 1) {
+        // In place: one replace. Deleting first could empty the document,
+        // which ProseMirror refills with a block of its own.
+        tr = tr.replaceWith(start, end, moved);
+    } else {
+        tr = tr.delete(start, end);
+        let insertAt = 0;
+        if (afterBid !== START) tr.doc.forEach((n, pos) => { if (n.attrs.bid === afterBid) insertAt = pos + n.nodeSize; });
+        tr = tr.insert(insertAt, moved);
     }
-    tr = tr.insert(insertAt, moved);
-    const ops: OpBody[] = [{ kind: 'block.move', target: { bid }, payload: { after: afterBid, level_delta: levelDelta } }];
-    return { tr: tag(tr, ops), ops, cids: [] };
+    return done(tr, [{ kind: 'block.move', target: { bid }, payload: { after: afterBid, level_delta: levelDelta } }]);
 }
 
-/** Delete a feature: its heading and own body; its children are promoted one
- *  level. Its bindings are detached by the applier, which records them so an
- *  undo re-attaches (spec §3); this gesture must not send its own detaches. */
+/** Delete a feature: its heading and own body; its child headings go up one
+ *  level. The applier detaches its bindings and records them, so an undo
+ *  re-attaches; this gesture sends no detach of its own. */
 export function deleteFeature(state: EditorState, env: Env, fid: string): Gesture | null {
     const doc = state.doc;
     let idx = -1;
     doc.forEach((n, _p, i) => { if (n.attrs.bid === fid) idx = i; });
     if (idx < 0 || doc.child(idx).type.name !== 'heading') return null;
-    // Own body: heading + following paragraphs.
+    // Own body: the heading and the blocks after it up to the next heading.
     let end = idx + 1;
     while (end < doc.childCount && doc.child(end).type.name !== 'heading') end++;
     // Never empty the tree by one gesture. The check is on the range, not on
     // the result: the schema says a document is `block+`, so ProseMirror refills
     // an emptied one with a default block and `childCount === 0` is never true.
-    if (end - idx >= doc.childCount) return null;
+    if (end - idx >= doc.childCount) { env.refuse?.('the only feature cannot be deleted'); return null; }
     const [, domEnd] = dominatedRange(doc, idx);
     const ops: OpBody[] = [{ kind: 'block.delete', target: { bid: fid }, payload: {} }];
     let tr = state.tr;
@@ -345,68 +508,108 @@ export function deleteFeature(state: EditorState, env: Env, fid: string): Gestur
     doc.forEach((n, pos, i) => { if (i === idx) start = pos; if (i === end - 1) stop = pos + n.nodeSize; });
     tr = tr.delete(start, stop);
     for (let i = idx; i < end; i++) env.shadows.delete(doc.child(i).attrs.bid as string);
-    return { tr: tag(tr, ops), ops, cids: [] };
+    return done(tr, ops);
 }
 
-/** A paste whose slice holds more than one block: the first paragraph's text
- *  joins the caret's block, and every further paragraph is a block of its own
- *  (`09-editor.md` §4). The person is the author of all of it. */
-export function pasteBlocks(state: EditorState, env: Env, slice: Slice): Gesture | null {
-    // NFC at the door, like every other text that becomes an op (01 §2): the
-    // shadow and the store compose it, and a page left holding the decomposed
-    // form disagrees with both about how many characters are there.
-    const paras: string[] = [];
-    slice.content.forEach(node => { if (node.isBlock) paras.push(nfc(node.textBetween(0, node.content.size, '\n'))); });
-    if (paras.length < 2) return null;
-    const b = blockAt(state, state.selection.from);
-    if (!b || !env.shadows.get(b.node.attrs.bid as string)) return null;
+/**
+ * A paste, as ops. The selection is deleted first (`deleteSelection`). In a
+ * source block the pieces' text lands as lines. Otherwise a first piece that
+ * is a heading or prose joins the caret's block as typed text would, with its
+ * marks, and an empty paragraph takes that piece's kind; every further piece
+ * is a block of its own after it. The person is the author of all of it.
+ * Pieces are NFC (paste.ts), as the applier records text.
+ */
+export function pasteBlocks(state: EditorState, env: Env, pieces: Piece[]): Gesture | null {
+    if (!pieces.length) return null;
     const ops: OpBody[] = [];
     const cids: string[] = [];
     let tr = state.tr;
-    let cut: Gesture | null = null;
     if (!state.selection.empty) {
-        cut = deleteSelection(state, env);
+        const cut = deleteSelection(state, env);
         if (!cut) return null;
         ops.push(...cut.ops);
         tr = cut.tr;
     }
     const $at = tr.doc.resolve(tr.selection.from);
-    const host = $at.node(1);
-    const bid = host.attrs.bid as string;
-    const shadow = env.shadows.get(bid)!;
+    const host = $at.depth >= 1 ? $at.node(1) : null;
+    const bid = host?.attrs.bid as string | undefined;
+    const shadow = bid ? env.shadows.get(bid) : undefined;
+    if (!host || !bid || !shadow) return ops.length ? done(tr, ops) : null;
+    const hostKind = kindOf(host);
     const off = scalarOffset(host, $at.parentOffset);
-    // The first paragraph lands in the caret's block, as typed text would.
-    if (paras[0]) {
+    const caret = tr.selection.from;
+    const insertHere = (text: string, path: string): string => {
         const cid = env.nextCid();
-        ops.push({ kind: 'text.insert', target: { bid, path: 'text' }, payload: { after: shadow.anchorBefore(off), text: paras[0] } });
+        ops.push({ kind: 'text.insert', target: { bid, path }, payload: { after: shadow.anchorBefore(off), text } });
         cids.push(cid);
-        shadow.insert(off, paras[0], cid);
-        tr = tr.insertText(paras[0], tr.selection.from);
+        shadow.insert(off, text, cid);
+        tr = tr.insertText(text, caret);
+        return cid;
+    };
+
+    if (SOURCE.has(hostKind)) {
+        const text = pieces.map(p => p.text).join('\n');
+        if (text) insertHere(text, 'source');
+        return done(tr.setSelection(TextSelection.create(tr.doc, caret + text.length)), ops, cids);
     }
+
+    let rest = pieces;
+    let end = caret;
+    const first = pieces[0];
+    if (isOneLine(first.kind)) {
+        rest = pieces.slice(1);
+        const wasEmpty = shadow.length === 0;
+        if (first.text) {
+            const cid = insertHere(first.text, 'text');
+            for (const s of first.spans) {
+                if (!SENT_MARKS.has(s.kind) || s.end <= s.start) continue;
+                ops.push({ kind: 'text.mark', target: { bid, path: 'text' }, payload: {
+                    kind: s.kind, attrs: s.attrs, start: ['$cid', cid, s.start] as CharRef, end: ['$cid', cid, s.end - 1] as CharRef, on: true } });
+                tr = tr.addMark(caret + units(first.text, s.start), caret + units(first.text, s.end), state.schema.marks[s.kind].create(s.attrs));
+            }
+            end = caret + first.text.length;
+        }
+        if (wasEmpty && hostKind === 'paragraph' && first.kind !== 'paragraph') {
+            const lvl = isLevelled(first.kind) ? clampLevel(first.level) : 0;
+            ops.push({ kind: 'block.set', target: { bid, path: 'kind' }, payload: lvl ? { value: first.kind, level: lvl } : { value: first.kind } });
+            tr = tr.setNodeMarkup($at.before(1), state.schema.nodes[first.kind], lineAttrs(first.kind, bid, host.attrs.head as number, lvl));
+        }
+    }
+
     // The rest arrive as blocks after it. Each position is read from the
     // document as it stands, never mapped: a position computed before the cut
-    // and mapped through a mapping that includes the cut is shifted twice, and
-    // the paragraph then lands inside the host, which ProseMirror fits by
-    // splitting it into two nodes carrying one bid.
+    // and mapped through a mapping that includes the cut is shifted twice.
     let after = bid;
-    let pos = blockEnd(tr.doc, bid);
-    for (const text of paras.slice(1)) {
+    for (const p of rest) {
         const nb = env.nextBid();
-        ops.push({ kind: 'block.add', target: { bid: nb }, payload: { kind: 'paragraph', after } });
-        const node = state.schema.nodes.paragraph.create({ bid: nb, head: 0 }, text ? state.schema.text(text) : undefined);
-        pos = blockEnd(tr.doc, after);
-        tr = tr.insert(pos, node);
-        pos += node.nodeSize;
+        const lvl = isLevelled(p.kind) ? clampLevel(p.level) : 0;
+        const source = SOURCE.has(p.kind);
+        const payload: Record<string, unknown> = { kind: p.kind, after };
+        if (lvl) payload.level = lvl;
+        if (source && Object.keys(p.content).length) payload.content = p.content;
+        ops.push({ kind: 'block.add', target: { bid: nb }, payload });
+        const ranges = p.spans.filter(s => SENT_MARKS.has(s.kind)).map(s => ({ ...s, name: s.kind }));
+        const node = source
+            ? state.schema.nodes.source.create({ bid: nb, head: 0, kind: p.kind, lang: p.content.lang ?? null, derived: p.content.derived === true },
+                                               p.text ? state.schema.text(p.text) : undefined)
+            : state.schema.nodes[p.kind].create(lineAttrs(p.kind, nb, 0, lvl), inlineNodes(state.schema, p.text, ranges));
         const sh = new Shadow();
         env.shadows.set(nb, sh);
-        if (text) {
+        if (p.text) {
             const cid = env.nextCid();
-            ops.push({ kind: 'text.insert', target: { bid: nb, path: 'text' }, payload: { after: START, text } });
+            ops.push({ kind: 'text.insert', target: { bid: nb, path: pathOf(p.kind) }, payload: { after: START, text: p.text } });
             cids.push(cid);
-            sh.insert(0, text, cid);
+            sh.insert(0, p.text, cid);
+            for (const s of ranges) {
+                ops.push({ kind: 'text.mark', target: { bid: nb, path: 'text' }, payload: {
+                    kind: s.kind, attrs: s.attrs, start: ['$cid', cid, s.start] as CharRef, end: ['$cid', cid, s.end - 1] as CharRef, on: true } });
+            }
         }
+        const pos = blockEnd(tr.doc, after);
+        tr = tr.insert(pos, node);
+        end = pos + node.nodeSize - 1;
         after = nb;
     }
-    tr = tr.setSelection(TextSelection.create(tr.doc, Math.min(pos - 1, tr.doc.content.size)));
-    return { tr: tag(tr, ops, cids), ops, cids };
+    tr = tr.setSelection(TextSelection.create(tr.doc, Math.min(end, tr.doc.content.size)));
+    return done(tr, ops, cids);
 }

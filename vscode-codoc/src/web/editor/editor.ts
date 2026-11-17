@@ -6,36 +6,46 @@
  *   schema.ts      the nodes and marks, and the view for plugin kinds
  *   keymap.ts      which key runs which gesture
  *   commands.ts    the gestures: each emits its ops and changes the document
+ *   paste.ts       what a paste brings, as Markdown blocks or the clipboard's own
  *   guards.ts      refuses unrecorded structural changes; keeps the page NFC
  *   outbox.ts      records transactions into ops, batches them, takes acks,
  *                  and says which blocks are held
  *   adoption.ts    brings the page in line with a new projection
- *   decorations.ts draws ink, ground, plan words and phase markers
- *   drag.ts, find.ts, menus.ts   the drag handle, find and replace, `/` and `@`
+ *   decorations.ts draws ink, ground, plan words, phase markers and list numbers
+ *   drag.ts, find.ts, menus.ts   the drag handle, find and replace, the `/`
+ *                  and `@` menus and the link field
  *
  * `mountEditor` builds the document and a shadow per block from the first
  * projection, wires those parts to one ProseMirror view, and returns the
  * handle the page uses (app.ts).
  *
+ * Two kinds of transaction are rerouted before they apply. One that replaces
+ * a selection spanning blocks (typing over it, cutting it) becomes the
+ * `deleteSelection` gesture followed by the typed text. One applied while an
+ * IME composition is open is recorded only when the composition ends, as one
+ * insert of the composed text (outbox.ts).
+ *
  * ProseMirror's own history is not installed. Undo submits the recorded
  * inverse of a batch as new ops, so the page and the store share one history.
  */
-import { EditorState, Plugin } from '@tiptap/pm/state';
+import { EditorState, Plugin, type Transaction } from '@tiptap/pm/state';
+import { ReplaceStep } from '@tiptap/pm/transform';
 import { EditorView } from '@tiptap/pm/view';
 
 import { docFrom } from '../calc/adopt';
 import { newBid, newCid } from '../calc/ids';
-import type { Ack, CharRef, Projection, Submission } from '../calc/projection';
+import { isOneLine, kindOf, type Ack, type CharRef, type Projection, type Submission } from '../calc/projection';
 import { scalarOffset } from '../calc/recorder';
 import { adopter, type Adopt } from './adoption';
-import { deleteFeature, moveBlock, pasteBlocks, type Env } from './commands';
-import { Paints, REPAINT, type Shown } from './decorations';
+import { RECORDED, deleteFeature, deleteSelection, moveBlock, pasteBlocks, selectedBlocks, type Env } from './commands';
+import { Paints, REPAINT, listNumbers, type Shown } from './decorations';
 import { dragPlugin } from './drag';
 import { FindWidget, findPlugin } from './find';
-import { nfcGuard, structureGuard } from './guards';
+import { nfcGuard, sameStructure, structureGuard } from './guards';
 import { gestureKeys } from './keymap';
-import { Menus } from './menus';
+import { LinkInput, Menus } from './menus';
 import { Outbox } from './outbox';
+import { clipboardPieces } from './paste';
 import { codocSchema, kindView } from './schema';
 
 export interface EditorHost {
@@ -45,7 +55,8 @@ export interface EditorHost {
     onFeature?(fid: string | null): void;
     /** Open the code a citation names. */
     openCite?(file: string, symbol: string): void;
-    /** A gesture was not performed, or the daemon refused an op and its block was reloaded. */
+    /** A gesture was not performed (`bid` is empty and `conflict` says why), or
+     *  the daemon refused an op and its block was reloaded. */
     onConflict?(bid: string, conflict: string): void;
 }
 
@@ -68,41 +79,69 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
     const schema = codocSchema();
     const { doc, shadows } = docFrom(schema, proj);
     const shown: Shown = { projection: proj, realizing: new Set(), history: false };
-    const env: Env = { shadows, nextBid: newBid, nextCid: newCid };
+    const env: Env = { shadows, nextBid: newBid, nextCid: newCid, refuse: why => host.onConflict?.('', why) };
     const paints = new Paints(shown);
     const outbox = new Outbox(shadows, subs => host.submit(subs), bid => paints.mark(bid));
+    /** Record what a finished IME composition left on the page. */
+    const settle = () => { if (!view.composing) outbox.settle(view.state.doc); };
 
     let menus: Menus | null = null;
+    let link: LinkInput | null = null;
     const state = EditorState.create({
         schema,
         doc,
         plugins: [
-            new Plugin({ props: { handleKeyDown: (_v, ev) => menus?.handleKeyDown(ev) ?? false } }),
+            new Plugin({ props: {
+                handleKeyDown: (_v, ev) => { settle(); return menus?.handleKeyDown(ev) ?? false; },
+                handleDOMEvents: { compositionend: () => { window.setTimeout(settle, 50); return false; } },
+            } }),
             structureGuard(),
             nfcGuard(),
-            ...gestureKeys(env, why => host.onConflict?.('', why)),
+            ...gestureKeys(env, () => link?.show() ?? false),
             paints.plugin,
+            listNumbers(),
             findPlugin(),
             dragPlugin((bid, after) => { const g = moveBlock(view.state, env, bid, after); if (g) view.dispatch(g.tr); }),
         ],
     });
 
+    /** Whether `tr` replaces a selection that spans blocks with inline text or
+     *  nothing: typing over it, or cutting it. */
+    const replacesAcross = (st: EditorState, tr: Transaction): boolean =>
+        !tr.getMeta(RECORDED) && tr.docChanged && tr.getMeta('uiEvent') !== 'drop' && !st.selection.empty
+        && tr.steps.length === 1 && tr.steps[0] instanceof ReplaceStep
+        && selectedBlocks(st).length > 1 && !sameStructure(st.doc, tr.doc);
+
     const view = new EditorView(container, {
         state,
         nodeViews: { kindBlock: node => kindView(node) },
         dispatchTransaction(tr) {
+            if (replacesAcross(view.state, tr)) {
+                settle();
+                const slice = (tr.steps[0] as ReplaceStep).slice;
+                const typed = slice.content.textBetween(0, slice.content.size, ' ');
+                const g = deleteSelection(view.state, env);
+                if (!g) return;
+                view.dispatch(g.tr);
+                if (typed) view.dispatch(view.state.tr.insertText(typed));
+                return;
+            }
             // Record what the page took, not what it was asked to take. The
             // structural guard can refuse a transaction, and a refused one
             // must leave no ops and no change to the shadows.
             const { state: next, transactions } = view.state.applyTransaction(tr);
-            for (const applied of transactions) outbox.record(applied);
+            for (const applied of transactions) outbox.record(applied, view.composing);
             view.updateState(next);
+            settle();
             if (tr.selectionSet || tr.docChanged) { host.onFeature?.(featureAt(next.selection.from)); menus?.update(); }
         },
-        handlePaste(_v, _event, slice) {
-            const g = pasteBlocks(view.state, env, slice);
-            if (!g) return false;                       // one block's worth: the recorder reads it
-            view.dispatch(g.tr);
+        handlePaste(_v, event, slice) {
+            settle();
+            const pieces = clipboardPieces(slice, event.clipboardData?.getData('text/plain') ?? '',
+                                           event.clipboardData?.getData('text/html') ?? '');
+            if (!pieces) return false;                  // inline words only: the recorder reads them
+            const g = pasteBlocks(view.state, env, pieces);
+            if (g) view.dispatch(g.tr);
             return true;
         },
         handleClickOn(_v, _pos, node, _np, event) {
@@ -116,6 +155,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
     });
 
     menus = new Menus(view, env, () => shown.projection, container);
+    link = new LinkInput(view, container);
     const finder = new FindWidget(view, container);
     const adopt = adopter(view, shadows, outbox, paints, shown);
 
@@ -141,7 +181,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             // its op, and a refused block is re-read regardless.
             adopt(shown.projection, shown.realizing, new Set(refused.keys()));
         },
-        flush: () => outbox.flush(),
+        flush: () => { settle(); outbox.flush(); },
         setHistory(on) {
             shown.history = on;
             paints.mark();
@@ -151,7 +191,8 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         selectionAnchor() {
             const { from, to, empty } = view.state.selection;
             const $f = view.state.doc.resolve(from), $t = view.state.doc.resolve(to);
-            if (empty || $f.depth !== 1 || $t.depth !== 1 || $f.parent !== $t.parent) return null;
+            // A source block holds no marks, so no comment anchors in one.
+            if (empty || $f.depth !== 1 || $t.depth !== 1 || $f.parent !== $t.parent || !isOneLine(kindOf($f.parent))) return null;
             const bid = $f.parent.attrs.bid as string;
             const sh = shadows.get(bid);
             if (!sh) return null;

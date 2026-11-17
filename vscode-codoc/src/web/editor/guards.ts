@@ -3,7 +3,7 @@
  *
  * The recorder can only speak for text inside blocks it knows. `structureGuard`
  * therefore refuses any transaction that adds, drops, duplicates or un-ids a
- * top-level block unless a gesture recorded it (09-editor §4 rule 1a).
+ * top-level block unless a gesture recorded it.
  * `nfcGuard` composes text a transaction inserted in decomposed form, because
  * the store and the shadows count NFC characters and the page has to count
  * the same.

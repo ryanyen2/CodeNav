@@ -1,6 +1,6 @@
 /**
  * app.ts — the editor page: a tree pane, a toolbar, the document, a margin of
- * comment cards and a status line (09-editor §7–8).
+ * comment cards and a status line.
  *
  * This is the entry of the page bundle, and it runs as soon as it loads. It
  * builds the shell, tells the host it is ready, and from then on is driven by
@@ -312,7 +312,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToPage>) => {
                     submit,
                     onFeature: fid => { if (fid && fid !== selected) select(fid); },
                     openCite: (file, symbol) => send({ kind: 'open-cite', file, symbol }),
-                    onConflict: (_bid, conflict) => notify(`an edit could not apply (${conflict}); the paragraph was reloaded`),
+                    onConflict: (bid, conflict) => notify(bid ? `an edit could not apply (${conflict}); the block was reloaded` : conflict),
                 });
                 timeline = new Timeline(page, () => editor?.view.dom ?? null);
                 margin = new Margin(page, () => editor?.view ?? null, {

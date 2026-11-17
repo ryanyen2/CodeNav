@@ -15,9 +15,9 @@ import type { Node as PMNode } from '@tiptap/pm/model';
 import * as fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-import type { Projection, Submission } from '../web/calc/projection';
+import { kindOf, type Projection, type Submission } from '../web/calc/projection';
 import { newThreadOps } from '../web/editor/comments';
-import { key, mountProj, paste, posIn, select, shadowFaults, typeText, type Mounted } from './web/editor/harness';
+import { key, mountProj, paste, pasteText, posIn, select, shadowFaults, typeRule, typeText, type Mounted } from './web/editor/harness';
 
 const TRIP = process.env.CODOC_ROUNDTRIP ?? '';
 const PHASE = process.env.CODOC_ROUNDTRIP_PHASE ?? 'R1';
@@ -39,7 +39,7 @@ function seedRandom(seed: number): () => void {
 /** The page as the store would describe it: id, kind, level and text per block. */
 const pageOf = (doc: PMNode): Array<[string, string, number, string]> => {
     const out: Array<[string, string, number, string]> = [];
-    doc.forEach(n => out.push([n.attrs.bid, n.type.name, n.type.name === 'heading' ? n.attrs.level : 0,
+    doc.forEach(n => out.push([n.attrs.bid, kindOf(n), n.type.name === 'heading' ? n.attrs.level : 0,
                                n.textBetween(0, n.content.size, '\n')]));
     return out;
 };
@@ -68,7 +68,49 @@ function gesture(m: Mounted, r: () => number, step: number, seed: number): strin
     const from = Math.min(pa, pb), to = Math.max(pa, pb);
     const heads = blocks.filter(x => x.kind === 'heading');
     const paras = blocks.filter(x => x.kind === 'paragraph');
-    const g = Math.floor(r() * 15);
+    const items = blocks.filter(x => x.kind === 'bullet' || x.kind === 'numbered');
+    const g = Math.floor(r() * 21);
+    if (g === 15) {
+        if (!paras.length) return 'noop';
+        const pp = paras[Math.floor(r() * paras.length)];
+        const marker = r() < 0.5 ? '-' : '1.';
+        typeRule(m.view, pp.bid, marker);
+        return `"${marker} " ${pp.bid}`;
+    }
+    if (g === 16) {
+        if (!items.length) return 'noop';
+        const it = items[Math.floor(r() * items.length)];
+        select(m.view, it.start + it.len);
+        key(m.view, 'Tab', 9, { shiftKey: r() < 0.4 });
+        return `tab item ${it.bid}`;
+    }
+    if (g === 17) {
+        if (!items.length) return 'noop';
+        const it = items[Math.floor(r() * items.length)];
+        if (r() < 0.5) { select(m.view, it.start + it.len); key(m.view, 'Enter', 13); return `enter item ${it.bid}`; }
+        select(m.view, it.start);
+        key(m.view, 'Backspace', 8);
+        return `bs item ${it.bid}`;
+    }
+    if (g === 18) {
+        select(m.view, from, to);
+        if (r() < 0.5) key(m.view, 'b', 66, { ctrlKey: true }); else key(m.view, 'e', 69, { ctrlKey: true });
+        return `mark ${from}-${to}`;
+    }
+    if (g === 19) {
+        select(m.view, from, r() < 0.7 ? from : to);
+        pasteText(m, `## M${step}\n\n- a${step}\n    - **b${step}** [l](https://x.io)\n1. c${step}`);
+        return `paste md ${from}-${to}`;
+    }
+    if (g === 20) {
+        if (!paras.length) return 'noop';
+        const pp = paras[Math.floor(r() * paras.length)];
+        select(m.view, pp.start + pp.len);
+        key(m.view, 'Enter', 13);
+        const back = r() < 0.5;
+        key(m.view, back ? 'Backspace' : 'Delete', back ? 8 : 46);
+        return `enter+${back ? 'bs' : 'del'} after ${pp.bid}`;
+    }
     if (g === 0) { select(m.view, from); typeText(m.view, `x${step}`); return `type@${from}`; }
     if (g === 1) { select(m.view, from, to); typeText(m.view, 'y'); return `type over ${from}-${to}`; }
     if (g === 2) { select(m.view, from, to); key(m.view, 'Backspace', 8); return `bs ${from}-${to}`; }

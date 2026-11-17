@@ -1,5 +1,5 @@
 /**
- * claims.ts — what to draw, from what the projection says (09-editor §7).
+ * claims.ts — what to draw, from what the projection says.
  *
  * Every visual claim on the prose is read off the projection: a run's actor
  * and whether its op is inside the realized frontier give the human channel
@@ -7,8 +7,10 @@
  * `suggest_del` spans give the plan channel (opacity). One palette on every
  * surface: blue is the person, gray a plan, green and red the code. Pure and
  * DOM-free; the editor turns `Paint`s into decorations at scalar → position.
+ * A block's paints come from its edited field: `source` for a table, a
+ * diagram or a code block, `text` otherwise.
  */
-import type { Claim, Phase, ProjectedBlock, Projection, TextField } from './projection';
+import { pathOf, textField, type Claim, type Phase, type ProjectedBlock, type Projection, type TextField } from './projection';
 
 export type Ink = 'ink-unsent' | 'ink-sent' | 'plan-open' | 'plan-accepted' | 'plan-cut' | 'plan-mark' | 'plan-unmark'
     | 'code-added' | 'code-removed' | 'author-human' | 'author-loop' | 'author-agent' | 'author-other';
@@ -100,8 +102,8 @@ function groundPaints(claims: Claim[] | undefined): Paint[] {
 export function paintsFor(b: ProjectedBlock, proj: Projection, fid: string | null,
                           watermarks: { handoff: Record<string, number>; realized: Record<string, number> },
                           history = false): Paint[] {
-    const f = b.fields.text as TextField | undefined;
-    if (!f || !('runs' in f)) return [];
+    const f = textField(b, pathOf(b.kind));
+    if (!f) return [];
     const ink = inkPaints(b, f, watermarks.realized, watermarks.handoff);
     const plan = planPaints(b, f, proj.plans);
     const mine = fid ? proj.claims[fid]?.filter(c => c.bid === b.id) : undefined;

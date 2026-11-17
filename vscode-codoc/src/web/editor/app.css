@@ -45,6 +45,18 @@ html, body { margin: 0; height: 100%; background: var(--codoc-bg); color: var(--
 .codoc-cite { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; background: var(--codoc-faint); border-radius: 4px; padding: 0 4px; cursor: pointer; }
 .codoc-consult { color: inherit; text-decoration: underline dotted; }
 .codoc-comment { background: color-mix(in srgb, #e6b800 18%, transparent); }
+.codoc-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; background: var(--codoc-faint); border-radius: 3px; padding: 0 3px; }
+
+/* list items: indented by level; a bullet or the number the page computed (data-n) in the gutter */
+.codoc-item { margin: 0 0 0.25em; padding-left: calc(var(--codoc-level, 1) * 1.6em); }
+.codoc-item::after { position: absolute; top: 0; left: calc((var(--codoc-level, 1) - 1) * 1.6em); width: 1.6em; text-align: center; color: var(--codoc-muted); pointer-events: none; }
+.codoc-bullet::after { content: '•'; }
+.codoc-numbered::after { content: attr(data-n); font-variant-numeric: tabular-nums; }
+
+/* tables, diagrams and code: raw lines in a code style, the kind (or language) in the corner */
+.codoc-source { margin: 0 0 0.75em; padding: 8px 12px; border: 1px solid var(--codoc-faint); border-radius: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; white-space: pre-wrap; tab-size: 4; }
+.codoc-source::after { content: attr(data-label); position: absolute; top: 2px; right: 8px; font-size: 10px; color: var(--codoc-muted); text-transform: uppercase; letter-spacing: .04em; pointer-events: none; }
+.codoc-link-input { padding: 4px; }
 
 /* the three channels */
 .codoc-ink-unsent { text-decoration: underline; text-decoration-color: var(--codoc-human); text-decoration-thickness: 2px; animation: codoc-pulse 1.6s ease-in-out infinite; }
@@ -85,18 +97,17 @@ html, body { margin: 0; height: 100%; background: var(--codoc-bg); color: var(--
 .codoc-menu-item.is-active, .codoc-menu-item:hover { background: var(--codoc-faint); }
 .codoc-menu-detail { color: var(--codoc-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; overflow: hidden; text-overflow: ellipsis; }
 
-/* Drag handles, as a pseudo-element on the block itself. They used to be three
-   thousand widget decorations, and consulting a decoration set costs
-   ProseMirror a scan per top-level child per view update — half the cost of a
-   keystroke in a large tree, for a mark that never depends on what the block
-   says. Nothing here reaches the decoration machinery at all. */
-.codoc-paragraph, .codoc-heading { position: relative; }
-.codoc-paragraph::before, .codoc-heading::before {
+/* Drag handles, as a pseudo-element on the block itself rather than a widget
+   decoration: ProseMirror scans the decoration set once per top-level child on
+   each view update, so a widget per block costs every keystroke in a large
+   tree, for a mark that never depends on what the block says. */
+.codoc-paragraph, .codoc-heading, .codoc-item, .codoc-source { position: relative; }
+.codoc-paragraph::before, .codoc-heading::before, .codoc-item::before, .codoc-source::before {
     content: ''; position: absolute; left: -34px; top: 0.35em; width: 12px; height: 16px;
     border-radius: 3px; cursor: grab; opacity: 0;
     background: radial-gradient(circle, var(--codoc-muted) 1px, transparent 1.5px) 0 0 / 6px 6px;
 }
-.codoc-paragraph:hover::before, .codoc-heading:hover::before { opacity: .7; }
+.codoc-paragraph:hover::before, .codoc-heading:hover::before, .codoc-item:hover::before, .codoc-source:hover::before { opacity: .7; }
 .is-drop-above { box-shadow: 0 -2px 0 var(--codoc-human); }
 .is-drop-below { box-shadow: 0 2px 0 var(--codoc-human); }
 

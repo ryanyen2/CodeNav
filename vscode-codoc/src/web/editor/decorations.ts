@@ -1,6 +1,5 @@
 /**
- * decorations.ts — everything drawn on the prose, as ProseMirror decorations
- * (09-editor §7).
+ * decorations.ts — everything drawn on the prose, as ProseMirror decorations.
  *
  * Nothing drawn is stored in the document. calc/claims.ts says what to paint
  * on each block in scalar offsets; `decorationsFor` places those paints at
@@ -8,7 +7,8 @@
  * code dropped, and puts a phase marker at each heading. `Paints` keeps the
  * result between transactions and redraws only the blocks whose paints
  * changed, because rebuilding every decoration on every keystroke is what
- * makes typing slow in a large tree.
+ * makes typing slow in a large tree. `listNumbers` puts each numbered list
+ * item's number on it.
  */
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
@@ -30,23 +30,48 @@ export interface Shown {
 /** Transaction meta: redraw the decorations though the document did not change. */
 export const REPAINT = 'codoc:repaint';
 
-/** UTF-16 offset inside a textblock for a scalar offset (a hard break counts 1). */
+/** UTF-16 offset inside a textblock for a scalar offset. */
 export function unitOffset(block: PMNode, scalar: number): number {
     let units = 0;
     let seen = 0;
     for (let i = 0; i < block.childCount && seen < scalar; i++) {
-        const child = block.child(i);
-        if (child.isText) {
-            const cps = Array.from(child.text ?? '');
-            const take = Math.min(cps.length, scalar - seen);
-            units += cps.slice(0, take).join('').length;
-            seen += take;
-        } else {
-            units += child.nodeSize;
-            seen += 1;
-        }
+        const cps = Array.from(block.child(i).text ?? '');
+        const take = Math.min(cps.length, scalar - seen);
+        units += cps.slice(0, take).join('').length;
+        seen += take;
     }
     return units;
+}
+
+/**
+ * Each numbered item's number, as `data-n` on its node. A numbered item counts
+ * among the numbered items at its level; the count restarts after a shallower
+ * item, a bullet at the same level, or a block that is not an item, and a
+ * deeper item in between does not restart it (docs/model.md, "The Markdown
+ * form"). Rebuilt on every change to the document: one pass over the top level.
+ */
+export function listNumbers(): Plugin<DecorationSet> {
+    const build = (doc: PMNode): DecorationSet => {
+        const decos: Decoration[] = [];
+        const counters = new Map<number, number>();
+        doc.forEach((node, pos) => {
+            const name = node.type.name;
+            if (name !== 'bullet' && name !== 'numbered') { counters.clear(); return; }
+            const level = node.attrs.level as number;
+            for (const l of [...counters.keys()]) if (l > level) counters.delete(l);
+            if (name === 'bullet') { counters.delete(level); return; }
+            const n = (counters.get(level) ?? 0) + 1;
+            counters.set(level, n);
+            decos.push(Decoration.node(pos, pos + node.nodeSize, { 'data-n': `${n}.` }));
+        });
+        return DecorationSet.create(doc, decos);
+    };
+    const key = new PluginKey<DecorationSet>('codoc-numbers');
+    return new Plugin<DecorationSet>({
+        key,
+        state: { init: (_c, state) => build(state.doc), apply: (tr, prev) => (tr.docChanged ? build(tr.doc) : prev) },
+        props: { decorations: state => key.getState(state) ?? null },
+    });
 }
 
 /** The decorations for the blocks in `only`, or for every block. */

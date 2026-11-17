@@ -1,7 +1,8 @@
 /**
  * window.ts — the timeline window as the daemon publishes it (`history.json`),
  * and two pure readers over it: which batch undo or redo should invert next,
- * and what every block said at a position in the window (09-editor §4, §7).
+ * and what every block said at a position in the window (docs/model.md,
+ * "Views", `history_window`).
  *
  * Undo is exact and shared with the store: a batch is undone by submitting
  * the recorded inverses of its ops, newest first, as a new batch named

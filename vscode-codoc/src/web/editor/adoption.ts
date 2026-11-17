@@ -1,5 +1,6 @@
 /**
- * adoption.ts — bringing the page in line with a projection (09-editor §6).
+ * adoption.ts — bringing the page in line with a projection (docs/concurrency.md,
+ * "The editor's side").
  *
  * The projection is the truth for every block the person is not holding
  * (outbox.ts says which those are). A held block keeps its node, its place and

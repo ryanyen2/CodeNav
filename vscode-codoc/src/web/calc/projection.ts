@@ -1,6 +1,6 @@
 /**
- * projection.ts — the daemon's `projection.json`, typed, and the op bodies the
- * editor sends back (docs/substrate/09-editor.md §5–6).
+ * projection.ts — the daemon's `projection.json`, typed, the op bodies the
+ * editor sends back, and the block kinds (docs/model.md, "Block kinds").
  *
  * Nothing here touches the DOM or ProseMirror. The projection is the truth for
  * every block the person is not holding; the editor adopts it per block.
@@ -32,7 +32,7 @@ export interface Run {
 }
 
 export interface Span {
-    kind: 'bold' | 'link' | 'cite' | 'comment' | string;
+    kind: 'bold' | 'code' | 'link' | 'cite' | 'comment' | string;
     attrs: Record<string, string>;
     start: number;      // live offsets, half-open
     end: number;
@@ -49,7 +49,7 @@ export interface TextField {
 
 export interface ProjectedBlock {
     id: string;
-    kind: 'heading' | 'paragraph' | string;
+    kind: 'heading' | 'paragraph' | 'bullet' | 'numbered' | 'table' | 'diagram' | 'code' | string;
     level: number;
     rank: string;
     head: number;
@@ -94,6 +94,26 @@ export interface Projection {
 
 export const NO_WATERMARKS: Watermarks = { handoff: {}, realized: {} };
 
+/** List items: prose with an indent `level`. */
+export const ITEMS: ReadonlySet<string> = new Set(['bullet', 'numbered']);
+/** Body kinds holding one line of inline text in field `text`. */
+export const PROSE: ReadonlySet<string> = new Set(['paragraph', 'bullet', 'numbered']);
+/** Kinds holding raw multi-line text in field `source`, with no marks. */
+export const SOURCE: ReadonlySet<string> = new Set(['table', 'diagram', 'code']);
+
+/** A heading or a prose kind: one line, and the only kinds that split, merge or change kind. */
+export const isOneLine = (kind: string): boolean => kind === 'heading' || PROSE.has(kind);
+
+/** The Text field the editor edits for a block of `kind`. */
+export const pathOf = (kind: string): string => (SOURCE.has(kind) ? 'source' : 'text');
+
+/** The store kind of an editor node: its type for heading and prose, its
+ *  `kind` attribute for a source block or a plugin block. */
+export function kindOf(node: { type: { name: string }; attrs: Record<string, unknown> }): string {
+    const name = node.type.name;
+    return name === 'source' || name === 'kindBlock' ? String(node.attrs.kind) : name;
+}
+
 export function textField(b: ProjectedBlock, path = 'text'): TextField | null {
     const f = b.fields[path];
     return f && typeof f === 'object' && 'runs' in (f as object) ? (f as TextField) : null;
@@ -130,7 +150,7 @@ export function scalars(s: string): string[] {
     return Array.from(s);
 }
 
-/** The applier records NFC (spec §4), so the editor counts and sends NFC: a
+/** The applier records NFC (docs/model.md, "Definitions"), so the editor counts and sends NFC: a
  *  decomposed "e + ́" typed by an IME or pasted from macOS is one character to
  *  the store, and a shadow that thought it was two would name anchors that do
  *  not exist. */

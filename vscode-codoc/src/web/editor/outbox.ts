@@ -1,6 +1,6 @@
 /**
  * outbox.ts — ops on their way from the page to the daemon, and what the page
- * holds while they travel (09-editor §4–6).
+ * holds while they travel (docs/concurrency.md, "The editor's side").
  *
  * `record` turns every transaction the page took into ops: a gesture's own
  * ops when the transaction carries them (commands.ts), otherwise what the
@@ -8,12 +8,18 @@
  * for a step it cannot name. Ops wait `SETTLE_MS` after the last keystroke and
  * leave together as one batch, which is the undo unit.
  *
+ * While an IME composition is open the browser rewrites the composed text on
+ * every keystroke (n, ni, 你). Nothing is recorded then: the blocks it touches
+ * wait in `composed`, and `settle` compares each with its shadow once the
+ * composition has ended, so the composed text leaves as one insert.
+ *
  * A block is **held** while the page knows more about it than a projection
- * does: one of its ops is still unanswered, or the projection in hand predates
- * the last op the daemon applied for it. Adoption leaves held blocks alone.
- * `held` is that one predicate. Both halves are needed. Without the first a
- * projection overwrites words the daemon has not seen. Without the second, an
- * older projection arriving after the ack takes the acked words away again.
+ * does: one of its ops is still unanswered, its composition is not settled,
+ * or the projection in hand predates the last op the daemon applied for it.
+ * Adoption leaves held blocks alone. `held` is that one predicate. Without the
+ * first a projection overwrites words the daemon has not seen. Without the
+ * last, an older projection arriving after the ack takes the acked words away
+ * again.
  */
 import type { Node as PMNode } from '@tiptap/pm/model';
 import type { Transaction } from '@tiptap/pm/state';
@@ -37,6 +43,8 @@ export class Outbox {
     private batch = newBatch();
     private timer: number | undefined;
     private readonly recorder: Recorder;
+    /** Blocks an open or just-ended IME composition changed, not yet recorded. */
+    private readonly composed = new Set<string>();
 
     /** `onHoldChange` is told each block whose hold changed, so its paints can be redrawn. */
     constructor(private readonly shadows: Map<string, Shadow>,
@@ -45,8 +53,9 @@ export class Outbox {
         this.recorder = new Recorder(shadows, newCid);
     }
 
-    /** Turn a transaction the page has applied into queued ops. */
-    record(tr: Transaction): void {
+    /** Turn a transaction the page has applied into queued ops. `composing`
+     *  says an IME composition is open. */
+    record(tr: Transaction, composing = false): void {
         const tagged = tr.getMeta(RECORDED) as OpBody[] | undefined;
         if (tagged) {
             // An empty list is not a gesture. Adoption and the NFC fix-up carry
@@ -56,29 +65,58 @@ export class Outbox {
             return;
         }
         if (!tr.docChanged) return;
+        if (composing || this.composed.size) {
+            // A change that ends a composition belongs to it too: some
+            // browsers deliver the committed text after `compositionend`.
+            for (const bid of this.touched(tr, tr.steps.map((_s, i) => i))) { this.composed.add(bid); this.onHoldChange(bid); }
+            return;
+        }
         const rec = this.recorder.record(tr.steps, tr.docs);
         if (rec.unhandled.length) {
             // The fallback: compare every block the unhandled steps touched with its shadow.
-            const touched = new Set<string>();
-            for (const step of rec.unhandled) {
-                step.getMap().forEach((_a, _b, fromB, toB) => {
-                    tr.doc.nodesBetween(Math.max(0, fromB - 1), Math.min(tr.doc.content.size, toB + 1), (n, _pos, parent) => {
-                        if (parent === tr.doc && n.attrs.bid && this.shadows.has(n.attrs.bid)) touched.add(n.attrs.bid);
-                        return false;
-                    });
-                });
-            }
-            for (const bid of touched) {
-                let node: PMNode | null = null;
-                tr.doc.forEach(n => { if (n.attrs.bid === bid) node = n; });
-                if (node) {
-                    const r = reconcile(node, this.shadows.get(bid)!, newCid);
-                    rec.ops.push(...r.ops);
-                    rec.cids.push(...r.cids);
-                }
-            }
+            const r = this.reconcileAll(tr.doc, this.touched(tr, rec.unhandled.map(s => tr.steps.indexOf(s))));
+            rec.ops.push(...r.ops);
+            rec.cids.push(...r.cids);
         }
         this.queue(rec.ops, rec.cids);
+    }
+
+    /** Record what a finished composition left in each block it touched. */
+    settle(doc: PMNode): void {
+        if (!this.composed.size) return;
+        const r = this.reconcileAll(doc, this.composed);
+        this.composed.clear();
+        if (r.ops.length) this.queue(r.ops, r.cids);
+    }
+
+    /** The blocks with shadows that the steps at `indices` changed, found in the transaction's final document. */
+    private touched(tr: Transaction, indices: number[]): Set<string> {
+        const out = new Set<string>();
+        for (const i of indices) {
+            const rest = tr.mapping.slice(i + 1);
+            tr.steps[i].getMap().forEach((_a, _b, fromB, toB) => {
+                const from = rest.map(fromB, -1), to = rest.map(toB, 1);
+                tr.doc.nodesBetween(Math.max(0, from - 1), Math.min(tr.doc.content.size, to + 1), (n, _pos, parent) => {
+                    if (parent === tr.doc && n.attrs.bid && this.shadows.has(n.attrs.bid)) out.add(n.attrs.bid);
+                    return false;
+                });
+            });
+        }
+        return out;
+    }
+
+    private reconcileAll(doc: PMNode, bids: Iterable<string>): { ops: OpBody[]; cids: string[] } {
+        const out = { ops: [] as OpBody[], cids: [] as string[] };
+        for (const bid of bids) {
+            let node: PMNode | null = null;
+            doc.forEach(n => { if (n.attrs.bid === bid) node = n; });
+            const shadow = this.shadows.get(bid);
+            if (!node || !shadow) continue;
+            const r = reconcile(node, shadow, newCid);
+            out.ops.push(...r.ops);
+            out.cids.push(...r.cids);
+        }
+        return out;
     }
 
     private queue(ops: OpBody[], cids: string[], holds: string[] = []): void {
@@ -140,7 +178,7 @@ export class Outbox {
 
     /** The blocks a projection with this frontier must leave alone. `force` names blocks to re-adopt regardless. */
     held(frontier: Record<string, number>, force: ReadonlySet<string>): Set<string> {
-        const out = new Set<string>();
+        const out = new Set<string>([...this.composed].filter(bid => !force.has(bid)));
         for (const bid of new Set([...this.unacked.keys(), ...this.lastOp.keys()])) {
             if (force.has(bid)) continue;
             const op = this.lastOp.get(bid);

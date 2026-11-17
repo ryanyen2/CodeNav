@@ -1,9 +1,16 @@
 /**
- * schema.ts — the document vocabulary of the editor (09-editor §2).
+ * schema.ts — the document vocabulary of the editor.
  *
- *   doc    := (heading | paragraph | kindBlock)+
- *   inline := text | hardBreak
- *   marks  := bold | link{href} | cite{file, symbol} | comment{block} | suggest_del{plan} | plan{pid}
+ *   doc    := (heading | paragraph | bullet | numbered | source | kindBlock)+
+ *   inline := text
+ *   marks  := bold | code | link{href} | cite{file, symbol} | comment{block} | suggest_del{plan} | plan{pid}
+ *
+ * The nodes follow the store's block kinds (docs/model.md, "Block kinds").
+ * A heading, a paragraph and a list item hold one line of inline text; a line
+ * break there is a new block, so there is no hard break. `bullet` and
+ * `numbered` carry the indent `level`; a numbered item's number is computed
+ * when the page is drawn (decorations.ts). A `source` node is a table, a
+ * diagram or a code block: raw multi-line text in a code style, no marks.
  *
  * A block node carries two attributes from the projection: `bid`, its
  * identity, and `head`, the store position of the last op that touched it,
@@ -11,22 +18,23 @@
  * to are not in the document. They are read from the projection's runs and
  * drawn as decorations.
  *
- * A person sets `bold`, `link` and `cite`, and the recorder sends them. The
- * projection sets `plan`, `suggest_del` and `comment`; the recorder never
- * sends those, and `plan` and `suggest_del` are non-inclusive so that typing
- * at their edge is the person's own text.
+ * A person sets `bold`, `code`, `link` and `cite`, and the recorder sends
+ * them. The projection sets `plan`, `suggest_del` and `comment`; the recorder
+ * never sends those. Every mark but `bold` is non-inclusive, so typing at its
+ * end is outside it, as the store has it.
  *
- * Any other block in the reading flow is a `kindBlock`: an atom drawn
- * read-only by `kindView` from the fields the projection gives it. Comment
- * blocks are not in the flow; they are cards in the margin (comments.ts).
+ * A plugin kind (an image, a url) is a `kindBlock`: an atom drawn read-only by
+ * `kindView` from the fields the projection gives it. Comment blocks are not
+ * in the flow; they are cards in the margin (comments.ts).
  */
 import { Mark, Node, getSchema, mergeAttributes } from '@tiptap/core';
 import Document from '@tiptap/extension-document';
-import HardBreak from '@tiptap/extension-hard-break';
 import Text from '@tiptap/extension-text';
 import type { Node as PMNode } from '@tiptap/pm/model';
 
 export const MAX_LEVEL = 6;
+
+export const clampLevel = (level: number): number => Math.min(MAX_LEVEL, Math.max(1, Math.round(level) || 1));
 
 function idAttrs() {
     return {
@@ -43,23 +51,23 @@ function idAttrs() {
     };
 }
 
+const levelAttr = () => ({
+    default: 1,
+    parseHTML: (el: HTMLElement) => clampLevel(Number(el.getAttribute('data-level') || 1)),
+    renderHTML: (attrs: Record<string, unknown>) => ({ 'data-level': String(attrs.level ?? 1) }),
+});
+
 const Heading = Node.create({
     name: 'heading',
     group: 'block',
     content: 'inline*',
     defining: true,
     addAttributes() {
-        return {
-            ...idAttrs(),
-            level: {
-                default: 1,
-                parseHTML: (el: HTMLElement) => Math.min(MAX_LEVEL, Math.max(1, Number(el.getAttribute('data-level') || 1))),
-                renderHTML: (attrs: Record<string, unknown>) => ({ 'data-level': String(attrs.level ?? 1) }),
-            },
-        };
+        return { ...idAttrs(), level: levelAttr() };
     },
     parseHTML() {
-        return [{ tag: 'div[data-heading]' }];
+        return [{ tag: 'div[data-heading]' },
+                ...[1, 2, 3, 4, 5, 6].map(level => ({ tag: `h${level}`, attrs: { level } }))];
     },
     renderHTML({ node, HTMLAttributes }) {
         return ['div', mergeAttributes(HTMLAttributes, { 'data-heading': '', class: `codoc-heading codoc-h${node.attrs.level}` }), 0];
@@ -81,7 +89,63 @@ const Paragraph = Node.create({
     },
 });
 
-/** A block of any plugin kind (a diagram, an image). The editor authors no ops against it. */
+/** How deep an HTML list item sits: one level per enclosing list. */
+function listDepth(el: HTMLElement): number {
+    let depth = 0;
+    for (let p = el.parentElement; p; p = p.parentElement) if (p.tagName === 'UL' || p.tagName === 'OL') depth++;
+    return clampLevel(depth);
+}
+
+/** A list item. `ordered` says which HTML list it is read from. */
+function listItem(name: 'bullet' | 'numbered', ordered: boolean) {
+    return Node.create({
+        name,
+        group: 'block',
+        content: 'inline*',
+        addAttributes() {
+            return { ...idAttrs(), level: levelAttr() };
+        },
+        parseHTML() {
+            return [{ tag: `div[data-item="${name}"]` },
+                    { tag: 'li', getAttrs: (el: HTMLElement) => ((el.parentElement?.tagName === 'OL') === ordered ? { level: listDepth(el) } : false) }];
+        },
+        renderHTML({ node, HTMLAttributes }) {
+            return ['div', mergeAttributes(HTMLAttributes, { 'data-item': name, class: `codoc-item codoc-${name}`,
+                                                             style: `--codoc-level: ${node.attrs.level}` }), 0];
+        },
+    });
+}
+
+/** A table, a diagram or a code block: its `source` field, as plain lines. */
+const Source = Node.create({
+    name: 'source',
+    group: 'block',
+    content: 'text*',
+    marks: '',
+    code: true,
+    defining: true,
+    addAttributes() {
+        return {
+            ...idAttrs(),
+            kind: { default: 'code', parseHTML: (el: HTMLElement) => el.getAttribute('data-source') || 'code' },
+            lang: { default: null, parseHTML: (el: HTMLElement) => el.getAttribute('data-lang') },
+            derived: { default: false, parseHTML: (el: HTMLElement) => el.hasAttribute('data-derived') },
+        };
+    },
+    parseHTML() {
+        return [{ tag: 'pre', preserveWhitespace: 'full' as const }];
+    },
+    renderHTML({ node, HTMLAttributes }) {
+        const { kind, lang, derived } = node.attrs;
+        const label = kind === 'code' ? (lang || 'code') : derived ? `${kind} (derived)` : kind;
+        return ['pre', mergeAttributes(HTMLAttributes, {
+            'data-source': kind, 'data-label': label, class: `codoc-source codoc-source-${kind}`,
+            ...(lang ? { 'data-lang': lang } : {}), ...(derived ? { 'data-derived': '' } : {}),
+        }), ['code', 0]];
+    },
+});
+
+/** A block of any plugin kind (an image, a url). The editor authors no ops against it. */
 const KindBlock = Node.create({
     name: 'kindBlock',
     group: 'block',
@@ -104,8 +168,15 @@ const KindBlock = Node.create({
 const Bold = Mark.create({
     name: 'bold',
     inclusive: true,
-    parseHTML() { return [{ tag: 'strong' }]; },
+    parseHTML() { return [{ tag: 'strong' }, { tag: 'b' }]; },
     renderHTML({ HTMLAttributes }) { return ['strong', mergeAttributes(HTMLAttributes, { class: 'codoc-focus' }), 0]; },
+});
+
+const Code = Mark.create({
+    name: 'code',
+    inclusive: false,
+    parseHTML() { return [{ tag: 'code' }]; },
+    renderHTML({ HTMLAttributes }) { return ['code', mergeAttributes(HTMLAttributes, { class: 'codoc-code' }), 0]; },
 });
 
 const Link = Mark.create({
@@ -164,7 +235,8 @@ const Plan = Mark.create({
 });
 
 export function codocSchema() {
-    return getSchema([Document, Text, HardBreak, Heading, Paragraph, KindBlock, Bold, Link, Cite, Comment, SuggestDel, Plan]);
+    return getSchema([Document, Text, Heading, Paragraph, listItem('bullet', false), listItem('numbered', true), Source, KindBlock,
+                      Bold, Code, Link, Cite, Comment, SuggestDel, Plan]);
 }
 
 /** The node view for a `kindBlock`: the kind's name, then one row per field

@@ -1,0 +1,878 @@
+{
+ "_comment": "Generated from codoc.calculus.block_md.parse and inline_md.parse. Offsets are Unicode scalars, end exclusive.",
+ "blocks": [
+  {
+   "name": "headings and paragraphs",
+   "md": "# Client {#b-0123456789ab}\n\nRetries once.\n\n## Sub\nwrapped\nlines join\n\n###### Six",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "heading",
+     "level": 1,
+     "text": "Client",
+     "content": {},
+     "id": "b-0123456789ab"
+    },
+    {
+     "kind": "paragraph",
+     "level": 0,
+     "text": "Retries once.",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "heading",
+     "level": 2,
+     "text": "Sub",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "paragraph",
+     "level": 0,
+     "text": "wrapped lines join",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "heading",
+     "level": 6,
+     "text": "Six",
+     "content": {},
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "a heading read as a description",
+   "md": "# Not a feature\n\nbody",
+   "headings": false,
+   "expect": [
+    {
+     "kind": "paragraph",
+     "level": 0,
+     "text": "Not a feature",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "paragraph",
+     "level": 0,
+     "text": "body",
+     "content": {},
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "hashes without a space are prose",
+   "md": "#tag and ####### seven",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "paragraph",
+     "level": 0,
+     "text": "#tag and ####### seven",
+     "content": {},
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "nested bullets",
+   "md": "- one\n    - two\n        - three\n    - back\n- top",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "bullet",
+     "level": 1,
+     "text": "one",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "bullet",
+     "level": 2,
+     "text": "two",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "bullet",
+     "level": 3,
+     "text": "three",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "bullet",
+     "level": 2,
+     "text": "back",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "bullet",
+     "level": 1,
+     "text": "top",
+     "content": {},
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "bullets with + and * and tabs",
+   "md": "+ plus\n* star\n\t- tabbed",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "bullet",
+     "level": 1,
+     "text": "plus",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "bullet",
+     "level": 1,
+     "text": "star",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "bullet",
+     "level": 2,
+     "text": "tabbed",
+     "content": {},
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "any indent width opens one level",
+   "md": "- a\n  - b\n          - c\n- d",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "bullet",
+     "level": 1,
+     "text": "a",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "bullet",
+     "level": 2,
+     "text": "b",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "bullet",
+     "level": 3,
+     "text": "c",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "bullet",
+     "level": 1,
+     "text": "d",
+     "content": {},
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "depth stops at six",
+   "md": "- 1\n - 2\n  - 3\n   - 4\n    - 5\n     - 6\n      - 7",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "bullet",
+     "level": 1,
+     "text": "1",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "bullet",
+     "level": 2,
+     "text": "2",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "bullet",
+     "level": 3,
+     "text": "3",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "bullet",
+     "level": 4,
+     "text": "4",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "bullet",
+     "level": 5,
+     "text": "5",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "bullet",
+     "level": 6,
+     "text": "6",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "bullet",
+     "level": 6,
+     "text": "7",
+     "content": {},
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "numbered list",
+   "md": "1. first\n2. second\n7. seventh\n    1. nested",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "numbered",
+     "level": 1,
+     "text": "first",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "numbered",
+     "level": 1,
+     "text": "second",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "numbered",
+     "level": 1,
+     "text": "seventh",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "numbered",
+     "level": 2,
+     "text": "nested",
+     "content": {},
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "bullet then numbered",
+   "md": "- bullet\n\n1. numbered\n- bullet again",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "bullet",
+     "level": 1,
+     "text": "bullet",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "numbered",
+     "level": 1,
+     "text": "numbered",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "bullet",
+     "level": 1,
+     "text": "bullet again",
+     "content": {},
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "a wrapped item",
+   "md": "- starts here\n  and continues\n- next",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "bullet",
+     "level": 1,
+     "text": "starts here and continues",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "bullet",
+     "level": 1,
+     "text": "next",
+     "content": {},
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "an item followed by prose",
+   "md": "- item\nnot indented",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "bullet",
+     "level": 1,
+     "text": "item",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "paragraph",
+     "level": 0,
+     "text": "not indented",
+     "content": {},
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "a table",
+   "md": "| a | b |\n|---|---|\n| 1 | 2 |\n\nafter",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "table",
+     "level": 0,
+     "text": "| a | b |\n|---|---|\n| 1 | 2 |",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "paragraph",
+     "level": 0,
+     "text": "after",
+     "content": {},
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "an indented table row",
+   "md": "  | x |\n| y |",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "table",
+     "level": 0,
+     "text": "| x |\n| y |",
+     "content": {},
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "a mermaid fence",
+   "md": "```mermaid\ngraph TD\n  A-->B\n```",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "diagram",
+     "level": 0,
+     "text": "graph TD\n  A-->B",
+     "content": {},
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "a derived mermaid fence",
+   "md": "```mermaid derived\ngraph LR\n```",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "diagram",
+     "level": 0,
+     "text": "graph LR",
+     "content": {
+      "derived": true
+     },
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "a code fence with a language",
+   "md": "```python\ndef f():\n    return [1, **x]\n```\n\ntext",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "code",
+     "level": 0,
+     "text": "def f():\n    return [1, **x]",
+     "content": {
+      "lang": "python"
+     },
+     "id": null
+    },
+    {
+     "kind": "paragraph",
+     "level": 0,
+     "text": "text",
+     "content": {},
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "a code fence without a language",
+   "md": "```\nplain\n```",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "code",
+     "level": 0,
+     "text": "plain",
+     "content": {},
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "a longer fence holds a shorter one",
+   "md": "````\n```\ninner\n```\n````",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "code",
+     "level": 0,
+     "text": "```\ninner\n```",
+     "content": {},
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "an unclosed fence runs to the end",
+   "md": "```js\nlet a = 1;\n\nlet b = 2;",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "code",
+     "level": 0,
+     "text": "let a = 1;\n\nlet b = 2;",
+     "content": {
+      "lang": "js"
+     },
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "a codoc fence with JSON",
+   "md": "```codoc:image {#b-00000000000a}\n{\"asset\": \"a.png\", \"caption\": \"**c**\"}\n```",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "image",
+     "level": 0,
+     "text": "",
+     "content": {
+      "asset": "a.png",
+      "caption": "**c**"
+     },
+     "id": "b-00000000000a"
+    }
+   ]
+  },
+  {
+   "name": "a codoc source fence",
+   "md": "```codoc:table\n{\"source\": \"not | a row\", \"note\": 1}\n```",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "table",
+     "level": 0,
+     "text": "not | a row",
+     "content": {
+      "note": 1
+     },
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "a codoc fence without JSON is code",
+   "md": "```codoc:diagram\nnot json\n```",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "code",
+     "level": 0,
+     "text": "not json",
+     "content": {
+      "lang": "codoc:diagram"
+     },
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "escaped block openers stay prose",
+   "md": "\\# not a heading\n\n\\- not an item\n\n1\\. not numbered\n\n\\| not a row",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "paragraph",
+     "level": 0,
+     "text": "\\# not a heading",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "paragraph",
+     "level": 0,
+     "text": "\\- not an item",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "paragraph",
+     "level": 0,
+     "text": "1\\. not numbered",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "paragraph",
+     "level": 0,
+     "text": "\\| not a row",
+     "content": {},
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "crlf line ends",
+   "md": "# T\r\n\r\npara\r\n- item",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "heading",
+     "level": 1,
+     "text": "T",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "paragraph",
+     "level": 0,
+     "text": "para",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "bullet",
+     "level": 1,
+     "text": "item",
+     "content": {},
+     "id": null
+    }
+   ]
+  },
+  {
+   "name": "blank input",
+   "md": "\n\n   \n",
+   "headings": true,
+   "expect": []
+  }
+ ],
+ "inline": [
+  {
+   "name": "plain",
+   "md": "just words",
+   "text": "just words",
+   "spans": []
+  },
+  {
+   "name": "bold",
+   "md": "a **bold** word",
+   "text": "a bold word",
+   "spans": [
+    {
+     "kind": "bold",
+     "attrs": {},
+     "start": 2,
+     "end": 6
+    }
+   ]
+  },
+  {
+   "name": "code",
+   "md": "call `f(x)` now",
+   "text": "call f(x) now",
+   "spans": [
+    {
+     "kind": "code",
+     "attrs": {},
+     "start": 5,
+     "end": 9
+    }
+   ]
+  },
+  {
+   "name": "code holding a bracket and stars",
+   "md": "use `list[int]` and `**kwargs`",
+   "text": "use list[int] and **kwargs",
+   "spans": [
+    {
+     "kind": "code",
+     "attrs": {},
+     "start": 4,
+     "end": 13
+    },
+    {
+     "kind": "code",
+     "attrs": {},
+     "start": 18,
+     "end": 26
+    }
+   ]
+  },
+  {
+   "name": "code with escaped backtick",
+   "md": "tick `a\\`b` done",
+   "text": "tick a`b done",
+   "spans": [
+    {
+     "kind": "code",
+     "attrs": {},
+     "start": 5,
+     "end": 8
+    }
+   ]
+  },
+  {
+   "name": "bold holding code",
+   "md": "**see `x` here**",
+   "text": "see x here",
+   "spans": [
+    {
+     "kind": "bold",
+     "attrs": {},
+     "start": 0,
+     "end": 10
+    },
+    {
+     "kind": "code",
+     "attrs": {},
+     "start": 4,
+     "end": 5
+    }
+   ]
+  },
+  {
+   "name": "a link",
+   "md": "[docs](https://example.com/a?b=c)",
+   "text": "docs",
+   "spans": [
+    {
+     "kind": "link",
+     "attrs": {
+      "href": "https://example.com/a?b=c"
+     },
+     "start": 0,
+     "end": 4
+    }
+   ]
+  },
+  {
+   "name": "a link holding bold and code",
+   "md": "[the **big** `fn`](https://x.io)",
+   "text": "the big fn",
+   "spans": [
+    {
+     "kind": "link",
+     "attrs": {
+      "href": "https://x.io"
+     },
+     "start": 0,
+     "end": 10
+    },
+    {
+     "kind": "bold",
+     "attrs": {},
+     "start": 4,
+     "end": 7
+    },
+    {
+     "kind": "code",
+     "attrs": {},
+     "start": 8,
+     "end": 10
+    }
+   ]
+  },
+  {
+   "name": "a cite",
+   "md": "[Client](codoc:src/client.py#Client.send)",
+   "text": "Client",
+   "spans": [
+    {
+     "kind": "cite",
+     "attrs": {
+      "file": "src/client.py",
+      "symbol": "Client.send"
+     },
+     "start": 0,
+     "end": 6
+    }
+   ]
+  },
+  {
+   "name": "a cite without a symbol",
+   "md": "[file](codoc:README.md)",
+   "text": "file",
+   "spans": [
+    {
+     "kind": "cite",
+     "attrs": {
+      "file": "README.md",
+      "symbol": ""
+     },
+     "start": 0,
+     "end": 4
+    }
+   ]
+  },
+  {
+   "name": "escapes",
+   "md": "\\*not bold\\* \\[not link\\] \\\\ \\` \\# \\- \\+ \\. \\|",
+   "text": "*not bold* [not link] \\ ` # - + . |",
+   "spans": []
+  },
+  {
+   "name": "a backslash before an ordinary letter stays",
+   "md": "a\\b c\\n",
+   "text": "a\\b c\\n",
+   "spans": []
+  },
+  {
+   "name": "unclosed bold",
+   "md": "**open and never closed",
+   "text": "**open and never closed",
+   "spans": []
+  },
+  {
+   "name": "unclosed code",
+   "md": "a `tick with no end",
+   "text": "a `tick with no end",
+   "spans": []
+  },
+  {
+   "name": "empty bold",
+   "md": "**** and ** **",
+   "text": "** and  **",
+   "spans": [
+    {
+     "kind": "bold",
+     "attrs": {},
+     "start": 1,
+     "end": 7
+    }
+   ]
+  },
+  {
+   "name": "unclosed link",
+   "md": "[label](not a target",
+   "text": "[label](not a target",
+   "spans": []
+  },
+  {
+   "name": "a bracket that is not a link",
+   "md": "[just brackets] and (parens)",
+   "text": "[just brackets] and (parens)",
+   "spans": []
+  },
+  {
+   "name": "a link with a bad scheme",
+   "md": "[x](ftp://host)",
+   "text": "[x](ftp://host)",
+   "spans": []
+  },
+  {
+   "name": "nested link in a label is literal",
+   "md": "[a [b](https://b) c](https://a)",
+   "text": "a [b c](https://a)",
+   "spans": [
+    {
+     "kind": "link",
+     "attrs": {
+      "href": "https://b"
+     },
+     "start": 0,
+     "end": 4
+    }
+   ]
+  },
+  {
+   "name": "bold across a link edge",
+   "md": "**a [b](https://x)** c",
+   "text": "a [b](https://x) c",
+   "spans": [
+    {
+     "kind": "bold",
+     "attrs": {},
+     "start": 0,
+     "end": 16
+    }
+   ]
+  },
+  {
+   "name": "astral characters before a span",
+   "md": "😀 **b** 𝒳 `c`",
+   "text": "😀 b 𝒳 c",
+   "spans": [
+    {
+     "kind": "bold",
+     "attrs": {},
+     "start": 2,
+     "end": 3
+    },
+    {
+     "kind": "code",
+     "attrs": {},
+     "start": 6,
+     "end": 7
+    }
+   ]
+  },
+  {
+   "name": "CJK",
+   "md": "中文 **加粗** 文字",
+   "text": "中文 加粗 文字",
+   "spans": [
+    {
+     "kind": "bold",
+     "attrs": {},
+     "start": 3,
+     "end": 5
+    }
+   ]
+  },
+  {
+   "name": "stars inside a word",
+   "md": "a*b*c and 2*3**4",
+   "text": "a*b*c and 2*3**4",
+   "spans": []
+  }
+ ]
+}

@@ -1,5 +1,5 @@
 /**
- * comments.ts — comment threads as kind blocks (03-extensions §4, 09-editor §7).
+ * comments.ts — comment threads as kind blocks (docs/model.md, "Block kinds").
  *
  * A comment is a block of kind `comment` (one message per block, `thread`
  * shared by replies) anchored by a `comment{block}` mark on the words it

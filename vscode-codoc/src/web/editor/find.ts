@@ -1,5 +1,5 @@
 /**
- * find.ts — Find and Replace over the document (09-editor §8).
+ * find.ts — Find and Replace over the document.
  *
  * Matching is over each textblock's text; matches never cross a block. A
  * replacement is an ordinary `insertText` transaction, so the recorder turns it

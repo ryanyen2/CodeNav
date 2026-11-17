@@ -27,12 +27,14 @@ describe('a selection across paragraphs', () => {
         else expect(texts(m.view.state.doc)).toEqual(['T', 'one  four']);
     });
 
-    it('Backspace across a kind block is refused and the shadows stand', () => {
+    it('Backspace across a plugin block deletes it with the words, and the shadows stand', () => {
         const m = mount([block('h', 'heading', 'T'), block('p1', 'paragraph', 'aaa bbb'), kindBlock('k'), block('p2', 'paragraph', 'ccc ddd')]);
         select(m.view, posIn(m.view, 'p1', 4), posIn(m.view, 'p2', 3));
         key(m.view, 'Backspace', 8);
         m.handle.flush();
         expect(shadowFaults(m)).toEqual([]);
+        expect(kinds(m.submitted)).toEqual(['text.delete', 'text.delete', 'block.delete', 'block.merge']);
+        expect(texts(m.view.state.doc)).toEqual(['T', 'aaa  ddd']);
     });
 
     it('select-all + Backspace over a tree with headings is refused with a reason', () => {
