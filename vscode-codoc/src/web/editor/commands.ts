@@ -102,16 +102,21 @@ export function selectedBlocks(state: EditorState): Array<{ node: PMNode; pos: n
  * both are prose. A heading at either end is left alone when none of its
  * characters is selected and deleted when all of them are; a selection that
  * covers part of a heading is refused, because the rest of it could not join
- * anything. A source block wholly selected at an end is deleted; partly
- * selected, it loses the covered text. A selection that would take every
- * block, or every feature, is refused.
+ * anything. A prose or source block wholly selected at an end is deleted
+ * when a block outside the selection is left to hold the caret, so a whole
+ * feature selected to the end of its last paragraph goes without leaving an
+ * empty paragraph to the feature above; partly selected, it loses the covered
+ * text. With `landing` (typed or pasted text follows) the first end stays to
+ * receive it. A selection that would take every block, or every feature, is
+ * refused.
  */
-export function deleteSelection(state: EditorState, env: Env): Gesture | null {
+export function deleteSelection(state: EditorState, env: Env, landing = false): Gesture | null {
     if (state.selection.empty) return null;
     const parts = selectedBlocks(state);
     if (!parts.length) return null;
     const refuse = (why: string): null => { env.refuse?.(why); return null; };
     const last = parts.length - 1;
+    const outside = parts[0].index > 0 || parts[last].index < state.doc.childCount - 1;
     type Fate = 'cut' | 'delete' | 'keep';
     const fates: Fate[] = [];
     for (const [i, p] of parts.entries()) {
@@ -123,7 +128,7 @@ export function deleteSelection(state: EditorState, env: Env): Gesture | null {
         else if (kind === 'heading') {
             if (covered && !whole) return refuse('a selection that covers part of a heading is not deleted; select the whole heading');
             fates.push(whole ? 'delete' : 'keep');
-        } else fates.push(SOURCE.has(kind) && whole ? 'delete' : 'cut');
+        } else fates.push(whole && outside && !(landing && i === 0) ? 'delete' : 'cut');
     }
     if (parts.length === 1 && !env.shadows.get(parts[0].node.attrs.bid as string)) return null;
     const gone = parts.filter((_p, i) => fates[i] === 'delete');
@@ -182,7 +187,8 @@ export function deleteSelection(state: EditorState, env: Env): Gesture | null {
     }
     const start = first.pos, end = tail.pos + tail.node.nodeSize;
     let tr = state.tr.replaceWith(start, end, ends);
-    tr = tr.setSelection(caret >= 0 ? TextSelection.create(tr.doc, start + caret) : Selection.near(tr.doc.resolve(Math.min(start, tr.doc.content.size))));
+    // With both ends gone, the caret goes to the end of the block before the selection.
+    tr = tr.setSelection(caret >= 0 ? TextSelection.create(tr.doc, start + caret) : Selection.near(tr.doc.resolve(Math.min(start, tr.doc.content.size)), -1));
     return done(tr, ops);
 }
 
@@ -534,7 +540,7 @@ export function pasteBlocks(state: EditorState, env: Env, pieces: Piece[]): Gest
     const cids: string[] = [];
     let tr = state.tr;
     if (!state.selection.empty) {
-        const cut = deleteSelection(state, env);
+        const cut = deleteSelection(state, env, true);
         if (!cut) return null;
         ops.push(...cut.ops);
         tr = cut.tr;

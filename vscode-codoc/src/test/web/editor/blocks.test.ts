@@ -184,6 +184,8 @@ describe('Backspace at the start of a heading', () => {
          { phases: { f: 'edited' }, watermarks: { f: { handoff: { s: 5 }, realized: { s: 4 } } } }],
         ['is named by an open plan', [block('f', 'heading', 'New'), block('p', 'paragraph', 'x')],
          { plans: [{ id: 'p-1', actor: 'agent:x', kind: 'edit', target: 'p', note: '', status: 'open', handoff: ['f'] }] }],
+        ['is proposed', [block('f', 'heading', 'New'), block('p', 'paragraph', 'x')], { phases: { f: 'proposed' } }],
+        ['is drifted', [block('f', 'heading', 'Old'), block('p', 'paragraph', 'x')], { phases: { f: 'drifted' } }],
     ];
     for (const [name, blocks, extra] of cases) {
         it(`on a heading that ${name} does nothing but say how`, () => {
@@ -435,6 +437,27 @@ describe('a selection across blocks', () => {
         key(m.view, 'Backspace', 8);
         expect(sent(m)).toEqual([{ kind: 'block.delete', target: { bid: 'b' }, payload: { ids: ['b', 'q1', 'q2'] } }]);
         expect(ids(m.view.state.doc)).toEqual(['heading:a', 'paragraph:p1', 'heading:c']);
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it('deletes a whole feature selected to the end of its last paragraph, and the last feature too', () => {
+        for (const tail of [[block('c', 'heading', 'C')], []]) {
+            const m = mount([block('a', 'heading', 'A'), block('p1', 'paragraph', 'one'), block('b', 'heading', 'B'),
+                             block('q1', 'paragraph', 'x'), block('q2', 'paragraph', 'y'), ...tail]);
+            select(m.view, posIn(m.view, 'b', 0), posIn(m.view, 'q2', 1));
+            key(m.view, 'Backspace', 8);
+            expect(sent(m)).toEqual([{ kind: 'block.delete', target: { bid: 'b' }, payload: { ids: ['b', 'q1', 'q2'] } }]);
+            expect(ids(m.view.state.doc)).toEqual(['heading:a', 'paragraph:p1', ...tail.map(t => `heading:${t.id}`)]);
+            expect(m.view.state.selection.from).toBe(posIn(m.view, 'p1', 3));
+            expect(shadowFaults(m)).toEqual([]);
+        }
+    });
+
+    it('typed over whole paragraphs keeps the first one for the typed words', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one'), block('p2', 'paragraph', 'two'), block('u', 'heading', 'U')]);
+        select(m.view, posIn(m.view, 'p1', 0), posIn(m.view, 'p2', 3));
+        typeText(m.view, 'X');
+        expect(texts(m.view.state.doc)).toEqual(['T', 'X', 'U']);
         expect(shadowFaults(m)).toEqual([]);
     });
 

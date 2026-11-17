@@ -84,16 +84,17 @@ export function gestureKeys(env: Env, openLink: () => boolean): Plugin[] {
             }
             if (empty && $from.parentOffset === 0 && caretKind(state) === 'heading') {
                 // A plain heading becomes a paragraph, so a stray `# ` is undone in one key. One that
-                // owns code, has a child heading, has a hand-off not yet realized, or is named by an
-                // open plan is a feature to keep.
+                // owns code, has a child heading, has a hand-off not yet realized, is named by an open
+                // plan, or is in any phase but edited or synced is a feature to keep.
                 const fid = $from.parent.attrs.bid as string, level = $from.parent.attrs.level as number;
                 const proj = env.projection?.();
                 let next: number | null = null;
                 for (let i = $from.index(0) + 1; i < state.doc.childCount && next === null; i++) {
                     if (state.doc.child(i).type.name === 'heading') next = state.doc.child(i).attrs.level;
                 }
-                const w = proj?.watermarks?.[fid];
+                const w = proj?.watermarks?.[fid], phase = proj?.phases[fid];
                 const keep = !!proj?.bindings.by_feature[fid]?.length || (next !== null && next > level)
+                    || (phase !== undefined && phase !== 'edited' && phase !== 'synced')
                     || (!!w && Object.entries(w.handoff).some(([s, seq]) => (w.realized[s] ?? 0) < seq))
                     || !!proj?.plans.some(p => p.status === 'open' && (p.target === fid || p.handoff?.includes(fid)));
                 if (!keep) return run(view!, setKind(state, env, 'paragraph'));
