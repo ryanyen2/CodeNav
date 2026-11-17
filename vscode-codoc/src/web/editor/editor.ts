@@ -1,0 +1,171 @@
+/**
+ * editor.ts — `mountEditor`, which assembles the editor over a projection.
+ *
+ * The parts, and where each lives:
+ *
+ *   schema.ts      the nodes and marks, and the view for plugin kinds
+ *   keymap.ts      which key runs which gesture
+ *   commands.ts    the gestures: each emits its ops and changes the document
+ *   guards.ts      refuses unrecorded structural changes; keeps the page NFC
+ *   outbox.ts      records transactions into ops, batches them, takes acks,
+ *                  and says which blocks are held
+ *   adoption.ts    brings the page in line with a new projection
+ *   decorations.ts draws ink, ground, plan words and phase markers
+ *   drag.ts, find.ts, menus.ts   the drag handle, find and replace, `/` and `@`
+ *
+ * `mountEditor` builds the document and a shadow per block from the first
+ * projection, wires those parts to one ProseMirror view, and returns the
+ * handle the page uses (app.ts).
+ *
+ * ProseMirror's own history is not installed. Undo submits the recorded
+ * inverse of a batch as new ops, so the page and the store share one history.
+ */
+import { EditorState, Plugin } from '@tiptap/pm/state';
+import { EditorView } from '@tiptap/pm/view';
+
+import { docFrom } from '../calc/adopt';
+import { newBid, newCid } from '../calc/ids';
+import type { Ack, CharRef, Projection, Submission } from '../calc/projection';
+import { scalarOffset } from '../calc/recorder';
+import { adopter, type Adopt } from './adoption';
+import { deleteFeature, moveBlock, pasteBlocks, type Env } from './commands';
+import { Paints, REPAINT, type Shown } from './decorations';
+import { dragPlugin } from './drag';
+import { FindWidget, findPlugin } from './find';
+import { nfcGuard, structureGuard } from './guards';
+import { gestureKeys } from './keymap';
+import { Menus } from './menus';
+import { Outbox } from './outbox';
+import { codocSchema, kindView } from './schema';
+
+export interface EditorHost {
+    /** Send submissions to the daemon's inbox. */
+    submit(subs: Submission[]): void;
+    /** The caret moved into this feature. */
+    onFeature?(fid: string | null): void;
+    /** Open the code a citation names. */
+    openCite?(file: string, symbol: string): void;
+    /** A gesture was not performed, or the daemon refused an op and its block was reloaded. */
+    onConflict?(bid: string, conflict: string): void;
+}
+
+export interface EditorHandle {
+    view: EditorView;
+    adopt: Adopt;
+    ack(acks: Ack[]): void;
+    /** Send queued ops now instead of waiting out the settle. */
+    flush(): void;
+    /** Show who wrote each run of words (the History stance). */
+    setHistory(on: boolean): void;
+    find(replace: boolean): void;
+    /** The selection as a comment anchor: its block, its words, and the first and last character. */
+    selectionAnchor(): { bid: string; text: string; start: CharRef; end: CharRef } | null;
+    deleteFeature(fid: string): void;
+    moveBlock(bid: string, afterBid: string | 'START', levelDelta?: number): void;
+}
+
+export function mountEditor(container: HTMLElement, proj: Projection, host: EditorHost): EditorHandle {
+    const schema = codocSchema();
+    const { doc, shadows } = docFrom(schema, proj);
+    const shown: Shown = { projection: proj, realizing: new Set(), history: false };
+    const env: Env = { shadows, nextBid: newBid, nextCid: newCid };
+    const paints = new Paints(shown);
+    const outbox = new Outbox(shadows, subs => host.submit(subs), bid => paints.mark(bid));
+
+    let menus: Menus | null = null;
+    const state = EditorState.create({
+        schema,
+        doc,
+        plugins: [
+            new Plugin({ props: { handleKeyDown: (_v, ev) => menus?.handleKeyDown(ev) ?? false } }),
+            structureGuard(),
+            nfcGuard(),
+            ...gestureKeys(env, why => host.onConflict?.('', why)),
+            paints.plugin,
+            findPlugin(),
+            dragPlugin((bid, after) => { const g = moveBlock(view.state, env, bid, after); if (g) view.dispatch(g.tr); }),
+        ],
+    });
+
+    const view = new EditorView(container, {
+        state,
+        nodeViews: { kindBlock: node => kindView(node) },
+        dispatchTransaction(tr) {
+            // Record what the page took, not what it was asked to take. The
+            // structural guard can refuse a transaction, and a refused one
+            // must leave no ops and no change to the shadows.
+            const { state: next, transactions } = view.state.applyTransaction(tr);
+            for (const applied of transactions) outbox.record(applied);
+            view.updateState(next);
+            if (tr.selectionSet || tr.docChanged) { host.onFeature?.(featureAt(next.selection.from)); menus?.update(); }
+        },
+        handlePaste(_v, _event, slice) {
+            const g = pasteBlocks(view.state, env, slice);
+            if (!g) return false;                       // one block's worth: the recorder reads it
+            view.dispatch(g.tr);
+            return true;
+        },
+        handleClickOn(_v, _pos, node, _np, event) {
+            const cite = (event.target as HTMLElement | null)?.closest?.('[data-cite]') as HTMLElement | null;
+            if (cite && host.openCite) {
+                const m = node.marks.find(x => x.type.name === 'cite') ?? null;
+                if (m) { host.openCite(m.attrs.file, m.attrs.symbol); return true; }
+            }
+            return false;
+        },
+    });
+
+    menus = new Menus(view, env, () => shown.projection, container);
+    const finder = new FindWidget(view, container);
+    const adopt = adopter(view, shadows, outbox, paints, shown);
+
+    /** The feature a position is in: the nearest heading at or above it. */
+    function featureAt(pos: number): string | null {
+        const $p = view.state.doc.resolve(Math.min(pos, view.state.doc.content.size));
+        if ($p.depth < 1) return null;
+        for (let i = $p.index(0); i >= 0; i--) {
+            const n = view.state.doc.child(i);
+            if (n.type.name === 'heading') return n.attrs.bid as string;
+        }
+        return null;
+    }
+
+    return {
+        view,
+        adopt,
+        ack(acks) {
+            const refused = outbox.ack(acks);
+            for (const [bid, conflict] of refused) host.onConflict?.(bid, conflict);
+            // Adopt the projection in hand again, always. A block this ack
+            // released is re-read exactly when the projection already contains
+            // its op, and a refused block is re-read regardless.
+            adopt(shown.projection, shown.realizing, new Set(refused.keys()));
+        },
+        flush: () => outbox.flush(),
+        setHistory(on) {
+            shown.history = on;
+            paints.mark();
+            view.dispatch(view.state.tr.setMeta(REPAINT, true));
+        },
+        find: replace => finder.open(replace),
+        selectionAnchor() {
+            const { from, to, empty } = view.state.selection;
+            const $f = view.state.doc.resolve(from), $t = view.state.doc.resolve(to);
+            if (empty || $f.depth !== 1 || $t.depth !== 1 || $f.parent !== $t.parent) return null;
+            const bid = $f.parent.attrs.bid as string;
+            const sh = shadows.get(bid);
+            if (!sh) return null;
+            const a = scalarOffset($f.parent, $f.parentOffset), b = scalarOffset($t.parent, $t.parentOffset);
+            if (b <= a) return null;
+            return { bid, text: sh.chars.slice(a, b).join(''), start: sh.ref(a), end: sh.ref(b - 1) };
+        },
+        deleteFeature(fid) {
+            const g = deleteFeature(view.state, env, fid);
+            if (g) view.dispatch(g.tr);
+        },
+        moveBlock(bid, after, delta = 0) {
+            const g = moveBlock(view.state, env, bid, after, delta);
+            if (g) view.dispatch(g.tr);
+        },
+    };
+}

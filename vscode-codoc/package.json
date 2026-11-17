@@ -1,7 +1,7 @@
 {
   "name": "codoc",
   "displayName": "codoc",
-  "description": "Feature-tree navigator and transaction queue for codoc",
+  "description": "The editor for a codoc tree: the intent of a codebase as a document, kept in step with the code.",
   "version": "0.2.18",
   "publisher": "codoc",
   "license": "MIT",
@@ -23,38 +23,10 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "Tree navigation works untrusted; setup, provisioning, and the watch daemon require trust."
+      "description": "The tree opens from the files the daemon has already published. Setup and the daemon need a trusted workspace."
     }
   },
   "contributes": {
-    "menus": {
-      "commandPalette": [
-        {
-          "command": "codoc.navigateToFeature",
-          "when": "false"
-        }
-      ]
-    },
-    "languages": [
-      {
-        "id": "codoc",
-        "aliases": [
-          "Codoc",
-          "codoc"
-        ],
-        "extensions": [
-          ".codoc"
-        ],
-        "configuration": "./language-configuration.json"
-      }
-    ],
-    "grammars": [
-      {
-        "language": "codoc",
-        "scopeName": "source.codoc",
-        "path": "./syntaxes/codoc.tmLanguage.json"
-      }
-    ],
     "customEditors": [
       {
         "viewType": "codoc.tree-editor",
@@ -93,16 +65,8 @@
         "title": "codoc: Share remotely — start the hub over a tunnel"
       },
       {
-        "command": "codoc.serve.stop",
-        "title": "codoc: Stop the deployed hub"
-      },
-      {
         "command": "codoc.open",
         "title": "codoc: Open"
-      },
-      {
-        "command": "codoc.navigateToFeature",
-        "title": "codoc: Navigate to feature"
       },
       {
         "command": "codoc.find",
@@ -130,10 +94,10 @@
     "configuration": {
       "title": "codoc",
       "properties": {
-        "codoc.rootDir": {
+        "codoc.serverPath": {
           "type": "string",
           "default": "",
-          "description": "Root directory of the codoc-initialized repo. Auto-detected from workspace if empty."
+          "description": "Path to a `codoc` executable to run instead of the one setup installs. For developing the Python side; leave empty otherwise."
         }
       }
     },
@@ -187,9 +151,9 @@
   },
   "dependencies": {
     "@tiptap/core": "^2.27.2",
-    "@tiptap/pm": "^2.27.2",
-    "@tiptap/starter-kit": "^2.27.2",
-    "@tiptap/suggestion": "^2.27.2",
-    "animejs": "^4.4.1"
+    "@tiptap/extension-document": "^2.27.2",
+    "@tiptap/extension-hard-break": "^2.27.2",
+    "@tiptap/extension-text": "^2.27.2",
+    "@tiptap/pm": "^2.27.2"
   }
 }

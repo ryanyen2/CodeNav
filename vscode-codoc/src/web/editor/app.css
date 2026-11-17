@@ -1,0 +1,140 @@
+/* The page's styles. One palette on every surface: blue is the person, gray a
+   plan, green and red the code. Everything else is muted. */
+:root {
+    --codoc-fg: var(--vscode-editor-foreground, #1f2328);
+    --codoc-bg: var(--vscode-editor-background, #fff);
+    --codoc-muted: color-mix(in srgb, var(--codoc-fg) 55%, var(--codoc-bg));
+    --codoc-faint: color-mix(in srgb, var(--codoc-fg) 12%, var(--codoc-bg));
+    --codoc-human: #2f6fed;
+    --codoc-plan: #8a8f98;
+    --codoc-added: #2f9e5b;
+    --codoc-removed: #d64545;
+    --codoc-font: var(--vscode-editor-font-family, ui-sans-serif, system-ui, sans-serif);
+}
+html, body { margin: 0; height: 100%; background: var(--codoc-bg); color: var(--codoc-fg); font: 14px/1.6 var(--codoc-font); }
+#app, .codoc-shell { height: 100%; }
+.codoc-shell { display: grid; grid-template-columns: 240px 1fr; }
+.codoc-tree { border-right: 1px solid var(--codoc-faint); overflow: auto; padding: 8px 0; font-size: 12.5px; }
+.codoc-row { display: flex; align-items: center; gap: 6px; padding: 3px 10px; cursor: pointer; color: var(--codoc-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.codoc-row:hover, .codoc-row.is-selected { color: var(--codoc-fg); background: var(--codoc-faint); }
+.codoc-l2 { padding-left: 22px; } .codoc-l3 { padding-left: 34px; } .codoc-l4 { padding-left: 46px; } .codoc-l5 { padding-left: 58px; } .codoc-l6 { padding-left: 70px; }
+.codoc-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: transparent; }
+.codoc-ch-human .codoc-dot { background: var(--codoc-human); }
+.codoc-ch-plan .codoc-dot { background: var(--codoc-plan); }
+.codoc-ch-code .codoc-dot { background: var(--codoc-added); }
+.codoc-dot-realizing { border: 1.5px solid var(--codoc-muted); animation: codoc-pulse 1.4s ease-in-out infinite; }
+.codoc-main { display: grid; grid-template-rows: auto 1fr auto; min-width: 0; height: 100%; }
+.codoc-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 14px; border-bottom: 1px solid var(--codoc-faint); font-size: 12.5px; }
+.codoc-crumb { color: var(--codoc-muted); }
+.codoc-spacer { flex: 1; }
+.codoc-chip { padding: 1px 8px; border-radius: 10px; background: var(--codoc-faint); color: var(--codoc-muted); }
+.codoc-chip-edited { color: var(--codoc-human); } .codoc-chip-queued, .codoc-chip-realizing { color: var(--codoc-added); } .codoc-chip-proposed { color: var(--codoc-plan); }
+.codoc-btn { border: 1px solid var(--codoc-faint); background: transparent; color: var(--codoc-fg); border-radius: 6px; padding: 2px 10px; cursor: pointer; font: inherit; font-size: 12.5px; }
+.codoc-btn:hover, .codoc-btn.is-on { background: var(--codoc-faint); }
+.codoc-btn-human { border-color: var(--codoc-human); color: var(--codoc-human); }
+.codoc-btn-plan { border-color: var(--codoc-plan); }
+.codoc-page { overflow: auto; padding: 24px 300px 120px 48px; }
+.codoc-status { padding: 3px 14px; font-size: 11.5px; color: var(--codoc-muted); border-top: 1px solid var(--codoc-faint); }
+
+/* the document */
+.ProseMirror { outline: none; max-width: 72ch; }
+.codoc-heading { position: relative; font-weight: 600; margin: 1.6em 0 0.4em; }
+.codoc-h1 { font-size: 1.5em; } .codoc-h2 { font-size: 1.25em; } .codoc-h3 { font-size: 1.1em; } .codoc-h4, .codoc-h5, .codoc-h6 { font-size: 1em; }
+.codoc-paragraph { margin: 0 0 0.75em; }
+.codoc-focus { font-weight: 600; }
+.codoc-cite { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; background: var(--codoc-faint); border-radius: 4px; padding: 0 4px; cursor: pointer; }
+.codoc-consult { color: inherit; text-decoration: underline dotted; }
+.codoc-comment { background: color-mix(in srgb, #e6b800 18%, transparent); }
+
+/* the three channels */
+.codoc-ink-unsent { text-decoration: underline; text-decoration-color: var(--codoc-human); text-decoration-thickness: 2px; animation: codoc-pulse 1.6s ease-in-out infinite; }
+.codoc-ink-sent { text-decoration: underline; text-decoration-color: var(--codoc-human); text-decoration-thickness: 2px; }
+.codoc-plan, .codoc-plan-open { color: var(--codoc-plan); }
+.codoc-plan-accepted { color: color-mix(in srgb, var(--codoc-plan) 60%, var(--codoc-fg)); }
+.codoc-plan-cut { text-decoration: line-through; text-decoration-color: var(--codoc-plan); color: var(--codoc-plan); }
+.codoc-plan-mark { text-decoration: underline dashed; text-decoration-color: var(--codoc-plan); text-underline-offset: 3px; }
+.codoc-plan-unmark { text-decoration: underline dashed; text-decoration-color: var(--codoc-plan); text-underline-offset: 3px; opacity: .75; }
+.codoc-code-added { background: color-mix(in srgb, var(--codoc-added) 18%, transparent); }
+.codoc-code-removed { background: color-mix(in srgb, var(--codoc-removed) 16%, transparent); text-decoration: line-through; color: var(--codoc-removed); font-size: 0.95em; margin-right: 2px; }
+
+/* the margin marker */
+.codoc-marker { position: absolute; left: -18px; top: 0.55em; width: 8px; height: 8px; border-radius: 50%; }
+.codoc-ch-human.codoc-marker, .codoc-marker-edited, .codoc-marker-queued { background: var(--codoc-human); }
+.codoc-marker-proposed, .codoc-marker-planned { background: var(--codoc-plan); }
+.codoc-marker-drifted { background: var(--codoc-added); }
+.codoc-marker-realizing { border: 1.5px solid var(--codoc-muted); animation: codoc-pulse 1.4s ease-in-out infinite; }
+
+/* History: word runs by author */
+.is-history .codoc-paint { outline: 1px solid transparent; }
+
+@keyframes codoc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .codoc-ink-unsent, .codoc-dot-realizing, .codoc-marker-realizing { animation: none; } }
+
+/* find */
+.codoc-page { position: relative; }
+.codoc-find { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -16px -32px 12px; padding: 6px 12px; background: var(--codoc-bg); border-bottom: 1px solid var(--codoc-faint); font-size: 12.5px; }
+.codoc-find-input { font: inherit; padding: 2px 6px; border: 1px solid var(--codoc-faint); border-radius: 4px; background: transparent; color: var(--codoc-fg); min-width: 16ch; }
+.codoc-find-count { color: var(--codoc-muted); min-width: 6ch; }
+.codoc-find-replace { display: flex; gap: 6px; flex-basis: 100%; }
+.codoc-find-match { background: color-mix(in srgb, #e6b800 30%, transparent); }
+.codoc-find-match.is-current { outline: 2px solid #e6b800; }
+
+/* the / and @ menus */
+.codoc-menu { position: absolute; z-index: 6; min-width: 18ch; max-width: 48ch; background: var(--codoc-bg); border: 1px solid var(--codoc-faint); border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.12); font-size: 12.5px; overflow: hidden; }
+.codoc-menu-item { display: flex; justify-content: space-between; gap: 12px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+.codoc-menu-item.is-active, .codoc-menu-item:hover { background: var(--codoc-faint); }
+.codoc-menu-detail { color: var(--codoc-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; overflow: hidden; text-overflow: ellipsis; }
+
+/* Drag handles, as a pseudo-element on the block itself. They used to be three
+   thousand widget decorations, and consulting a decoration set costs
+   ProseMirror a scan per top-level child per view update — half the cost of a
+   keystroke in a large tree, for a mark that never depends on what the block
+   says. Nothing here reaches the decoration machinery at all. */
+.codoc-paragraph, .codoc-heading { position: relative; }
+.codoc-paragraph::before, .codoc-heading::before {
+    content: ''; position: absolute; left: -34px; top: 0.35em; width: 12px; height: 16px;
+    border-radius: 3px; cursor: grab; opacity: 0;
+    background: radial-gradient(circle, var(--codoc-muted) 1px, transparent 1.5px) 0 0 / 6px 6px;
+}
+.codoc-paragraph:hover::before, .codoc-heading:hover::before { opacity: .7; }
+.is-drop-above { box-shadow: 0 -2px 0 var(--codoc-human); }
+.is-drop-below { box-shadow: 0 2px 0 var(--codoc-human); }
+
+/* History: who wrote which words */
+.codoc-author-human { background: color-mix(in srgb, var(--codoc-human) 12%, transparent); }
+.codoc-author-loop { background: color-mix(in srgb, var(--codoc-added) 12%, transparent); }
+.codoc-author-agent { background: color-mix(in srgb, var(--codoc-plan) 18%, transparent); }
+.codoc-author-other { background: color-mix(in srgb, var(--codoc-fg) 6%, transparent); }
+
+/* toolbar extras */
+.codoc-lang { font: inherit; font-size: 12px; border: 1px solid var(--codoc-faint); border-radius: 6px; background: transparent; color: var(--codoc-fg); padding: 1px 4px; }
+.codoc-status.is-notice { color: var(--codoc-removed); }
+
+/* plugin kinds: read-only in this editor */
+.codoc-kind { position: relative; margin: 0 0 0.75em; padding: 8px 12px; border: 1px solid var(--codoc-faint); border-radius: 6px; font-size: 12.5px; }
+.codoc-kind-label { color: var(--codoc-muted); text-transform: uppercase; letter-spacing: .04em; font-size: 10.5px; margin-bottom: 4px; }
+.codoc-kind-field { display: flex; gap: 8px; align-items: baseline; }
+.codoc-kind-key { color: var(--codoc-muted); min-width: 6ch; }
+.codoc-kind-value { white-space: pre-wrap; word-break: break-word; margin: 0; font: inherit; }
+pre.codoc-kind-value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+
+/* comments in the margin */
+.codoc-margin { position: absolute; top: 0; right: 16px; width: 240px; pointer-events: none; }
+.codoc-card { position: absolute; left: 0; width: 100%; box-sizing: border-box; pointer-events: auto; padding: 8px 10px; background: var(--codoc-bg); border: 1px solid var(--codoc-faint); border-left: 3px solid #e6b800; border-radius: 6px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+.codoc-card.is-draft { border-left-color: var(--codoc-human); }
+.codoc-card-quote { color: var(--codoc-muted); font-style: italic; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.codoc-card-msg { display: flex; gap: 6px; margin: 2px 0; }
+.codoc-card-who { color: var(--codoc-muted); flex: none; }
+.codoc-card-input { width: 100%; box-sizing: border-box; font: inherit; border: 1px solid var(--codoc-faint); border-radius: 4px; background: transparent; color: var(--codoc-fg); margin-top: 4px; resize: vertical; }
+.codoc-card-actions { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+.codoc-card-actions .codoc-btn { font-size: 11.5px; padding: 1px 7px; }
+.is-commented { background: color-mix(in srgb, #e6b800 12%, transparent); }
+
+/* the timeline */
+.codoc-timeline { display: flex; align-items: center; gap: 10px; padding: 6px 0 10px; font-size: 12px; color: var(--codoc-muted); }
+.codoc-timeline input[type=range] { flex: 1; max-width: 72ch; }
+.codoc-past { max-width: 72ch; background: color-mix(in srgb, #e6b800 6%, var(--codoc-bg)); padding: 4px 12px; border-radius: 6px; }
+.codoc-past ins { text-decoration: none; background: color-mix(in srgb, var(--codoc-added) 22%, transparent); }
+.codoc-past del { color: var(--codoc-removed); background: color-mix(in srgb, var(--codoc-removed) 14%, transparent); }
+.is-history .codoc-tree { opacity: .6; }
+.codoc-past-gone { opacity: .75; }

@@ -1,55 +1,37 @@
 /**
- * provider.ts — the `Codoc Tree` custom editor's host half (09-editor §5–6).
+ * provider.ts — the extension-host half of the `Codoc Tree` custom editor.
  *
- * The host does four things and nothing else: reads `projection.json` and
- * `status.json` and posts them to the webview when they change; appends the
- * webview's submissions to `.codoc/inbox/ide.jsonl`; tails
- * `.codoc/inbox/ide.ack.jsonl` and posts acks back; opens code locations and
- * runs the two terminal commands (`codoc realize`, `codoc sync`). It holds no
- * document model, no baseline, no diff.
+ * It relays files and nothing else. It posts `projection.json` and
+ * `status.json` to the page when they change, appends the page's submissions
+ * to `.codoc/inbox/ide.jsonl`, tails `.codoc/inbox/ide.ack.jsonl` and posts
+ * the daemon's acks back, answers a `history` request with `history.json`,
+ * writes the tree's language to `config.json`, and opens the code a citation
+ * names. It holds no document model and compares nothing.
+ *
+ * The custom editor is registered for `.codoc/tree.codoc`, the daemon's
+ * Markdown export. That file is only the handle VS Code opens; the page is
+ * drawn from the projection, and the export is never read or written here.
  */
-import * as fs from 'fs';
-import * as fsp from 'fs/promises';
-import * as path from 'path';
+import * as fsp from 'node:fs/promises';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 
-import type { Ack, Projection, Submission } from '../calc/projection';
+import type { HostToPage, PageToHost } from '../wire';
+import type { Ack, Projection, Submission } from '../web/calc/projection';
+import type { HistoryWindow } from '../web/calc/window';
 
-export interface HostToWebview {
-    kind: 'projection' | 'acks' | 'status' | 'reveal' | 'find' | 'history' | 'notice';
-    proj?: Projection;
-    history?: unknown;
-    realizing?: string[];
-    acks?: Ack[];
-    status?: Record<string, unknown>;
-    fid?: string;
-    replace?: boolean;
-    /** A sentence for the status bar: something the host could not do, and why. */
-    text?: string;
-}
-
-export interface WebviewToHost {
-    kind: 'ready' | 'submit' | 'open-cite' | 'realize' | 'sync' | 'open-file' | 'set-language' | 'history';
-    subs?: Submission[];
-    file?: string;
-    symbol?: string;
-    tag?: string;
-}
-
+/** This client's name in the daemon's inbox: `inbox/ide.jsonl`, `inbox/ide.ack.jsonl`. */
 const CLIENT = 'ide';
 
 export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
     static readonly viewType = 'codoc.tree-editor';
     private static panels = new Map<string, vscode.WebviewPanel>();
 
-    constructor(private readonly context: vscode.ExtensionContext, private readonly codocCli: () => string | undefined) {}
-
-    static reveal(fid: string): void {
-        for (const p of CodocEditorProvider.panels.values()) void p.webview.postMessage({ kind: 'reveal', fid } satisfies HostToWebview);
-    }
+    /** `realize` runs `codoc realize` in the given repository, where the person can watch it. */
+    constructor(private readonly context: vscode.ExtensionContext, private readonly realize: (root: string) => void) {}
 
     static find(replace = false): void {
-        for (const p of CodocEditorProvider.panels.values()) void p.webview.postMessage({ kind: 'find', replace } satisfies HostToWebview);
+        for (const p of CodocEditorProvider.panels.values()) void p.webview.postMessage({ kind: 'find', replace } satisfies HostToPage);
     }
 
     async resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel): Promise<void> {
@@ -59,7 +41,7 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
         panel.webview.html = this.html(panel.webview);
         CodocEditorProvider.panels.set(document.uri.toString(), panel);
 
-        const post = (m: HostToWebview) => void panel.webview.postMessage(m);
+        const post = (m: HostToPage) => void panel.webview.postMessage(m);
         const postProjection = async () => {
             const proj = await readJson<Projection>(path.join(codocDir, 'projection.json'));
             if (proj) post({ kind: 'projection', proj, realizing: await realizingSet(codocDir) });
@@ -67,6 +49,7 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
         const postStatus = async () => {
             const st = await readJson<Record<string, unknown>>(path.join(codocDir, 'status.json'));
             const cfg = await readJson<{ doc_language?: string }>(path.join(codocDir, 'config.json'));
+            // `human:local` is the actor the daemon gives the `ide` inbox.
             if (st) post({ kind: 'status', status: { ...st, doc_language: cfg?.doc_language ?? 'en', actor: 'human:local' } });
         };
 
@@ -83,7 +66,7 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
             if (acks.length) post({ kind: 'acks', acks });
         };
 
-        const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(codocDir), '{projection.json,status.json,config.json,inbox/ide.ack.jsonl}'));
+        const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(codocDir), `{projection.json,status.json,config.json,inbox/${CLIENT}.ack.jsonl}`));
         const onChange = (uri: vscode.Uri) => {
             const name = path.basename(uri.fsPath);
             if (name === 'projection.json') void postProjection();
@@ -96,7 +79,7 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
             if (CodocEditorProvider.panels.get(document.uri.toString()) === panel) CodocEditorProvider.panels.delete(document.uri.toString());
         });
 
-        panel.webview.onDidReceiveMessage(async (msg: WebviewToHost) => {
+        panel.webview.onDidReceiveMessage(async (msg: PageToHost) => {
             switch (msg.kind) {
                 case 'ready':
                     await postProjection();
@@ -108,17 +91,12 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
                 case 'open-cite':
                     if (msg.file) await openSymbol(root, msg.file, msg.symbol ?? '');
                     return;
-                case 'open-file':
-                    if (msg.file) await vscode.window.showTextDocument(vscode.Uri.file(path.join(root, msg.file)), { preview: true });
-                    return;
                 case 'history': {
-                    const h = await readJson<unknown>(path.join(codocDir, 'history.json'));
-                    if (h) post({ kind: 'history', history: h });
+                    const history = await readJson<HistoryWindow>(path.join(codocDir, 'history.json'));
+                    if (history) post({ kind: 'history', history });
                     return;
                 }
                 case 'set-language': {
-                    // `.codoc/config.json` is the one tracked setting file; the daemon and
-                    // every prompt read `doc_language` from it (codoc lang does the same).
                     if (!msg.tag) return;
                     const p = path.join(codocDir, 'config.json');
                     const cfg = (await readJson<Record<string, unknown>>(p)) ?? {};
@@ -131,14 +109,8 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
                     return;
                 }
                 case 'realize':
-                case 'sync': {
-                    const cli = this.codocCli();
-                    if (!cli) { void vscode.window.showWarningMessage('codoc is not installed yet — run "codoc: Set up codoc".'); return; }
-                    const term = vscode.window.createTerminal({ name: `codoc ${msg.kind}`, cwd: root });
-                    term.show(true);
-                    term.sendText(`${quote(cli)} ${msg.kind}`);
+                    this.realize(root);
                     return;
-                }
             }
         });
     }
@@ -168,15 +140,15 @@ async function sizeOf(p: string): Promise<number> {
     try { return (await fsp.stat(p)).size; } catch { return 0; }
 }
 
+/** The complete lines of `p` from byte `offset` on, and the offset just past them. */
 async function readFrom(p: string, offset: number): Promise<{ lines: string[]; end: number }> {
     try {
         const fh = await fsp.open(p, 'r');
         try {
             const st = await fh.stat();
-            // The daemon trims this file to its newest lines at session open, so
-            // a file SHORTER than where we stopped is a rotation, not a quiet
-            // moment: read it from the start rather than never reading it
-            // again, which would leave every block held for the session.
+            // The daemon trims this file to its newest lines when a session
+            // opens, so a file shorter than the offset has been rotated. Read
+            // it from the start; skipping it would leave every block held.
             if (st.size < offset) offset = 0;
             if (st.size <= offset) return { lines: [], end: offset };
             const buf = Buffer.alloc(st.size - offset);
@@ -200,6 +172,7 @@ async function appendSubmissions(codocDir: string, subs: Submission[]): Promise<
     await fsp.appendFile(path.join(dir, `${CLIENT}.jsonl`), body, 'utf8');
 }
 
+/** The features an agent is writing code for right now, from the agent's own activity file. */
 async function realizingSet(codocDir: string): Promise<string[]> {
     const st = await readJson<{ state?: string }>(path.join(codocDir, 'status.json'));
     if (st?.state !== 'realizing') return [];
@@ -207,6 +180,8 @@ async function realizingSet(codocDir: string): Promise<string[]> {
     return Object.entries(act?.features ?? {}).filter(([, v]) => v?.phase === 'editing' || v?.phase === 'reflecting').map(([k]) => k);
 }
 
+/** Open `file` and put the caret on `symbol`: its definition when a Python or
+ *  JavaScript keyword introduces it, otherwise its first occurrence. */
 async function openSymbol(root: string, file: string, symbol: string): Promise<void> {
     const uri = vscode.Uri.file(path.join(root, file));
     const doc = await vscode.workspace.openTextDocument(uri);
@@ -214,18 +189,11 @@ async function openSymbol(root: string, file: string, symbol: string): Promise<v
     const leaf = symbol.split('::').pop()?.split('.').pop();
     if (!leaf) return;
     const text = doc.getText();
-    const m = new RegExp(`\\b(def|class|function|const|let|var|async function)\\s+${leaf.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).exec(text)
-        ?? new RegExp(`\\b${leaf.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).exec(text);
+    const name = leaf.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const m = new RegExp(`\\b(def|class|function|const|let|var|async function)\\s+${name}\\b`).exec(text)
+        ?? new RegExp(`\\b${name}\\b`).exec(text);
     if (!m) return;
     const pos = doc.positionAt(m.index);
     editor.selection = new vscode.Selection(pos, pos);
     editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
-}
-
-function quote(p: string): string {
-    return /\s/.test(p) ? `"${p}"` : p;
-}
-
-export function fileExists(p: string): boolean {
-    try { fs.accessSync(p); return true; } catch { return false; }
 }

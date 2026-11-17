@@ -1,12 +1,11 @@
 import { defineConfig } from 'vitest/config';
 
+// Tests mirror `src/`: `src/test/host` for the extension host, `src/test/web`
+// for the page. A module that imports `vscode` cannot be loaded here, so the
+// host tests cover the files that do not. Tests run under `node`; a test that
+// mounts the editor asks for `jsdom` in its first line.
 export default defineConfig({
     test: {
-        // Modules under test must not import 'vscode'. Most of these are pure
-        // logic and run under `node`; `editor-dom.test.ts` mounts the real
-        // editor and asks for `jsdom` in its own docblock, because the faults
-        // that only appear when the browser drives it were invisible to a suite
-        // that never mounted it.
         include: ['src/test/**/*.test.ts'],
         environment: 'node',
     },

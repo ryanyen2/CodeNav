@@ -1,0 +1,166 @@
+/**
+ * outbox.ts — ops on their way from the page to the daemon, and what the page
+ * holds while they travel (09-editor §4–6).
+ *
+ * `record` turns every transaction the page took into ops: a gesture's own
+ * ops when the transaction carries them (commands.ts), otherwise what the
+ * recorder reads from its steps, with the per-block comparison as the fallback
+ * for a step it cannot name. Ops wait `SETTLE_MS` after the last keystroke and
+ * leave together as one batch, which is the undo unit.
+ *
+ * A block is **held** while the page knows more about it than a projection
+ * does: one of its ops is still unanswered, or the projection in hand predates
+ * the last op the daemon applied for it. Adoption leaves held blocks alone.
+ * `held` is that one predicate. Both halves are needed. Without the first a
+ * projection overwrites words the daemon has not seen. Without the second, an
+ * older projection arriving after the ack takes the acked words away again.
+ */
+import type { Node as PMNode } from '@tiptap/pm/model';
+import type { Transaction } from '@tiptap/pm/state';
+
+import { inFrontier } from '../calc/claims';
+import { newBatch, newCid } from '../calc/ids';
+import type { Ack, OpBody, Submission } from '../calc/projection';
+import { Recorder, reconcile } from '../calc/recorder';
+import type { Shadow } from '../calc/shadow';
+import { GESTURE_CIDS, RECORDED } from './commands';
+
+const SETTLE_MS = 350;
+
+export class Outbox {
+    /** Client ids awaiting an ack, by block. */
+    private readonly unacked = new Map<string, Set<string>>();
+    /** Block → the newest op the daemon applied for it. */
+    private readonly lastOp = new Map<string, string>();
+    /** Submissions not yet sent. */
+    private pending: Submission[] = [];
+    private batch = newBatch();
+    private timer: number | undefined;
+    private readonly recorder: Recorder;
+
+    /** `onHoldChange` is told each block whose hold changed, so its paints can be redrawn. */
+    constructor(private readonly shadows: Map<string, Shadow>,
+                private readonly submit: (subs: Submission[]) => void,
+                private readonly onHoldChange: (bid: string) => void) {
+        this.recorder = new Recorder(shadows, newCid);
+    }
+
+    /** Turn a transaction the page has applied into queued ops. */
+    record(tr: Transaction): void {
+        const tagged = tr.getMeta(RECORDED) as OpBody[] | undefined;
+        if (tagged) {
+            // An empty list is not a gesture. Adoption and the NFC fix-up carry
+            // the tag only to pass the structural guard, and holding the blocks
+            // they moved would wait for an ack nobody sends.
+            if (tagged.length) this.queue(tagged, (tr.getMeta(GESTURE_CIDS) as string[]) ?? [], bornOrGone(tr));
+            return;
+        }
+        if (!tr.docChanged) return;
+        const rec = this.recorder.record(tr.steps, tr.docs);
+        if (rec.unhandled.length) {
+            // The fallback: compare every block the unhandled steps touched with its shadow.
+            const touched = new Set<string>();
+            for (const step of rec.unhandled) {
+                step.getMap().forEach((_a, _b, fromB, toB) => {
+                    tr.doc.nodesBetween(Math.max(0, fromB - 1), Math.min(tr.doc.content.size, toB + 1), (n, _pos, parent) => {
+                        if (parent === tr.doc && n.attrs.bid && this.shadows.has(n.attrs.bid)) touched.add(n.attrs.bid);
+                        return false;
+                    });
+                });
+            }
+            for (const bid of touched) {
+                let node: PMNode | null = null;
+                tr.doc.forEach(n => { if (n.attrs.bid === bid) node = n; });
+                if (node) {
+                    const r = reconcile(node, this.shadows.get(bid)!, newCid);
+                    rec.ops.push(...r.ops);
+                    rec.cids.push(...r.cids);
+                }
+            }
+        }
+        this.queue(rec.ops, rec.cids);
+    }
+
+    private queue(ops: OpBody[], cids: string[], holds: string[] = []): void {
+        let ci = 0;
+        let first = '';
+        const hold = (bid: unknown, cid: string) => {
+            if (typeof bid !== 'string' || !bid) return;
+            this.unacked.set(bid, (this.unacked.get(bid) ?? new Set()).add(cid));
+            this.onHoldChange(bid);
+        };
+        for (const op of ops) {
+            // An insert keeps the client id its shadow refs were minted under.
+            const cid = op.kind === 'text.insert' ? (cids[ci++] ?? newCid()) : newCid();
+            first ||= cid;
+            // Every block the op names, not only its target: a merge is about
+            // the block that dies as much as the one that survives, and a split
+            // about the one it mints.
+            for (const bid of [op.target.bid, op.target.into, op.target.fid, op.payload?.new]) hold(bid, cid);
+            this.pending.push({ cid, batch: this.batch, ...op });
+        }
+        for (const bid of holds) hold(bid, first || newCid());
+        if (this.timer) window.clearTimeout(this.timer);
+        this.timer = window.setTimeout(() => this.flush(), SETTLE_MS);
+    }
+
+    /** Send what is queued now, as one batch. */
+    flush(): void {
+        if (this.timer) { window.clearTimeout(this.timer); this.timer = undefined; }
+        if (!this.pending.length) return;
+        this.submit(this.pending);
+        this.pending = [];
+        this.batch = newBatch();
+    }
+
+    /**
+     * Take the daemon's answers. An applied op turns the shadow's provisional
+     * refs into real ones and becomes its blocks' `lastOp`. Returns the blocks
+     * whose op was refused, with the reason: their shadows now say something
+     * the store does not, so the caller re-adopts them from the projection.
+     */
+    ack(acks: Ack[]): Map<string, string> {
+        const refused = new Map<string, string>();
+        for (const a of acks) {
+            const waiting: string[] = [];
+            for (const [bid, set] of this.unacked) {
+                if (set.delete(a.cid)) {
+                    waiting.push(bid);
+                    this.onHoldChange(bid);
+                    if (a.conflict) refused.set(bid, a.conflict);
+                    if (set.size === 0) this.unacked.delete(bid);
+                }
+            }
+            if (a.op && !a.conflict) {
+                for (const bid of waiting) { this.shadows.get(bid)?.resolve(a.cid, a.op); this.lastOp.set(bid, a.op); }
+            }
+        }
+        return refused;
+    }
+
+    /** The blocks a projection with this frontier must leave alone. `force` names blocks to re-adopt regardless. */
+    held(frontier: Record<string, number>, force: ReadonlySet<string>): Set<string> {
+        const out = new Set<string>();
+        for (const bid of new Set([...this.unacked.keys(), ...this.lastOp.keys()])) {
+            if (force.has(bid)) continue;
+            const op = this.lastOp.get(bid);
+            if ((this.unacked.get(bid)?.size ?? 0) > 0 || (op !== undefined && !inFrontier(op, frontier))) out.add(bid);
+        }
+        return out;
+    }
+
+    /** A block has left the page for good. */
+    forget(bid: string): void {
+        this.lastOp.delete(bid);
+    }
+}
+
+/** The blocks a gesture put on the page or took off it. They are held with the
+ *  blocks its ops name, because a projection that predates the gesture still
+ *  lists what it removed and still lacks what it added. */
+function bornOrGone(tr: Transaction): string[] {
+    const before = new Set<string>(), after = new Set<string>();
+    tr.before.forEach(n => { if (n.attrs.bid) before.add(n.attrs.bid as string); });
+    tr.doc.forEach(n => { if (n.attrs.bid) after.add(n.attrs.bid as string); });
+    return [...before, ...after].filter(b => before.has(b) !== after.has(b));
+}

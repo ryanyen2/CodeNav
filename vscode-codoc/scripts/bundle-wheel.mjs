@@ -1,11 +1,10 @@
-// Build the codoc Python wheel and stage it in vscode-codoc/bundled/ so it ships
-// inside the VSIX. The extension's provisioning step (src/setup/provision.ts)
-// installs this wheel with `uv tool install`, pinning codoc's exact version while
-// transitive deps (torch / lancedb / cocoindex) resolve from PyPI.
+// Builds the codoc Python wheel into vscode-codoc/bundled/ so it ships inside
+// the VSIX. Setup (src/host/setup/provision.ts) installs that wheel with
+// `uv tool install`, which pins codoc itself to the version built here; its
+// dependencies come from PyPI.
 //
-// Run via `npm run bundle-wheel`; wired into `vscode:prepublish` so `vsce package`
-// always embeds a fresh wheel. Requires `uv` on the build machine (maintainer-side
-// only — end users never run this).
+// `npm run bundle-wheel` runs it, and `vscode:prepublish` runs it before every
+// package. It needs `uv` on the machine that builds the extension.
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

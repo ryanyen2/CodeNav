@@ -9,6 +9,6 @@ Open it to:
 - **Ask for work** — select a sentence and comment on it. A comment is a request the
   agent implements, scoped to the code that sentence cites; **Build it** starts the agent
   straight away.
-- **Review** — accept or reject the tree changes codoc proposes, inline where they happen.
+- **Review** — plans an agent or codoc proposes are drawn in the prose in gray. Accept or reject them from the toolbar.
 
 [Open your feature tree](command:codoc.open)

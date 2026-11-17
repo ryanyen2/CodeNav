@@ -1,16 +1,21 @@
 /**
- * workspace.ts — where the `.codoc` directory is, and what `status.json` says.
+ * workspace.ts — which folder holds `.codoc`, and what the daemon says about it.
  *
- * The host needs two facts about the workspace and no model of the tree: the
- * root that holds `.codoc/`, and the daemon's published status for the status
- * bar. Everything about the document lives in the webview, which reads the
- * projection the daemon publishes.
+ * The extension host keeps no model of the tree. It needs the repository root,
+ * whether that root has been initialised, whether a daemon is running, and the
+ * daemon's `status.json` for the status bar. `Workspace` watches the files
+ * those answers come from and fires `onDidChange` when any of them changes.
+ *
+ * One root per window: the first workspace folder that contains `.codoc`, or
+ * the first folder when none does.
  */
-import * as fs from 'fs';
-import * as path from 'path';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 
-export interface Status { state?: string; pending?: number; detail?: string; features?: number }
+import { readPid } from './pidfile';
+
+interface Status { state?: string; pending?: number; detail?: string; features?: number }
 
 export class Workspace implements vscode.Disposable {
     readonly rootDir: string | null;
@@ -34,14 +39,15 @@ export class Workspace implements vscode.Disposable {
         return this.rootDir ? path.join(this.rootDir, '.codoc') : null;
     }
 
+    /** The op log exists, so `codoc init` has run here. */
     get initialized(): boolean {
         return !!this.codocDir && fs.existsSync(path.join(this.codocDir, 'log'));
     }
 
     get daemonRunning(): boolean {
-        if (!this.codocDir) return false;
+        const pid = this.codocDir ? readPid(this.codocDir) : undefined;
+        if (pid === undefined) return false;
         try {
-            const pid = Number(fs.readFileSync(path.join(this.codocDir, 'watch.pid'), 'utf8').trim());
             process.kill(pid, 0);
             return true;
         } catch {
@@ -77,7 +83,7 @@ function detectRoot(): string | null {
     return folders[0]?.uri.fsPath ?? null;
 }
 
-/** The status bar's text and tooltip: one line, the thing the person owes. */
+/** The status bar item: one line saying what the person owes, and the command a click runs. */
 export function statusBarView(ws: Workspace, hasExecs: boolean): { text: string; tooltip: string; command: string | undefined; warn: boolean } {
     if (ws.provisioning) return { text: '$(cloud-download) codoc: setting up…', tooltip: 'installing and indexing', command: undefined, warn: false };
     if (!ws.initialized || !hasExecs) return { text: '$(sparkle) codoc: set up', tooltip: 'index this repo and build its feature tree', command: 'codoc.setup', warn: false };

@@ -1,0 +1,196 @@
+/**
+ * decorations.ts — everything drawn on the prose, as ProseMirror decorations
+ * (09-editor §7).
+ *
+ * Nothing drawn is stored in the document. calc/claims.ts says what to paint
+ * on each block in scalar offsets; `decorationsFor` places those paints at
+ * document positions, draws removed text as a widget carrying the words the
+ * code dropped, and puts a phase marker at each heading. `Paints` keeps the
+ * result between transactions and redraws only the blocks whose paints
+ * changed, because rebuilding every decoration on every keystroke is what
+ * makes typing slow in a large tree.
+ */
+import type { Node as PMNode } from '@tiptap/pm/model';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
+
+import { PHASE_CHANNEL, PHASE_LABEL, paintsFor, type Paint } from '../calc/claims';
+import { NO_WATERMARKS, type Phase, type Projection, type Watermarks } from '../calc/projection';
+import { REPLACED } from './commands';
+import { sameStructure } from './guards';
+
+/** What the page is showing: the projection in hand, the features an agent is
+ *  building right now, and whether the History stance is on. */
+export interface Shown {
+    projection: Projection;
+    realizing: ReadonlySet<string>;
+    history: boolean;
+}
+
+/** Transaction meta: redraw the decorations though the document did not change. */
+export const REPAINT = 'codoc:repaint';
+
+/** UTF-16 offset inside a textblock for a scalar offset (a hard break counts 1). */
+export function unitOffset(block: PMNode, scalar: number): number {
+    let units = 0;
+    let seen = 0;
+    for (let i = 0; i < block.childCount && seen < scalar; i++) {
+        const child = block.child(i);
+        if (child.isText) {
+            const cps = Array.from(child.text ?? '');
+            const take = Math.min(cps.length, scalar - seen);
+            units += cps.slice(0, take).join('').length;
+            seen += take;
+        } else {
+            units += child.nodeSize;
+            seen += 1;
+        }
+    }
+    return units;
+}
+
+/** The decorations for the blocks in `only`, or for every block. */
+function decorationsFor(doc: PMNode, paints: Map<string, Paint[]>, phases: Record<string, Phase>,
+                        realizing: ReadonlySet<string>, only?: ReadonlySet<string>): Decoration[] {
+    const decos: Decoration[] = [];
+    doc.forEach((block, pos) => {
+        const bid = block.attrs.bid as string | null;
+        if (!bid || (only && !only.has(bid))) return;
+        if (block.type.name === 'heading') {
+            const phase: Phase = realizing.has(bid) ? 'realizing' : (phases[bid] ?? 'synced');
+            if (phase !== 'synced') {
+                decos.push(Decoration.widget(pos + 1, () => {
+                    const el = document.createElement('span');
+                    el.className = `codoc-marker codoc-marker-${phase} codoc-ch-${PHASE_CHANNEL[phase]}`;
+                    el.title = PHASE_LABEL[phase];
+                    el.setAttribute('aria-label', PHASE_LABEL[phase]);
+                    return el;
+                }, { side: -1, key: `marker:${bid}:${phase}` }));
+            }
+        }
+        for (const p of paints.get(bid) ?? []) {
+            const from = pos + 1 + unitOffset(block, p.start);
+            if (p.cls === 'code-removed') {
+                decos.push(Decoration.widget(from, () => {
+                    const el = document.createElement('span');
+                    el.className = 'codoc-paint codoc-code-removed';
+                    el.textContent = p.text ?? '';
+                    el.title = p.title;
+                    el.setAttribute('aria-description', p.title);
+                    return el;
+                }, { side: 0, key: `removed:${bid}:${p.start}:${p.text?.length ?? 0}` }));
+                continue;
+            }
+            const to = pos + 1 + unitOffset(block, p.end);
+            if (to > from) {
+                decos.push(Decoration.inline(from, to, { class: `codoc-paint codoc-${p.cls}`, title: p.title, 'aria-description': p.title }));
+            }
+        }
+    });
+    return decos;
+}
+
+/** Where each of `bids` sits in the document, as a `[from, to)` range. */
+function blockRanges(doc: PMNode, bids: ReadonlySet<string>): Array<{ from: number; to: number }> {
+    const out: Array<{ from: number; to: number }> = [];
+    doc.forEach((block, pos) => {
+        if (bids.has(block.attrs.bid as string)) out.push({ from: pos, to: pos + block.nodeSize });
+    });
+    return out;
+}
+
+/**
+ * The paints per block and the decoration set built from them, kept across
+ * transactions.
+ *
+ * Whoever changes what a block should look like calls `mark`, for that block
+ * or for all of them, and the plugin redraws what is marked at the next
+ * transaction that changes the document or carries `REPAINT`. A change to the
+ * document's structure marks every block by itself, because which feature a
+ * block belongs to is where it sits, so a block arriving or leaving can change
+ * the paints of every block after it.
+ */
+export class Paints {
+    readonly plugin: Plugin<DecorationSet>;
+    /** The feature each block sits in, as of the last full redraw. */
+    readonly featureOf = new Map<string, string | null>();
+    private readonly byBlock = new Map<string, Paint[]>();
+    private all = true;
+    private readonly dirty = new Set<string>();
+
+    constructor(private readonly shown: Shown) {
+        const key = new PluginKey<DecorationSet>('codoc-paints');
+        this.plugin = new Plugin<DecorationSet>({
+            key,
+            state: {
+                init: (_config, state) => this.build(state.doc),
+                apply: (tr, prev, _old, state) => {
+                    if (!tr.docChanged && !tr.getMeta(REPAINT)) return prev;
+                    // An adoption that rebuilds the document replaces it in one
+                    // step, and mapping every decoration through that costs more
+                    // than building them again, so `REPLACED` rebuilds too.
+                    if (tr.docChanged && (tr.getMeta(REPLACED) || !sameStructure(tr.before, tr.doc))) this.all = true;
+                    if (this.all) return this.build(state.doc);
+                    const dirty = new Set(this.dirty);
+                    const paints = this.refresh(state.doc);
+                    let set = prev.map(tr.mapping, state.doc);
+                    if (dirty.size) {
+                        for (const r of blockRanges(state.doc, dirty)) set = set.remove(set.find(r.from, r.to));
+                        set = set.add(state.doc, decorationsFor(state.doc, paints, this.shown.projection.phases, this.shown.realizing, dirty));
+                    }
+                    return set;
+                },
+            },
+            props: { decorations: state => key.getState(state) ?? null },
+        });
+    }
+
+    /** Mark one block's paints stale, or every block's. */
+    mark(bid?: string): void {
+        if (bid === undefined) this.all = true;
+        else this.dirty.add(bid);
+    }
+
+    /** Whether every block is already marked. */
+    get allMarked(): boolean {
+        return this.all;
+    }
+
+    private build(doc: PMNode): DecorationSet {
+        return DecorationSet.create(doc, decorationsFor(doc, this.refresh(doc), this.shown.projection.phases, this.shown.realizing));
+    }
+
+    /** Recompute the marked paints, clear the marks, and return the paints. */
+    private refresh(doc: PMNode): Map<string, Paint[]> {
+        const { projection, history } = this.shown;
+        if (this.all) {
+            this.byBlock.clear();
+            this.featureOf.clear();
+            const byId = new Map(projection.blocks.map(b => [b.id, b]));
+            let fid: string | null = null;
+            doc.forEach(block => {
+                const bid = block.attrs.bid as string | null;
+                if (!bid) return;
+                if (block.type.name === 'heading') fid = bid;
+                this.featureOf.set(bid, fid);
+                const pb = byId.get(bid);
+                if (pb) this.byBlock.set(bid, paintsFor(pb, projection, fid, this.watermarks(fid), history));
+            });
+        } else {
+            for (const bid of this.dirty) {
+                if (!this.featureOf.has(bid)) continue;
+                const fid = this.featureOf.get(bid) ?? null;
+                const pb = projection.blocks.find(b => b.id === bid);
+                if (pb) this.byBlock.set(bid, paintsFor(pb, projection, fid, this.watermarks(fid), history));
+                else this.byBlock.delete(bid);
+            }
+        }
+        this.all = false;
+        this.dirty.clear();
+        return this.byBlock;
+    }
+
+    private watermarks(fid: string | null): Watermarks {
+        return (fid && this.shown.projection.watermarks?.[fid]) || NO_WATERMARKS;
+    }
+}
