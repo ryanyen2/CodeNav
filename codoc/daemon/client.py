@@ -225,6 +225,21 @@ def ingest(codoc_dir: str | Path, *, client: str, bid: str, path: str, base_text
     return {"refused": a["conflict"], "ops": a["ops"], "status": a["status"]}
 
 
+def propose(codoc_dir: str | Path, *, client: str, pid: str, kind: str, target: str | None, note: str, build: bool,
+             bodies: list[dict], rewrites: list[dict], strikes: list[str], caused_by: str | None = None,
+             root_dir: str | None = None, wait_s: float = 10.0) -> dict:
+    """A machine's proposal as one plan, decided whole in the applier
+    (``Workspace.propose``): a plan that nothing landed under is taken back
+    there, whether or not the ack arrives in time. ``rewrites`` are
+    ``{bid, path, new_md, base_text}``. Returns ``{"status", "refused", "ops"}``;
+    ``status`` is ``plan:<id>``, ``unchanged``, or None when no ack arrived."""
+    sub = Submission(cid=_cid(client), kind="propose", target={"fid": target or ""}, caused_by=caused_by, payload={
+        "pid": pid, "kind": kind, "target": target, "note": note, "build": build, "bodies": bodies, "rewrites": rewrites,
+        "strikes": strikes})
+    a = _send(Path(codoc_dir), client, [sub], root_dir, wait_s)[0]
+    return {"status": a["status"], "refused": [a["conflict"]] if a["conflict"] else [], "ops": a["ops"]}
+
+
 def amend(codoc_dir: str | Path, *, client: str, fid: str, rewrites: list[dict], bodies: list[dict] | None = None,
           strikes: list[str] | None = None, structural: bool = False, note: str = "", caused_by: str | None = None,
           root_dir: str | None = None, wait_s: float = 10.0) -> dict:

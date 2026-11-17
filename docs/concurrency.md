@@ -304,6 +304,18 @@ an agent through the `amend` submission):
 | Any rewording meets a plan row of the table above. | One plan for the whole amend. |
 | Otherwise. | Every part on the trunk. |
 
+An agent's proposal (`codoc_propose`, or a `codoc_reflect` edit that needs a plan) is one
+`propose` submission, decided whole by `Workspace.propose`: it opens the plan, writes the
+new blocks, rewordings and strikes under it, and takes the plan back when nothing landed.
+A delete plan stays with nothing under it, since accepting it is the deletion. The agent
+mints the plan id, so it knows the id even when the ack comes late, and a late ack never
+leaves an empty plan behind.
+
+A client's mark that names its placer (`actor`, `op`, `at`) keeps that placer only when it
+repeats the inverse the applier recorded for the sender's own latest change of that mark
+kind on that field: the undo of a removal. An undo resent after someone else changed the
+mark is the sender's own mark.
+
 ## 8. Conflicts
 
 No write is merged by guessing. An op either applies or is recorded with a code

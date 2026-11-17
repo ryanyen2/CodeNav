@@ -39,7 +39,7 @@ from codoc.index.graph import Graph
 from codoc.llm.prompt import titles_outline
 from codoc.loops.context import description_blocks, select_context, written_by
 from codoc.calculus.block_md import BlockSpec
-from codoc.calculus.ingest import block_bodies, strike_bodies
+from codoc.calculus.ingest import block_bodies, concat_bodies
 from codoc.loops.edits import PLAN_KIND, Change, Compiler, delete_open
 from codoc.loops.realize import queued
 from codoc.mcp.walkthrough import AskStep, build_walkthrough, clear_walkthrough, read_walkthrough, write_walkthrough
@@ -276,60 +276,32 @@ def _write_plans(codoc_dir: str, store, changes: list[Change], *, note: str, cau
 
 def _write_plan(codoc_dir: str, store, changes: list[Change], *, note: str, caused_by: str | None,
                 root_dir: str | None, build: bool) -> dict:
-    """Open one plan and write every change under it: each change's bodies as
-    one batch, then its rewrites as ingests, then its strikes."""
+    """One plan holding every change, written as one ``propose`` submission:
+    the applier opens it, writes the bodies, rewrites and strikes under it, and
+    takes it back when nothing landed (``Workspace.propose``)."""
     kinds = {PLAN_KIND.get(c.kind, "edit") for c in changes}
     kind = kinds.pop() if len(kinds) == 1 else "edit"      # a delete plan holds exactly one removal
     target = changes[0].target if len(changes) == 1 and kind != "add" else None
-    pid = new_plan_id()
-    payload = {"kind": kind, "target": target, "note": note, **({"build": True} if build else {})}
-    opened = client.write(codoc_dir, client=AGENT, bodies=[
-        {"kind": K.PLAN_OPEN, "target": {"pid": pid}, "payload": payload}],
-        batch=pid, caused_by=caused_by, root_dir=root_dir)
-    if opened and opened[0].get("conflict"):
-        return _err(f"plan.open refused: {opened[0]['conflict']}")
-    # Per submission: why it was refused, and whether it may have landed (an op
-    # was applied, or the ack did not arrive in time). An unchanged rewrite did not.
-    refused: list[str] = []
-    landed = 0
-
-    def took(conflict, ops, status, label=""):
-        nonlocal landed
-        if conflict:
-            refused.append(f"{label}{conflict}")
-        elif ops or status is None:
-            landed += 1
-
+    pid, bodies = new_plan_id(), []
     for c in changes:
-        if c.bodies:
-            for a in client.write(codoc_dir, client=AGENT, bodies=c.bodies, plan=pid, batch=pid,
-                                  caused_by=caused_by, root_dir=root_dir):
-                took(a["conflict"], a["ops"], a["status"])
-        for r in c.rewrites:
-            base = store.blocks[r.bid].text(r.path).live_text()
-            got = client.ingest(codoc_dir, client=AGENT, bid=r.bid, path=r.path, base_text=base, new_md=r.new_md,
-                                plan=pid, caused_by=caused_by, root_dir=root_dir)
-            took(got["refused"], got["ops"], got["status"], f"{r.bid}: ")
-        strikes = strike_bodies(store, c.strikes, pid)
-        if strikes:
-            for a in client.write(codoc_dir, client=AGENT, bodies=strikes, plan=pid, batch=pid,
-                                  caused_by=caused_by, root_dir=root_dir):
-                took(a["conflict"], a["ops"], a["status"])
-    if not landed and kind != "delete":
-        # Take the empty plan back, or the person is asked to accept nothing
-        # (and, with build, to queue a build of nothing). A delete plan is the
-        # proposal by itself: accepting it deletes its target, struck words or not.
-        client.write(codoc_dir, client=AGENT, bodies=[{"kind": K.PLAN_REJECT, "target": {"pid": pid}, "payload": {}}],
-                     batch=pid, root_dir=root_dir)
-        return _err("nothing was written: " + ("; ".join(refused) or "the text already says that"))
-    out = {"ok": True, "plan_id": pid, "ops": landed,
+        bodies = concat_bodies(bodies, c.bodies)
+    got = client.propose(codoc_dir, client=AGENT, pid=pid, kind=kind, target=target, note=note, build=build, bodies=bodies,
+                         rewrites=[{"bid": r.bid, "path": r.path, "new_md": r.new_md,
+                                    "base_text": store.blocks[r.bid].text(r.path).live_text()}
+                                   for c in changes for r in c.rewrites],
+                         strikes=[bid for c in changes for bid in c.strikes], caused_by=caused_by, root_dir=root_dir)
+    if got["status"] == "unchanged":
+        return _err("nothing was written: " + ("; ".join(got["refused"]) or "the text already says that"))
+    out = {"ok": True, "plan_id": pid, "ops": len(got["ops"]),
            "note": "The person accepts or rejects this plan in the editor. "
                    + ("Accepting it deletes the feature; removing its code is a separate hand-off."
                       if kind == "delete" else
                       "Accepting it queues the work for you." if build else
                       "Accepting it takes the words only; nothing is queued.")}
-    if refused:
-        out["refused"] = refused
+    if got["status"] is None:
+        out["note"] += " The daemon has not answered yet; read the tree to see the plan."
+    if got["refused"]:
+        out["refused"] = got["refused"]
     return out
 
 

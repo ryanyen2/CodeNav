@@ -489,6 +489,29 @@ def test_undoing_the_removal_of_a_widened_mark_gives_it_back_to_its_placer(tmp_p
     ws.apply_submissions("ide", H, [Submission(cid="u1", kind=undo["kind"], target=undo["target"],
                                                payload=undo["payload"])])
     assert [(m.kind, m.actor) for m in ws.store.blocks["p1"].text().marks] == [(BOLD, "loop")]
+    # The loop removes it; the same undo sent again is the person's bold, not the loop's.
+    ws.submit([bold(False, 11)], actor="loop")
+    ws.apply_submissions("ide", H, [Submission(cid="u2", kind=undo["kind"], target=undo["target"],
+                                               payload=undo["payload"])])
+    assert [(m.kind, m.actor) for m in ws.store.blocks["p1"].text().marks] == [(BOLD, H)]
+    ws.close()
+
+
+def test_a_proposal_is_decided_whole_by_the_applier(tmp_path):
+    """The agent may never see the ack (a busy daemon). Whatever it sees, a
+    proposal that lands nothing leaves no plan; one that lands is one plan."""
+    ws = Workspace(tmp_path / ".codoc"); seed(ws)
+
+    def propose(pid: str, text: str):
+        return ws.apply_submissions("mcp", "agent:claude-code", [Submission(
+            cid=pid, kind="propose", target={"fid": "h1"}, payload={
+                "pid": pid, "kind": "edit", "target": "h1", "note": "", "build": True,
+                "rewrites": [{"bid": "p1", "new_md": text}]})])[0]
+
+    same = propose("p-same", T(ws.store, "p1"))
+    assert same.status == "unchanged" and "p-same" not in ws.store.open_plans
+    changed = propose("p-new", "Retries twice.")
+    assert changed.status == "plan:p-new" and ws.store.open_plans["p-new"].ops
     ws.close()
 
 
