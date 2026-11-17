@@ -47,7 +47,7 @@ export class Outbox {
     private readonly composed = new Set<string>();
     /** Blocks one of whose ops the daemon refused, waiting to be re-read. */
     private readonly stale = new Set<string>();
-    /** Every op the daemon applied for this page. */
+    /** The ops the daemon applied for this page that no adopted projection covers yet. */
     readonly applied = new Set<string>();
 
     /** `onHoldChange` is told each block whose hold changed, so its paints can be redrawn. */
@@ -201,6 +201,11 @@ export class Outbox {
         const out = new Set([...this.stale].filter(bid => !held.has(bid)));
         for (const bid of out) this.stale.delete(bid);
         return out;
+    }
+
+    /** A projection with this frontier was adopted: its runs now say who wrote the ops it covers. */
+    covered(frontier: Record<string, number>): void {
+        for (const op of this.applied) if (inFrontier(op, frontier)) this.applied.delete(op);
     }
 
     /** The daemon rebuilt its store (a commit, a checkout, a fold), so the ops

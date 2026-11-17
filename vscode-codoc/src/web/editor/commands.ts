@@ -45,8 +45,8 @@ export interface Env {
     refuse?: (why: string) => void;
     /** The projection in hand, for the features' bindings and phases. */
     projection?: () => Projection;
-    /** Whether the viewer wrote this character. Without it, only unacked characters count. */
-    mine?: (r: CharRef) => boolean;
+    /** For block `bid`, whether the viewer wrote a character. Without it, only unacked characters count. */
+    mine?: (bid: string) => (r: CharRef) => boolean;
 }
 
 /** One block as it arrives in a paste: inline Markdown already read into
@@ -146,12 +146,13 @@ export function deleteSelection(state: EditorState, env: Env): Gesture | null {
         const refs = shadow.delete(scalarOffset(p.node, p.from), scalarOffset(p.node, p.to));
         if (refs.length) ops.push(deleteOf({ bid, path: pathOf(kindOf(p.node)) }, refs));
     }
-    // One delete per block, naming it alone: a heading taken this way leaves
-    // the blocks after it to the feature before.
-    for (const p of gone) {
-        const bid = p.node.attrs.bid as string;
-        ops.push({ kind: 'block.delete', target: { bid }, payload: { ids: [bid] } });
-        env.shadows.delete(bid);
+    // One delete naming exactly the blocks that go, so the applier reads each
+    // block's feature before any of them dies. A heading taken this way leaves
+    // the blocks after the selection to the feature before.
+    if (gone.length) {
+        const ids = gone.map(p => p.node.attrs.bid as string);
+        ops.push({ kind: 'block.delete', target: { bid: ids[0] }, payload: { ids } });
+        for (const bid of ids) env.shadows.delete(bid);
     }
     if (merge) {
         const into = first.node.attrs.bid as string, dying = tail.node.attrs.bid as string;
@@ -400,8 +401,9 @@ export function sourceFromMarker(state: EditorState, env: Env): Gesture | null {
     }
     if (!/^\|.*\|.*\|$/.test(text)) return null;
     // Only the viewer's own row: replacing another actor's paragraph would re-author their words.
-    const mine = env.shadows.get($from.parent.attrs.bid as string)?.refs.every(r => env.mine?.(r) ?? isProvisional(r));
-    return mine ? insertSource(state, env, 'table', {}, text, text.length) : null;
+    const bid = $from.parent.attrs.bid as string;
+    const mine = env.mine?.(bid) ?? isProvisional;
+    return env.shadows.get(bid)?.refs.every(mine) ? insertSource(state, env, 'table', {}, text, text.length) : null;
 }
 
 /** An empty paragraph after the caret's block: the way out of a source block. */

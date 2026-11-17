@@ -179,7 +179,11 @@ describe('Backspace at the start of a heading', () => {
         ['owns code', [block('f', 'heading', 'F'), block('p', 'paragraph', 'x')],
          { bindings: { by_feature: { f: [{ file: 'a.py', symbol: 'a.py::f' }] }, by_file: {} } }],
         ['has a child heading', [block('f', 'heading', 'Theme'), block('c', 'heading', 'Child', 2)], {}],
-        ['is queued', [block('f', 'heading', 'New'), block('p', 'paragraph', 'x')], { phases: { f: 'queued' } }],
+        // Edited ranks above queued, so the phase alone would let this one go mid-build.
+        ['is edited and queued', [block('f', 'heading', 'New'), block('p', 'paragraph', 'x')],
+         { phases: { f: 'edited' }, watermarks: { f: { handoff: { s: 5 }, realized: { s: 4 } } } }],
+        ['is named by an open plan', [block('f', 'heading', 'New'), block('p', 'paragraph', 'x')],
+         { plans: [{ id: 'p-1', actor: 'agent:x', kind: 'edit', target: 'p', note: '', status: 'open', handoff: ['f'] }] }],
     ];
     for (const [name, blocks, extra] of cases) {
         it(`on a heading that ${name} does nothing but say how`, () => {
@@ -421,6 +425,16 @@ describe('a selection across blocks', () => {
         expect(kinds(m.submitted)).toEqual(['text.delete', 'text.delete', 'block.delete', 'block.merge']);
         expect(m.submitted[2].payload).toEqual({ ids: ['b'] });
         expect(texts(m.view.state.doc)).toEqual(['A', 'owo']);
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it('deletes a whole feature in one block.delete, so the applier reads each block\'s feature before any dies', () => {
+        const m = mount([block('a', 'heading', 'A'), block('p1', 'paragraph', 'one'), block('b', 'heading', 'B'),
+                         block('q1', 'paragraph', 'x'), block('q2', 'paragraph', 'y'), block('c', 'heading', 'C')]);
+        select(m.view, posIn(m.view, 'b', 0), posIn(m.view, 'c', 0));
+        key(m.view, 'Backspace', 8);
+        expect(sent(m)).toEqual([{ kind: 'block.delete', target: { bid: 'b' }, payload: { ids: ['b', 'q1', 'q2'] } }]);
+        expect(ids(m.view.state.doc)).toEqual(['heading:a', 'paragraph:p1', 'heading:c']);
         expect(shadowFaults(m)).toEqual([]);
     });
 

@@ -66,7 +66,7 @@ One gesture is one batch, and a batch is the undo unit. Typing is flushed as one
 | `/` menu: Heading 1..3 or Paragraph | editor | `block.set(kind)`, after a `text.delete` of the typed `/query` | A paragraph made from a heading joins the previous feature's body. |
 | Backspace at the start, or Delete at the end, of a paragraph next to a paragraph | editor | `block.merge` | One paragraph. Each word keeps its author. |
 | Backspace or Delete at a heading boundary | editor | none | The caret moves across the boundary. |
-| Delete or Backspace over a selection across paragraphs | editor | `text.delete` per block, `block.delete` per block wholly inside, `block.merge` of the two ends | A selection that touches a heading is refused with a message. |
+| Delete or Backspace over a selection across paragraphs | editor | `text.delete` per block, one `block.delete` naming every block wholly inside, `block.merge` of the two ends | A selection that touches a heading is refused with a message. |
 | Tab, Shift-Tab on a heading | editor | `block.set(level)` on that heading | Only that heading changes level (I3). |
 | Drag a block's handle | editor | `block.move` | A heading moves with its range. |
 | Paste several paragraphs | editor | `text.insert` into the caret's block, then `block.add` and `text.insert` per further paragraph | The person is the author of all of it. |

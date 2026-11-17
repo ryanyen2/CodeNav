@@ -86,6 +86,7 @@ export function adopter(view: EditorView, shadows: Map<string, Shadow>, outbox: 
         if (!rebuilt && next.head < shown.projection.head) return;
         outbox.flush();
         if (rebuilt) outbox.rebuilt();
+        outbox.covered(next.frontier);
         // Re-read every block after a rebuild, and a refused block once it is free.
         // A block with an op in flight stays held either way.
         const held = outbox.held(next.frontier);

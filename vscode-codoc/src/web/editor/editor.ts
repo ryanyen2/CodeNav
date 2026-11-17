@@ -83,9 +83,12 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
     const shown: Shown = { projection: proj, realizing: new Set(), history: false };
     const env: Env = {
         shadows, nextBid: newBid, nextCid: newCid, refuse: why => host.onConflict?.('', why), projection: () => shown.projection,
-        // Unacked, applied for this page, or in a projected run by the viewer.
-        mine: r => isProvisional(r) || outbox.applied.has(r[0]) || shown.projection.blocks.some(b =>
-            textField(b, pathOf(b.kind))?.runs.some(x => x.op === r[0] && x.actor === host.actor?.())),
+        // Unacked, applied for this page, or in one of the block's projected runs by the viewer.
+        mine: bid => {
+            const b = shown.projection.blocks.find(x => x.id === bid);
+            const ops = new Set((b ? textField(b, pathOf(b.kind))?.runs ?? [] : []).filter(x => x.actor === host.actor?.()).map(x => x.op));
+            return r => isProvisional(r) || outbox.applied.has(r[0]) || ops.has(r[0]);
+        },
     };
     const paints = new Paints(shown);
     const outbox = new Outbox(shadows, subs => host.submit(subs), bid => paints.mark(bid));
