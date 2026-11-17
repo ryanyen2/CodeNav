@@ -19,6 +19,9 @@ One process applies ops at a time. It is called the applier.
 
 - A daemon is alive when `.codoc/watch.pid` names a running process. A second daemon
   refuses to start.
+- A daemon builds its store, writes the pidfile, then takes the applier lock once and
+  rebuilds if any other session's log changed since it built. A daemonless writer that
+  applied in that window is not lost.
 - With a daemon alive, no other process applies. A writer appends to
   `.codoc/inbox/<client>.jsonl` and reads the answer from `.codoc/inbox/<client>.ack.jsonl`.
 - With no daemon, a writer is the applier for one call. It takes an exclusive lock on
@@ -27,7 +30,8 @@ One process applies ops at a time. It is called the applier.
   own session's changed size. Then it applies, publishes the derived files, and releases
   the lock.
 - The lock is held per call. Held for the life of a process, it would leave every other
-  writer submitting to an inbox that no daemon drains.
+  writer submitting to an inbox that no daemon drains. `codoc translate` and
+  `codoc rebuild` hold it for their whole run and refuse while a daemon is alive.
 - A long-lived writer with no daemon (the MCP server) keeps one store and one session
   file across calls. Its reads also rebuild when another process's log file changed.
   When a daemon appears, it closes its session and submits through the inbox.
@@ -140,7 +144,7 @@ flowchart TD
     S -- yes --> K[skip]
     S -- no --> R[resolve provisional anchors]
     R --> G{suggester, no plan tag,<br/>not a comment?}
-    G -- yes --> T[a range delete becomes suggest_del;<br/>tag with the actor's plan]
+    G -- yes --> T[a delete becomes suggest_del over the characters it names;<br/>tag with the actor's plan]
     G -- no --> M
     T --> M[mint id and clock, stamp the actor]
     M --> P{policy allows this actor?}
@@ -185,8 +189,12 @@ re-reading lines it has drained.
   appear in it in the order they wrote.
 - The applier (the daemon, or a writer with no daemon) closes its session and opens a new
   one when `HEAD` moves (a commit, a checkout, a pull, a rebase). The daemon also closes
-  it when it exits. A session file is therefore never appended to after a commit that
-  may have recorded it.
+  it when it exits.
+- `HEAD` is checked at the start of each daemon batch and each daemonless call. A commit
+  made while a long pass runs (a reflect pass waiting on a model) is seen at the next
+  batch, so that pass's ops still go to the file the commit may have recorded. The next
+  commit records them; a merge of two branches is unaffected, because each branch's
+  files are its own.
 - A read-only open replays the logs and writes nothing.
 
 ## 6. Replay
@@ -368,11 +376,13 @@ What each tagged op becomes:
 `plan.reject` undoes every applied op of the plan, newest first. Both verdicts record
 everything they changed, and `plan.reopen` restores exactly that, subset included.
 
-- **Accepting does not hand off.** The applier never adds a hand-off to a verdict; the
-  sender does. `codoc accept` sends `feature.handoff` for every feature the plan touches
-  in the same batch, unless given `--no-build`. The editor's Accept sends the verdict
-  alone. A delete plan is never handed off with its accept; removing code is
-  `codoc handoff --delete-code`.
+- **The applier never adds a hand-off to a verdict; the sender does.** The editor's
+  Accept and `codoc accept` send `feature.handoff` in the same batch for the features
+  `derive.accept_handoffs` names: those a coding agent's plan touches, since that plan
+  was proposed before the code and is a request to build. A loop's, translator's or
+  suggester's plan is accepted without a hand-off. `codoc accept --build` hands off any
+  plan's features, `--no-build` none. A delete plan is never handed off with its
+  accept; removing code is `codoc handoff --delete-code`.
 - **Plans the applier opens.** A suggester's untagged edit, and a machine write the gate
   demoted, need a plan. The applier uses, first match: the plan it opened for the same
   actor and batch, if still open; the newest open `edit` plan of that actor targeting the
@@ -540,7 +550,8 @@ It adopts each new projection block by block.
   does not contain the last op the applier applied for it (that op is outside the
   projection's `frontier`). A held block keeps its node and its place.
 - A gesture holds every block it names and every block it added or removed.
-- A projection whose `head` is lower than the one already shown is dropped.
+- A projection from another `store` resets the page's holds and is adopted whole; within
+  one `store`, one whose `head` is lower than the one already shown is dropped.
 - A block that is not held and whose `head` is unchanged is left alone. Any other
   unheld block is replaced by the projection's.
 - An adoption that changes only words replaces those blocks in place. One that adds,

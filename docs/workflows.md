@@ -78,8 +78,8 @@ One gesture is one batch, and a batch is the undo unit. Typing is flushed as one
 | Build it on a comment | editor | `feature.handoff` with the thread's words as `asked` | The host runs `codoc realize` in a terminal. |
 | Hand off (⌘S or the toolbar) | editor | `feature.handoff` per `edited` feature | Ink turns from unsent to sent. |
 | `codoc handoff <feature> [--asked …] [--delete-code]` | CLI | `feature.handoff` | |
-| Accept all, Reject all | editor | `plan.accept` or `plan.reject` per open plan | Accepted words become ordinary text with the plan's author; rejected words die. |
-| `codoc accept <plan>` | CLI | `plan.accept`, and `feature.handoff` per feature the plan touches unless `--no-build` or the plan is a `delete` plan | |
+| Accept all, Reject all | editor | `plan.accept` or `plan.reject` per open plan; with Accept, `feature.handoff` for each feature a coding agent's plan touches (the projection's `plans[].handoff`) | Accepted words become ordinary text with the plan's author; an accepted agent plan is queued. |
+| `codoc accept <plan>` | CLI | `plan.accept`, and `feature.handoff` per feature by the same rule as the editor; `--build` hands off any plan's features, `--no-build` none; never for a delete plan | As above. |
 | `codoc reject <plan>` | CLI | `plan.reject` | |
 | Undo, redo (⌘Z, ⇧⌘Z, ⌘Y) | editor | The recorded inverses of the viewer's newest batch, newest first, as batch `u-<batch>`; redo undoes that | The log keeps both. |
 | Delete feature | editor command `deleteFeature` (no control on the page calls it) | `block.delete` of the heading, `block.set(level)` per promoted child heading | The heading and its body are gone; History keeps them. |
@@ -115,7 +115,7 @@ touched the feature.
 show as gray text, struck gray for `suggest_del`. Whatever the person types inside a
 proposal is theirs and untagged. Accept or reject is a verdict
 ([concurrency.md](concurrency.md#9-plans-and-verdicts)). The editor's Accept sends the
-verdict alone; `codoc accept` also hands off.
+verdict and, for a coding agent's plan, the hand-off; `codoc accept` does the same.
 
 ### 3.4 Reviewing what happened
 

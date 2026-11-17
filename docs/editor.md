@@ -132,7 +132,9 @@ conflict.
 
 `adopt` in `adoption.ts`, with the plan from `calc/adopt.ts`:
 
-1. A projection whose `head` is lower than the one shown is dropped.
+1. A projection from another `store` (the daemon rebuilt) drops every hold and every
+   last-applied op, keeps queued ops, and is adopted whole. Within one `store`, a
+   projection whose `head` is lower than the one shown is dropped.
 2. Queued ops are flushed.
 3. A block is held while one of its ops is unacked, or while its last applied op is
    outside the projection's `frontier` (`Outbox.held`). Held blocks keep their node, their
@@ -186,7 +188,7 @@ the window. It never writes to the live editor.
 | History | Toggles section 7's History. |
 | Language | Sets `doc_language`. |
 | Comment | Starts a thread on the selected words. |
-| Accept all (n), Reject all (n) | `plan.accept` or `plan.reject` per open plan, in one batch. No hand-off. |
+| Accept all (n), Reject all (n) | `plan.accept` or `plan.reject` per open plan, in one batch. Accept also sends `feature.handoff` for each feature in the plans' `handoff`. |
 | Hand off (n), ⌘S | `feature.handoff` per `edited` feature, with no `covers`. |
 | Build now | Asks the host to run `codoc realize`. Shown when a feature is `queued` or `planned`. |
 | ⌘F, ⌘⌥F or ⌘H | Find; Find and Replace (`find.ts`). Matches stay inside a block; a replacement is ordinary typing. |

@@ -23,7 +23,7 @@ Frontier   := { Session: seq }              a set of ops: every op of each sessi
 Rank       := base-62 fraction, as a string
 
 Doc        := Block[]                       sorted by (rank, id); live and dead
-Block      := { id, kind, rank, level, content, dead?, detached? }
+Block      := { id, kind, rank, level, content, dead?, dead_actor?, dead_at?, detached? }
 content    := { field: Text | JSON }        which fields are Text is fixed by the kind
 Text       := { segs: Seg[], marks: Mark[] }       segs in document order, live and dead
 Seg        := { op, k0, chars, actor, at, plan?, dead?, dead_actor?, dead_at? }
@@ -560,7 +560,7 @@ rejected plan's words are dead.
 | `history_window(n)` | The timeline: the applied ops among the last `n` (200 as published). Per op: the `text` of each block it touched as it read right after the op, its recorded inverse, the blocks it took off or put on the page, and the ranks, kinds and levels it displaced; plus what was true entering the window. Computed by un-applying the window backwards on clones of the live fields, by character identity. |
 | `dead_cites(known)` | `cite` marks whose `(file, symbol)` is not in the index. |
 | `export` | `block_spec` of every live block in `rejected` mode, written with heading ids. |
-| `projection` | `{head, frontier, blocks, phases, plans, watermarks, bindings, claims}`. A block entry is `{id, kind, level, rank, head, fields}`. A Text field is `{text, runs, spans, suggest_del}` in `live` mode, with unmerged runs and the document's own marks. `plans` is `open_plans()`. `claims` is `ink`, `ground` and `plan_claims` per feature. |
+| `projection` | `{store, head, frontier, blocks, phases, plans, watermarks, bindings, claims}`. `store` names the store instance and changes on every rebuild; `head` is comparable only under one `store`. Each plan carries `handoff`: the features accepting it hands off (`accept_handoffs`: a coding agent's plan that is not a delete plan). A block entry is `{id, kind, level, rank, head, fields}`. A Text field is `{text, runs, spans, suggest_del}` in `live` mode, with unmerged runs and the document's own marks. `plans` is `open_plans()`. `claims` is `ink`, `ground` and `plan_claims` per feature. |
 | `state_fingerprint` | Blocks with text and marks, bindings, plans, watermarks. Equal fingerprints mean the same document. |
 
 ### Phase
@@ -569,7 +569,7 @@ rejected plan's words are dead.
 
 | phase | holds when |
 |---|---|
-| `edited` | `ink(f)` has an `unsent` claim, or a person killed characters on the in-flow blocks of `body(f)` with an op outside both `handoff` and `realized`. |
+| `edited` | `ink(f)` has an `unsent` claim, or a person killed characters on the in-flow blocks of `body(f)` with an op outside both `handoff` and `realized`., or a person deleted a whole in-flow block of `body(f)` that held document words, with an op outside both. Changing a block's kind, level or place is layout and does not count. |
 | `realizing` | `f` is queued and a realize pass holds the lease: `status.json` says `realizing` and was written within the last 300 seconds. The lease is the one input from outside the store. |
 | `queued` | `f` is queued and has at least one binding. |
 | `planned` | `f` is queued and has no binding. |
