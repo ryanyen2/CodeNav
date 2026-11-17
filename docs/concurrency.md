@@ -186,6 +186,11 @@ re-reading lines it has drained.
 4. Reflect the changed code files that are not held: the loop's pass, which writes ops as `loop`.
 5. Publish the derived files.
 
+**Exactly once.** Every writer mints random client ids (a per-page prefix in the editor, a
+uuid in the CLI and the MCP server), and the drain reads each inbox line once, from the
+offset it stored. A `cid` is read again only if a client appends the same line again; the
+newest 2000 acks per client are kept to answer that with the same op.
+
 ## 5. Sessions
 
 - A session is one applier's run between rotations. Its id is random.
@@ -612,5 +617,3 @@ It adopts each new projection block by block.
 ## Open questions
 
 1. With two snapshots the rebuild uses the newest by file name, whichever fold covers more.
-2. A `cid` resubmitted after its ack has been trimmed from the ack file (more than 2000
-   acks later) is applied again.
