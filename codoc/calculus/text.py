@@ -66,6 +66,18 @@ def nfc(s: str) -> str:
     return unicodedata.normalize("NFC", s)
 
 
+def struck_chars(m: "Mark") -> list[Segment]:
+    """The characters a ``suggest_del`` proposes to cut, as one-character
+    segments. They are recorded when the mark is placed, so accepting it
+    kills those and nothing typed between them since."""
+    out = []
+    for ref in (m.attrs.get("chars") or "").split(","):
+        op_id, _, k = ref.rpartition(":")
+        if op_id and k.isdigit():
+            out.append((op_id, int(k), 1))
+    return out
+
+
 @dataclass(eq=False)
 class Seg:
     op: OpId
@@ -446,7 +458,9 @@ class Text:
                         self.marks.extend(pieces)
                         added.extend(pieces)
             # Extending an existing mark keeps that mark's placer: widening a
-            # person's cite by one word does not make it the loop's cite.
+            # person's cite by one word does not make it the loop's cite. The
+            # clock is this op's: drift reads `at` as the last time anyone
+            # touched the prose.
             lo, hi = new.start, new.end
             keep_actor, keep_op = actor, op
             merged = False
@@ -458,7 +472,7 @@ class Text:
                     removed.append(m)
                     lo = m.start if self._before(m.start, lo) else lo
                     hi = m.end if self._before(hi, m.end) else hi
-            new = Mark(kind, dict(attrs), lo, hi, keep_actor, keep_op)
+            new = Mark(kind, dict(attrs), lo, hi, keep_actor, keep_op, at)
             self.marks.append(new)
             added.append(new)
             return removed, added

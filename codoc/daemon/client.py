@@ -33,6 +33,7 @@ from codoc.calculus.ingest import resolve_pending_refs
 from codoc.calculus.ops import TEXT_INSERT
 from codoc.daemon.pidfile import daemon_running
 from codoc.daemon.publish import publish
+from codoc.index.git import head_sha
 from codoc.workspace import Workspace
 from codoc.workspace import log as L
 from codoc.workspace.layout import APPLIER_LOCK, locked
@@ -50,6 +51,7 @@ def _actor(client: str) -> str:
 
 _OWNED: dict[Path, Workspace] = {}
 _SEEN: dict[Path, dict[str, int]] = {}      # log file → size, as this process last left it
+_HEAD: dict[Path, str] = {}                 # the HEAD sha this process last wrote under
 
 
 def _applier(codoc_dir: Path) -> Workspace:
@@ -78,13 +80,30 @@ def _catch_up(codoc_dir: Path, ws: Workspace) -> None:
         ws.rebuild()
 
 
+def _follow_head(codoc_dir: Path, ws: Workspace) -> bool:
+    """When ``HEAD`` moved since this process's last turn (a commit, a checkout,
+    a pull), rebuild from the logs now on disk and start a new session file,
+    as the daemon does. A session file is never appended to after the commit
+    that may have recorded it. Returns whether it rebuilt."""
+    head = head_sha(str(codoc_dir.parent))
+    was = _HEAD.get(codoc_dir)
+    _HEAD[codoc_dir] = head
+    if was is None or was == head:
+        return False
+    ws.rebuild()
+    ws.rotate_session()
+    return True
+
+
 @contextmanager
 def applying(codoc_dir: Path):
     """The workspace, under the applier lock, caught up with anybody else's
-    writes. Yields inside the lock so apply and publish are one turn."""
+    writes and with ``HEAD``. Yields inside the lock so apply and publish are
+    one turn."""
     with locked(codoc_dir / APPLIER_LOCK):
         ws = _applier(codoc_dir)
-        _catch_up(codoc_dir, ws)
+        if not _follow_head(codoc_dir, ws):
+            _catch_up(codoc_dir, ws)
         yield ws
         _SEEN[codoc_dir] = _sizes(codoc_dir)
 
@@ -94,6 +113,7 @@ def release(codoc_dir: Path | None = None) -> None:
     takes the checkout back)."""
     for key in ([codoc_dir] if codoc_dir is not None else list(_OWNED)):
         ws = _OWNED.pop(Path(key), None) if key is not None else None
+        _HEAD.pop(Path(key), None)
         if ws is not None:
             ws.close()
 

@@ -46,6 +46,15 @@ VERDICTS = frozenset({K.PLAN_ACCEPT, K.PLAN_REJECT, K.PLAN_REOPEN})
 WHOLE_OP = -1          # a character range standing for "everything this op minted"
 
 
+def _main_field(store: Store, bid: str) -> str | None:
+    """The Text field the window reports for a block: ``text`` for a heading
+    or prose block, ``source`` for a table, diagram or snippet, the first
+    declared one for a plugin kind."""
+    b = store.blocks.get(bid)
+    fields = text_fields(b.kind) if b is not None else ()
+    return fields[0] if fields else None
+
+
 def history_window(store: Store, limit: int = 200) -> dict:
     ops = [o for o in store.ops[-limit:] if o.conflict is None]
     clones: dict[tuple[str, str], Text] = {}
@@ -93,7 +102,7 @@ def history_window(store: Store, limit: int = 200) -> dict:
             return [(t["bid"], f) for f in text_fields(p.get("kind", ""))]
         if o.kind in (K.BLOCK_DELETE, K.BLOCK_RESTORE):
             key = "killed" if o.kind == K.BLOCK_DELETE else "revived"
-            return [(i, "text") for i in p.get(key, []) if i in store.blocks]
+            return [(i, f) for i in p.get(key, []) if (f := _main_field(store, i))]
         if o.kind in VERDICTS:
             out: list[tuple[str, str]] = []
             for e in _verdict_entries(p):
@@ -168,7 +177,7 @@ def history_window(store: Store, limit: int = 200) -> dict:
         # an anchor can still name them, and a reader that showed them would
         # put the paragraph back on every page after its deletion.
         after = {bid: ("" if bid in dead else t.live_text()) for bid, path in touched(o)
-                 if bid not in born and path == "text" and (t := clone(bid, path)) is not None}
+                 if bid not in born and path == _main_field(store, bid) and (t := clone(bid, path)) is not None}
         gone, back = _liveness(o)
         moved = _rank_rows(o)
         entries.append({"pos": store.position[o.id], "id": o.id, "at": o.at, "actor": o.actor, "kind": o.kind,
@@ -190,7 +199,7 @@ def history_window(store: Store, limit: int = 200) -> dict:
             born.add(o.payload["new"])
     entries.reverse()
     before = {bid: ("" if bid in dead else t.live_text()) for (bid, path), t in clones.items()
-              if path == "text" and bid not in born}
+              if path == _main_field(store, bid) and bid not in born}
     named = {bid for bid, _ in clones} | born | {i for e in entries for i in e["live"]} | {i for e in entries for i in e["ranks"]}
     return {"start": (store.position[ops[0].id] if ops else store.pos), "head": store.pos, "before": before,
             "born": sorted(born), "dead": sorted(dead & named),

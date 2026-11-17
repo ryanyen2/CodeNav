@@ -26,13 +26,16 @@ from dataclasses import replace
 
 from codoc.calculus import ops as K
 from codoc.calculus.doc import (
-    HEADING, ITEMS, LEVELLED, PARAGRAPH, Block, clamp_level, empty_content, is_text_field, level_for, text_fields,
+    HEADING, ITEMS, LEVELLED, PARAGRAPH, Block, clamp_level, empty_content, is_one_line, is_text_field, level_for,
+    text_fields,
 )
 from codoc.calculus.ids import END, START, CharRef, OpId, ref_from_json, ref_to_json
 from codoc.calculus.ops import Op, OpBody, body, covered, frontier_union
 from codoc.calculus.rank import RankError
 from codoc.calculus.store import Binding, Plan, Store
-from codoc.calculus.text import PROPOSALS, SUGGEST_DEL, SUGGEST_MARK, AnchorError, Mark, MarkError, Text, nfc
+from codoc.calculus.text import (
+    PROPOSALS, SUGGEST_DEL, SUGGEST_MARK, AnchorError, Mark, MarkError, Text, nfc, struck_chars,
+)
 
 RESERVED_PATHS = frozenset({"id", "rank", "dead"})
 
@@ -407,8 +410,8 @@ def _h_block_set(store: Store, op: Op, touched: set[str]):
     value = op.payload["value"]
     canonical: dict = {"value": value}
     if path == "kind":
-        if set(text_fields(value)) != set(text_fields(b.kind)):
-            raise Conflict("kind_incompatible", f"{b.kind}->{value}")
+        if not (is_one_line(value) and is_one_line(b.kind)):
+            raise Conflict("kind_incompatible", f"{b.kind}->{value}")    # only heading and the prose kinds convert
         prev_kind, prev_level = b.kind, b.level
         # bullet <-> numbered keeps the depth; any other change starts at level 1 unless told.
         keep = prev_level if prev_kind in ITEMS and value in ITEMS else None
@@ -448,6 +451,8 @@ def _h_block_split(store: Store, op: Op, touched: set[str]):
         if not b.live:
             raise Conflict("dead_block", b.id)
         text = b.text(path)
+    if not is_one_line(b.kind):
+        raise Conflict("not_splittable", b.kind)     # a newline in a source or plugin field is content
     existing = store.blocks.get(new)
     if existing is not None and (existing.live or not forced):
         raise Conflict("duplicate_block", new)
@@ -493,7 +498,7 @@ def _h_block_merge(store: Store, op: Op, touched: set[str]):
     # split, which is the one merge that says so.
     if b.kind == HEADING or (a.kind == HEADING and not op.payload.get("rejoin")):
         raise Conflict("merge_heading")
-    if set(text_fields(a.kind)) != set(text_fields(b.kind)):
+    if not (is_one_line(a.kind) and is_one_line(b.kind)):
         raise Conflict("kind_incompatible")
     prev, nxt = store.live_neighbours_of(into)
     if bid not in (prev, nxt):
@@ -862,18 +867,6 @@ def _proposed_marks(store: Store, pid: str, accepted: set[str]) -> list[tuple[Bl
 
 
 
-def _struck_chars(m: Mark) -> list[tuple[str, int, int]]:
-    """The characters a `suggest_del` proposed to cut, as segments. Recorded at
-    placement, so accepting kills exactly those and nothing typed between them
-    since — the same rule `text.delete` has followed since round 3 (01 §3)."""
-    out = []
-    for ref in (m.attrs.get("chars") or "").split(","):
-        op_id, _, k = ref.rpartition(":")
-        if op_id and k.isdigit():
-            out.append((op_id, int(k), 1))
-    return out
-
-
 def _h_plan_accept(store: Store, op: Op, touched: set[str]):
     pid = op.target["pid"]
     plan = store.plans.get(pid)
@@ -903,7 +896,7 @@ def _h_plan_accept(store: Store, op: Op, touched: set[str]):
         t = block.text(p)
         if m not in t.marks:
             continue
-        got = t.kill(_struck_chars(m), by=op.id, by_actor=op.actor, by_at=op.at)
+        got = t.kill(struck_chars(m), by=op.id, by_actor=op.actor, by_at=op.at)
         t.marks.remove(m)
         record.setdefault("struck", []).append({"bid": block.id, "path": p, "mark": m.to_json(),
                                                 "segments": [list(k) for k in got]})

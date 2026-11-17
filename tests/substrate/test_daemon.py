@@ -67,6 +67,47 @@ def test_inbox_ops_are_drained_and_acked(tmp_path):
     assert status["state"] == "edited"
 
 
+def test_a_batch_with_no_paths_drains_what_queued_while_no_daemon_ran(tmp_path):
+    """Startup and `codoc sync` call process_batch([]). An edit a client
+    appended while nothing was watching has no file event to announce it."""
+    d, _ = make(tmp_path, [])
+    t = d.ws.store.blocks["p1"].text()
+    L.submit(d.codoc_dir, "ide", [Submission(cid="q1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                                             payload={"after": list(t.last_live_ref()), "text": " Queued."})])
+    assert "1 client op" in d.process_batch([])
+    assert d.ws.store.blocks["p1"].text().live_text().endswith(" Queued.")
+    assert "client op" not in d.process_batch([])          # drained once, from the saved offset
+
+
+def test_a_daemonless_writer_starts_a_new_session_when_head_moves(tmp_path, monkeypatch):
+    """The MCP server writes as the applier when no daemon runs. After a commit
+    its session file may be in the repo, so the next write goes to a new file."""
+    from codoc.daemon import client
+    from codoc.workspace import Workspace
+
+    head = {"sha": "a" * 40}
+    monkeypatch.setattr(client, "head_sha", lambda _root: head["sha"])
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws); ws.close()
+
+    def type_(words: str) -> str:
+        last = list(client.read(cd).store.blocks["p1"].text().live_refs())[-1]
+        client.write(cd, client="cli", bodies=[{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                                                "payload": {"after": list(last), "text": words}}])
+        return client._OWNED[cd].session
+
+    try:
+        first, again = type_(" A."), type_(" B.")
+        head["sha"] = "b" * 40                      # a commit
+        after = type_(" C.")
+    finally:
+        client.release(cd)
+    assert first == again != after
+    fresh = Workspace(cd, readonly=True)
+    assert fresh.store.blocks["p1"].text().live_text().endswith(" A. B. C.")
+    fresh.close()
+
+
 def test_a_warm_publisher_writes_what_a_cold_one_would(tmp_path):
     """The per-block memo is a pure-function cache: every key is a counter the
     store advances when the answer can change (spec §6)."""

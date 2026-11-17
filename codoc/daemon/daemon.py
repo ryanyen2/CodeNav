@@ -69,27 +69,25 @@ class Daemon:
         self.publisher = Publisher(self.codoc_dir, str(self.root))
 
     # ── routing ────────────────────────────────────────────────────────────
-    def classify(self, paths: list[str]) -> tuple[set[str], bool, bool]:
-        """``(code_files, inbox_touched, activity_touched)``."""
+    def classify(self, paths: list[str]) -> tuple[set[str], bool]:
+        """``(code_files, activity_touched)``. An inbox change needs no flag:
+        every batch drains the inboxes."""
         code: set[str] = set()
-        inbox = activity = False
-        inbox_dir = L.inbox_dir(self.codoc_dir).resolve()
+        activity = False
         act = (self.codoc_dir / ACTIVITY).resolve()
         for p in paths:
             rp = Path(p).resolve()
             if rp == act:
                 activity = True
-            elif inbox_dir in rp.parents and rp.suffix == ".jsonl" and not rp.name.endswith(".ack.jsonl"):
-                inbox = True
             elif any(part in SKIP_DIRS for part in rp.parts):
                 continue
             elif rp.suffix in CODE_EXTENSIONS and self.root.resolve() in rp.parents:
                 code.add(str(rp.relative_to(self.root.resolve())))
-        return code, inbox, activity
+        return code, activity
 
     def process_batch(self, paths: list[str], *, now: float | None = None) -> str:
         now = now if now is not None else time.time()
-        code, inbox, activity = self.classify(paths)
+        code, activity = self.classify(paths)
         notes: list[str] = []
         rebuilt = False
         # 1. HEAD moved → the set of logs on disk may have changed (a checkout,
@@ -103,12 +101,14 @@ class Daemon:
             rebuilt = True
             notes.append("session rotated (HEAD moved)")
         # 2. Client ops, under the roles the tracked config names right now
-        # (the hub adds a login's role when they sign in).
-        if inbox:
-            self.ws.roles.table = Roles.load(self.codoc_dir).table
-            done = self.ws.drain_inbox(self.identity)
-            if done:
-                notes.append(f"{len(done)} client op(s)")
+        # (the hub adds a login's role when they sign in). Every batch drains:
+        # the drain reads each inbox from its saved offset, so this is cheap,
+        # and a batch with no inbox event (startup, `codoc sync`) still picks
+        # up what clients wrote while no daemon was running.
+        self.ws.roles.table = Roles.load(self.codoc_dir).table
+        done = self.ws.drain_inbox(self.identity)
+        if done:
+            notes.append(f"{len(done)} client op(s)")
         # 3. Epoch edges and stale recovery. A pass that runs because an agent
         # session ended is the one kind of evidence that settles a hand-off.
         under_epoch = False

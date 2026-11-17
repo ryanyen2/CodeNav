@@ -18,7 +18,7 @@ from codoc.calculus.ids import OpId, is_human
 from codoc.calculus.inline_md import Span, render
 from codoc.calculus.ops import Op, covered, in_frontier
 from codoc.calculus.store import Store
-from codoc.calculus.text import CITE, PROPOSALS, SUGGEST_DEL, SUGGEST_MARK, Mark, Text
+from codoc.calculus.text import CITE, PROPOSALS, SUGGEST_DEL, SUGGEST_MARK, Mark, Text, struck_chars
 
 LOOP = "loop"
 # A feature with pending intent: the document wins over a machine's repair
@@ -65,7 +65,7 @@ def _in_mode(text: Text, mode: str, store: Store | None) -> Text:
         if m.attrs.get("plan") not in open_plans:
             continue
         if m.kind == SUGGEST_DEL:
-            view.delete(m.start, m.end, by="view")
+            view.kill(struck_chars(m), by="view")      # what accept would kill, not the whole range
         else:
             view.set_mark(m.attrs.get("mark", ""), {k[2:]: v for k, v in m.attrs.items() if k.startswith("a:")},
                           m.start, m.end, bool(m.attrs.get("on")), actor=m.actor, op=m.op)
