@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 
 from codoc.calculus import ops as K
 from codoc.calculus import rank as R
-from codoc.calculus.doc import HEADING, Block, in_flow, text_fields
+from codoc.calculus.doc import HEADING, Block
 from codoc.calculus.ids import CharRef, OpId
 from codoc.calculus.ops import Op, frontier_union
 from codoc.calculus.text import AnchorError, Text
@@ -306,7 +306,7 @@ class Store:
         # once per block by a cold publish, and an O(n) list copy each turns
         # that into O(n²): 450 ms of it alone at 10,000 features.
         i = self._index_of(bid)
-        flows = lambda j: (b := self.blocks[self.order[j][1]]).live and in_flow(b.kind)
+        flows = lambda j: (b := self.blocks[self.order[j][1]]).live and b.layout.flow
         prev = next((self.order[j][1] for j in range(i - 1, -1, -1) if flows(j)), None)
         nxt = next((self.order[j][1] for j in range(i + 1, len(self.order)) if flows(j)), None)
         return prev, nxt
@@ -421,7 +421,7 @@ class Store:
         blocks = []
         for b in self.all_blocks():
             j = b.to_json()
-            for f in text_fields(b.kind):
+            for f in b.layout.text:
                 j["content"][f]["marks"] = b.text(f).sorted_marks_json()
             blocks.append(j)
         return {

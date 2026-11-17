@@ -109,6 +109,25 @@ def test_subset_accept_rejects_unaccepted_marks_and_redo_keeps_subset():
     assert redo[0].conflict is None and T(s, "p1") == "keep this!"
 
 
+def test_a_subset_accept_without_the_plans_own_delete_gives_its_words_back():
+    """The plan proposed "abc", then took back "b". Accepting only the insert
+    keeps "abc"; reopening the verdict kills "b" again, as the plan's delete."""
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Top")
+    ins = paragraph(m, s, "p1", "x", after="h1")
+    ag = Mint("a", "agent:x")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "pl"}, {"kind": "edit"}))
+    i1 = apply(s, ag.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [ins.id, 0], "text": "abc"}, plan="pl"))
+    d1 = apply(s, ag.op(K.TEXT_DELETE, {"bid": "p1", "path": "text"}, {"segments": [[i1.id, 1, 1]]}, plan="pl"))
+    assert d1.conflict is None and T(s, "p1") == "xac"
+    acc = apply(s, m.op(K.PLAN_ACCEPT, {"pid": "pl"}, {"subset": [i1.id]}))
+    assert acc.payload["rejected"] == [d1.id] and T(s, "p1") == "xabc"
+    (ro,) = invert(s, m, acc)
+    assert ro.conflict is None and T(s, "p1") == "xac"
+    b = next(sg for sg in s.blocks["p1"].text().segs if sg.op == i1.id and sg.k0 == 1)
+    assert b.dead == d1.id
+
+
 # ── ranks are re-derived on restore ─────────────────────────────────────
 
 def test_move_undo_never_collides_ranks():

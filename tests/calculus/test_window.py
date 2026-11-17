@@ -28,8 +28,8 @@ def test_window_matches_prefix_replay_through_text_split_merge_and_marks():
     w = history_window(s, limit=100)
     assert w["start"] == 0 and len(w["ops"]) == len(s.ops)
     for e, snap in zip(w["ops"], truth):
-        for bid, text in e["blocks"].items():
-            assert text == snap[bid], (e["kind"], bid, text, snap[bid])
+        for bid, fields in e["blocks"].items():
+            assert fields.items() <= snap[bid].items(), (e["kind"], bid, fields, snap[bid])
     assert all(isinstance(e["inverse"], list) for e in w["ops"])
 
 
@@ -42,8 +42,8 @@ def test_window_is_bounded_and_records_the_text_before_it():
         last = apply(s, m.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [last.id, 0], "text": str(i)}))
     w = history_window(s, limit=3)
     assert len(w["ops"]) == 3 and w["start"] == len(s.ops) - 3
-    assert w["before"]["p1"] == "a0123456"
-    assert [e["blocks"]["p1"] for e in w["ops"]] == ["a01234567", "a012345678", "a0123456789"]
+    assert w["before"]["p1"] == {"text": "a0123456"}
+    assert [e["blocks"]["p1"]["text"] for e in w["ops"]] == ["a01234567", "a012345678", "a0123456789"]
 
 
 def check_window(store: Store, limit: int = 1000) -> dict:
@@ -53,12 +53,12 @@ def check_window(store: Store, limit: int = 1000) -> dict:
     w = history_window(store, limit=limit)
     for e in w["ops"]:
         snap = truth[e["pos"]]
-        for bid, text in e["blocks"].items():
-            assert text == snap[bid], (e["kind"], e["pos"], bid, text, snap[bid])
+        for bid, fields in e["blocks"].items():
+            assert fields.items() <= snap[bid].items(), (e["kind"], e["pos"], bid, fields, snap[bid])
     if w["start"] > 0:
         before = truth[w["start"] - 1]
-        for bid, text in w["before"].items():
-            assert bid in before and text == before[bid], ("before", bid, text, before.get(bid))
+        for bid, fields in w["before"].items():
+            assert bid in before and fields.items() <= before[bid].items(), ("before", bid, fields, before.get(bid))
         for bid in w["born"]:
             assert bid not in before, (bid, "born inside the window but existed before it")
     return w
@@ -195,9 +195,9 @@ def test_window_unapplies_verdicts_and_omits_blocks_born_inside_it():
     truth = texts_after_each_op(s)
     w = history_window(s, limit=500)
     for e in w["ops"]:
-        for bid, text in e["blocks"].items():
-            assert text == truth[e["pos"]][bid], (e["kind"], bid, text, truth[e["pos"]][bid])
-    assert next(e for e in w["ops"] if e["id"] == pi.id)["blocks"]["p1"] == "keep maybe later"
+        for bid, fields in e["blocks"].items():
+            assert fields.items() <= truth[e["pos"]][bid].items(), (e["kind"], bid, fields, truth[e["pos"]][bid])
+    assert next(e for e in w["ops"] if e["id"] == pi.id)["blocks"]["p1"] == {"text": "keep maybe later"}
     short = history_window(s, limit=2)
     assert "p1" in short["before"]
     m2, s2 = Mint(), Store()

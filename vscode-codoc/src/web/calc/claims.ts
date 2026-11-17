@@ -10,7 +10,7 @@
  * A block's paints come from its edited field: `source` for a table, a
  * diagram or a code block, `text` otherwise.
  */
-import { pathOf, textField, type Claim, type Phase, type ProjectedBlock, type Projection, type TextField } from './projection';
+import { isBuiltin, pathOf, textField, type Claim, type Phase, type ProjectedBlock, type Projection, type TextField } from './projection';
 
 export type Ink = 'ink-unsent' | 'ink-sent' | 'plan-open' | 'plan-accepted' | 'plan-cut' | 'plan-mark' | 'plan-unmark'
     | 'code-added' | 'code-removed' | 'author-human' | 'author-loop' | 'author-agent' | 'author-other';
@@ -102,7 +102,8 @@ function groundPaints(claims: Claim[] | undefined): Paint[] {
 export function paintsFor(b: ProjectedBlock, proj: Projection, fid: string | null,
                           watermarks: { handoff: Record<string, number>; realized: Record<string, number> },
                           history = false): Paint[] {
-    const f = textField(b, pathOf(b.kind));
+    // A card (a kind without a node type) holds its words in text areas, which take no paints.
+    const f = isBuiltin(b.kind) ? textField(b, pathOf(b.kind)) : null;
     if (!f) return [];
     const ink = inkPaints(b, f, watermarks.realized, watermarks.handoff);
     const plan = planPaints(b, f, proj.plans);

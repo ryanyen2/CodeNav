@@ -47,7 +47,7 @@ from difflib import SequenceMatcher
 
 from codoc.calculus import ops as K
 from codoc.calculus.block_md import BlockSpec
-from codoc.calculus.doc import is_source_field, text_fields
+from codoc.calculus.doc import BUILTIN, LAYOUT_KEY, Layout, is_source_field, layout_of
 from codoc.calculus.ids import REWRITERS, START, CharRef, actor_kind, is_human, new_block_id
 from codoc.calculus.inline_md import parse
 from codoc.calculus.text import BOLD, CITE, CODE, GROWS_AFTER, LINK, Mark, Text, nfc
@@ -244,11 +244,14 @@ def block_bodies(specs: list[BlockSpec], *, after: str, keep_ids: bool = False) 
     inserts = 0
     for spec in specs:
         bid = spec.id if keep_ids and spec.id else new_block_id()
-        fields = text_fields(spec.kind)
+        layout = _spec_layout(spec)
+        fields = layout.text
         payload: dict = {"kind": spec.kind, "after": after}
+        if spec.kind not in BUILTIN:
+            payload["layout"] = layout.to_json()     # the fields below are split by it, so the block is too
         if spec.level:
             payload["level"] = spec.level
-        plain = {k: v for k, v in spec.content.items() if k not in fields}
+        plain = {k: v for k, v in spec.content.items() if k not in fields and k != LAYOUT_KEY}
         if plain:
             payload["content"] = plain
         bodies.append({"kind": K.BLOCK_ADD, "target": {"bid": bid}, "payload": payload})
@@ -269,6 +272,17 @@ def block_bodies(specs: list[BlockSpec], *, after: str, keep_ids: bool = False) 
         ids.append(bid)
         after = bid
     return bodies, ids
+
+
+def _spec_layout(spec: BlockSpec) -> Layout:
+    """A copied block keeps the layout its fence carries; a fence without one
+    (typed, or from an older export) takes this process's for the kind."""
+    if spec.kind not in BUILTIN and LAYOUT_KEY in spec.content:
+        try:
+            return Layout.from_json(spec.content[LAYOUT_KEY])
+        except TypeError:
+            pass
+    return layout_of(spec.kind)
 
 
 def concat_bodies(first: list[dict], more: list[dict]) -> list[dict]:
@@ -294,7 +308,7 @@ def strike_bodies(store, bids: list[str], pid: str) -> list[dict]:
     bodies = []
     for bid in bids:
         b = store.blocks[bid]
-        for f in text_fields(b.kind):
+        for f in b.layout.text:
             t = b.text(f)
             if t.live_len():
                 bodies.append({"kind": K.TEXT_MARK, "target": {"bid": bid, "path": f},

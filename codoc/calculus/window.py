@@ -1,6 +1,7 @@
 """The timeline window (docs/model.md, ``history_window``): the last ``limit`` ops with, per
 op, the text of every block it touched as it read right after the op, and
-each touched block's text as it read before the window. Derived by
+each touched block's text as it read before the window, both as
+``{bid: {field: text}}`` over every Text field of the block. Derived by
 un-applying the window backwards on clones of the live fields, so the
 reconstruction is exact (a fuzz test checks it against a prefix replay) and the
 editor's scrubber never pushes old prose through the recorder. Each entry
@@ -36,7 +37,6 @@ a batch it holds whole from one that reaches back past the window.
 from __future__ import annotations
 
 from codoc.calculus import ops as K
-from codoc.calculus.doc import text_fields
 from codoc.calculus.ids import END, ref_from_json
 from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
@@ -46,13 +46,10 @@ VERDICTS = frozenset({K.PLAN_ACCEPT, K.PLAN_REJECT, K.PLAN_REOPEN})
 WHOLE_OP = -1          # a character range standing for "everything this op minted"
 
 
-def _main_field(store: Store, bid: str) -> str | None:
-    """The Text field the window reports for a block: ``text`` for a heading
-    or prose block, ``source`` for a table, diagram or snippet, the first
-    declared one for a plugin kind."""
+def _fields(store: Store, bid: str) -> tuple[str, ...]:
+    """The Text fields the window reports for a block: every one of its layout."""
     b = store.blocks.get(bid)
-    fields = text_fields(b.kind) if b is not None else ()
-    return fields[0] if fields else None
+    return b.layout.text if b is not None else ()
 
 
 def history_window(store: Store, limit: int = 200) -> dict:
@@ -99,10 +96,10 @@ def history_window(store: Store, limit: int = 200) -> dict:
         if o.kind == K.BLOCK_MERGE:
             return [(t["into"], path), (t["bid"], path)]
         if o.kind == K.BLOCK_ADD:
-            return [(t["bid"], f) for f in text_fields(p.get("kind", ""))]
+            return [(t["bid"], f) for f in _fields(store, t["bid"])]
         if o.kind in (K.BLOCK_DELETE, K.BLOCK_RESTORE):
             key = "killed" if o.kind == K.BLOCK_DELETE else "revived"
-            return [(i, f) for i in p.get(key, []) if (f := _main_field(store, i))]
+            return [(i, f) for i in p.get(key, []) for f in _fields(store, i)]
         if o.kind in VERDICTS:
             out: list[tuple[str, str]] = []
             for e in _verdict_entries(p):
@@ -176,8 +173,10 @@ def history_window(store: Store, limit: int = 200) -> dict:
         # the store still holds for it: a deleted paragraph keeps its words so
         # an anchor can still name them, and a reader that showed them would
         # put the paragraph back on every page after its deletion.
-        after = {bid: ("" if bid in dead else t.live_text()) for bid, path in touched(o)
-                 if bid not in born and path == _main_field(store, bid) and (t := clone(bid, path)) is not None}
+        after: dict[str, dict[str, str]] = {}
+        for bid, path in touched(o):
+            if bid not in born and (t := clone(bid, path)) is not None:
+                after.setdefault(bid, {})[path] = "" if bid in dead else t.live_text()
         gone, back = _liveness(o)
         moved = _rank_rows(o)
         entries.append({"pos": store.position[o.id], "id": o.id, "at": o.at, "actor": o.actor, "kind": o.kind,
@@ -198,8 +197,10 @@ def history_window(store: Store, limit: int = 200) -> dict:
         elif o.kind == K.BLOCK_SPLIT and not o.payload.get("new_takes"):
             born.add(o.payload["new"])
     entries.reverse()
-    before = {bid: ("" if bid in dead else t.live_text()) for (bid, path), t in clones.items()
-              if path == _main_field(store, bid) and bid not in born}
+    before: dict[str, dict[str, str]] = {}
+    for (bid, path), t in clones.items():
+        if bid not in born:
+            before.setdefault(bid, {})[path] = "" if bid in dead else t.live_text()
     named = {bid for bid, _ in clones} | born | {i for e in entries for i in e["live"]} | {i for e in entries for i in e["ranks"]}
     return {"start": (store.position[ops[0].id] if ops else store.pos), "head": store.pos, "before": before,
             "born": sorted(born), "dead": sorted(dead & named),

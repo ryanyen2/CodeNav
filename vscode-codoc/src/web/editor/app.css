@@ -127,7 +127,8 @@ html, body { margin: 0; height: 100%; background: var(--codoc-bg); color: var(--
 .codoc-kind-field { display: flex; gap: 8px; align-items: baseline; }
 .codoc-kind-key { color: var(--codoc-muted); min-width: 6ch; }
 .codoc-kind-value { white-space: pre-wrap; word-break: break-word; margin: 0; font: inherit; }
-pre.codoc-kind-value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+.codoc-kind-note { color: var(--codoc-muted); font-style: italic; font-size: 11px; margin-bottom: 4px; }
+.codoc-kind-text { flex: 1; font: inherit; color: var(--codoc-fg); background: transparent; border: 1px solid var(--codoc-faint); border-radius: 4px; padding: 2px 6px; resize: vertical; }
 
 /* comments in the margin */
 .codoc-margin { position: absolute; top: 0; right: 16px; width: 240px; pointer-events: none; }

@@ -12,7 +12,7 @@
  */
 import type { Node as PMNode, Slice } from '@tiptap/pm/model';
 
-import { parseBlocks, parseInline } from '../calc/markdown';
+import { LAYOUT_KEY, fenceLayout, parseBlocks, parseInline } from '../calc/markdown';
 import { SOURCE, isOneLine, kindOf, nfc, type Span } from '../calc/projection';
 import { SENT_MARKS, markAttrs } from '../calc/recorder';
 import type { Piece } from './commands';
@@ -36,8 +36,19 @@ export function piecesFromMarkdown(md: string): Piece[] {
         if (isOneLine(b.kind)) return { kind: b.kind, level: b.level, ...parseInline(b.text), content: {} };
         if (b.kind === 'code') return { kind: 'code', level: 0, text: b.text, spans: [], content: typeof b.content.lang === 'string' ? { lang: b.content.lang } : {} };
         if (SOURCE.has(b.kind)) return { kind: b.kind, level: 0, text: b.text, spans: [], content: {} };
-        // A plugin kind's `codoc:` fence: its JSON, kept visible in a code block.
-        return { kind: 'code', level: 0, text: JSON.stringify(b.content, null, 2), spans: [], content: { lang: 'json' } };
+        // Any other kind's `codoc:` fence keeps its kind. Its `$layout` names the
+        // Text fields, given as inline Markdown; every other key is JSON. A fence
+        // with no valid layout has no Text fields (ingest.block_bodies does the same
+        // when no plugin declares the kind).
+        const layout = fenceLayout(b.content) ?? { text: [], flow: true, export: true };
+        const content: Record<string, unknown> = {};
+        const texts: Record<string, { text: string; spans: Span[] }> = {};
+        for (const [k, v] of Object.entries(b.content)) {
+            if (k === LAYOUT_KEY) continue;
+            if (!layout.text.includes(k)) content[k] = v;
+            else if (typeof v === 'string') texts[k] = parseInline(v);
+        }
+        return { kind: b.kind, level: 0, text: '', spans: [], content, layout, texts };
     });
 }
 

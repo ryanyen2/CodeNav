@@ -24,7 +24,8 @@ export interface WindowEntry {
     batch_first?: number;
     plan: string | null;
     caused_by: string | null;
-    blocks: Record<string, string>;     // text of each touched block right after the op
+    /** Each touched block right after the op: the text of each of its Text fields, by path. */
+    blocks: Record<string, Record<string, string>>;
     inverse: OpBody[];
     /** Blocks whose presence on the page this op changed: id → there after it. */
     live?: Record<string, boolean>;
@@ -37,7 +38,8 @@ export interface WindowEntry {
 export interface HistoryWindow {
     start: number;
     head: number;
-    before: Record<string, string>;     // text of each touched block before the window
+    /** Each touched block entering the window, the same way. */
+    before: Record<string, Record<string, string>>;
     /** Blocks created inside the window: they have no "before". */
     born?: string[];
     /** Blocks already off the page entering the window. */
@@ -99,11 +101,12 @@ export function nextUndo(w: HistoryWindow, actor: string, redo = false): { batch
 
 const BIRTHS = new Set(['block.add', 'block.split']);
 
-/** What block `bid` said right after window position `pos` (an index into
- *  `w.ops`, -1 for before the window); null when the block did not exist yet. */
-export function textAt(w: HistoryWindow, bid: string, pos: number, live: string): string | null {
+/** What field `path` of block `bid` said right after window position `pos`
+ *  (an index into `w.ops`, -1 for before the window); null when the block did
+ *  not exist yet. */
+export function textAt(w: HistoryWindow, bid: string, path: string, pos: number, live: string): string | null {
     for (let i = Math.min(pos, w.ops.length - 1); i >= 0; i--) {
-        const t = w.ops[i].blocks[bid];
+        const t = w.ops[i].blocks[bid]?.[path];
         if (t !== undefined) return t;
     }
     // Nothing at or before `pos`: either the block was born later in the window
@@ -112,7 +115,7 @@ export function textAt(w: HistoryWindow, bid: string, pos: number, live: string)
     const laterBirth = w.ops.slice(pos + 1).some(e => BIRTHS.has(e.kind) && bid in e.blocks
                                                  && (born.has(bid) || !(bid in w.before)));
     if (laterBirth) return null;
-    return bid in w.before ? w.before[bid] : live;
+    return w.before[bid]?.[path] ?? live;
 }
 
 /** A display-only word diff between two texts: [kind, text] pieces. */

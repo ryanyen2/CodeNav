@@ -29,7 +29,7 @@ from codoc.calculus import ops as K
 from codoc.calculus.derive import (
     attribution, dead_cites, description, history as feature_history, open_plans, phase, title,
 )
-from codoc.calculus.doc import HEADING, fold_tree, text_fields
+from codoc.calculus.doc import HEADING, fold_tree
 from codoc.calculus.ids import new_plan_id
 from codoc.daemon import client
 from codoc.daemon.publish import read_status as published_status
@@ -187,7 +187,7 @@ def read_history(codoc_dir: str, feature_id: str, limit: int = 20) -> dict:
         entries.append(e)
     blame = {(b.id if f == "text" else f"{b.id}.{f}"):
              [{"actor": r.actor, "start": r.start, "end": r.end} for r in attribution(b.text(f))]
-             for b in store.feature_body(feature_id) for f in text_fields(b.kind)}
+             for b in store.feature_body(feature_id) for f in b.layout.text}
     return {"ok": True, "feature_id": feature_id, "title": title(store, feature_id), "ops": entries, "attribution": blame}
 
 

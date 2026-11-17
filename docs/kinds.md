@@ -1,9 +1,15 @@
 # Block kinds
 
-A block kind decides which of a block's content fields are attributed `Text` and what the
-other fields hold. The calculus knows the heading and prose kinds and the `source` field
-of the source kinds. Every source and plugin kind is also a declaration in `codoc/kinds/`.
-The kinds and their fields are listed in [model.md](model.md#block-kinds).
+A block kind's declaration says which content fields of a new block are attributed `Text`,
+what the other fields hold, and how the block reads to the loop and to the agent. The
+calculus knows the heading and prose kinds and the `source` field of the source kinds.
+Every source and plugin kind is also a declaration in `codoc/kinds/`. The kinds and their
+fields are listed in [model.md](model.md#block-kinds).
+
+A plugin block's layout (its Text fields, `in_flow`, `exported`) is data recorded on the
+block by its `block.add`; its codecs are code. A clone that lacks the declaration still
+edits, exports and shows the block the same way, from the layout. Only `lift`, `lower`,
+`consult` and the schema check need the declaration.
 
 ## 1. A declaration
 
@@ -20,8 +26,15 @@ Kind(
 )
 ```
 
-- `register(kind)` adds it to the registry and tells the calculus its Text fields, whether
-  it is in the flow and whether it is exported. A prose kind cannot be registered.
+- `register(kind)` adds it to the registry and gives the calculus its layout:
+  `Layout(text_fields, in_flow, exported)`. A writer building a `block.add`
+  (`ingest.block_bodies`) puts that layout on it, and the applier uses it for an add that
+  carries none. A prose kind cannot be registered. A source kind's layout is the
+  calculus's own and registering it does not change it.
+- A block keeps the layout it was added with. A new version of a kind cannot give
+  existing blocks a new Text field; a field it adds is a JSON field. `text_fields` may
+  name fields existing blocks lack, and a write to one is then a `block.set`.
+- No field may be named `$layout`: the `codoc:` fence carries the layout under that key.
 - `schema` types are `string`, `number`, `boolean`, `object`, `array`. `Kind.validate`
   refuses an unknown field, a wrong type and a value outside `enum`. A partial write skips
   `required`. Text fields arrive as Markdown strings.
@@ -37,7 +50,7 @@ Kind(
 
 ## 2. Text fields
 
-A field named in `text_fields` is a `Text`. It gets character identity, per-word
+A field named in the block's layout is a `Text`. It gets character identity, per-word
 attribution, marks, plan tags, comments anchored in it, `ingest`, translation and History,
 with no code in the kind. A mermaid source edited by a person and redrawn by the loop
 shows ink and ground as a paragraph does. Any other field is replaced whole by
@@ -66,7 +79,7 @@ Content written to a kind block goes through `codoc/kinds/write.py`
 
 - `plan_write(block, content)` is pure. It validates `content` against the schema and
   returns one `block.set` body per changed non-Text field and one ingest request
-  `(field, base_text, new_md)` per Text field named. Fields not named are left alone. A
+  `(field, base_text, new_md)` per Text field named, Text by the block's layout. Fields not named are left alone. A
   dead or missing block, an unknown kind or a schema error is a refusal.
 - A new kind block is a `block.add` built with `ingest.block_bodies`, its Text fields
   in the same batch. `mcp.tools.write_block` runs both against the workspace, with the
@@ -93,6 +106,12 @@ For each block of the feature's body (`loops/realize.py`, `_kind_lines`):
 - A comment is out of the flow, so it speaks only through `lower`. Its `lower` does not
   compare `old` and `new`: an open thread is in every directive of its feature until it is
   resolved.
+- An in-flow block of a kind this process has no declaration for adds `<kind>: <words>`,
+  its Text fields in the `rejected` mode (`derive.kind_words`).
+
+The reflect context (`loops/context.py`, `feature_entry`) lists every in-flow plugin block
+the same way, as `kind_blocks: ["<kind>: <words>"]`. They are read, not amended: an amend
+names only prose and source blocks.
 
 ## 6. Comments
 
@@ -107,14 +126,16 @@ whole and does not grow (I2). A comment is not exported to `tree.codoc` and is l
 
 The editor edits heading and paragraph blocks. Every other in-flow block is a read-only
 `kindBlock` node drawn from the projection's fields (kind name, then one row per field).
+A plugin block's projection entry carries its `layout`, which says which fields are Text.
 Comments are cards in the margin ([editor.md](editor.md)). The structure guard refuses a
 transaction that would drop a kind block, and a selection delete across one is refused.
 
 ## Not built
 
 - A per-kind Markdown form in `tree.codoc`. A plugin kind is written as a
-  ```` ```codoc:<kind> ```` JSON fence ([model.md](model.md#7-the-markdown-form)).
+  ```` ```codoc:<kind> ```` JSON fence that carries the block's layout under `$layout`,
+  with or without its code ([model.md](model.md#7-the-markdown-form)).
 - Codecs for how a kind block reads as model context and how an agent's reply becomes
-  content. The context builder sends prose and source blocks; an agent writes content
-  through `codoc_write_block`.
+  content. The context builder sends prose and source blocks to amend and each in-flow
+  plugin block's words to read; an agent writes content through `codoc_write_block`.
 - Editing a kind block's fields in the editor.

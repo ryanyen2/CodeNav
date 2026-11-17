@@ -12,8 +12,8 @@ Every feature entry is block-keyed: its description is a list of
 from __future__ import annotations
 
 from codoc.calculus import block_md
-from codoc.calculus.derive import block_spec, block_written_by, markdown, phase
-from codoc.calculus.doc import PROSE, SOURCE, in_flow, parent_of
+from codoc.calculus.derive import block_spec, block_written_by, kind_words, markdown, phase
+from codoc.calculus.doc import BUILTIN, PROSE, SOURCE, parent_of
 from codoc.calculus.store import Store
 from codoc.index.graph import Graph
 
@@ -33,7 +33,7 @@ def written_by(store: Store, fid: str) -> str:
     block out of the reading flow (a margin comment) is a request about the
     prose, not the prose: a person's note on a loop-written feature does not
     make the feature theirs."""
-    authors = [block_written_by(store, b.id) for b in store.feature_body(fid) if in_flow(b.kind)]
+    authors = [block_written_by(store, b.id) for b in store.feature_body(fid) if b.layout.flow]
     if "human" in authors:
         return "human"
     return next((a for a in reversed(authors) if a), "")
@@ -60,6 +60,10 @@ def feature_entry(store: Store, fid: str, *, full: bool = True) -> dict:
     }
     if full:
         entry["blocks"] = description_blocks(store, fid)
+        # An image, a link, a pdf: read, not amended, so not in `blocks`.
+        if kinds := [w for b in store.feature_body(fid) if b.kind not in BUILTIN and b.layout.flow
+                     if (w := kind_words(b, store))]:
+            entry["kind_blocks"] = kinds
         entry["bindings"] = sorted(b.symbol for b in store.bindings.values() if b.feature == fid)
         wb = written_by(store, fid)
         if wb:

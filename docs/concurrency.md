@@ -395,7 +395,9 @@ What each tagged op becomes:
 7. For `kind = delete` with a live target: the heading's body dies and its bindings are detached.
 8. The plan is `accepted` and `decided_by` is the actor.
 
-`plan.reject` undoes every applied op of the plan, newest first. Both verdicts record
+`plan.reject` undoes every applied op of the plan, newest first. A plan's own `text.delete` (of words it
+inserted) is undone by reviving those words, and its `text.restore` by killing them again;
+a reopen puts each back as the plan's op had it. Both verdicts record
 everything they changed, and `plan.reopen` restores exactly that, subset included.
 
 - **The applier never adds a hand-off to a verdict; the sender does.** The editor's

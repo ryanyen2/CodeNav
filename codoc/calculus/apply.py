@@ -26,8 +26,8 @@ from dataclasses import replace
 
 from codoc.calculus import ops as K
 from codoc.calculus.doc import (
-    HEADING, ITEMS, LEVELLED, PARAGRAPH, Block, clamp_level, empty_content, is_one_line, is_text_field, level_for,
-    text_fields,
+    BUILTIN, HEADING, ITEMS, LAYOUT_KEY, LEVELLED, PARAGRAPH, Block, Layout, clamp_level, empty_content, is_one_line,
+    layout_of, level_for,
 )
 from codoc.calculus.ids import END, START, CharRef, OpId, actor_kind, ref_from_json, ref_to_json
 from codoc.calculus.ops import Op, OpBody, body, covered, frontier_union
@@ -37,7 +37,7 @@ from codoc.calculus.text import (
     PROPOSALS, SUGGEST_DEL, SUGGEST_MARK, AnchorError, Mark, MarkError, Text, nfc, struck_chars,
 )
 
-RESERVED_PATHS = frozenset({"id", "rank", "dead"})
+RESERVED_PATHS = frozenset({"id", "rank", "dead", LAYOUT_KEY})   # LAYOUT_KEY: the fence's own key for the layout
 
 
 class Conflict(Exception):
@@ -143,7 +143,7 @@ def _live_text_field(store: Store, bid: str, path: str) -> tuple[Block, Text]:
         raise Conflict("no_block", bid)
     if not b.live:
         raise Conflict("dead_block", bid)
-    if not is_text_field(b.kind, path):
+    if path not in b.layout.text:
         raise Conflict("not_text", f"{b.kind}.{path}")
     return b, b.text(path)
 
@@ -388,16 +388,24 @@ def _h_block_add(store: Store, op: Op, touched: set[str]):
     else:
         after, level = op.payload.get("after", START), level_for(kind, op.payload.get("level"))
     anchor = _after(store, after)
-    content = empty_content(kind, op.payload.get("content"))
+    # A builtin kind's layout is the calculus's. Any other kind's is what the
+    # writer sent, or this process's registry for an add that sent none (an
+    # old log, an old writer); the record keeps the one used, so a replay on a
+    # clone without the kind reads the block the same way (I6).
+    layout = layout_of(kind) if kind in BUILTIN or "layout" not in op.payload \
+        else Layout.from_json(op.payload["layout"])
+    if LAYOUT_KEY in (op.payload.get("content") or {}):
+        raise Conflict("reserved_path", LAYOUT_KEY)
+    content = empty_content(layout, op.payload.get("content"))
     for f, tj in (op.payload.get("texts") or {}).items():
-        if f in text_fields(kind):
+        if f in layout.text:
             content[f] = Text.from_json(tj)
     # A pinned rank comes from a snapshot or a recorded inverse re-placing a
     # block exactly where it was; a fresh add derives one from its anchor.
     rank = op.payload.get("rank") or store.rank_after(anchor)
     if op.payload.get("bound_once"):
         store.bound_once.add(bid)        # a snapshot restoring a feature that once had code
-    block = Block(bid, kind, rank, level, content)
+    block = Block(bid, kind, rank, level, content, layout=layout)
     if op.payload.get("dead"):               # a snapshot restoring a block with its killer
         block.kill(op.payload["dead"], op.payload.get("dead_actor", ""), op.payload.get("dead_at", ""),
                    op.payload.get("dead_in", ""))
@@ -408,11 +416,13 @@ def _h_block_add(store: Store, op: Op, touched: set[str]):
         w.code_at = str(op.payload.get("code_at") or "")
         w.realized_at = str(op.payload.get("realized_at") or "")
     store.add_block(block)
-    for f in text_fields(kind):
+    for f in layout.text:
         store.index_text(bid, f, content[f])
     touched.add(bid)
     canonical = {"kind": kind, "level": level, "after": after, "rank": block.rank,
                  "content": {k: v for k, v in content.items() if not isinstance(v, Text)}}
+    if kind not in BUILTIN:
+        canonical["layout"] = layout.to_json()
     if op.payload.get("texts"):
         canonical["texts"] = op.payload["texts"]
     if block.dead:
@@ -429,7 +439,7 @@ def _h_block_set(store: Store, op: Op, touched: set[str]):
         raise Conflict("dead_block", bid)
     if path in RESERVED_PATHS:
         raise Conflict("reserved_path", path)
-    value = op.payload["value"]
+    value = op.payload["value"] if path in ("kind", "level") or not op.payload.get("unset") else None
     canonical: dict = {"value": value}
     if path == "kind":
         if not (is_one_line(value) and is_one_line(b.kind)):
@@ -449,12 +459,18 @@ def _h_block_set(store: Store, op: Op, touched: set[str]):
         canonical.update({"value": b.level, "prev": prev, "_structural": True})
         inverse = [body(K.BLOCK_SET, {"bid": bid, "path": "level"}, {"value": prev})]
     else:
-        if is_text_field(b.kind, path):
+        if path in b.layout.text:
             raise Conflict("text_field", f"use text ops for {path}")
-        prev = b.content.get(path)
-        b.content[path] = value
+        # A field the block did not have comes back absent, not null: the
+        # inverse of setting it is `unset`.
+        absent, prev = path not in b.content, b.content.get(path)
+        if op.payload.get("unset"):
+            b.content.pop(path, None)
+            canonical = {"unset": True}
+        else:
+            b.content[path] = value
         canonical["prev"] = prev
-        inverse = [body(K.BLOCK_SET, {"bid": bid, "path": path}, {"value": prev})]
+        inverse = [body(K.BLOCK_SET, {"bid": bid, "path": path}, {"unset": True} if absent else {"value": prev})]
     touched.add(bid)
     return canonical, inverse
 
@@ -495,7 +511,7 @@ def _h_block_split(store: Store, op: Op, touched: set[str]):
         store.set_rank(new, rank)
         nb = existing
     else:
-        nb = Block(new, new_kind, rank, new_level, empty_content(new_kind))
+        nb = Block(new, new_kind, rank, new_level)
         nb.content[path] = new_text
         store.add_block(nb)
     store.index_text(b.id, path, keep_text)
@@ -821,10 +837,27 @@ def _undo_plan_op(store: Store, o: Op, by: OpId, touched: set[str], record: dict
                 t.marks.remove(m)
                 record.setdefault("marks", []).append({"bid": block.id, "path": p, "mark": m.to_json()})
                 touched.add(block.id)
+    elif o.kind in (K.TEXT_DELETE, K.TEXT_RESTORE):
+        # A plan taking back its own words, or giving them back: undone by the
+        # other one over the segments it recorded. A revived character
+        # remembers which op had killed it, so a reopen kills it as that op.
+        segs = [(str(a), int(k), int(n)) for a, k, n in o.payload.get("segments") or []]
+        for block, p in _segment_holders(store, segs, (o.target["bid"], o.target.get("path", "text")), live_only=False):
+            t = block.text(p)
+            if o.kind == K.TEXT_DELETE:
+                got = t.revive(segs, by=o.id)
+                entry = {"bid": block.id, "path": p, "by": o.id, "actor": o.actor, "at": o.at}
+                key = "revived"
+            else:
+                got = t.kill(segs, by=by, by_actor=by_actor, by_at=by_at)
+                entry, key = {"bid": block.id, "path": p}, "killed"
+            if got:
+                record.setdefault(key, []).append({**entry, "segments": [list(s) for s in got]})
+                touched.add(block.id)
     elif o.kind in (K.BLOCK_ADD, K.BLOCK_SPLIT):
         bid = o.target["bid"] if o.kind == K.BLOCK_ADD else o.payload["new"]
         b = store.blocks.get(bid)
-        if b is not None and b.live and all(b.content[f].live_len() == 0 for f in text_fields(b.kind)):
+        if b is not None and b.live and all(b.content[f].live_len() == 0 for f in b.layout.text):
             b.kill(by)
             record.setdefault("blocks", []).append(bid)
             touched.add(bid)
@@ -841,6 +874,8 @@ def _undo_plan_op(store: Store, o: Op, by: OpId, touched: set[str], record: dict
             b.level = level_for(inv["value"], inv.get("level"))
         elif path == "level":
             b.level = clamp_level(inv["value"])
+        elif inv.get("unset"):
+            b.content.pop(path, None)
         else:
             b.content[path] = inv["value"]
         record.setdefault("sets", []).append(was)
@@ -887,7 +922,7 @@ def _proposed_marks(store: Store, pid: str, accepted: set[str]) -> list[tuple[Bl
     subset accept takes only the ones whose op it took."""
     out: list[tuple[Block, str, Mark, int]] = []
     for block in store.blocks.values():
-        for p in text_fields(block.kind):
+        for p in block.layout.text:
             for m in block.text(p).proposals(pid, SUGGEST_MARK):
                 if m.op in accepted:
                     out.append((block, p, m, store.position.get(m.op, 0)))
@@ -1002,7 +1037,8 @@ def _h_plan_reopen(store: Store, op: Op, touched: set[str]):
         raise Conflict("plan_open", pid)
     p = op.payload
     by = p.get("by")
-    for entry in p.get("killed", []) + p.get("struck", []) + p.get("marks", []) + p.get("sets", []) + p.get("applied", []):
+    for entry in (p.get("killed", []) + p.get("revived", []) + p.get("struck", []) + p.get("marks", [])
+                  + p.get("sets", []) + p.get("applied", [])):
         if entry["bid"] not in store.blocks:
             raise Conflict("no_block", entry["bid"])
     for i in p.get("blocks", []) + p.get("deleted_blocks", []) + [m[0] for m in p.get("moved", [])]:
@@ -1014,6 +1050,12 @@ def _h_plan_reopen(store: Store, op: Op, touched: set[str]):
             continue
         for block, f in _segment_holders(store, segs, (entry["bid"], entry["path"]), live_only=False):
             block.text(f).revive(segs, by=by)
+            touched.add(block.id)
+    for entry in p.get("revived", []):
+        # Words the verdict gave back by undoing the plan's own delete: dead again, by that delete.
+        segs = [tuple(s) for s in entry["segments"]]
+        for block, f in _segment_holders(store, segs, (entry["bid"], entry["path"]), live_only=True):
+            block.text(f).kill(segs, by=entry["by"], by_actor=entry.get("actor", ""), by_at=entry.get("at", ""))
             touched.add(block.id)
     for entry in p.get("struck", []) + p.get("marks", []):
         mk = Mark.from_json(entry["mark"])

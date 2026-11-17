@@ -34,7 +34,7 @@ from pathlib import Path
 
 from codoc.calculus import block_md
 from codoc.calculus.derive import open_plans_on, title
-from codoc.calculus.doc import PROSE, TABLE, parent_of, text_fields
+from codoc.calculus.doc import PROSE, TABLE, parent_of
 from codoc.doclang import DocLanguage, detect_prose_language, norm_key, prose_letters, workspace_doc_language
 from codoc.llm.passes import propose_translations
 from codoc.loops.context import description_blocks
@@ -182,7 +182,7 @@ def _write(ws: Workspace, fid: str, new_title: str, new_blocks: dict[str, str], 
     for bid, md in new_blocks.items():
         block = ws.store.blocks.get(bid)
         if block is not None and block.kind in PROSE_BLOCKS:
-            rewrites.append((bid, text_fields(block.kind)[0], block_md.parse(md, headings=False)[0].text, None))
+            rewrites.append((bid, block.layout.text[0], block_md.parse(md, headings=False)[0].text, None))
     done = ws.amend(fid, rewrites=rewrites, actor=actor, note=f"translation to {lang.name}", whole=True)
     if done.refused:
         bid, why = done.refused[0]

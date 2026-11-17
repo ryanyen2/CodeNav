@@ -11,7 +11,6 @@
  *
  * The file's name and place are fixed by that script.
  */
-import type { Node as PMNode } from '@tiptap/pm/model';
 import * as fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
@@ -36,13 +35,23 @@ function seedRandom(seed: number): () => void {
     return () => { Math.random = orig; };
 }
 
-/** The page as the store would describe it: id, kind, level and text per block. */
-const pageOf = (doc: PMNode): Array<[string, string, number, string]> => {
+/** The page as the store would describe it: id, kind, level and text per block.
+ *  A card's text is what its first text area holds. */
+const pageOf = (m: Mounted): Array<[string, string, number, string]> => {
     const out: Array<[string, string, number, string]> = [];
-    doc.forEach(n => out.push([n.attrs.bid, kindOf(n), n.type.name === 'heading' ? n.attrs.level : 0,
-                               n.textBetween(0, n.content.size, '\n')]));
+    m.view.state.doc.forEach(n => {
+        const card = n.type.name === 'kindBlock'
+            ? (m.container.querySelector(`[data-bid="${n.attrs.bid}"] textarea[data-path="${(n.attrs.text as string[])[0]}"]`) as HTMLTextAreaElement | null)
+            : null;
+        out.push([n.attrs.bid, kindOf(n), n.type.name === 'heading' ? n.attrs.level : 0, card ? card.value : n.textBetween(0, n.content.size, '\n')]);
+    });
     return out;
 };
+
+/** A `widget`, a kind no checkout registers, whose one Text field is named
+ *  `text` so the store's page reads it the way it reads a paragraph. */
+const widget = (step: number) =>
+    `\`\`\`codoc:widget\n{"$layout": {"export": true, "flow": true, "text": ["text"]}, "n": ${step}, "text": "w${step}"}\n\`\`\``;
 
 /** Replace every match of `q` with `r` through the Find widget's own DOM: one
  *  transaction over many blocks. */
@@ -61,15 +70,16 @@ function replaceAll(m: Mounted, q: string, r: string): void {
 /** One random gesture, and a name for it. */
 function gesture(m: Mounted, r: () => number, step: number, seed: number): string {
     const doc = m.view.state.doc;
+    // Carets and selections land in textblocks; a card is reached through its text area.
     const blocks: Array<{ bid: string; kind: string; start: number; len: number }> = [];
-    doc.forEach((n, pos) => blocks.push({ bid: n.attrs.bid, kind: n.type.name, start: pos + 1, len: n.content.size }));
+    doc.forEach((n, pos) => { if (n.isTextblock) blocks.push({ bid: n.attrs.bid, kind: n.type.name, start: pos + 1, len: n.content.size }); });
     const a = blocks[Math.floor(r() * blocks.length)], b = blocks[Math.floor(r() * blocks.length)];
     const pa = a.start + Math.floor(r() * (a.len + 1)), pb = b.start + Math.floor(r() * (b.len + 1));
     const from = Math.min(pa, pb), to = Math.max(pa, pb);
     const heads = blocks.filter(x => x.kind === 'heading');
     const paras = blocks.filter(x => x.kind === 'paragraph');
     const items = blocks.filter(x => x.kind === 'bullet' || x.kind === 'numbered');
-    const g = Math.floor(r() * 21);
+    const g = Math.floor(r() * 23);
     if (g === 15) {
         if (!paras.length) return 'noop';
         const pp = paras[Math.floor(r() * paras.length)];
@@ -110,6 +120,20 @@ function gesture(m: Mounted, r: () => number, step: number, seed: number): strin
         const back = r() < 0.5;
         key(m.view, back ? 'Backspace' : 'Delete', back ? 8 : 46);
         return `enter+${back ? 'bs' : 'del'} after ${pp.bid}`;
+    }
+    if (g === 21) {
+        select(m.view, from, r() < 0.8 ? from : to);
+        pasteText(m, widget(step));
+        return `paste widget ${from}-${to}`;
+    }
+    if (g === 22) {
+        const areas = [...m.container.querySelectorAll('[data-kind="widget"] textarea')] as HTMLTextAreaElement[];
+        if (!areas.length) return 'noop';
+        const t = areas[Math.floor(r() * areas.length)];
+        const at = Math.floor(r() * (t.value.length + 1));
+        t.value = r() < 0.7 || !t.value ? t.value.slice(0, at) + `e${step}` + t.value.slice(at) : t.value.slice(0, at) + t.value.slice(at + 1);
+        t.dispatchEvent(new window.InputEvent('input', { bubbles: true }));
+        return `edit card ${t.closest('[data-bid]')?.getAttribute('data-bid')}`;
     }
     if (g === 0) { select(m.view, from); typeText(m.view, `x${step}`); return `type@${from}`; }
     if (g === 1) { select(m.view, from, to); typeText(m.view, 'y'); return `type over ${from}-${to}`; }
@@ -168,7 +192,7 @@ describe.runIf(TRIP && PHASE === 'R1')('R1. one actor, every gesture', () => {
         for (let seed = 1; seed <= SEEDS; seed++) {
             const { m, log } = fuzz(p0, seed, STEPS, failures);
             fs.writeFileSync(`${TRIP}/seed${String(seed).padStart(2, '0')}.json`,
-                             JSON.stringify({ seed, log, subs: m.submitted, expect: pageOf(m.view.state.doc) }));
+                             JSON.stringify({ seed, log, subs: m.submitted, expect: pageOf(m) }));
         }
         expect(failures).toEqual([]);
     });
@@ -205,7 +229,7 @@ describe.runIf(TRIP && (PHASE === 'R2A' || PHASE === 'R2B'))('R2. two actors and
             const faultsAck = shadowFaults(m);
             m.handle.adopt(rec.p3);
             fs.writeFileSync(`${TRIP}/r2c-seed${pad}.json`, JSON.stringify(
-                { seed, log, afterP3: pageOf(m.view.state.doc), faultsP2, faultsAck, faultsP3: shadowFaults(m) }));
+                { seed, log, afterP3: pageOf(m), faultsP2, faultsAck, faultsP3: shadowFaults(m) }));
         }
         expect(failures).toEqual([]);
     });

@@ -45,7 +45,7 @@ def plan_write(block: Block | None, content: dict) -> WritePlan:
         return WritePlan(refused=err)
     out = WritePlan()
     for k, v in content.items():
-        if k in kind.text_fields:
+        if k in block.layout.text:
             cur = block.content.get(k)
             out.ingests.append((k, cur.live_text() if isinstance(cur, Text) else "", v))
         elif block.content.get(k) != v:

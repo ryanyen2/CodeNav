@@ -11,7 +11,7 @@ from codoc.loops.realize import directive
 from codoc.workspace import Roles, Workspace
 from codoc.workspace import log as L
 from codoc.workspace.snapshot import write_snapshot
-from tests.helpers import ROWS, H, T, fake_file, fake_org, fold, ins, mark, refs, seed
+from tests.helpers import ROWS, H, T, fake_file, fake_org, fold, ins, kind_block, mark, refs, seed
 
 
 def test_snapshot_keeps_the_fingerprint_when_a_dead_block_exists(tmp_path):
@@ -29,6 +29,23 @@ def test_snapshot_keeps_the_fingerprint_when_a_dead_block_exists(tmp_path):
     ws.close()
     ws2 = Workspace(cd, readonly=True)
     assert ws2.store.state_fingerprint() == fp
+
+
+def test_snapshot_keeps_a_plugin_blocks_layout(tmp_path, monkeypatch):
+    """A fold re-adds each block with the layout it was added with, so a clone
+    without the kind's code rebuilds its Text fields from the snapshot."""
+    from codoc.calculus import doc
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    monkeypatch.setitem(doc._REGISTERED, "widget", doc.Layout(("caption",)))
+    w = kind_block(ws, "widget", {"url": "u", "caption": "A **plot**"}, after="p1")
+    fp = ws.store.state_fingerprint()
+    ws.close()
+    fold(cd)
+    assert '"layout"' in next((cd / "log").glob("snapshot-*.jsonl")).read_text()
+    monkeypatch.delitem(doc._REGISTERED, "widget")
+    st = Workspace(cd, readonly=True).store
+    assert st.state_fingerprint() == fp and st.blocks[w].layout.text == ("caption",)
 
 
 def test_snapshot_keeps_an_accepted_delete_plan(tmp_path):

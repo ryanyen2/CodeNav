@@ -383,6 +383,17 @@ def test_undoing_a_merge_brings_the_block_back_with_its_own_kind_and_level():
     assert (i2.dead_actor, i2.dead_at, i2.dead_in) == ("", "", "")
 
 
+def test_undoing_a_set_of_a_new_field_leaves_the_field_absent():
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Top")
+    paragraph(m, s, "p1", "body", after="h1")
+    set_ = apply(s, m.op(K.BLOCK_SET, {"bid": "p1", "path": "note"}, {"value": "x"}))
+    assert set_.conflict is None and s.blocks["p1"].content["note"] == "x"
+    assert all(o.conflict is None for o in invert(s, m, set_))
+    assert "note" not in s.blocks["p1"].content
+    assert "note" not in replay(s).blocks["p1"].content
+
+
 def test_a_handoff_records_no_commit_and_one_that_named_a_commit_still_applies():
     m, s = Mint(), Store()
     heading(m, s, "h1", "Top")

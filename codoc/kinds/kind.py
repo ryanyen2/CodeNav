@@ -15,7 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from codoc.calculus.derive import field_text
-from codoc.calculus.doc import Block, is_one_line, register_kind, text_fields
+from codoc.calculus.doc import Block, Layout, is_one_line, register_kind
 from codoc.calculus.store import Binding, Store
 from codoc.calculus.text import Text
 
@@ -79,7 +79,7 @@ def register(kind: Kind) -> Kind:
     if is_one_line(kind.name):
         raise ValueError(f"{kind.name} is a prose kind of the calculus")
     _REGISTRY[kind.name] = kind
-    register_kind(kind.name, kind.text_fields, exported=kind.exported, in_flow=kind.in_flow)
+    register_kind(kind.name, Layout(kind.text_fields, kind.in_flow, kind.exported))
     return kind
 
 
@@ -94,6 +94,5 @@ def kinds() -> list[Kind]:
 def plain(block: Block, store: Store | None = None, mode: str = "rejected") -> dict:
     """A block's content as a codec sees it: each Text field as a string (raw
     for a source field, inline Markdown otherwise) in the read mode ``mode``."""
-    fields = text_fields(block.kind)
-    return {k: field_text(block, k, mode, store) if k in fields and isinstance(v, Text) else v
+    return {k: field_text(block, k, mode, store) if k in block.layout.text and isinstance(v, Text) else v
             for k, v in block.content.items()}

@@ -25,8 +25,10 @@ from pathlib import Path
 
 from codoc import kinds as registry
 from codoc.calculus import ops as K
-from codoc.calculus.derive import description, ink, live_spans, prose_blocks, removed_blocks, text_string, title
-from codoc.calculus.doc import in_flow, text_fields
+from codoc.calculus.derive import (
+    description, ink, kind_words, live_spans, prose_blocks, removed_blocks, text_string, title,
+)
+from codoc.calculus.doc import BUILTIN
 from codoc.calculus.ids import OpId, is_human
 from codoc.calculus.ops import Op, covered, in_frontier
 from codoc.calculus.store import Store, Watermarks
@@ -161,21 +163,24 @@ def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[
     in-flow block's ``consult``, then the directive each block's
     ``lower`` codec derives from what changed since the last realization. An
     out-of-flow block (a comment) is not prose the agent reads, only a
-    request, which its own codec words."""
+    request, which its own codec words. A kind this process has no code for
+    says its Text fields' words under its name."""
     reads: list[str] = []
     asks: list[str] = []
     ctx: object | None = None
     for b in store.feature_body(fid):
         kind = registry.get(b.kind)
         if kind is None:
+            if b.kind not in BUILTIN and b.layout.flow and (said := kind_words(b, store)):
+                reads.append(said)
             continue
         new = registry.plain(b, store)
-        if in_flow(b.kind) and (said := kind.consult(new)):
+        if b.layout.flow and (said := kind.consult(new)):
             reads.append(said)
         if kind.lower is None:
             continue
         old = {k: (text_string(b.kind, k, _at_realized(store, v, w.realized), "rejected", store)
-                   if isinstance(v, Text) and k in text_fields(b.kind) else v)
+                   if isinstance(v, Text) and k in b.layout.text else v)
                for k, v in b.content.items()}
         for o in reversed(store.ops_on([b.id])):
             if o.conflict or o.kind != K.BLOCK_SET or in_frontier(o.id, w.realized):
@@ -229,14 +234,14 @@ def _human_changes(store: Store, fid: str, w: Watermarks) -> list[str]:
         if c.stage == "sent":
             out.append(f"added: \"{c.text}\"")
     for b in prose_blocks(store, fid):
-        for f in text_fields(b.kind):
+        for f in b.layout.text:
             for s in b.text(f).segs:
                 if s.dead and is_human(s.dead_actor) and not in_frontier(s.dead, w.realized) \
                         and in_frontier(s.dead, w.handoff):
                     out.append(f"removed: \"{s.chars}\"")
     for b in removed_blocks(store, fid):
         if in_frontier(b.dead, w.handoff) and not in_frontier(b.dead, w.realized):
-            words = " ".join(b.text(f).live_text() for f in text_fields(b.kind)).strip()
+            words = " ".join(b.text(f).live_text() for f in b.layout.text).strip()
             out.append(f"removed: \"{words}\"")
     return out
 
@@ -250,7 +255,7 @@ def _focus(store: Store, fid: str, w: Watermarks) -> list[str]:
     find, and a fold that takes the ops away leaves the focus intact."""
     out: list[str] = []
     for b in prose_blocks(store, fid):
-        for f in text_fields(b.kind):
+        for f in b.layout.text:
             t = b.text(f)
             for m in t.marks:
                 if m.kind == BOLD and is_human(m.actor) and m.op and not in_frontier(m.op, w.realized):
@@ -262,7 +267,7 @@ def _focus(store: Store, fid: str, w: Watermarks) -> list[str]:
 def _all_links(store: Store, fid: str) -> list[tuple[str, str]]:
     out = []
     for b in store.feature_body(fid):
-        for f in text_fields(b.kind):
+        for f in b.layout.text:
             t = b.text(f)
             lt = t.live_text()
             for sp in live_spans(t):

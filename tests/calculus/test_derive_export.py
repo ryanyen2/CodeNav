@@ -45,7 +45,7 @@ graph TD; A-->B
 | 1 | 2 |
 
 ```codoc:url {#b-000000000003}
-{"url": "https://example.org/spec"}
+{"$layout": {"export": true, "flow": true, "text": ["caption"]}, "url": "https://example.org/spec"}
 ```
 
 # Storage {#b-000000000004}

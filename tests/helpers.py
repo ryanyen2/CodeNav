@@ -135,15 +135,16 @@ def build(store: Store, m: Mint, bodies: list[dict], actor="import"):
             insert_ids.append(op.id)
 
 
-def texts_after_each_op(store: Store) -> list[dict[str, str]]:
-    """Replay the prefix up to each op and read every block."""
+def texts_after_each_op(store: Store) -> list[dict[str, dict[str, str]]]:
+    """Replay the prefix up to each op and read every Text field of every block."""
     out = []
     fresh = Store()
     for o in store.ops:
         apply(fresh, Op.from_json(copy.deepcopy(o.to_json())))
         # What the page showed: a dead block reads as nothing, whatever text the
         # store still holds so its characters can be named.
-        out.append({b.id: (b.text().live_text() if b.live else "") for b in fresh.all_blocks()})
+        out.append({b.id: {f: (b.text(f).live_text() if b.live else "") for f in b.layout.text}
+                    for b in fresh.all_blocks()})
     return out
 
 

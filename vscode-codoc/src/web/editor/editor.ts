@@ -3,7 +3,8 @@
  *
  * The parts, and where each lives:
  *
- *   schema.ts      the nodes and marks, and the view for plugin kinds
+ *   schema.ts      the nodes and marks
+ *   card.ts        the card for a kind without a node type, and its text areas
  *   keymap.ts      which key runs which gesture
  *   commands.ts    the gestures: each emits its ops and changes the document
  *   paste.ts       what a paste brings, as Markdown blocks or the clipboard's own
@@ -46,7 +47,8 @@ import { gestureKeys } from './keymap';
 import { LinkInput, Menus } from './menus';
 import { Outbox } from './outbox';
 import { clipboardPieces } from './paste';
-import { codocSchema, kindView } from './schema';
+import { cardView, type CardFields } from './card';
+import { codocSchema } from './schema';
 
 export interface EditorHost {
     /** Send submissions to the daemon's inbox. */
@@ -81,8 +83,9 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
     const schema = codocSchema();
     const { doc, shadows } = docFrom(schema, proj);
     const shown: Shown = { projection: proj, realizing: new Set(), history: false };
+    const cards: CardFields = new Map();
     const env: Env = {
-        shadows, nextBid: newBid, nextCid: newCid, refuse: why => host.onConflict?.('', why), projection: () => shown.projection,
+        shadows, nextBid: newBid, nextCid: newCid, refuse: why => host.onConflict?.('', why), projection: () => shown.projection, cards,
         // Unacked, applied for this page, or in one of the block's projected runs by the viewer.
         mine: bid => {
             const b = shown.projection.blocks.find(x => x.id === bid);
@@ -91,7 +94,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         },
     };
     const paints = new Paints(shown);
-    const outbox = new Outbox(shadows, subs => host.submit(subs), bid => paints.mark(bid));
+    const outbox = new Outbox(shadows, subs => host.submit(subs), bid => paints.mark(bid), cards);
     /** Record what a finished IME composition left on the page. */
     const settle = () => { if (!view.composing) outbox.settle(view.state.doc); };
 
@@ -124,7 +127,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
 
     const view = new EditorView(container, {
         state,
-        nodeViews: { kindBlock: node => kindView(node) },
+        nodeViews: { kindBlock: (node, v) => cardView(node, v, cards, newCid) },
         dispatchTransaction(tr) {
             if (replacesAcross(view.state, tr)) {
                 settle();

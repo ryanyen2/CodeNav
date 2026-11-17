@@ -16,11 +16,12 @@
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { type EditorState, Selection, TextSelection, type Transaction } from '@tiptap/pm/state';
 
-import { ITEMS, PROSE, SOURCE, START, isOneLine, isProvisional, kindOf, nfc, pathOf, type CharRef, type OpBody,
+import { ITEMS, PROSE, SOURCE, START, isOneLine, isProvisional, kindOf, nfc, pathOf, type CharRef, type Layout, type OpBody,
          type Projection, type Span } from '../calc/projection';
 import { inlineNodes } from '../calc/adopt';
 import { SENT_MARKS, deleteOf, scalarOffset } from '../calc/recorder';
 import { Shadow } from '../calc/shadow';
+import type { CardFields } from './card';
 import { MAX_LEVEL, clampLevel } from './schema';
 
 /** Transaction meta: the ops that record this transaction. The recorder skips
@@ -47,12 +48,19 @@ export interface Env {
     projection?: () => Projection;
     /** For block `bid`, whether the viewer wrote a character. Without it, only unacked characters count. */
     mine?: (bid: string) => (r: CharRef) => boolean;
+    /** The field shadows of card blocks (card.ts); a paste that adds a card fills its entry. */
+    cards?: CardFields;
 }
 
 /** One block as it arrives in a paste: inline Markdown already read into
  *  plain `text` and `spans` for a heading or prose kind, raw text for a source
- *  kind, whose `content` holds `lang` or `derived`. */
-export interface Piece { kind: string; level: number; text: string; spans: Span[]; content: Record<string, unknown> }
+ *  kind, whose `content` holds `lang` or `derived`. A block of any other kind
+ *  carries its `layout`, its JSON fields in `content`, and each Text field the
+ *  layout names, read the same way, in `texts`. */
+export interface Piece {
+    kind: string; level: number; text: string; spans: Span[]; content: Record<string, unknown>;
+    layout?: Layout; texts?: Record<string, { text: string; spans: Span[] }>;
+}
 
 function blockAt(state: EditorState, pos: number): { node: PMNode; pos: number; index: number } | null {
     const $p = state.doc.resolve(pos);
@@ -613,6 +621,34 @@ export function pasteBlocks(state: EditorState, env: Env, pieces: Piece[]): Gest
     let after = bid;
     for (const p of rest) {
         const nb = env.nextBid();
+        if (p.layout) {
+            // A card: added with its layout, each Text field inserted at START, the rest as JSON.
+            const payload: Record<string, unknown> = { kind: p.kind, after, ...(Object.keys(p.content).length ? { content: p.content } : {}), layout: p.layout };
+            ops.push({ kind: 'block.add', target: { bid: nb }, payload });
+            const fields: Record<string, unknown> = { ...p.content };
+            const shadows = new Map<string, Shadow>();
+            for (const path of p.layout.text) {
+                const t = p.texts?.[path] ?? { text: '', spans: [] };
+                const sh = new Shadow();
+                shadows.set(path, sh);
+                fields[path] = { text: t.text, runs: [], spans: t.spans, suggest_del: [] };
+                if (!t.text) continue;
+                const cid = env.nextCid();
+                ops.push({ kind: 'text.insert', target: { bid: nb, path }, payload: { after: START, text: t.text } });
+                cids.push(cid);
+                sh.insert(0, t.text, cid);
+                for (const s of t.spans) {
+                    if (!SENT_MARKS.has(s.kind) || s.end <= s.start) continue;
+                    ops.push({ kind: 'text.mark', target: { bid: nb, path }, payload: {
+                        kind: s.kind, attrs: s.attrs, start: ['$cid', cid, s.start] as CharRef, end: ['$cid', cid, s.end - 1] as CharRef, on: true } });
+                }
+            }
+            // The card reads these shadows, not the fields' runs, which this page has not seen yet.
+            env.cards?.set(nb, { from: fields, shadows });
+            tr = tr.insert(blockEnd(tr.doc, after), state.schema.nodes.kindBlock.create({ bid: nb, head: 0, kind: p.kind, fields, text: p.layout.text }));
+            after = nb;
+            continue;
+        }
         const lvl = isLevelled(p.kind) ? clampLevel(p.level) : 0;
         const source = SOURCE.has(p.kind);
         const payload: Record<string, unknown> = { kind: p.kind, after };

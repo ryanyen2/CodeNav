@@ -526,6 +526,58 @@
    ]
   },
   {
+   "name": "a plugin fence carries its layout",
+   "md": "```codoc:widget {#b-0123456789ab}\n{\"$layout\": {\"export\": true, \"flow\": true, \"text\": [\"alt\", \"caption\"]}, \"caption\": \"A **plot**\", \"url\": \"https://x.org\"}\n```",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "widget",
+     "level": 0,
+     "text": "",
+     "content": {
+      "$layout": {
+       "export": true,
+       "flow": true,
+       "text": [
+        "alt",
+        "caption"
+       ]
+      },
+      "caption": "A **plot**",
+      "url": "https://x.org"
+     },
+     "id": "b-0123456789ab"
+    }
+   ]
+  },
+  {
+   "name": "a plugin fence out of the flow",
+   "md": "```codoc:note\n{\"$layout\": {\"export\": false, \"flow\": false, \"text\": [\"body\"]}, \"body\": \"hi\", \"n\": [1, 2]}\n```",
+   "headings": true,
+   "expect": [
+    {
+     "kind": "note",
+     "level": 0,
+     "text": "",
+     "content": {
+      "$layout": {
+       "export": false,
+       "flow": false,
+       "text": [
+        "body"
+       ]
+      },
+      "body": "hi",
+      "n": [
+       1,
+       2
+      ]
+     },
+     "id": null
+    }
+   ]
+  },
+  {
    "name": "escaped block openers stay prose",
    "md": "\\# not a heading\n\n\\- not an item\n\n1\\. not numbered\n\n\\| not a row",
    "headings": true,

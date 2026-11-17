@@ -1,6 +1,6 @@
 """Blocks and the heading fold.
 
-    Block := { id, kind, rank, level, content, dead? }
+    Block := { id, kind, rank, level, content, layout, dead? }
 
 Kinds, by what their content is:
 
@@ -13,6 +13,9 @@ Kinds, by what their content is:
                                 ``derived``; code may carry ``lang``.
     plugin     image | url | pdf | screenshot | comment | …   (codoc.kinds)
                a declared schema; its Text fields are inline text
+
+Which fields are Text is the block's ``layout``: fixed by the kind for the
+kinds above it, and recorded by ``block.add`` for a plugin kind.
 
 Heading and the prose kinds have the same field, so ``block.set(kind)`` turns
 one into another, ``block.split`` splits any of them, and ``block.merge`` joins
@@ -46,37 +49,51 @@ PROSE = frozenset({PARAGRAPH, BULLET, NUMBERED})     # body kinds holding one li
 LEVELLED = frozenset({HEADING, BULLET, NUMBERED})    # kinds whose ``level`` means something
 SOURCE = frozenset({TABLE, DIAGRAM, CODE_BLOCK})     # kinds whose ``source`` Text is raw and multi-line
 
-_TEXT_FIELDS: dict[str, tuple[str, ...]] = {
-    **{k: ("text",) for k in (HEADING, PARAGRAPH, BULLET, NUMBERED)},
-    **{k: ("source",) for k in SOURCE},
-}
-_UNEXPORTED: set[str] = set()
-_OUT_OF_FLOW: set[str] = set()
 MAX_LEVEL = 6
 
 
-def register_kind(kind: str, text_fields: tuple[str, ...], *, exported: bool = True, in_flow: bool = True) -> None:
-    """Declare a medium or note kind: its Text fields, whether it appears in
-    the Markdown export, and whether it sits in the reading flow."""
-    _TEXT_FIELDS[kind] = tuple(text_fields)
-    (_UNEXPORTED.discard if exported else _UNEXPORTED.add)(kind)
-    (_OUT_OF_FLOW.discard if in_flow else _OUT_OF_FLOW.add)(kind)
+@dataclass(frozen=True)
+class Layout:
+    """Which content fields of a block are Text, whether it sits in the
+    reading flow, and whether the export writes it. Recorded on the block when
+    it is added and never changed after, so every clone reads the block the same
+    way whether or not it has the kind's code."""
+    text: tuple[str, ...] = ()
+    flow: bool = True
+    export: bool = True
+
+    def to_json(self) -> dict:
+        return {"text": list(self.text), "flow": self.flow, "export": self.export}
+
+    @classmethod
+    def from_json(cls, d) -> "Layout":
+        text = d.get("text", []) if isinstance(d, dict) else None
+        if not isinstance(text, list) or not all(isinstance(f, str) and f != LAYOUT_KEY for f in text):
+            raise TypeError("layout")
+        return cls(tuple(dict.fromkeys(text)), bool(d.get("flow", True)), bool(d.get("export", True)))
 
 
-def is_exported(kind: str) -> bool:
-    return kind not in _UNEXPORTED
+OPAQUE = Layout()       # a kind nobody declared: every field is JSON
+LAYOUT_KEY = "$layout"  # where a plugin block's `codoc:` fence carries its layout; no field may be named so
+BUILTIN: dict[str, Layout] = {
+    **{k: Layout(("text",)) for k in (HEADING, PARAGRAPH, BULLET, NUMBERED)},
+    **{k: Layout(("source",)) for k in SOURCE},
+}
+_REGISTERED: dict[str, Layout] = {}
 
 
-def in_flow(kind: str) -> bool:
-    return kind not in _OUT_OF_FLOW
+def register_kind(kind: str, layout: Layout) -> None:
+    """Declare the layout a writer gives a new block of a plugin kind. A
+    builtin kind's layout is fixed and is not changed."""
+    if kind not in BUILTIN:
+        _REGISTERED[kind] = layout
 
 
-def text_fields(kind: str) -> tuple[str, ...]:
-    return _TEXT_FIELDS.get(kind, ())
-
-
-def is_text_field(kind: str, path: str) -> bool:
-    return path in text_fields(kind)
+def layout_of(kind: str) -> Layout:
+    """The layout this process gives a new block of ``kind``. Asked only by a
+    writer building a ``block.add`` and by the applier for an add that does not
+    carry one; every other question about a block asks ``Block.layout``."""
+    return BUILTIN.get(kind) or _REGISTERED.get(kind) or OPAQUE
 
 
 def is_source_field(kind: str, path: str) -> bool:
@@ -117,6 +134,12 @@ class Block:
     # died. "" when no words were removed: a block merged into its neighbour,
     # or one a rejected plan had added.
     dead_in: str = ""
+    # Fixed by the kind for a builtin kind; for any other kind, what its
+    # `block.add` recorded.
+    layout: Layout = OPAQUE
+
+    def __post_init__(self) -> None:
+        self.layout = BUILTIN.get(self.kind) or self.layout
 
     @property
     def live(self) -> bool:
@@ -137,6 +160,8 @@ class Block:
     def to_json(self) -> dict:
         content = {k: (v.to_json() if isinstance(v, Text) else v) for k, v in self.content.items()}
         d = {"id": self.id, "kind": self.kind, "rank": self.rank, "level": self.level, "content": content}
+        if self.kind not in BUILTIN:
+            d["layout"] = self.layout.to_json()
         if self.dead:
             d["dead"] = self.dead
             if self.dead_actor:
@@ -149,24 +174,18 @@ class Block:
 
     @classmethod
     def from_json(cls, d: dict) -> "Block":
-        kind = d["kind"]
-        content = {}
-        for k, v in (d.get("content") or {}).items():
-            content[k] = Text.from_json(v) if k in text_fields(kind) else v
-        return cls(d["id"], kind, d["rank"], int(d.get("level") or 0), content, d.get("dead"),
+        layout = BUILTIN.get(d["kind"]) or (Layout.from_json(d["layout"]) if "layout" in d else OPAQUE)
+        content = {k: Text.from_json(v) if k in layout.text else v for k, v in (d.get("content") or {}).items()}
+        return cls(d["id"], d["kind"], d["rank"], int(d.get("level") or 0), content, d.get("dead"),
                    [dict(e) for e in (d.get("detached") or [])], d.get("dead_actor", ""), d.get("dead_at", ""),
-                   d.get("dead_in", ""))
+                   d.get("dead_in", ""), layout)
 
 
-def empty_content(kind: str, content: dict | None = None) -> dict:
+def empty_content(layout: Layout, content: dict | None = None) -> dict:
     """Content for a new block: every Text field starts empty; other fields are
     taken from ``content`` as given."""
-    out: dict = {}
-    for k, v in (content or {}).items():
-        if k not in text_fields(kind):
-            out[k] = v
-    for f in text_fields(kind):
-        out[f] = Text()
+    out = {k: v for k, v in (content or {}).items() if k not in layout.text}
+    out.update({f: Text() for f in layout.text})
     return out
 
 

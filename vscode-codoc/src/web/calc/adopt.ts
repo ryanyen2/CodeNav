@@ -5,19 +5,22 @@
  * heading or a prose block that is the live text with the projection's spans
  * as marks, plan-tagged runs as `plan` marks and suggested deletions as
  * `suggest_del` marks; for a source block (table, diagram, code) it is the raw
- * `source`. `adoptionPlan` says which blocks to replace, insert, remove or
+ * `source`. Any other kind is a card (editor/card.ts) whose node carries the
+ * projected fields and the names of its Text fields; the card keeps its own
+ * shadows. `adoptionPlan` says which blocks to replace, insert, remove or
  * reorder given the document's current blocks and the set of held blocks
  * (editor/outbox.ts). Pure: no editor, no DOM.
  */
 import type { Node as PMNode, Schema } from '@tiptap/pm/model';
 
-import { SOURCE, isOneLine, refsOf, textField, type ProjectedBlock, type Projection, type TextField } from './projection';
+import { SOURCE, isBuiltin, refsOf, textField, textPaths, type ProjectedBlock, type Projection, type TextField } from './projection';
 import { Shadow } from './shadow';
 
-/** The blocks the document shows: everything but comment threads, which the
- *  editor draws in the margin beside their anchor. */
+/** The blocks the document shows: everything in the reading flow. Comment
+ *  threads, and any kind whose layout says it is out of the flow, are not;
+ *  the editor draws comments in the margin beside their anchor. */
 export function flowBlocks(proj: Projection): ProjectedBlock[] {
-    return proj.blocks.filter(b => b.kind !== 'comment');
+    return proj.blocks.filter(b => b.kind !== 'comment' && b.layout?.flow !== false);
 }
 
 /** One block's node with its marks, and the shadow that matches it. */
@@ -28,9 +31,8 @@ export function blockNode(schema: Schema, b: ProjectedBlock): { node: PMNode; sh
         const node = schema.nodes.source.create(attrs, f?.text ? schema.text(f.text) : undefined);
         return { node, shadow: f ? Shadow.fromField(f.text, refsOf(f)) : null };
     }
-    if (!isOneLine(b.kind)) {
-        // A plugin kind: read-only in this editor, no shadow, no ops from here.
-        return { node: schema.nodes.kindBlock.create({ bid: b.id, head: b.head, kind: b.kind, fields: b.fields }), shadow: null };
+    if (!isBuiltin(b.kind)) {
+        return { node: schema.nodes.kindBlock.create({ bid: b.id, head: b.head, kind: b.kind, fields: b.fields, text: textPaths(b) }), shadow: null };
     }
     const f = textField(b);
     const type = schema.nodes[b.kind];

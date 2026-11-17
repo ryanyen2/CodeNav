@@ -1,7 +1,7 @@
 """Block kinds: declarations, writes, lift and lower (docs/kinds.md)."""
 from codoc.calculus import ops as K
 from codoc.calculus.derive import attribution, markdown
-from codoc.calculus.doc import text_fields
+from codoc.calculus.doc import layout_of
 from codoc.calculus.export import export_markdown
 from codoc.index.graph import Graph
 from codoc.kinds import LowerContext, get, plain
@@ -14,8 +14,9 @@ from tests.helpers import handoff, kind_block, seed_loop
 
 
 def test_registration_declares_text_fields_and_schema_validation():
-    assert text_fields("diagram") == text_fields("table") == text_fields("code") == ("source",)
-    assert text_fields("image") == ("alt", "caption")
+    assert layout_of("diagram").text == layout_of("table").text == layout_of("code").text == ("source",)
+    assert layout_of("image").text == ("alt", "caption")
+    assert not layout_of("comment").flow and not layout_of("comment").export
     img = get("image")
     assert img.validate({"asset": ".codoc/media/a.png", "alt": "x"}) is None
     assert img.validate({"alt": "x"}) == "asset is required"

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from codoc.calculus import block_md
 from codoc.calculus.block_md import BlockSpec
 from codoc.calculus.doc import (
-    HEADING, PROSE, SOURCE, Block, TreeNode, fold_tree, in_flow, is_exported, is_source_field, text_fields,
+    BUILTIN, HEADING, LAYOUT_KEY, PROSE, SOURCE, Block, TreeNode, fold_tree, is_source_field,
 )
 from codoc.calculus.ids import OpId, is_human
 from codoc.calculus.inline_md import Span, render
@@ -108,14 +108,25 @@ def block_spec(store: Store, b: Block, mode: str = "live") -> BlockSpec | None:
     if b.kind in PROSE:
         md = markdown(b.text(), mode, store)
         return BlockSpec(b.kind, b.level, md) if md.strip() else None
-    if not is_exported(b.kind):
+    if not b.layout.export:
         return None
-    plain = {k: v for k, v in b.content.items() if k not in text_fields(b.kind)}
+    plain = {k: v for k, v in b.content.items() if k not in b.layout.text}
     if b.kind in SOURCE:
         source = field_text(b, "source", mode, store)
         return BlockSpec(b.kind, text=source, content=plain) if source.strip() else None
-    texts = {f: field_text(b, f, mode, store) for f in text_fields(b.kind)}
-    return BlockSpec(b.kind, content={**plain, **{f: t for f, t in texts.items() if t}}, id=b.id)
+    texts = {f: field_text(b, f, mode, store) for f in b.layout.text}
+    # The fence says which keys are Text, so a paste rebuilds the same block
+    # whether or not the pasting side has the kind's code.
+    return BlockSpec(b.kind, content={LAYOUT_KEY: b.layout.to_json(), **plain, **{f: t for f, t in texts.items() if t}},
+                     id=b.id)
+
+
+def kind_words(b: Block, store: Store | None = None) -> str:
+    """A plugin block as a model reads it without the kind's code: the kind's
+    name and the words of its Text fields in the ``rejected`` mode, or "" when
+    they hold none."""
+    words = [w for f in b.layout.text if (w := field_text(b, f, "rejected", store).strip())]
+    return f"{b.kind}: {'; '.join(words)}" if words else ""
 
 
 def description(store: Store, fid: str, mode: str = "live") -> str:
@@ -173,7 +184,7 @@ def block_written_by(store: Store, bid: str) -> str:
     clause to it does not loosen the gate on rewriting the rest."""
     b = store.blocks[bid]
     newest = ("", "")
-    for f in text_fields(b.kind):
+    for f in b.layout.text:
         for s in b.text(f).segs:
             if not s.live or s.plan in store.open_plans:
                 continue
@@ -207,7 +218,7 @@ def prose_blocks(store: Store, fid: str) -> list[Block]:
     rather than standing among them, so writing one is not editing the prose:
     it must not ink the feature, turn it `edited`, or offer a hand-off of a
     note."""
-    return [b for b in store.feature_body(fid) if in_flow(b.kind)]
+    return [b for b in store.feature_body(fid) if b.layout.flow]
 
 
 def ink(store: Store, fid: str) -> list[Claim]:
@@ -218,7 +229,7 @@ def ink(store: Store, fid: str) -> list[Claim]:
     w = store.watermarks(fid)
     out: list[Claim] = []
     for b in prose_blocks(store, fid):
-        for f in text_fields(b.kind):
+        for f in b.layout.text:
             t = b.text(f)
             lt = t.live_text()
             last: Claim | None = None
@@ -253,7 +264,7 @@ def ground(store: Store, fid: str) -> list[Claim]:
 
     out: list[Claim] = []
     for b in prose_blocks(store, fid):
-        for f in text_fields(b.kind):
+        for f in b.layout.text:
             t = b.text(f)
             i = 0
             for s in t.segs:
@@ -272,7 +283,7 @@ def plan_claims(store: Store, fid: str) -> list[Claim]:
     plans' words (``accepted``)."""
     out: list[Claim] = []
     for b in prose_blocks(store, fid):
-        for f in text_fields(b.kind):
+        for f in b.layout.text:
             t = b.text(f)
             lt = t.live_text()
             for r in attribution(t):
@@ -337,7 +348,7 @@ def unsent_removal(store: Store, fid: str) -> bool:
     person would be told there is nothing to hand off while there is."""
     w = store.watermarks(fid)
     for b in prose_blocks(store, fid):
-        for f in text_fields(b.kind):
+        for f in b.layout.text:
             for sg in b.text(f).segs:
                 if sg.dead and is_human(sg.dead_actor) and not in_frontier(sg.dead, w.handoff) \
                         and not in_frontier(sg.dead, w.realized):
@@ -353,9 +364,9 @@ def removed_blocks(store: Store, fid: str) -> list[Block]:
     Changing a block's kind, level or place is layout and is not listed."""
     out = []
     for b in store.removed_body(fid):
-        if not (in_flow(b.kind) and is_human(b.dead_actor)):
+        if not (b.layout.flow and is_human(b.dead_actor)):
             continue
-        if any(s.live and s.plan not in store.open_plans for f in text_fields(b.kind) for s in b.text(f).segs):
+        if any(s.live and s.plan not in store.open_plans for f in b.layout.text for s in b.text(f).segs):
             out.append(b)
     return out
 
@@ -406,7 +417,7 @@ def touched_at(store: Store, fid: str, *, human_only: bool = False) -> str:
     "since" from."""
     newest = ""
     for b in prose_blocks(store, fid):
-        for f in text_fields(b.kind):
+        for f in b.layout.text:
             t = b.text(f)
             for sg in t.segs:
                 if not human_only or is_human(sg.actor):
@@ -445,7 +456,7 @@ def history(store: Store, fid: str) -> list[Op]:
 def dead_cites(store: Store, known: set[tuple[str, str]]) -> list[tuple[str, Mark]]:
     out = []
     for b in store.ordered():
-        for f in text_fields(b.kind):
+        for f in b.layout.text:
             for m in b.text(f).marks:
                 if m.kind == CITE and (m.attrs.get("file", ""), m.attrs.get("symbol", "")) not in known:
                     out.append((b.id, m))
@@ -466,7 +477,9 @@ def block_entry(store: Store, b: Block) -> dict:
     ``unmarked``), and the words it inserted are in ``runs``, as before."""
     entry = {"id": b.id, "kind": b.kind, "level": b.level, "rank": b.rank, "head": store.block_head.get(b.id, 0),
              "fields": {}}
-    for f in text_fields(b.kind):
+    if b.kind not in BUILTIN:
+        entry["layout"] = b.layout.to_json()     # so an editor without the kind can still draw it
+    for f in b.layout.text:
         t = b.text(f)
         entry["fields"][f] = {
             "text": t.live_text(),
@@ -475,7 +488,7 @@ def block_entry(store: Store, b: Block) -> dict:
             "suggest_del": [{"plan": s.attrs["plan"], "start": s.start, "end": s.end} for s in _suggest_spans(t, store)],
         }
     for k, v in b.content.items():
-        if k not in text_fields(b.kind):
+        if k not in b.layout.text:
             entry["fields"][k] = v
     return entry
 

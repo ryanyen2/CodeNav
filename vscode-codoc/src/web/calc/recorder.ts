@@ -171,7 +171,13 @@ export function markAttrs(kind: string, attrs: Record<string, unknown>): Record<
  * only run boundaries can be coarser than recording.
  */
 export function reconcile(block: PMNode, shadow: Shadow, nextCid: () => string): { ops: OpBody[]; cids: string[] } {
-    const now = scalars(nfc(block.textContent));
+    return reconcileText(targetOf(block), block.textContent, shadow, nextCid);
+}
+
+/** The same comparison for a field's plain text, as a card's text area holds it. */
+export function reconcileText(target: { bid: string; path: string }, text: string, shadow: Shadow,
+                              nextCid: () => string): { ops: OpBody[]; cids: string[] } {
+    const now = scalars(nfc(text));
     const was = shadow.chars;
     let p = 0;
     while (p < now.length && p < was.length && now[p] === was[p]) p++;
@@ -179,7 +185,6 @@ export function reconcile(block: PMNode, shadow: Shadow, nextCid: () => string):
     while (s < now.length - p && s < was.length - p && now[now.length - 1 - s] === was[was.length - 1 - s]) s++;
     const ops: OpBody[] = [];
     const cids: string[] = [];
-    const target = targetOf(block);
     const delTo = was.length - s;
     if (delTo > p) ops.push(deleteOf(target, shadow.delete(p, delTo)));
     const inserted = now.slice(p, now.length - s).join('');

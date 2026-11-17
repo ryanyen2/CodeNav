@@ -22,7 +22,7 @@ from pathlib import Path
 from codoc.calculus import ops as K
 from codoc.calculus.apply import apply, replay_recorded
 from codoc.calculus.derive import GATE_HUMAN, GATE_MACHINE, HELD, block_written_by, phase
-from codoc.calculus.doc import is_one_line, is_source_field, is_text_field
+from codoc.calculus.doc import is_one_line, is_source_field
 from codoc.calculus.ids import MACHINE_KINDS, actor_kind, new_batch_id, new_plan_id, new_session_id, op_id
 from codoc.calculus.ingest import Ingest, as_plan_bodies, ingest, resolve_pending_refs, strike_bodies
 from codoc.calculus.ops import Op, frontier_union
@@ -179,7 +179,7 @@ class Workspace:
             return Ingest(refused="no_block")
         if not block.live:
             return Ingest(refused="dead_block")
-        if not is_text_field(block.kind, path):
+        if path not in block.layout.text:
             return Ingest(refused="not_text")
         text = block.text(path)
         if any(s.live and s.plan != plan and s.plan in self.store.open_plans for s in text.segs):
@@ -259,7 +259,7 @@ class Workspace:
         for bid, path, new_md, base_text in rewrites:
             block = store.blocks.get(bid)
             if base_text is None:
-                base_text = block.text(path).live_text() if block is not None and is_text_field(block.kind, path) else ""
+                base_text = block.text(path).live_text() if block is not None and path in block.layout.text else ""
             ing = self.plan_ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, trunk=not need_plan)
             if self.must_propose(bid, actor, ing):
                 need_plan = True
@@ -306,7 +306,7 @@ class Workspace:
             for bid, path, new_md, base_text in rewrites:
                 block = self.store.blocks.get(bid)
                 if base_text is None:
-                    base_text = block.text(path).live_text() if block is not None and is_text_field(block.kind, path) else ""
+                    base_text = block.text(path).live_text() if block is not None and path in block.layout.text else ""
                 res, ops = self.ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, plan=pid,
                                        batch=pid, caused_by=caused_by)
                 if res.refused:

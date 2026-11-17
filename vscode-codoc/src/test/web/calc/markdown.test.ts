@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { parseBlocks, parseInline, type BlockSpec } from '../../../web/calc/markdown';
+import { fenceLayout, parseBlocks, parseInline, type BlockSpec } from '../../../web/calc/markdown';
 import type { Span } from '../../../web/calc/projection';
 
 // Written by the Python codecs (codoc.calculus.block_md / inline_md); see the file's `_comment`.
@@ -17,4 +17,15 @@ describe('parseBlocks reads what block_md.parse reads', () => {
 
 describe('parseInline reads what inline_md.parse reads', () => {
     for (const c of cases.inline) it(c.name, () => expect(parseInline(c.md)).toEqual({ text: c.text, spans: c.spans }));
+});
+
+describe('a fence\'s `$layout`, read as doc.Layout.from_json reads it', () => {
+    it('takes a list of field names, defaults flow and export, and refuses anything else', () => {
+        expect(fenceLayout({ $layout: { text: ['alt', 'caption', 'alt'] } })).toEqual({ text: ['alt', 'caption'], flow: true, export: true });
+        expect(fenceLayout({ $layout: { text: ['body'], flow: false, export: false } })).toEqual({ text: ['body'], flow: false, export: false });
+        expect(fenceLayout({ $layout: {} })).toEqual({ text: [], flow: true, export: true });
+        expect(fenceLayout({ $layout: { text: 'caption' } })).toBeNull();
+        expect(fenceLayout({ $layout: { text: [1] } })).toBeNull();
+        expect(fenceLayout({ caption: 'x' })).toBeNull();
+    });
 });

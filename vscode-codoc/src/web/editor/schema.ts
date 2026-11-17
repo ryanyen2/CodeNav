@@ -23,14 +23,14 @@
  * never sends those. Every mark but `bold` is non-inclusive, so typing at its
  * end is outside it, as the store has it.
  *
- * A plugin kind (an image, a url) is a `kindBlock`: an atom drawn read-only by
- * `kindView` from the fields the projection gives it. Comment blocks are not
- * in the flow; they are cards in the margin (comments.ts).
+ * Any other kind (an image, a url, a kind a newer codoc made) is a
+ * `kindBlock`: an atom drawn as a card (card.ts) from the fields the
+ * projection gives it. Comment blocks are not in the flow; they are cards in
+ * the margin (comments.ts).
  */
 import { Mark, Node, getSchema, mergeAttributes } from '@tiptap/core';
 import Document from '@tiptap/extension-document';
 import Text from '@tiptap/extension-text';
-import type { Node as PMNode } from '@tiptap/pm/model';
 
 export const MAX_LEVEL = 6;
 
@@ -145,7 +145,9 @@ const Source = Node.create({
     },
 });
 
-/** A block of any plugin kind (an image, a url). The editor authors no ops against it. */
+/** A block of any kind without a node type here: a plugin kind (an image, a
+ *  url) or one a newer codoc made. `fields` are its projected fields and
+ *  `text` the names of its Text fields; the card view (card.ts) draws it. */
 const KindBlock = Node.create({
     name: 'kindBlock',
     group: 'block',
@@ -157,6 +159,7 @@ const KindBlock = Node.create({
             ...idAttrs(),
             kind: { default: '', renderHTML: (attrs: Record<string, unknown>) => ({ 'data-kind': String(attrs.kind ?? '') }) },
             fields: { default: {}, renderHTML: () => ({}) },
+            text: { default: [], renderHTML: () => ({}) },
         };
     },
     parseHTML() { return [{ tag: 'div[data-kind]' }]; },
@@ -237,35 +240,4 @@ const Plan = Mark.create({
 export function codocSchema() {
     return getSchema([Document, Text, Heading, Paragraph, listItem('bullet', false), listItem('numbered', true), Source, KindBlock,
                       Bold, Code, Link, Cite, Comment, SuggestDel, Plan]);
-}
-
-/** The node view for a `kindBlock`: the kind's name, then one row per field
- *  that has a value. A Text field shows its words, anything else its JSON. */
-export function kindView(node: PMNode): { dom: HTMLElement } {
-    const dom = document.createElement('div');
-    dom.className = `codoc-kind codoc-kind-${node.attrs.kind}`;
-    dom.dataset.bid = node.attrs.bid;
-    dom.dataset.kind = node.attrs.kind;
-    dom.contentEditable = 'false';
-    const label = document.createElement('div');
-    label.className = 'codoc-kind-label';
-    label.textContent = String(node.attrs.kind);
-    dom.append(label);
-    const fields = (node.attrs.fields ?? {}) as Record<string, unknown>;
-    for (const [k, v] of Object.entries(fields)) {
-        const row = document.createElement('div');
-        row.className = 'codoc-kind-field';
-        const isText = v && typeof v === 'object' && 'runs' in (v as object);
-        const value = isText ? String((v as { text: string }).text) : typeof v === 'string' ? v : JSON.stringify(v);
-        if (!value) continue;
-        const key = document.createElement('span');
-        key.className = 'codoc-kind-key';
-        key.textContent = k;
-        const val = document.createElement(isText && k === 'source' ? 'pre' : 'span');
-        val.className = 'codoc-kind-value';
-        val.textContent = value;
-        row.append(key, val);
-        dom.append(row);
-    }
-    return { dom };
 }

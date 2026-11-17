@@ -1,13 +1,20 @@
 """Rules for the block kinds: what converts, splits and merges, and how list levels move."""
+import copy
+
+from codoc.calculus import block_md, doc
 from codoc.calculus import ops as K
 from codoc.calculus.apply import apply
-from codoc.calculus.derive import markdown
-from codoc.calculus.doc import BULLET, CODE_BLOCK, HEADING, NUMBERED, PARAGRAPH, TABLE
+from codoc.calculus.block_md import BlockSpec
+from codoc.calculus.derive import block_entry, block_spec, markdown
+from codoc.calculus.doc import BUILTIN, BULLET, CODE_BLOCK, HEADING, NUMBERED, PARAGRAPH, TABLE, Layout
+from codoc.calculus.export import export_markdown
 from codoc.calculus.ids import START
+from codoc.calculus.ingest import block_bodies, resolve_pending_refs
+from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
 from codoc.calculus.text import BOLD
 from codoc.calculus.window import history_window
-from tests.helpers import Mint, paragraph
+from tests.helpers import Mint, paragraph, replay
 
 
 def block(m: Mint, s: Store, bid: str, kind: str, text: str, after=START, level=None, path="text"):
@@ -89,4 +96,85 @@ def test_the_timeline_reports_a_source_block():
     ins = block(m, s, "t", TABLE, "| a |\n|---|", path="source")
     apply(s, m.op(K.TEXT_INSERT, {"bid": "t", "path": "source"}, {"after": [ins.id, 10], "text": "\n| 1 |"}))
     w = history_window(s)
-    assert w["ops"][-1]["blocks"] == {"t": "| a |\n|---|\n| 1 |"}
+    assert w["ops"][-1]["blocks"] == {"t": {"source": "| a |\n|---|\n| 1 |"}}
+
+
+WIDGET = Layout(("alt", "caption"))
+
+
+def _widget_log(monkeypatch) -> list[Op]:
+    """The ops a writer that has the `widget` kind sends to add one with words."""
+    monkeypatch.setitem(doc._REGISTERED, "widget", WIDGET)
+    bodies, _ = block_bodies([BlockSpec("widget", content={"url": "https://x.org", "caption": "A **plot**"})],
+                             after=START)
+    m, inserts, out = Mint(), [], []
+    for b in bodies:
+        payload = dict(b["payload"])
+        resolve_pending_refs(payload, inserts)
+        out.append(m.op(b["kind"], b["target"], payload))
+        if b["kind"] == K.TEXT_INSERT:
+            inserts.append(out[-1].id)
+    return out
+
+
+def _submit(s: Store, log: list[Op]) -> None:
+    for o in log:
+        got = apply(s, Op.from_json(copy.deepcopy(o.to_json())))
+        assert got.conflict is None, (o.kind, got.conflict)
+
+
+def test_a_clone_without_a_plugin_kind_replays_its_text_the_same(monkeypatch):
+    """The layout rides on the block.add, so a clone that lacks the kind still
+    reads its Text fields as Text: the same log ends in the same state (I6)."""
+    log = _widget_log(monkeypatch)
+    with_kind = Store()
+    _submit(with_kind, log)
+    monkeypatch.delitem(doc._REGISTERED, "widget")
+    without = Store()
+    _submit(without, log)
+    assert without.state_fingerprint() == with_kind.state_fingerprint()
+    entry = block_entry(without, without.blocks[log[0].target["bid"]])
+    assert entry["layout"] == WIDGET.to_json() and entry["fields"]["caption"]["text"] == "A plot"
+    # An add that carries no layout (an old writer) takes this process's
+    # registry and records it, so a replay without the kind reads the same.
+    monkeypatch.setitem(doc._REGISTERED, "widget", WIDGET)
+    m, old = Mint(), Store()
+    apply(old, m.op(K.BLOCK_ADD, {"bid": "w"}, {"kind": "widget", "after": START}))
+    apply(old, m.op(K.TEXT_INSERT, {"bid": "w", "path": "caption"}, {"after": START, "text": "hi"}))
+    monkeypatch.delitem(doc._REGISTERED, "widget")
+    assert old.ops[0].payload["layout"] == {"text": ["alt", "caption"], "flow": True, "export": True}
+    assert replay(old).state_fingerprint() == old.state_fingerprint()
+    # The timeline reports every Text field, not only the first.
+    assert history_window(old)["ops"][-1]["blocks"] == {"w": {"caption": "hi"}}
+
+
+def test_a_builtin_kind_ignores_a_sent_layout():
+    m, s = Mint(), Store()
+    add = apply(s, m.op(K.BLOCK_ADD, {"bid": "p"}, {"kind": PARAGRAPH, "after": START,
+                                                    "layout": {"text": ["note"], "flow": False}}))
+    assert add.conflict is None and "layout" not in add.payload and s.blocks["p"].layout == BUILTIN[PARAGRAPH]
+    assert apply(s, m.op(K.TEXT_INSERT, {"bid": "p", "path": "note"}, {"after": START, "text": "x"})).conflict == "not_text"
+    for bad in (["alt"], {"text": "alt"}, {"text": ["$layout"]}):
+        assert apply(s, m.op(K.BLOCK_ADD, {"bid": "w"}, {"kind": "widget", "layout": bad})).conflict == "malformed"
+    # `$layout` is the fence's own key, so no field may take that name.
+    assert apply(s, m.op(K.BLOCK_ADD, {"bid": "w"}, {"kind": "widget", "content": {"$layout": 1}})).conflict == "reserved_path"
+    apply(s, m.op(K.BLOCK_ADD, {"bid": "w2"}, {"kind": "widget", "layout": {"text": ["alt"]}}))
+    assert apply(s, m.op(K.BLOCK_SET, {"bid": "w2", "path": "$layout"}, {"value": 1})).conflict == "reserved_path"
+
+
+def test_the_export_of_a_kind_without_code_is_a_fence_that_parses_back(monkeypatch):
+    log = _widget_log(monkeypatch)
+    monkeypatch.delitem(doc._REGISTERED, "widget")
+    s = Store()
+    _submit(s, log)
+    md = export_markdown(s)
+    assert md.startswith("```codoc:widget"), md
+    (back,) = block_md.parse(md)
+    assert back == block_spec(s, s.blocks[back.id], "rejected")
+    assert back.content == {"$layout": WIDGET.to_json(), "url": "https://x.org", "caption": "A **plot**"}
+    # A paste on this side, which has no code for the kind, rebuilds the same block.
+    bodies, (bid,) = block_bodies([back], after=START)
+    pasted, m = Store(), Mint("p")
+    _submit(pasted, [m.op(b["kind"], b["target"], b["payload"]) for b in bodies[:2]])
+    assert pasted.blocks[bid].layout == WIDGET and pasted.blocks[bid].content["url"] == "https://x.org"
+    assert pasted.blocks[bid].text("caption").live_text() == "A plot"

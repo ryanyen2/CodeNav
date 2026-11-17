@@ -4,7 +4,7 @@
  * It never touches the live editor: pushing Tuesday's prose through the
  * recorder would record the author reverting the tree.
  */
-import { pathOf, type Projection } from '../calc/projection';
+import { textPaths, type Projection } from '../calc/projection';
 import { shapeAt, textAt, wordDiff, type HistoryWindow } from '../calc/window';
 
 export class Timeline {
@@ -83,14 +83,15 @@ export class Timeline {
             const was = shape.shape.get(bid);
             const b = live.get(bid) ?? { id: bid, kind: was?.kind ?? 'paragraph', level: was?.level ?? 0,
                                          rank: '', head: 0, fields: {} };
-            const f = b.fields[pathOf(b.kind)] as { text?: string } | undefined;
-            const now = textAt(w, bid, p, f?.text ?? '');
+            const path = textPaths(b)[0] ?? 'text';           // one field per block: its first Text field
+            const f = b.fields[path] as { text?: string } | undefined;
+            const now = textAt(w, bid, path, p, f?.text ?? '');
             if (now === null) continue;
             const el = document.createElement(b.kind === 'heading' ? 'div' : 'p');
             el.className = b.kind === 'heading' ? `codoc-heading codoc-h${b.level}` : 'codoc-paragraph';
             if (!live.has(bid)) el.classList.add('codoc-past-gone');
             if (bid in e.blocks) {
-                const was = (p > 0 && shapeAt(w, p - 1).dead.has(bid)) ? '' : (textAt(w, bid, p - 1, f?.text ?? '') ?? '');
+                const was = (p > 0 && shapeAt(w, p - 1).dead.has(bid)) ? '' : (textAt(w, bid, path, p - 1, f?.text ?? '') ?? '');
                 for (const [k, t] of wordDiff(was, now)) {
                     const span = document.createElement(k === 'eq' ? 'span' : k);
                     span.textContent = t;

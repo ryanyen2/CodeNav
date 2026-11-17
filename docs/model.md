@@ -32,7 +32,9 @@ Mark       := { kind, attrs, start: CharRef, end: CharRef, actor, op, at }     e
 Binding    := { feature: BlockId, file, symbol, fingerprint, types_hash }      keyed by (file, symbol)
 
 Plan       := { id, actor,                  actor: who opened it
-                kind,                       edit | add | move | delete; the applier gives meaning only to delete
+                kind,                       edit | add | move | delete; only delete has a meaning in the applier,
+                                            so any other kind is a label, kept as sent (a newer client's kind
+                                            survives an older store)
                 target?,                    a block id; a delete plan must name a live heading
                 note,
                 status,                     open, then accepted | rejected; plan.reopen returns it to open
@@ -73,10 +75,11 @@ Op         := { id, at, actor,              set by the applier; actor from the c
 | field | meaning |
 |---|---|
 | `id` | Unique for the life of the log. Only `block.add` and `block.split` create one. |
-| `kind` | Decides which content fields are `Text`. |
+| `kind` | What the block is: a heading, prose, a source kind or a plugin kind. |
+| `layout` | `{text: [field, …], flow, export}`: which content fields are `Text`, whether the block is in the reading flow, whether the export writes it. Fixed by the kind for the builtin kinds (heading, prose, source); recorded by `block.add` for any other kind. |
 | `rank` | Order key. A dead block keeps its rank, so "after a deleted block" still names a place. |
 | `level` | Outline depth of a heading, indent depth of a list item, both 1..6. 0 for any other kind. |
-| `content` | A `Text` field is edited by text ops. Any other field is a JSON value replaced whole by `block.set`. |
+| `content` | A field named in `layout.text` is a `Text` edited by text ops. Any other field is a JSON value replaced whole by `block.set`. |
 | `dead` | The op that killed the block. Absent while it is live. |
 | `dead_actor`, `dead_at` | Who killed it and when. |
 | `dead_in` | The feature whose description it was removed from, read when it died. A block that dies with its heading records that heading; a block merged into its neighbour, or added by a plan that was rejected, records none, since no words were removed. `removed:` and the `edited` phase read it, so where the dead block sits later does not matter. |
@@ -111,6 +114,16 @@ Op         := { id, at, actor,              set by the applier; actor from the c
   to the block into a directive line when a hand-off is rendered. `consult` is what the
   realizing agent reads. A kind never produces ops, and its schema is checked where
   content becomes ops (section 6), not by the applier.
+- **A plugin block's layout is data; its codecs are code.** The declaration's Text
+  fields and flags are the layout a writer puts on a new block's `block.add`. Every
+  question about a block's fields asks the block's `layout`, never the kind, so a
+  clone without the kind's code (an older codoc, a missing plugin) applies text ops to
+  its Text fields, exports it and shows its words to a model exactly as a clone with
+  the code does. Only the codecs (`lift`, `lower`, `consult`) and the schema check need
+  the declaration.
+- **A block's layout never changes after it is added.** A kind version cannot give
+  existing blocks a new Text field; a field it adds is a JSON field. A block of a kind
+  nobody declared, added without a layout, has the empty layout: every field is JSON.
 - A block that is not in the flow (a comment) has a rank like any other. `block.merge`
   skips it when it looks for a neighbour, and its text is left out of `ink`, `ground`,
   `phase` and drift. A thread is one `comment` block per message, all with the same
@@ -286,8 +299,8 @@ Target `{bid, path}`; `path` defaults to `text`.
 
 | op | target | wire payload | canonical payload adds | inverse |
 |---|---|---|---|---|
-| `block.add` | `bid` | `kind`, `level?`, `after: BlockId \| START` or `under: BlockId \| START`, `content` | `after`, `level`, `rank` | `block.delete {ids: [bid]}` |
-| `block.set` | `bid`, `path` | `value`; with `path = kind`, optional `level` | `prev`; for `kind` also `prev_level`, `level` | `block.set` to the previous value |
+| `block.add` | `bid` | `kind`, `level?`, `after: BlockId \| START` or `under: BlockId \| START`, `content`, `layout?` | `after`, `level`, `rank`; `layout` for a kind that is not builtin | `block.delete {ids: [bid]}` |
+| `block.set` | `bid`, `path` | `value`, or `unset: true` to remove a non-Text field; with `path = kind`, optional `level` | `prev`; for `kind` also `prev_level`, `level` | `block.set` to the previous value, or `unset` when the field was absent |
 | `block.split` | `bid`, `path` | `at: CharRef \| START`, `new: BlockId` | `new_first`, `rank`, `bid`, `path` | `block.merge {into: bid, bid: new}`, with `rejoin` for a heading |
 | `block.merge` | `into`, `bid`, `path` | none | `at` (the seam), `order`, `rank` of the dead block | `block.split {at, new: bid, rank, new_takes}` |
 | `block.move` | `bid` | `after: BlockId \| START` and `level_delta`, or `under: BlockId \| START` | `after`, `level_delta`, `range`, `prev: [[id, rank, level]]` | `block.move {restore: prev}` |
@@ -296,6 +309,12 @@ Target `{bid, path}`; `path` defaults to `text`.
 
 - **add.** Text fields start empty. `after` may name a dead block. `level` is clamped to
   1..6 for a heading or list item (1 when not given) and is 0 for any other kind.
+- **add, `layout`.** A builtin kind ignores a sent layout. Any other kind takes the
+  layout sent; an add without one (an old log, an old writer) takes this process's
+  registered layout for the kind, or the empty layout when it has none. The canonical
+  payload records the layout used, so replay and a snapshot give the block the same
+  layout on any version. A layout that is not `{text: [string, …], flow?, export?}`
+  conflicts `malformed`.
 - **`under`** (add and move, headings only). The heading goes after the last live block
   of the parent's range, one level deeper; `START` is the end of the document at level 1.
   It is resolved when the op applies, against the tree as it is then, and the record
@@ -422,7 +441,10 @@ becomes op bodies in two ways. Both are pure: they mint no ids and apply nothing
 
 **`block_bodies(specs, after)`** for new blocks. Nothing is diffed. Each block is one
 `block.add` after the previous one; each Text field with text is one `text.insert` at
-`START`, then one `text.mark` per span.
+`START`, then one `text.mark` per span. A plugin block's `block.add` carries a layout:
+the spec's `$layout` when its fence had one (a copied block keeps its layout), else the
+layout this process registers for the kind, else the empty one. The spec's fields are
+split into Text and JSON by that same layout.
 
 **`ingest(field, base_text, new_md, actor)`** for new text of an existing field. It is
 the one place where a diff decides what happened.
@@ -504,7 +526,12 @@ Writing:
   lines all start with `|`, a diagram with no field but `derived: true`, a code block
   with no field but a one-word `lang`. Otherwise it is a `codoc:` JSON fence with its
   `source` inside. A plugin block is always a JSON fence, with its Text fields as
-  Markdown strings and empty ones left out.
+  Markdown strings and empty ones left out, and the reserved key `"$layout"` holding
+  the block's layout, so the fence says which keys are Text. It is written from the
+  block, so a kind this process has no code for is written the same way. Reading it
+  back gives the same fields; `block_bodies` rebuilds the block with the fence's
+  layout, or this process's for the kind when the fence has none. No field of a kind
+  may be named `$layout`.
 - A fence is one backtick longer than the longest line of backticks in its source.
 - **Marks nest link, then bold, then code.** The store allows any overlap. The writer
   cuts a bold at every link edge and a code at every link and bold edge.
@@ -565,12 +592,12 @@ rejected plan's words are dead.
 | `open_plans()` | Open plans whose target is null or live: the ones offered for a verdict. |
 | `phase(f)` | Below. |
 | `queued()` | Queued features in document order, then queued dead headings (a removal still waiting). |
-| `directive(f)` | The realize prompt item: title and `description` in `rejected` mode; `added:` from `sent` ink; `removed:` from characters a person killed inside `handoff` and outside `realized`; `Focus:` from a person's bold marks outside `realized`; `Consult:` from links; each kind block's `consult` and `lower`; `Author asked:` from the latest hand-off. For a dead heading: a removal item, which deletes code only when the hand-off set `delete_code`. |
+| `directive(f)` | The realize prompt item: title and `description` in `rejected` mode; `added:` from `sent` ink; `removed:` from characters a person killed inside `handoff` and outside `realized`; `Focus:` from a person's bold marks outside `realized`; `Consult:` from links; each kind block's `consult` and `lower`, or for an in-flow block of a kind this process has no code for, `<kind>: <words>` from its Text fields; `Author asked:` from the latest hand-off. For a dead heading: a removal item, which deletes code only when the hand-off set `delete_code`. |
 | `history(f)` | Every op recorded against a block of `body(f)`, oldest first, conflicted ones included. Ops on blocks the feature no longer holds are left out. |
-| `history_window(n)` | The timeline: the applied ops among the last `n` (200 as published). Per op: the `text` of each block it touched as it read right after the op, its recorded inverse, the blocks it took off or put on the page, and the ranks, kinds and levels it displaced; plus what was true entering the window. Computed by un-applying the window backwards on clones of the live fields, by character identity. |
+| `history_window(n)` | The timeline: the applied ops among the last `n` (200 as published). Per op: `blocks`, the text of each Text field of each block it touched as it read right after the op (`{bid: {field: text}}`), its recorded inverse, the blocks it took off or put on the page, and the ranks, kinds and levels it displaced; plus what was true entering the window. Computed by un-applying the window backwards on clones of the live fields, by character identity. |
 | `dead_cites(known)` | `cite` marks whose `(file, symbol)` is not in the index. |
 | `export` | `block_spec` of every live block in `rejected` mode, written with heading ids. |
-| `projection` | `{store, head, frontier, blocks, phases, plans, watermarks, bindings, claims}`. `store` names the store instance and changes on every rebuild; `head` is comparable only under one `store`. Each plan carries `handoff`: the features accepting it hands off (`accept_handoffs`: a plan opened with `build`, which `codoc_propose` sets, that is not a delete plan). A block entry is `{id, kind, level, rank, head, fields}`. A Text field is `{text, runs, spans, suggest_del}` in `live` mode, with unmerged runs and the document's own marks. `plans` is `open_plans()`. `claims` is `ink`, `ground` and `plan_claims` per feature. |
+| `projection` | `{store, head, frontier, blocks, phases, plans, watermarks, bindings, claims}`. `store` names the store instance and changes on every rebuild; `head` is comparable only under one `store`. Each plan carries `handoff`: the features accepting it hands off (`accept_handoffs`: a plan opened with `build`, which `codoc_propose` sets, that is not a delete plan). A block entry is `{id, kind, level, rank, head, fields}`, plus `layout` for a kind that is not builtin, so an editor without the kind can draw it. A Text field is `{text, runs, spans, suggest_del}` in `live` mode, with unmerged runs and the document's own marks. `plans` is `open_plans()`. `claims` is `ink`, `ground` and `plan_claims` per feature. |
 | `state_fingerprint` | Blocks with text and marks, bindings, plans, watermarks. Equal fingerprints mean the same document. |
 
 ### Phase
@@ -645,13 +672,3 @@ A publish from a cold cache and one from a warm cache write the same bytes.
 - An `Edit only:` scope line in the directive. The scope is the feature's binding set.
 - Kind codecs for model context, for an agent's reply, and for a per-kind export form.
 
-## Open questions
-
-1. A verdict has no undo case for a plan-tagged `text.delete` or `text.restore`. A subset
-   accept that leaves one out leaves its effect in place.
-2. The applier accepts any block kind and any plan kind. An unknown block kind is stored
-   with opaque content, so a newer client's kind survives an older store. Is that
-   the intended forward-compatibility rule?
-3. Undoing a `block.set` on a field that did not exist leaves it `null`.
-4. The timeline reports one Text field per block (`text`, `source`, or a plugin kind's
-   first field). A change to an image's `caption` is un-applied and not reported.

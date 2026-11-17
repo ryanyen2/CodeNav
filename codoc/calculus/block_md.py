@@ -41,7 +41,8 @@ class BlockSpec:
     ``text`` is inline Markdown for a prose kind and the raw source for a
     source kind (table, diagram, code). ``content`` holds the non-Text fields;
     for a kind written as a JSON fence it also holds the Text fields, as
-    Markdown strings. ``id`` is set only where the Markdown carried one."""
+    Markdown strings, and for a plugin kind ``$layout``, which names them.
+    ``id`` is set only where the Markdown carried one."""
     kind: str
     level: int = 0
     text: str = ""

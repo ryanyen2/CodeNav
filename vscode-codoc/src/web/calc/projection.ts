@@ -54,7 +54,12 @@ export interface ProjectedBlock {
     rank: string;
     head: number;
     fields: Record<string, TextField | unknown>;
+    /** For a kind that is not heading, prose or source: which fields are Text,
+     *  whether it sits in the reading flow, and whether it is exported. */
+    layout?: Layout;
 }
+
+export interface Layout { text: string[]; flow: boolean; export: boolean }
 
 export interface Claim {
     bid: string;
@@ -109,8 +114,19 @@ export const SOURCE: ReadonlySet<string> = new Set(['table', 'diagram', 'code'])
 /** A heading or a prose kind: one line, and the only kinds that split, merge or change kind. */
 export const isOneLine = (kind: string): boolean => kind === 'heading' || PROSE.has(kind);
 
-/** The Text field the editor edits for a block of `kind`. */
+/** The Text field the editor edits for a block of a heading, prose or source `kind`. */
 export const pathOf = (kind: string): string => (SOURCE.has(kind) ? 'source' : 'text');
+
+/** Whether the editor has a node type of its own for this kind. */
+export const isBuiltin = (kind: string): boolean => isOneLine(kind) || SOURCE.has(kind);
+
+/** A block's Text fields: fixed for heading, prose and source kinds; for any
+ *  other kind, what the block's own layout says. A projection without a layout
+ *  still marks each Text field by its shape. */
+export function textPaths(b: ProjectedBlock): string[] {
+    if (isBuiltin(b.kind)) return [pathOf(b.kind)];
+    return b.layout?.text ?? Object.keys(b.fields).filter(k => textField(b, k));
+}
 
 /** The store kind of an editor node: its type for heading and prose, its
  *  `kind` attribute for a source block or a plugin block. */

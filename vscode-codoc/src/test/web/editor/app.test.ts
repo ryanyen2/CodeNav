@@ -48,7 +48,7 @@ describe('the page', () => {
         post({ kind: 'acks', acks: cids.map(cid => ({ cid, op: null, conflict: 'authority' })) });
         const w: HistoryWindow = { start: 0, head: 1, before: {}, ops: [
             { pos: 0, id: 's:1', at: '1', actor: 'human:local', kind: 'text.insert', batch: 't-earlier', batch_first: 0, plan: null, caused_by: null,
-              blocks: { p: 'one two' }, inverse: [{ kind: 'text.delete', target: { bid: 'p', path: 'text' }, payload: {} }] },
+              blocks: { p: { text: 'one two' } }, inverse: [{ kind: 'text.delete', target: { bid: 'p', path: 'text' }, payload: {} }] },
         ] };
         posted.length = 0;
         post({ kind: 'history', history: w });

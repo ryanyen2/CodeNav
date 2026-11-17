@@ -9,7 +9,7 @@
  * Offsets are Unicode scalars, as everywhere the store counts, so the parsers
  * work on arrays of code points rather than on UTF-16 strings.
  */
-import type { Span } from './projection';
+import type { Layout, Span } from './projection';
 
 export interface BlockSpec {
     kind: string;
@@ -23,6 +23,19 @@ export interface BlockSpec {
 }
 
 const MAX_LEVEL = 6;
+
+/** Where a plugin block's `codoc:` fence carries its layout. */
+export const LAYOUT_KEY = '$layout';
+
+/** The layout a `codoc:` fence carries, as `doc.Layout.from_json` reads it, or
+ *  null when it has none or it is malformed. */
+export function fenceLayout(content: Record<string, unknown>): Layout | null {
+    const d = content[LAYOUT_KEY];
+    const text = d && typeof d === 'object' ? (d as Record<string, unknown>).text ?? [] : null;
+    if (!Array.isArray(text) || !text.every(f => typeof f === 'string')) return null;
+    const o = d as Record<string, unknown>;
+    return { text: [...new Set(text as string[])], flow: o.flow === undefined ? true : !!o.flow, export: o.export === undefined ? true : !!o.export };
+}
 const SOURCE = new Set(['table', 'diagram', 'code']);
 // `.` with the `s` flag matches what Python's `.` does on a line with no newline.
 const HEADING = /^(#{1,6}) (.*?)(?: \{#(b-[0-9a-f]+)\})?$/s;

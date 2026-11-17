@@ -29,6 +29,7 @@ import { newBatch, newCid } from '../calc/ids';
 import type { Ack, OpBody, Submission } from '../calc/projection';
 import { Recorder, reconcile } from '../calc/recorder';
 import type { Shadow } from '../calc/shadow';
+import type { CardFields } from './card';
 import { GESTURE_CIDS, RECORDED } from './commands';
 
 const SETTLE_MS = 350;
@@ -51,9 +52,11 @@ export class Outbox {
     readonly applied = new Set<string>();
 
     /** `onHoldChange` is told each block whose hold changed, so its paints can be redrawn. */
+    /** `cards` holds the field shadows of card blocks (card.ts), which an ack resolves too. */
     constructor(private readonly shadows: Map<string, Shadow>,
                 private readonly submit: (subs: Submission[]) => void,
-                private readonly onHoldChange: (bid: string) => void) {
+                private readonly onHoldChange: (bid: string) => void,
+                private readonly cards: CardFields = new Map()) {
         this.recorder = new Recorder(shadows, newCid);
     }
 
@@ -177,7 +180,11 @@ export class Outbox {
             }
             if (a.op && !a.conflict) {
                 this.applied.add(a.op);
-                for (const bid of waiting) { this.shadows.get(bid)?.resolve(a.cid, a.op); this.lastOp.set(bid, a.op); }
+                for (const bid of waiting) {
+                    this.shadows.get(bid)?.resolve(a.cid, a.op);
+                    for (const sh of this.cards.get(bid)?.shadows.values() ?? []) sh.resolve(a.cid, a.op);
+                    this.lastOp.set(bid, a.op);
+                }
             }
         }
         return refused;
