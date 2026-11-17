@@ -102,13 +102,20 @@ export function selectedBlocks(state: EditorState): Array<{ node: PMNode; pos: n
  * both are prose. A heading at either end is left alone when none of its
  * characters is selected and deleted when all of them are; a selection that
  * covers part of a heading is refused, because the rest of it could not join
- * anything. A prose or source block wholly selected at an end is deleted
- * when a block outside the selection is left to hold the caret, so a whole
- * feature selected to the end of its last paragraph goes without leaving an
- * empty paragraph to the feature above; partly selected, it loses the covered
- * text. With `landing` (typed or pasted text follows) the first end stays to
- * receive it. A selection that would take every block, or every feature, is
+ * anything. A selection that would take every block, or every feature, is
  * refused.
+ *
+ * The other ends depend on the gesture. A pure delete (`landing` false)
+ * deletes a prose or source end that is wholly selected when a block outside
+ * the selection is left, so a whole feature selected to the end of its last
+ * paragraph goes without leaving an empty paragraph to the feature above;
+ * partly selected, an end loses the covered text. When text follows (typing,
+ * paste, Enter, an IME composition) the text must land inside what was
+ * selected: a prose end is always kept, emptied of the covered text, and the
+ * caret goes into the first kept prose end, or the last; a wholly selected
+ * source end is deleted, so the text never lands in a code block or a table;
+ * a heading is never the landing place. When no prose end is kept, a new
+ * empty paragraph stands where the selection was.
  */
 export function deleteSelection(state: EditorState, env: Env, landing = false): Gesture | null {
     if (state.selection.empty) return null;
@@ -128,7 +135,8 @@ export function deleteSelection(state: EditorState, env: Env, landing = false): 
         else if (kind === 'heading') {
             if (covered && !whole) return refuse('a selection that covers part of a heading is not deleted; select the whole heading');
             fates.push(whole ? 'delete' : 'keep');
-        } else fates.push(whole && outside && !(landing && i === 0) ? 'delete' : 'cut');
+        } else if (landing) fates.push(SOURCE.has(kind) && whole ? 'delete' : 'cut');
+        else fates.push(whole && outside ? 'delete' : 'cut');
     }
     if (parts.length === 1 && !env.shadows.get(parts[0].node.attrs.bid as string)) return null;
     const gone = parts.filter((_p, i) => fates[i] === 'delete');
@@ -174,16 +182,24 @@ export function deleteSelection(state: EditorState, env: Env, landing = false): 
         ends.push(first.node.copy(first.node.content.cut(0, first.from).append(tail.node.content.cut(tail.to))));
         caret = 1 + first.from;
     } else {
-        if (fates[0] !== 'delete') {
-            ends.push(fates[0] === 'cut' ? cut(first) : first.node);
-            if (fates[0] === 'cut') caret = 1 + first.from;
+        const head = fates[0] === 'delete' ? null : fates[0] === 'cut' ? cut(first) : first.node;
+        const back = fates[last] === 'delete' ? null : fates[last] === 'cut' ? cut(tail) : tail.node;
+        const prose = (i: number, p: typeof first) => fates[i] === 'cut' && PROSE.has(kindOf(p.node));
+        let blank: PMNode | null = null;
+        if (landing && !prose(0, first) && !prose(last, tail)) {
+            // No prose end is kept: a new paragraph stands where the selection was.
+            const nb = env.nextBid();
+            const after = head ? first.node.attrs.bid as string : first.index > 0 ? state.doc.child(first.index - 1).attrs.bid as string : START;
+            ops.push({ kind: 'block.add', target: { bid: nb }, payload: { kind: 'paragraph', after } });
+            env.shadows.set(nb, new Shadow());
+            blank = state.schema.nodes.paragraph.create({ bid: nb, head: 0 });
         }
-        if (fates[last] !== 'delete') {
-            if (caret < 0) caret = (ends[0]?.nodeSize ?? 0) + 1;
-            ends.push(fates[last] === 'cut' ? cut(tail) : tail.node);
-        } else if (caret < 0 && ends.length) {
-            caret = ends[0].nodeSize - 1;          // the end of a heading left alone
-        }
+        for (const n of [head, blank, back]) if (n) ends.push(n);
+        const backStart = (head?.nodeSize ?? 0) + (blank?.nodeSize ?? 0);
+        if (landing) caret = prose(0, first) ? 1 + first.from : prose(last, tail) ? backStart + 1 : (head?.nodeSize ?? 0) + 1;
+        else if (fates[0] === 'cut') caret = 1 + first.from;
+        else if (back) caret = backStart + 1;
+        else if (head) caret = head.nodeSize - 1;          // the end of a heading left alone
     }
     const start = first.pos, end = tail.pos + tail.node.nodeSize;
     let tr = state.tr.replaceWith(start, end, ends);

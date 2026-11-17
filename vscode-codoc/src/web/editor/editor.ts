@@ -130,7 +130,8 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
                 settle();
                 const slice = (tr.steps[0] as ReplaceStep).slice;
                 const typed = slice.content.textBetween(0, slice.content.size, ' ');
-                const g = deleteSelection(view.state, env, !!typed);
+                // Typed text, or an IME composition whose first change only removes the selection.
+                const g = deleteSelection(view.state, env, !!typed || view.composing);
                 if (!g) return;
                 view.dispatch(g.tr);
                 if (typed) view.dispatch(view.state.tr.insertText(typed));

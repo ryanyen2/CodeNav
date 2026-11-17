@@ -35,10 +35,11 @@ export function gestureKeys(env: Env, openLink: () => boolean): Plugin[] {
         (state.selection.$from.depth === 1 ? kindOf(state.selection.$from.parent) : null);
 
     /** A selection across blocks is deleted as ops, or refused with a notice.
-     *  'none' when the selection is empty or inside one block. */
-    const cutAcross = (state: EditorState, view: EditorView): 'none' | 'done' | 'refused' => {
+     *  'none' when the selection is empty or inside one block. `landing`: a new
+     *  line follows, so the caret stays inside what was selected. */
+    const cutAcross = (state: EditorState, view: EditorView, landing = false): 'none' | 'done' | 'refused' => {
         if (state.selection.empty || selectedBlocks(state).length < 2) return 'none';
-        return run(view, deleteSelection(state, env)) ? 'done' : 'refused';
+        return run(view, deleteSelection(state, env, landing)) ? 'done' : 'refused';
     };
 
     /** At a block boundary that cannot merge, move the caret across it instead. */
@@ -57,7 +58,7 @@ export function gestureKeys(env: Env, openLink: () => boolean): Plugin[] {
     };
 
     const enter: Command = (state, _dispatch, view) => {
-        if (cutAcross(state, view!) === 'refused') return true;
+        if (cutAcross(state, view!, true) === 'refused') return true;
         state = view!.state;
         if (SOURCE.has(caretKind(state) ?? '')) { view!.dispatch(state.tr.insertText('\n')); return true; }
         if (!state.selection.empty) {

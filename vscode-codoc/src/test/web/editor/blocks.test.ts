@@ -541,4 +541,106 @@ describe('an IME composition', () => {
         expect(sent(m)).toEqual([{ kind: 'text.insert', target: { bid: 'p', path: 'text' }, payload: { after: ref, text: '你' } }]);
         expect(shadowFaults(m)).toEqual([]);
     });
+
+    it('over a selection across blocks lands the composed text inside what was selected', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one'), block('p2', 'paragraph', 'two'), block('u', 'heading', 'U')]);
+        // jsdom has no DOM selection for ProseMirror to keep, so the selection is set once composing.
+        m.view.dom.dispatchEvent(new window.CompositionEvent('compositionstart', { bubbles: true }));
+        select(m.view, posIn(m.view, 'p1', 0), posIn(m.view, 'p2', 3));
+        m.view.dispatch(m.view.state.tr.deleteSelection());           // the first DOM change only removes the selection
+        m.view.dispatch(m.view.state.tr.insertText('你'));
+        m.view.dom.dispatchEvent(new window.CompositionEvent('compositionend', { bubbles: true, data: '你' }));
+        m.handle.flush();
+        expect(texts(m.view.state.doc)).toEqual(['T', '你', 'U']);
+        expect(shadowFaults(m)).toEqual([]);
+    });
+});
+
+describe('text over a selection across blocks lands inside it', () => {
+    const featB = (tail: boolean, aBody = true) => [block('a', 'heading', 'A'), ...(aBody ? [block('p1', 'paragraph', 'one')] : []),
+        block('b', 'heading', 'B'), block('q1', 'paragraph', 'x'), block('q2', 'paragraph', 'y'), ...(tail ? [block('c', 'heading', 'C')] : [])];
+    const overB = (m: Mounted) => select(m.view, posIn(m.view, 'b', 0), posIn(m.view, 'q2', 1));
+
+    it('typed over a whole middle feature: in its emptied last paragraph', () => {
+        const m = mount(featB(true));
+        overB(m);
+        typeText(m.view, 'X');
+        expect(ids(m.view.state.doc)).toEqual(['heading:a', 'paragraph:p1', 'paragraph:q2', 'heading:c']);
+        expect(texts(m.view.state.doc)).toEqual(['A', 'one', 'X', 'C']);
+        expect(sent(m).map(o => o.kind)).toEqual(['text.delete', 'block.delete', 'text.insert']);
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it('typed over the whole last feature, or one after a feature with no body', () => {
+        for (const [doc, want] of [[featB(false), ['A', 'one', 'X']], [featB(true, false), ['A', 'X', 'C']]] as const) {
+            const m = mount([...doc]);
+            overB(m);
+            typeText(m.view, 'X');
+            expect(texts(m.view.state.doc)).toEqual(want);
+            expect(shadowFaults(m)).toEqual([]);
+        }
+    });
+
+    it('typed over the whole first feature', () => {
+        const m = mount([block('a', 'heading', 'A'), block('p1', 'paragraph', 'one'), block('b', 'heading', 'B'), block('q1', 'paragraph', 'x')]);
+        select(m.view, posIn(m.view, 'a', 0), posIn(m.view, 'p1', 3));
+        typeText(m.view, 'X');
+        expect(texts(m.view.state.doc)).toEqual(['X', 'B', 'x']);
+    });
+
+    it('typed from a heading\'s end: the heading keeps its title', () => {
+        const m = mount([block('a', 'heading', 'A'), block('p1', 'paragraph', 'one'), block('b', 'heading', 'B'), block('q1', 'paragraph', 'x')]);
+        select(m.view, posIn(m.view, 'a', 1), posIn(m.view, 'p1', 3));
+        typeText(m.view, 'X');
+        expect(texts(m.view.state.doc)).toEqual(['A', 'X', 'B', 'x']);
+    });
+
+    it('typed between two headings left alone: in a new paragraph where the selection was', () => {
+        const m = mount([block('a', 'heading', 'A'), block('p1', 'paragraph', 'one'), block('b', 'heading', 'B')]);
+        select(m.view, posIn(m.view, 'a', 1), posIn(m.view, 'b', 0));
+        typeText(m.view, 'X');
+        const nb = bidAt(m, 1);
+        expect(texts(m.view.state.doc)).toEqual(['A', 'X', 'B']);
+        expect(sent(m).slice(0, 2)).toEqual([{ kind: 'block.delete', target: { bid: 'p1' }, payload: { ids: ['p1'] } },
+                                              { kind: 'block.add', target: { bid: nb }, payload: { kind: 'paragraph', after: 'a' } }]);
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it('typed or pasted over a whole code block and a paragraph: never into the code block', () => {
+        const doc = () => [block('h', 'heading', 'H'), block('k', 'code', 'x = 1', 0), block('p1', 'paragraph', 'one'), block('u', 'heading', 'U')];
+        const m = mount(doc());
+        select(m.view, posIn(m.view, 'k', 0), posIn(m.view, 'p1', 3));
+        typeText(m.view, 'X');
+        expect(ids(m.view.state.doc)).toEqual(['heading:h', 'paragraph:p1', 'heading:u']);
+        expect(texts(m.view.state.doc)).toEqual(['H', 'X', 'U']);
+        const m2 = mount(doc());
+        select(m2.view, posIn(m2.view, 'k', 0), posIn(m2.view, 'p1', 3));
+        pasteText(m2, '- item\n- two');
+        expect(shape(m2.view.state.doc)).toEqual(['heading:1', 'bullet:1', 'bullet:1', 'heading:1']);
+        expect(texts(m2.view.state.doc)).toEqual(['H', 'item', 'two', 'U']);
+        expect(shadowFaults(m2)).toEqual([]);
+    });
+
+    it('pasted over a whole middle feature', () => {
+        const m = mount(featB(true));
+        overB(m);
+        pasteText(m, '## New\n\nbody text');
+        expect(texts(m.view.state.doc)).toEqual(['A', 'one', 'New', 'body text', 'C']);
+        expect(shape(m.view.state.doc)).toEqual(['heading:1', 'paragraph', 'heading:2', 'paragraph', 'heading:1']);
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it('Enter over whole paragraphs after a code block, or over a whole feature, splits inside the selection', () => {
+        const m = mount([block('h', 'heading', 'H'), block('k', 'code', 'x = 1', 0), block('p1', 'paragraph', 'one'),
+                         block('p2', 'paragraph', 'two'), block('u', 'heading', 'U')]);
+        select(m.view, posIn(m.view, 'p1', 0), posIn(m.view, 'p2', 3));
+        key(m.view, 'Enter', 13);
+        expect(texts(m.view.state.doc)).toEqual(['H', 'x = 1', '', '', 'U']);
+        expect(shadowFaults(m)).toEqual([]);
+        const m2 = mount(featB(true));
+        overB(m2);
+        key(m2.view, 'Enter', 13);
+        expect(texts(m2.view.state.doc)).toEqual(['A', 'one', '', '', 'C']);
+        expect(shadowFaults(m2)).toEqual([]);
+    });
 });
