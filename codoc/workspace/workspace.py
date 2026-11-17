@@ -300,25 +300,31 @@ class Workspace:
             out.refused.append(("", f"plan.open: {opened.conflict}"))
             return out
         out.plan, landed = pid, []
-        if bodies:
-            landed += self.submit(list(bodies), actor=actor, plan=pid, batch=pid, caused_by=caused_by)
-        for bid, path, new_md, base_text in rewrites:
-            block = self.store.blocks.get(bid)
-            if base_text is None:
-                base_text = block.text(path).live_text() if block is not None and is_text_field(block.kind, path) else ""
-            res, ops = self.ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, plan=pid,
-                                   batch=pid, caused_by=caused_by)
-            if res.refused:
-                out.refused.append((bid, res.refused))
-            landed += ops
-        if strikes:
-            landed += self.submit(strike_bodies(self.store, list(strikes), pid), actor=actor, plan=pid, batch=pid,
-                                  caused_by=caused_by)
+        try:
+            if bodies:
+                landed += self.submit(list(bodies), actor=actor, plan=pid, batch=pid, caused_by=caused_by)
+            for bid, path, new_md, base_text in rewrites:
+                block = self.store.blocks.get(bid)
+                if base_text is None:
+                    base_text = block.text(path).live_text() if block is not None and is_text_field(block.kind, path) else ""
+                res, ops = self.ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, plan=pid,
+                                       batch=pid, caused_by=caused_by)
+                if res.refused:
+                    out.refused.append((bid, res.refused))
+                landed += ops
+            if strikes:
+                landed += self.submit(strike_bodies(self.store, list(strikes), pid), actor=actor, plan=pid,
+                                      batch=pid, caused_by=caused_by)
+        finally:
+            # Whatever stopped it, a plan nothing landed under is taken back;
+            # a delete plan stays, since accepting it is the deletion.
+            if kind != "delete":
+                self._withdraw_if_empty(pid)
         out.refused += [(o.target.get("bid", ""), o.conflict) for o in landed if o.conflict]
-        out.ops = [opened] + [o for o in landed if not o.conflict]
-        if len(out.ops) == 1 and kind != "delete":
-            self._apply(self._mint(K.PLAN_REJECT, {"pid": pid}, {}, actor=actor, batch=pid))
-            out.plan, out.ops = None, []
+        if pid not in self.store.open_plans:
+            out.plan = None
+        else:
+            out.ops = [opened] + [o for o in landed if not o.conflict]
         return out
 
     def must_propose(self, bid: str, actor: str, res: Ingest) -> str | None:
@@ -515,7 +521,7 @@ class Workspace:
         if s.kind == "amend":
             # The amend decides its own plan, so no suggester plan is opened for it.
             p = s.payload
-            done = self.amend(str(p.get("fid") or ""), actor=actor, note=str(p.get("note") or ""), caused_by=s.caused_by,
+            done = self.amend(str(s.target.get("fid") or ""), actor=actor, note=str(p.get("note") or ""), caused_by=s.caused_by,
                               rewrites=[(r["bid"], r.get("path", "text"), r["new_md"], r.get("base_text"))
                                         for r in p.get("rewrites") or []],
                               bodies=p.get("bodies") or [], strikes=p.get("strikes") or [],
@@ -524,7 +530,7 @@ class Workspace:
                            (f"plan:{done.plan}" if done.plan else "trunk") if done.ops else "unchanged")
         if s.kind == "propose":
             p = s.payload
-            done = self.propose(actor=actor, kind=str(p.get("kind") or "edit"), target=p.get("target"), pid=p.get("pid"),
+            done = self.propose(actor=actor, kind=str(p.get("kind") or "edit"), target=p.get("target"), pid=s.target.get("pid"),
                                 note=str(p.get("note") or ""), build=bool(p.get("build")), caused_by=s.caused_by,
                                 bodies=p.get("bodies") or [], strikes=p.get("strikes") or [],
                                 rewrites=[(r["bid"], r.get("path", "text"), r["new_md"], r.get("base_text"))
@@ -623,22 +629,26 @@ def client_payload(store: Store, kind: str, payload: dict, actor: str = "", targ
 
 def _recorded_restore(store: Store, actor: str, target: dict, payload: dict) -> dict | None:
     """The ``text.mark`` payload that ``payload`` repeats (``chars`` aside)
-    from the recorded inverse of the latest applied mark op of that kind on
-    that field, when that op is ``actor``'s; else None. Only the latest: an
-    undo resent after someone else changed the mark restores nothing in the
-    placer's name."""
+    from the recorded inverse of one of ``actor``'s own mark ops on that field,
+    or None. Walking back from the newest op: the sender's own ops are passed
+    (an undo flushes several of them together), and the walk stops with None
+    at another actor's op that removed or added a mark of this placer (by its
+    op id): someone else changed this mark since, so an old undo restores
+    nothing in the placer's name."""
     def key(p: dict) -> str:
         return json.dumps({**p, "attrs": {k: v for k, v in (p.get("attrs") or {}).items() if k != "chars"}},
                           sort_keys=True)
-    field = (target.get("bid"), target.get("path", "text"))
+    field, placer, want = (target.get("bid"), target.get("path", "text")), payload.get("op"), key(payload)
     for o in reversed(store.ops):
-        if (o.kind == K.TEXT_MARK and o.conflict is None and o.payload.get("kind") == payload.get("kind")
-                and (o.target.get("bid"), o.target.get("path", "text")) == field):
-            if o.actor != actor:
-                return None
-            want = key(payload)
-            return next((b["payload"] for b in o.inverse
-                         if b.get("kind") == K.TEXT_MARK and key(b.get("payload") or {}) == want), None)
+        if o.kind != K.TEXT_MARK or o.conflict or (o.target.get("bid"), o.target.get("path", "text")) != field:
+            continue
+        if o.actor == actor:
+            got = next((b["payload"] for b in o.inverse
+                        if b.get("kind") == K.TEXT_MARK and key(b.get("payload") or {}) == want), None)
+            if got is not None:
+                return got
+        elif any(m.get("op") == placer for m in (o.payload.get("removed") or []) + (o.payload.get("added") or [])):
+            return None
     return None
 
 

@@ -291,7 +291,7 @@ def _write_plan(codoc_dir: str, store, changes: list[Change], *, note: str, caus
                                    for c in changes for r in c.rewrites],
                          strikes=[bid for c in changes for bid in c.strikes], caused_by=caused_by, root_dir=root_dir)
     if got["status"] == "unchanged":
-        return _err("nothing was written: " + ("; ".join(got["refused"]) or "the text already says that"))
+        return _err("nothing was written: " + ("; ".join(got["refused"]) or "no block would change"))
     out = {"ok": True, "plan_id": pid, "ops": len(got["ops"]),
            "note": "The person accepts or rejects this plan in the editor. "
                    + ("Accepting it deletes the feature; removing its code is a separate hand-off."

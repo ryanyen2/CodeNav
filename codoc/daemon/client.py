@@ -225,30 +225,35 @@ def ingest(codoc_dir: str | Path, *, client: str, bid: str, path: str, base_text
     return {"refused": a["conflict"], "ops": a["ops"], "status": a["status"]}
 
 
-def propose(codoc_dir: str | Path, *, client: str, pid: str, kind: str, target: str | None, note: str, build: bool,
-             bodies: list[dict], rewrites: list[dict], strikes: list[str], caused_by: str | None = None,
-             root_dir: str | None = None, wait_s: float = 10.0) -> dict:
-    """A machine's proposal as one plan, decided whole in the applier
-    (``Workspace.propose``): a plan that nothing landed under is taken back
-    there, whether or not the ack arrives in time. ``rewrites`` are
-    ``{bid, path, new_md, base_text}``. Returns ``{"status", "refused", "ops"}``;
-    ``status`` is ``plan:<id>``, ``unchanged``, or None when no ack arrived."""
-    sub = Submission(cid=_cid(client), kind="propose", target={"fid": target or ""}, caused_by=caused_by, payload={
-        "pid": pid, "kind": kind, "target": target, "note": note, "build": build, "bodies": bodies, "rewrites": rewrites,
-        "strikes": strikes})
+def _decide(codoc_dir: str | Path, client: str, kind: str, target: dict, payload: dict, caused_by: str | None,
+            root_dir: str | None, wait_s: float) -> dict:
+    """Send one submission the applier decides whole (``amend``, ``propose``).
+    Returns ``{"status", "refused", "ops"}``; ``status`` is ``plan:<id>``,
+    ``trunk``, ``unchanged``, or None when no ack arrived within ``wait_s``."""
+    sub = Submission(cid=_cid(client), kind=kind, target=target, caused_by=caused_by, payload=payload)
     a = _send(Path(codoc_dir), client, [sub], root_dir, wait_s)[0]
     return {"status": a["status"], "refused": [a["conflict"]] if a["conflict"] else [], "ops": a["ops"]}
+
+
+def propose(codoc_dir: str | Path, *, client: str, pid: str, kind: str, target: str | None, note: str, build: bool,
+            bodies: list[dict], rewrites: list[dict], strikes: list[str], caused_by: str | None = None,
+            root_dir: str | None = None, wait_s: float = 10.0) -> dict:
+    """A machine's proposal as plan ``pid``, decided whole in the applier
+    (``Workspace.propose``): a plan nothing landed under is taken back there,
+    whether or not the ack arrives in time. ``rewrites`` are
+    ``{bid, path, new_md, base_text}``."""
+    return _decide(codoc_dir, client, "propose", {"pid": pid}, {
+        "kind": kind, "target": target, "note": note, "build": build, "bodies": bodies, "rewrites": rewrites,
+        "strikes": strikes}, caused_by, root_dir, wait_s)
 
 
 def amend(codoc_dir: str | Path, *, client: str, fid: str, rewrites: list[dict], bodies: list[dict] | None = None,
           strikes: list[str] | None = None, structural: bool = False, note: str = "", caused_by: str | None = None,
           root_dir: str | None = None, wait_s: float = 10.0) -> dict:
-    """A machine's repair of one feature, decided once in the applier
-    (``Workspace.amend``). ``rewrites`` are ``{bid, path, new_md, base_text}``.
-    Returns ``{"status", "refused", "ops"}``; ``status`` is ``plan:<id>``,
-    ``trunk``, ``unchanged``, or None when no ack arrived within ``wait_s``."""
-    sub = Submission(cid=_cid(client), kind="amend", target={"fid": fid}, caused_by=caused_by, payload={
-        "fid": fid, "rewrites": rewrites, "bodies": bodies or [], "strikes": strikes or [],
-        "structural": structural, "note": note})
-    a = _send(Path(codoc_dir), client, [sub], root_dir, wait_s)[0]
-    return {"status": a["status"], "refused": [a["conflict"]] if a["conflict"] else [], "ops": a["ops"]}
+    """A machine's repair of feature ``fid``, decided once in the applier
+    (``Workspace.amend``). ``rewrites`` are ``{bid, path, new_md, base_text}``."""
+    return _decide(codoc_dir, client, "amend", {"fid": fid}, {
+        "rewrites": rewrites, "bodies": bodies or [], "strikes": strikes or [], "structural": structural,
+        "note": note}, caused_by, root_dir, wait_s)
+
+

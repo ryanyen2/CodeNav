@@ -504,8 +504,8 @@ def test_a_proposal_is_decided_whole_by_the_applier(tmp_path):
 
     def propose(pid: str, text: str):
         return ws.apply_submissions("mcp", "agent:claude-code", [Submission(
-            cid=pid, kind="propose", target={"fid": "h1"}, payload={
-                "pid": pid, "kind": "edit", "target": "h1", "note": "", "build": True,
+            cid=pid, kind="propose", target={"pid": pid}, payload={
+                "kind": "edit", "target": "h1", "note": "", "build": True,
                 "rewrites": [{"bid": "p1", "new_md": text}]})])[0]
 
     same = propose("p-same", T(ws.store, "p1"))

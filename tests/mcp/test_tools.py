@@ -184,7 +184,7 @@ def test_a_proposal_that_writes_nothing_says_so_and_leaves_no_plan(tmp_path):
                                                 "blocks": [{"id": "p1", "text": text}]}], root_dir=str(tmp_path))
 
         unchanged = reword(T(ws.store, "p1"))
-        assert not unchanged["ok"] and "already says that" in unchanged["error"]
+        assert not unchanged["ok"] and "no block would change" in unchanged["error"]
         assert reword("Retries twice.")["ok"]
         second = reword("Retries three times.")
         assert not second["ok"] and "open_plan" in second["error"]
