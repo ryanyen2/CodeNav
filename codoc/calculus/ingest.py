@@ -25,7 +25,7 @@ becomes ops here, two ways:
    characters the new text still marks the same way is kept; where the new
    extent differs, the mark is widened by an ``on`` over the new span (bold
    merges; a link or cite displaces and the inverse restores) and shrunk by an
-   ``off`` over the surviving characters the new text no longer marks. A bold
+   ``off`` over the surviving characters the new text does not mark. A bold
    whose end an insert lands on would grow over the insert (I2's one growing
    kind), and any mark swallows an insert anchored inside it; when the new
    text does not mark those words, an ``off`` over them follows the insert. A
@@ -161,7 +161,7 @@ def ingest(text: Text, *, bid: str, path: str, base_text: str, new_md: str, acto
         res.bodies.append({"kind": K.TEXT_MARK, "target": target,
                            "payload": {"kind": kind, "attrs": dict(attrs), "start": start, "end": end, "on": on}})
 
-    # Shrink: surviving characters the new text no longer marks this way.
+    # Shrink: surviving characters the new text does not mark this way.
     for m, offs in existing:
         covered = cover.get(_key(m.kind, m.attrs), set())
         for lo, hi in _runs(o for o in offs if o not in covered):

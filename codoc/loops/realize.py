@@ -85,7 +85,7 @@ def write_queue(codoc_dir: str | Path, store: Store, root_dir: str = ".", doc_la
 def settle(ws: Workspace, res, *, sha: str = "", files: list[str] | None = None, summary: str = "") -> list[Op]:
     """Record ``feature.realized`` for each feature whose latest hand-off the
     reflect pass ``res`` cited, when a binding op since that hand-off cites it
-    (the agent's own ``codoc_reflect`` attach or this pass's) — or, for a
+    (the agent's own ``codoc_reflect`` attach or this pass's); for a
     phantom, when the pass saw its code go."""
     out = []
     store = ws.store
@@ -171,7 +171,7 @@ def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[
     """What this feature's kind blocks put in front of the agent: every
     in-flow block's ``consult``, then the directive each block's
     ``lower`` codec derives from what changed since the last realization. An
-    out-of-flow block (a comment) is not prose the agent reads — only a
+    out-of-flow block (a comment) is not prose the agent reads, only a
     request, which its own codec words."""
     reads: list[str] = []
     asks: list[str] = []
@@ -203,7 +203,7 @@ def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[
 def _at_realized(store: Store, text: Text, realized: dict) -> Text:
     """The field without what the AUTHOR changed since the last realization:
     their characters are not there yet and their kills have not happened. By
-    identity, no diff. Only the author's, because `lower` speaks for them — a
+    identity, no diff. Only the author's, because `lower` speaks for them. A
     diagram the loop lifted from the code is already in the code, and telling
     the agent "the author drew that edge" about it contradicts the `consult`
     line beside it."""
@@ -233,7 +233,7 @@ def _human_changes(store: Store, fid: str, w: Watermarks) -> list[str]:
     """What the person did that the code has not answered, as the directive
     says it. Read from the TEXT, never from the ops: a segment carries who
     minted it and now who killed it, so a fold that takes the ops away leaves
-    the request intact — which matters because the hand-off that renders it is
+    the request intact. That matters because the hand-off that renders it is
     usually given after the fold, and nothing at fold time could know."""
     out = []
     for c in ink(store, fid):
@@ -257,7 +257,7 @@ def _focus(store: Store, fid: str, w: Watermarks) -> list[str]:
     ``Focus:`` lines.
 
     A mark carries its own actor and placing op, so this reads the MARKS, not
-    the ops that placed them: a mark since turned off is simply not here to
+    the ops that placed them: a mark since turned off is not here to
     find, and a fold that takes the ops away leaves the focus intact."""
     out: list[str] = []
     for b in prose_blocks(store, fid):

@@ -17,7 +17,7 @@ Schema (version 1)::
       "version": 1,
       "id": "ask-<ns>",
       "question": "why is de-hyphenation skipped inside a quote?",
-      "answer": "It is not skipped — quotes are de-hyphenated with everything else, …",
+      "answer": "It is not skipped: quotes are de-hyphenated with everything else, …",
       "at": "<iso>",
       "steps": [
         {
@@ -52,7 +52,7 @@ from codoc.workspace.layout import ASK, locked, read_json, write_json
 ASK_VERSION = 1
 
 # A walkthrough is a reading path, not a report. Past ~a dozen stops nobody
-# follows it in order, and the numbering stops being the point — so the tool
+# follows it in order and the numbering stops helping, so the tool
 # truncates and says so rather than rendering a wall of chips.
 MAX_STEPS = 12
 
@@ -133,8 +133,8 @@ def _clip(text: str, limit: int) -> str:
     """Collapse whitespace and cut to *limit* on a word boundary where possible.
 
     Prose arrives from an LLM, so it may be a paragraph where a phrase was asked
-    for. Truncating in the writer (rather than in CSS) keeps the file honest
-    about what the overlay will actually show.
+    for. Truncating in the writer (rather than in CSS) keeps the file's text
+    the same as what the overlay shows.
     """
     s = " ".join((text or "").split())
     if len(s) <= limit:
@@ -150,11 +150,11 @@ def label_steps(steps: list[AskStep]) -> list[AskStep]:
     """Assign ``label`` in place and return *steps*.
 
     Grouped: a new group STRING starts a new number, and each step inside it gets
-    the next letter — ``1a 1b / 2a``. The group changing back to an earlier name
+    the next letter: ``1a 1b / 2a``. The group changing back to an earlier name
     starts a fresh number, because a procedure that returns to a stage visits it
     again rather than rejoining the first visit.
 
-    Ungrouped (no step carries a group): plain ordinals — ``1 2 3``.
+    Ungrouped (no step carries a group): plain ordinals: ``1 2 3``.
     """
     grouped = any(s.group for s in steps)
     if not grouped:
@@ -183,7 +183,7 @@ def build_walkthrough(question: str, answer: str, steps: list[AskStep]) -> Walkt
         s.note = _clip(s.note, MAX_NOTE_CHARS)
         s.group = _clip(s.group, MAX_GROUP_CHARS)
         # The quote is matched verbatim against the description, so it is NOT
-        # whitespace-collapsed here — only bounded, and only at a length no real
+        # whitespace-collapsed here. It is only bounded, at a length no real
         # highlight needs.
         s.quote = (s.quote or "").strip()[:280]
     label_steps(kept)

@@ -71,7 +71,7 @@ def compute_changeset(
     """Diff the index before/after an incremental update; return the change set.
 
     ``file_scope`` restricts comparison to a set of repo-relative files (a watch
-    cycle reports exactly which files changed) — the index update is still global
+    cycle reports exactly which files changed). The index update is still global
     but cheap thanks to cocoindex per-file memoization. The scope is pushed down
     to LanceDB (``files=``) so a scoped pass reads only the touched files' rows.
     ``rows`` (the graph's symbol table) still spans the whole index, but

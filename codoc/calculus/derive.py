@@ -380,7 +380,7 @@ def phase(store: Store, fid: str, realizing: set[str] = frozenset()) -> str:
 
 
 def reads_its_ops(store: Store, fid: str) -> bool:
-    """Whether a view still reads this feature's OPS and not just its state —
+    """Whether a view still reads this feature's OPS and not only its state,
     which is what a snapshot may not fold away.
 
     One does: an open plan's verdict undoes the plan's own ops by identity, so
@@ -423,7 +423,7 @@ def _drifted(store: Store, fid: str) -> bool:
     """Bound code moved and nobody has looked at the prose since.
 
     Three clocks, all on state: when the code under this feature last moved
-    (`bind.refresh` or `bind.detach` — an `attach` is a relocation, not drift),
+    (`bind.refresh` or `bind.detach`; an `attach` is a relocation, not drift),
     when anybody last touched the prose, and when a realization last settled
     it."""
     w = store.watermarks(fid)
@@ -437,8 +437,8 @@ def _drifted(store: Store, fid: str) -> bool:
 def history(store: Store, fid: str) -> list[Op]:
     """Every op recorded against the heading or a block it currently
     dominates, oldest first, conflicted ones included (their ``conflict`` says
-    why they did nothing). Ops on blocks it dominated at the time but no longer
-    does are omitted."""
+    why they did nothing). Ops on blocks it dominated at the time but does not
+    dominate now are omitted."""
     return store.ops_on(_body_ids(store, fid))
 
 

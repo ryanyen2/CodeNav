@@ -125,7 +125,7 @@ def _extract_chunks_recursive(
     children = node.children
 
     for child in children:
-        # decorated_definition wraps the real function/class — peel it.
+        # decorated_definition wraps the real function/class; peel it.
         is_decorated = child.type == "decorated_definition"
         if is_decorated:
             effective_type = "decorated_definition"
@@ -323,7 +323,7 @@ class PythonAdapter:
                             end_byte=child.end_byte,
                         ))
                     elif child.type == "aliased_import":
-                        # import x as y  — record the original name
+                        # import x as y: record the original name
                         orig = next(
                             (c for c in child.children if c.type == "dotted_name"), None
                         )

@@ -1,5 +1,5 @@
 /**
- * projection.ts — the daemon's `projection.json`, typed, the op bodies the
+ * projection.ts: the daemon's `projection.json`, typed, the op bodies the
  * editor sends back, and the block kinds (docs/model.md, "Block kinds").
  *
  * Nothing here touches the DOM or ProseMirror. The projection is the truth for

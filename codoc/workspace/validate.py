@@ -15,13 +15,13 @@ Four refusals, and nothing else:
 - an op in a session file carrying a field only a snapshot writes
   (`ops.SNAPSHOT_ONLY`), which would let it claim another actor's words;
 - a **snapshot** file, which claims a whole state rather than a sequence of ops
-  and can only honestly be written by the workspace folding its own log;
+  and is legitimate only when the workspace wrote it by folding its own log;
 - a stamp **far ahead of wall time**, which would drag every clock that
   observes it into the future and order real work behind it.
 
-Everything else a log can be wrong about — a torn tail, an out-of-sequence id,
-an unreadable line — `log.read_session` already reports and the rebuild already
-skips the file whole; those are reported here too, under the same eye.
+Everything else a log can be wrong about (a torn tail, an out-of-sequence id,
+an unreadable line) `log.read_session` already reports and the rebuild already
+skips the file whole; those are reported here too.
 
 These checks are for a *foreign* log. A log this workspace wrote went through
 the applier, where the same table already answered.
@@ -115,7 +115,7 @@ def refused_verdicts(store: Store, roles: Roles) -> dict[str, int]:
 def _policy_view(store: Store | None, ops: list[Op]) -> Store:
     """A store the policy can answer from.
 
-    It reads the PLANS — which is nearly all of it, and deliberately so: a
+    It reads the PLANS, which is nearly all of it, on purpose: a
     policy that needs the whole document is one this door cannot evaluate. The
     exception is a comment, where "is this thread yours" is who added the
     block, so the blocks these files add and the workspace's own come too.

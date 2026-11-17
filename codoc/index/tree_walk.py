@@ -1,9 +1,9 @@
 """One tree-sitter walk over a chunk that yields its two identity hashes.
 
 ``walk`` returns a ``WalkResult`` with:
-  tokens_hash   — SHA-256 of the whitespace-normalized token stream, comments
+  tokens_hash:    SHA-256 of the whitespace-normalized token stream, comments
                   stripped: the chunk's content, wherever it sits.
-  types_hash    — SHA-256 of the node-type sequence: the chunk's shape, whatever
+  types_hash:     SHA-256 of the node-type sequence: the chunk's shape, whatever
                   its identifiers are called.
 """
 from __future__ import annotations

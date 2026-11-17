@@ -2,7 +2,7 @@
 op, the text of every block it touched as it read right after the op, and
 each touched block's text as it read before the window. Derived by
 un-applying the window backwards on clones of the live fields, so the
-reconstruction is exact — a fuzz checks it against a prefix replay — and the
+reconstruction is exact (a fuzz test checks it against a prefix replay) and the
 editor's scrubber never pushes old prose through the recorder. Each entry
 carries the op's recorded inverse, which is what undo submits.
 
@@ -15,15 +15,15 @@ state they are in is the one this op left.
 
 A block born inside the window is absent from ``before`` and named in ``born``,
 so a reader never shows it before it existed. Three more facts are folded
-forward by the reader the same way ``before`` is — the window says what was
-true entering it and what each op changed:
+forward by the reader the same way ``before`` is. For each, the window says
+what was true entering it and what each op changed:
 
 - ``dead`` and each entry's ``live``: which blocks were not on the page. A
   reader without this shows a deleted paragraph on every page after its
   deletion, and a merged-away one as an empty phantom, because their text is
   still in the store.
 - ``ranks``: per block, the rank it held ENTERING the window, folded back from
-  each op that displaced one — a move, or a verdict that undid one, including a
+  each op that displaced one: a move, or a verdict that undid one, including a
   ``plan.reopen``, which applies the verdict's own record and so reports what
   it displaced separately (``undid``). Each ENTRY's ``ranks`` is the same kind
   of row for that op alone, read forward like its ``blocks``: what the page
@@ -204,8 +204,8 @@ def history_window(store: Store, limit: int = 200) -> dict:
     return {"start": (store.position[ops[0].id] if ops else store.pos), "head": store.pos, "before": before,
             "born": sorted(born), "dead": sorted(dead & named),
             "ranks": {b: r for b, r in rank.items() if b in named},
-            # A block the window names but the projection does not — one deleted
-            # inside it, or one whose kind has changed since — has nowhere else
+            # A block the window names but the projection does not (one deleted
+            # inside it, or one whose kind has changed since) has nowhere else
             # to say what it was. Folded forward like the ranks.
             "shape": {b: shape[b] for b in sorted(named) if b in shape},
             "ops": entries}
@@ -238,7 +238,7 @@ def _displaced(o: Op) -> dict:
 
 
 def _shape_rows(o: Op) -> list[tuple[str, dict]]:
-    """(block, what its kind and level were before this op). Only ``block.set``
+    """(block, what its kind and level were before ``o``). Only ``block.set``
     and a verdict undoing one change either."""
     p = o.payload
     if o.kind == K.BLOCK_SET and o.target.get("path") == "kind":
@@ -257,7 +257,7 @@ def _shape_rows(o: Op) -> list[tuple[str, dict]]:
 
 
 def _rank_rows(o: Op) -> list[tuple[str, str]]:
-    """(block, the rank it held before this op). A move records what it
+    """(block, the rank it held before ``o``). A move records what it
     displaced as ``prev`` (or, when it is itself a restore, in its inverse); a
     verdict that undoes a planned move records the same thing as ``moved``,
     and a page before it is in the order it undid."""

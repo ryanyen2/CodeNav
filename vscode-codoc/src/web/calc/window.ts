@@ -1,5 +1,5 @@
 /**
- * window.ts — the timeline window as the daemon publishes it (`history.json`),
+ * window.ts: the timeline window as the daemon publishes it (`history.json`),
  * and two pure readers over it: which batch undo or redo should invert next,
  * and what every block said at a position in the window (docs/model.md,
  * "Views", `history_window`).
@@ -46,7 +46,7 @@ export interface HistoryWindow {
      *  the order it had rather than today's. */
     ranks?: Record<string, string>;
     /** Kind and level per block the window names, entering it, so a heading
-     *  deleted inside the window — or since turned into a paragraph — is still
+     *  deleted inside the window (or since turned into a paragraph) is still
      *  drawn as a heading on the pages before that happened. */
     shape?: Record<string, { kind: string; level: number }>;
     ops: WindowEntry[];
@@ -54,7 +54,7 @@ export interface HistoryWindow {
 
 /** The shape of the page at window position `pos`: which blocks were not on it,
  *  and the rank each one had. Both are folded forward from what the window says
- *  entering it, the way `before` is — a deleted paragraph keeps its words in the
+ *  entering it, the way `before` is. A deleted paragraph keeps its words in the
  *  store, so without this it reads as present on every page after its deletion,
  *  and a merged-away one as an empty phantom. */
 export function shapeAt(w: HistoryWindow, pos: number): {

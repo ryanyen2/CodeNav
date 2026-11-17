@@ -1,5 +1,5 @@
 /**
- * recorder.ts — ProseMirror steps → op bodies.
+ * recorder.ts: ProseMirror steps → op bodies.
  *
  * Given the document a transaction started from, its steps, and the shadows
  * of the blocks it touches, produce the ops the calculus needs and advance the

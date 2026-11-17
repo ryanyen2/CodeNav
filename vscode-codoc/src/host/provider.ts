@@ -1,5 +1,5 @@
 /**
- * provider.ts — the extension-host half of the `Codoc Tree` custom editor.
+ * provider.ts: the extension-host half of the `Codoc Tree` custom editor.
  *
  * It relays files and nothing else. It posts `projection.json` and
  * `status.json` to the page when they change, appends the page's submissions
@@ -140,7 +140,7 @@ async function sizeOf(p: string): Promise<number> {
     try { return (await fsp.stat(p)).size; } catch { return 0; }
 }
 
-/** The complete lines of `p` from byte `offset` on, and the offset just past them. */
+/** The complete lines of `p` from byte `offset` on, and the offset past their end. */
 async function readFrom(p: string, offset: number): Promise<{ lines: string[]; end: number }> {
     try {
         const fh = await fsp.open(p, 'r');

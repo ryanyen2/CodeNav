@@ -1,5 +1,5 @@
 /**
- * menus.ts — the `/` block menu, the `@` citation picker, and the link field.
+ * menus.ts: the `/` block menu, the `@` citation picker, and the link field.
  *
  * The menus are one popup: a trigger character typed into a textblock opens a
  * list under the caret, the characters typed after it filter the list, and

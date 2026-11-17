@@ -10,8 +10,8 @@ for the life of the process, so a long-lived writer (the MCP server) writes one
 session log rather than one per call. A daemon that appears later takes over
 at the next call, and the held workspace is closed.
 
-Two daemonless writers are not forbidden — the MCP server holds its workspace
-while the person runs `codoc accept` — so ``applying()`` wraps apply-and-publish
+Two daemonless writers are allowed (the MCP server holds its workspace while
+the person runs `codoc accept`), so ``applying()`` wraps apply-and-publish
 in an exclusive lock, and both writes AND reads rebuild when the log grew by a
 hand that is not ours since our last turn. Without the lock each held a store
 the other had moved on from and the derived files described whichever published
@@ -174,7 +174,7 @@ def wait_for_acks(codoc_dir: Path, client: str, cids: list[str], wait_s: float) 
 
 def read(codoc_dir: str | Path) -> Workspace:
     """A workspace to read from: this process's own when it is the applier
-    (so a read sees what it just wrote, caught up with anybody else's writes),
+    (so a read sees its own writes, caught up with anybody else's),
     else the logs replayed read-only."""
     codoc_dir = Path(codoc_dir)
     held = _OWNED.get(codoc_dir)

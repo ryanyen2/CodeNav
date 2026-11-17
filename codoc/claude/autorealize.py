@@ -85,7 +85,7 @@ def spawn_realize(root_dir: str, codoc_dir: str, *, engine: str = "auto") -> sub
         detail = "implementing (headless) — codoc watch --auto-realize"
     try:
         write_realizing(codoc_dir, detail=detail, owner=owner)
-    except Exception:  # noqa: BLE001 — status is advisory
+    except Exception:  # noqa: BLE001 (status is advisory)
         pass
     return proc
 

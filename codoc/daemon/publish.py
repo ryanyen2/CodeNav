@@ -190,7 +190,7 @@ def renew_realizing(codoc_dir: str | Path) -> bool:
 def write_status(codoc_dir: str | Path, store: Store, *, phases: dict[str, str] | None = None,
                  realizing: bool | None = None, detail: str = "") -> dict:
     """Derive the workspace state and write it. A fresh realizing lease is
-    preserved untouched (a rewrite would renew the lease it just checked)."""
+    preserved untouched (rewriting it would renew a lease this call only checked)."""
     path = Path(codoc_dir) / STATUS
     if realizing is None:
         if realizing_is_fresh(codoc_dir):

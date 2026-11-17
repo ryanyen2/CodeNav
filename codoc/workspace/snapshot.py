@@ -7,7 +7,7 @@ live or dead (a dead one carries the op that killed it, so an undo from a
 branch forked before the fold still finds it), with its full Text (segments,
 actors, clocks, marks) as ``texts``; one ``bind.attach`` per binding; one
 ``plan.open`` per plan with its status restored by a verdict; one
-``feature.handoff`` — with the words the person asked for — and one
+``feature.handoff`` (with the words the person asked for) and one
 ``feature.realized`` per watermark.
 
 **The fold stops at the first op of open work.** A verdict on an open plan
@@ -53,8 +53,8 @@ def settled_prefix(store: Store) -> int:
     A feature with no proposal open on it is finished: its ops are history and
     the state they produced is enough, because every other reader reads state
     (``derive.reads_its_ops`` says which and why). Stopping at the oldest op of
-    any feature that is NOT is conservative, not exact — the cut lands at that
-    feature's creation rather than at the oldest op its verdict will need — and
+    any feature that is NOT is conservative, not exact (the cut lands at that
+    feature's creation rather than at the oldest op its verdict will need), and
     it is linear, where replaying forward to test each prefix would be
     quadratic. An exact cut would be worth having only if a tree commonly had
     an old open plan and much newer work; it does not.
@@ -161,7 +161,7 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
                  actor=asked.actor if asked is not None else SNAPSHOT_ACTOR)
         if w.realized:
             # A realization settles a request, so there has to be one to settle
-            # or `nothing_queued` refuses it — and a person may undo a hand-off
+            # or `nothing_queued` refuses it, and a person may undo a hand-off
             # that was already realized, which leaves exactly that pair.
             if not w.handoff:
                 emit(K.FEATURE_HANDOFF, {"fid": fid}, {"covers": w.realized})
@@ -198,7 +198,7 @@ def write_snapshot(codoc_dir: str | Path, store: Store, clock: Clock, *, node: s
     # Only a file the fold covers WHOLE and whose writer has CLOSED: one that
     # also holds ops after the cut is still the log (and the frontier keeps its
     # folded half from applying twice), and one still open belongs to a live
-    # applier — moving it would send that applier's next op to `log/archive/`,
+    # applier: moving it would send that applier's next op to `log/archive/`,
     # which no rebuild reads.
     for old in L.list_sessions(codoc_dir):
         sess = L.read_session(old)

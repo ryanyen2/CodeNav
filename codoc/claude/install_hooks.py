@@ -174,10 +174,10 @@ def install_hooks(root_dir: str) -> list[str]:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(cmd.read_text(encoding="utf-8"), encoding="utf-8")
             # `codoc/plan.md` is the namespaced `/codoc:plan`; a command at the
-            # top level would just be `/plan`.
+            # top level would be plain `/plan`.
             parts = list(rel.parts)
             installed_cmds.append("/" + ":".join(parts[:-1] + [rel.stem]))
-        # Drop previously-installed codoc commands the plugin no longer ships.
+        # Drop installed codoc commands that the plugin does not ship.
         dest_ns = cmd_dest_dir / "codoc"
         if dest_ns.is_dir():
             shipped = {p.name for p in (cmd_src_dir / "codoc").glob("*.md")}

@@ -1,5 +1,5 @@
 /**
- * schema.ts — the document vocabulary of the editor.
+ * schema.ts: the document vocabulary of the editor.
  *
  *   doc    := (heading | paragraph | bullet | numbered | source | kindBlock)+
  *   inline := text

@@ -7,7 +7,7 @@ hand-off has no pull request yet, is realized **off the live tree** on its own
 git worktree and branch, by an agent under the enforced sandbox
 (`realize_agent`: no shell, edits confined to the feature's bound files,
 secrets unreadable, GitHub tokens scrubbed from its environment), and only the
-orchestrator — which holds the token — opens the PR.
+orchestrator, which holds the token, opens the PR.
 
 Nothing is written to the store here. A directive is realized when the code
 lands and a reflect pass under a closed session says so (`loops.realize.settle`),
@@ -121,7 +121,7 @@ def realize_one(req: Request, worktree: str, *, run, agent, base: str = "main", 
         # The branch may be there already: a hub killed between the agent's
         # commit and the ledger write left the work on it and no record of it.
         # Building again would spend another model session on the same request
-        # and, worse, `_cleanup` would delete the commit first — this pass is
+        # and, worse, `_cleanup` would delete the commit first: this pass is
         # classed not-built, so it does not keep the branch. The branch existing
         # IS the record: resume at the push.
         if run(["git", "rev-parse", "--verify", f"refs/heads/{branch}"], cwd=root) == 0:
@@ -186,7 +186,7 @@ def process_ready(root_dir: str, codoc_dir: str, *, base: str = "main", run=_run
         tried = _attempts(ledger.get(req.handoff, ""))
         try:
             res = realize_one(req, worktree, run=run, agent=agent, base=base, root=root_dir, resume=tried > 0)
-        except Exception as exc:  # noqa: BLE001 — one bad request never wedges the loop
+        except Exception as exc:  # noqa: BLE001 (one bad request never wedges the loop)
             printer(f"  ⚠ hub realize {req.fid} failed: {exc}")
             _cleanup(worktree, branch_name(req.handoff), run, root_dir)
             continue
@@ -208,8 +208,8 @@ def process_ready(root_dir: str, codoc_dir: str, *, base: str = "main", run=_run
             # git or gh failed, or the sandbox could not run: the request was
             # never answered, so the next interval tries again rather than
             # burying it in the ledger. When the agent's work is already
-            # committed, the branch stays and the retry starts at the push —
-            # asking the model again would spend another session on the same
+            # committed, the branch stays and the retry starts at the push.
+            # Asking the model again would spend another session on the same
             # request.
             printer(f"  ⚠ hub realize {req.fid}: {res.reason}; will retry")
             if res.built:
@@ -243,7 +243,7 @@ def _cleanup(worktree: str, branch: str, run, root: str | None = None, *, keep_b
     for argv in argvs:
         try:
             run(argv, cwd=root)
-        except Exception:  # noqa: BLE001 — best effort
+        except Exception:  # noqa: BLE001 (best effort)
             pass
 
 
@@ -261,8 +261,8 @@ class Worker:
         while not self._stop.is_set():
             try:
                 # Replaying the log to find nothing is the common case, and the
-                # published head says when there is nothing to find — but a
-                # transient failure left a request unanswered, and that one is
+                # published head says when there is nothing to find. But a
+                # request that a transient failure left unanswered is
                 # retried whether or not anybody has edited the tree since
                 # (`docs/serve-deployment.md`: "a git or gh failure is not a
                 # refusal and is retried").
@@ -272,7 +272,7 @@ class Worker:
                     again: list[str] = []
                     process_ready(self.root_dir, self.codoc_dir, base=self.base, printer=self.printer, retry=again)
                     self._unanswered = bool(again)
-            except Exception as exc:  # noqa: BLE001 — the worker thread never dies
+            except Exception as exc:  # noqa: BLE001 (the worker thread never dies)
                 self.printer(f"  ⚠ hub realize worker: {exc}")
             self._stop.wait(self.interval)
 

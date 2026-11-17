@@ -78,8 +78,8 @@ class Workspace:
         if len(snaps) > 1:
             # Two clones each folded and the merge brought both. Only one state
             # can be the state, and the other's log is in `log/archive/`, which
-            # nothing reads — so say so, and read the archive, rather than
-            # losing a feature quietly. Fold once, on one branch.
+            # nothing reads. So report it and read the archive, rather than
+            # lose a feature with no message. Fold once, on one branch.
             self.problems.append(L.LogProblem(str(snaps[-1]), 1, (
                 f"{len(snaps)} snapshots: {', '.join(p.name for p in snaps[:-1])} was folded by another clone; "
                 "replaying its archived log. Re-fold once, on one branch.")))
@@ -97,7 +97,7 @@ class Workspace:
                 # The folded ops ARE in this state, so the frontier has to say
                 # so. A frontier is a vector clock and a fold drops the folded
                 # sessions' entries from it; without this, everything a later
-                # watermark should cover reads as uncovered — a hand-off given
+                # watermark should cover reads as uncovered: a hand-off given
                 # after a fold would not carry the words the person removed
                 # before it, and `covered()` would call settled work in flight.
                 self.store.frontier = frontier_union(self.store.frontier, exclude)
@@ -111,7 +111,7 @@ class Workspace:
         An op whose record says it applied and which conflicts HERE is the one
         thing replay cannot make true again: two clones forked, one accepted
         the plan the other went on writing into, and the merge has to choose.
-        It chooses the earlier op, which is right — and says so, because the
+        It chooses the earlier op, which is right, and says so, because the
         loser's own log says those words landed and their tree will not have
         them. `codoc rebuild` and the daemon both print `problems`."""
         self.clock.observe(op.at)
@@ -195,7 +195,7 @@ class Workspace:
         """``plan_ingest`` then ``commit_ingest``, on the trunk or under ``plan``.
 
         A machine writing prose on its own is gated HERE, because this is where
-        every machine write passes — the loop's own pass, a translator, and the
+        every machine write passes: the loop's own pass, a translator, and the
         agent through ``codoc_reflect`` (docs/concurrency.md, The machine
         gate). A repair the trunk refuses because it would drop a mark the person placed, one that deletes
         more of the block than its gate allows, or any repair at all to a
@@ -205,7 +205,7 @@ class Workspace:
         and commits its parts itself, so it passes through here only once.
 
         ``derived`` says this content was READ OFF THE CODE rather than
-        authored — the lift pass's re-derived diagram, and nothing else. The
+        authored: the lift pass's re-derived diagram, and nothing else. The
         gate exists to keep a machine from overwriting words somebody meant,
         and a derived field holds none: it is attribution, like a binding
         refresh. Gating it would turn every large code change into a proposal
@@ -321,7 +321,7 @@ class Workspace:
                     before = set(self.store.plans)
                     try:
                         out.extend(self._drain_one(client, actor, s, acked))
-                    except Exception as e:  # noqa: BLE001 — the applier is total; so is the drain
+                    except Exception as e:  # noqa: BLE001 (the applier is total; so is the drain)
                         L.ack(self.codoc_dir, client, s.cid, error=f"refused: {e!r}")
                         acked[s.cid] = ""
                     opened |= set(self.store.plans) - before
@@ -522,7 +522,7 @@ def client_payload(store: Store, kind: str, payload: dict) -> dict:
 def _resolve_provisional(payload: dict, minted: dict[str, str], sent: dict[str, str] | None = None) -> dict:
     """Replace ``["$cid", cid, k]`` anchors with ``[op_id, k]`` once the insert
     with that client id has been minted. An unresolvable one is left as is and
-    fails as an unknown anchor, which is the honest outcome.
+    fails as an unknown anchor rather than being guessed at.
 
     ``k`` is the client's own scalar index into the text it sent; the applier
     stores NFC, so a client that sent a decomposed ``e + ́`` counted one

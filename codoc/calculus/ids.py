@@ -74,8 +74,8 @@ def is_human(actor: str) -> bool:
 
 # Everything that is not a person. The authority policy gives these the trunk
 # and plans but no verdict; ``ingest`` additionally refuses to let the ones that
-# rewrite prose on their own — the loop, a translator, and a coding agent
-# through ``codoc_reflect`` — drop a person's mark. An import writes a tree that
+# rewrite prose on their own (the loop, a translator, and a coding agent
+# through ``codoc_reflect``) drop a person's mark. An import writes a tree that
 # has no marks yet, so it is not one of them.
 MACHINE_KINDS = frozenset({"agent", "translator", "loop", "import"})
 REWRITERS = frozenset({"agent", "loop", "translator"})

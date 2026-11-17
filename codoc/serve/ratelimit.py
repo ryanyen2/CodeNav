@@ -1,7 +1,7 @@
 """Per-identity request rate limiting for the hub.
 
 A remote user (or a misconfiguration window past the Access edge) must not be
-able to flood the write/SSE endpoints — each write wakes the daemon and fans out
+able to flood the write/SSE endpoints: each write wakes the daemon and fans out
 to every connected browser, so an unbounded request rate is both a daemon DoS and
 a broadcast amplifier. This is a small, dependency-free token bucket keyed per
 GitHub identity; the route rejects with HTTP 429 when a key runs dry.

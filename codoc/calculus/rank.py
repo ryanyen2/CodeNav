@@ -1,7 +1,7 @@
-"""Order keys — fractional indexing over a base-62 alphabet.
+"""Order keys: fractional indexing over a base-62 alphabet.
 
 A key is read as a base-62 fraction: ``"V"`` is roughly ``0.5``, ``"AV"`` sits
-just above ``"A"``. The alphabet is in ASCII order, so Python's ``<`` and
+slightly above ``"A"``. The alphabet is in ASCII order, so Python's ``<`` and
 SQLite's ``ORDER BY`` agree without a collation. Keys never end in the zero
 digit, so every value has exactly one spelling.
 
@@ -24,7 +24,7 @@ START = ALPHABET[BASE // 2]
 
 
 class RankError(ValueError):
-    """A rank request that cannot be satisfied — the bounds are out of order."""
+    """A rank request that cannot be satisfied because the bounds are out of order."""
 
 
 def _digit(key: str, i: int, default: int) -> int:
@@ -47,7 +47,7 @@ def between(a: str = "", b: str = "") -> str:
         lo = _digit(a, i, 0)
         hi = _digit(b, i, BASE) if bounded else BASE
         if hi - lo > 1:
-            # Room for a digit strictly between the two — the key ends here, and
+            # Room for a digit strictly between the two: the key ends here, and
             # the midpoint is never the zero digit because hi > lo + 1 >= 1.
             out.append(ALPHABET[(lo + hi) // 2])
             return "".join(out)
@@ -64,9 +64,9 @@ def append_after(last: str = "") -> str:
     """The next key after ``last``, where nothing sits above it.
 
     Distinct from ``between(last, "")`` on purpose. That halves the remaining
-    space each time, so a list built by appending one node at a time — which is
-    exactly how bootstrap and Loop A build one — would grow keys about six times
-    faster than necessary. With no upper bound the cheap answer is available:
+    space each time, so a list built by appending one node at a time (how
+    bootstrap and Loop A build one) would grow keys about six times faster than
+    necessary. With no upper bound the cheap answer is available:
     step the final digit by one.
     """
     if not last:

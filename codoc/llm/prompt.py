@@ -73,12 +73,12 @@ def split_prompt(template: str) -> tuple[list[str], str]:
 
     Returns ``(prefix_parts, volatile_tail)``: everything before the last
     marker is the stable prefix (one part per marker-delimited segment,
-    most-stable-first — the template author orders them), the remainder is the
+    most-stable-first, in the template author's order), the remainder is the
     per-call tail. A template without markers is all tail (no caching).
 
     MUST be called on the raw template, BEFORE ``format_prompt`` substitutes
     values: substituted content is repo-derived (chunk source, descriptions),
-    and a literal marker inside it — codoc's own source contains one — would
+    and a literal marker inside it (codoc's own source contains one) would
     move the split point and promote untrusted text into the system-prompt
     prefix. Splitting first makes marker-shaped *values* inert.
     """
@@ -102,8 +102,8 @@ def titles_outline(all_titles: list[dict]) -> str:
     def _line(t: dict, depth: int) -> str:
         # The planned marker is the outline's one annotation: an accepted plan
         # placeholder is invisible to file-seeded context (it has no bindings),
-        # so this line is the only place a reader — the tree-update LLM or an
-        # agent reading codoc_context — learns the node exists and is waiting
+        # so this line is the only place a reader (the tree-update LLM or an
+        # agent reading codoc_context) learns the node exists and is waiting
         # for exactly this code rather than needing a fresh node.
         mark = "  (planned — attach its code, don't duplicate)" if t.get("planned") else ""
         return f"{'  ' * depth}- [{t.get('id')}] {t.get('title', '')}{mark}"
@@ -119,7 +119,7 @@ def titles_outline(all_titles: list[dict]) -> str:
 
     emitted: set[str] = set()
     _emit(None, 0, emitted)
-    # EVERY title must appear — this list is the LLM's duplicate-avoidance
+    # EVERY title must appear: this list is the LLM's duplicate-avoidance
     # context. Nodes the root walk can't reach (orphaned parent links, cycle
     # members, and their descendants) are appended flat; omitting them invites
     # the model to mint duplicates of exactly the features that are already in
@@ -142,9 +142,9 @@ def repair_json(text: str) -> str:
     """Escape the two things a model reliably gets wrong inside a JSON string.
 
     Descriptions are prose, and prose contains quotation marks and line breaks.
-    A model asked to state a reason will happily write ``"description": "Signs
-    the request the server calls "stale"."`` — the inner quote closes the string
-    and the parser then asks for a comma it will never find. Raw newlines inside
+    A model asked to state a reason will write ``"description": "Signs
+    the request the server calls "stale"."``, where the inner quote closes the
+    string and the parser then asks for a comma it will never find. Raw newlines inside
     a string fail the same way.
 
     Both are recoverable without guessing at meaning: walk the text tracking
@@ -168,7 +168,7 @@ def repair_json(text: str) -> str:
                 in_string = True
             i += 1
             continue
-        if ch == "\\":            # already escaped — copy the pair verbatim
+        if ch == "\\":            # already escaped: copy the pair verbatim
             out.append(text[i:i + 2])
             i += 2
             continue
@@ -195,11 +195,12 @@ def repair_json(text: str) -> str:
 
 
 def _concatenated(raw: str) -> dict | list | None:
-    """Every complete JSON value in ``raw``, combined — or None if there is one.
+    """Every complete JSON value in ``raw``, combined; None when nothing parses
+    or a value that opens like JSON is broken.
 
     A model asked for one object sometimes answers with several, back to back:
     `{"ops": [...]}\\n{"ops": [...]}`. ``json.loads`` reads the first, finds more
-    after it, and raises "Extra data", so the whole call is lost — and on a
+    after it, and raises "Extra data", so the whole call is lost. On a
     bootstrap that is a whole file described as a bare filename with no prose.
 
     Reading only the first value would be worse than the error, because the rest
@@ -220,7 +221,7 @@ def _concatenated(raw: str) -> dict | list | None:
             value, i = decoder.raw_decode(raw, i)
         except json.JSONDecodeError:
             # Something here is not a complete JSON value. If it OPENS like one
-            # it is a broken one — truncated, or with a stray quote in it — and
+            # it is a broken one (truncated, or with a stray quote in it), and
             # the repair pass is likelier to recover it than dropping it is. If
             # it does not, it is the model talking after its answer, and keeping
             # what parsed is right.
@@ -250,7 +251,7 @@ def _loads(raw: str) -> dict | list:
     """Strict first, concatenated second, repaired third.
 
     A clean sample is never rewritten, and the repair pass stays the last resort
-    — it rewrites the text, so anything that can be read as it stands should be.
+    because it rewrites the text: anything that can be read as it stands should be.
     """
     try:
         return json.loads(raw)
@@ -307,7 +308,7 @@ def parse_solution(response: str) -> dict | list:
 # prompt, which would be billed again in full. Keyed on provider, model,
 # temperature and the whole prompt; only responses that PARSED are cached, so a
 # malformed sample is retried fresh. Process-local: the daemon is long-lived,
-# and a CLI one-shot simply misses.
+# and a CLI one-shot misses.
 _MEMO_MAX = 32
 _memo: "OrderedDict[str, str]" = OrderedDict()
 _memo_lock = threading.Lock()

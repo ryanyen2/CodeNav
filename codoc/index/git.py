@@ -3,7 +3,7 @@ said about a file.
 
 ``head_sha`` anchors a hand-off to the commit the work starts from, so a reader
 can later diff what the agent did. ``commit_rationales`` gives a bootstrap pass
-the one place a repository routinely records why a change was made: code says
+the commit messages, where a repository routinely records why a change was made: code says
 what a program does, and a model asked for the reason with only code in front
 of it invents one.
 
@@ -37,7 +37,7 @@ def _git(root_dir: str | Path, *args: str) -> str:
             ["git", "-C", str(root_dir), *args],
             capture_output=True, text=True, timeout=_GIT_TIMEOUT_S, errors="replace",
         )
-    except Exception:  # noqa: BLE001 — advisory read; see the docstring
+    except Exception:  # noqa: BLE001 (advisory read; see the docstring)
         return ""
     if proc.returncode != 0:
         return ""

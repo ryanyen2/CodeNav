@@ -1,5 +1,5 @@
 /**
- * guards.ts — two plugins that keep the page from disagreeing with the shadows.
+ * guards.ts: two plugins that keep the page from disagreeing with the shadows.
  *
  * The recorder can only speak for text inside blocks it knows. `structureGuard`
  * therefore refuses any transaction that adds, drops, duplicates or un-ids a

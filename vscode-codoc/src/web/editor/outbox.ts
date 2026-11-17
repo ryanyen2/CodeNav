@@ -1,5 +1,5 @@
 /**
- * outbox.ts — ops on their way from the page to the daemon, and what the page
+ * outbox.ts: ops on their way from the page to the daemon, and what the page
  * holds while they travel (docs/concurrency.md, "The editor's side").
  *
  * `record` turns every transaction the page took into ops: a gesture's own
@@ -43,7 +43,7 @@ export class Outbox {
     private batch = newBatch();
     private timer: number | undefined;
     private readonly recorder: Recorder;
-    /** Blocks an open or just-ended IME composition changed, not yet recorded. */
+    /** Blocks an open or newly ended IME composition changed, not yet recorded. */
     private readonly composed = new Set<string>();
     /** Blocks one of whose ops the daemon refused, waiting to be re-read. */
     private readonly stale = new Set<string>();

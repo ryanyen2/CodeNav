@@ -22,7 +22,7 @@ def _cocoindex_db_path(codoc_dir: Path) -> Path:
 
 # How long a superseded table version is kept before optimize may reclaim it.
 # Not zero: a concurrent reader (the daemon, a CLI one-shot) may hold a
-# just-superseded version open (lancedb#3086). Not long either: the window is
+# newly superseded version open (lancedb#3086). Not long either: the window is
 # wall clock while passes arrive seconds apart, and a version younger than the
 # window is not reclaimed, so the next pass reads and rewrites a bloated table
 # (a 2000-chunk rename grows it from 2.9 MB to 24.6 MB). A read takes
@@ -42,8 +42,8 @@ def _maintain_table(codoc_path: Path) -> None:
 
     try:
         reader._run(_opt())
-    except Exception as exc:  # noqa: BLE001 — upkeep must never fail the pass…
-        # …but a persistently failing optimize means versions and fragments are
+    except Exception as exc:  # noqa: BLE001 (upkeep must never fail the pass)
+        # But a persistently failing optimize means versions and fragments are
         # accumulating, or the table is corrupt, and that must be visible.
         import logging
 

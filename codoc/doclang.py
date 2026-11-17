@@ -46,8 +46,8 @@ class ScriptClass:
     chars_per_word: float
 
 
-# Latin, Cyrillic, Greek, Arabic, Hebrew, Devanagari … — anything that delimits
-# words with whitespace and averages a Latin-ish word length.
+# Latin, Cyrillic, Greek, Arabic, Hebrew, Devanagari, and any other script that
+# delimits words with whitespace and averages a Latin-ish word length.
 SPACED = ScriptClass("spaced", chars_per_word=6.0)
 # Han + kana: word boundaries are unmarked and a "word" is one or two characters.
 LOGOGRAPHIC = ScriptClass("logographic", chars_per_word=2.0)
@@ -142,7 +142,7 @@ def norm_key(text: str | None) -> str:
     Simplified vs Traditional Han is deliberately NOT folded: 简体/繁體 are a
     localization choice, not a spelling variant, and a repo that authors in one
     never sees the other. Folding them would need a conversion table and would
-    silently merge two legitimately distinct trees in a repo that hosts both.
+    merge two legitimately distinct trees in a repo that hosts both.
     """
     s = unicodedata.normalize("NFKC", (text or "").strip())
     return re.sub(r"\s+", " ", s).casefold()
@@ -158,8 +158,8 @@ def char_budget(base_chars: int, text: str) -> int:
     Prompt budgets are capped in characters but paid for in tokens, and the two
     diverge by roughly the same factor as word length: 400 characters of English
     is ~100 tokens, 400 characters of Chinese is several times that. Scaling the
-    cap down keeps the *information* budget — and the bill — roughly constant
-    instead of quietly multiplying prompt size on a CJK repo.
+    cap down keeps the *information* budget, and the bill, roughly constant
+    instead of multiplying prompt size on a CJK repo.
     """
     ratio = chars_per_word(text) / SPACED.chars_per_word
     return max(40, round(base_chars * ratio))
@@ -198,10 +198,10 @@ _CJK_PUNCT = (
 # 书面语, and the result is prose a native reader finds HARDER to read than the English
 # it came from: nominalized, 被-heavy, and shaped around English clause order.
 #
-# The concrete DON'Ts are not decoration. An abstract "write plainly" loses to the specific
-# constraints elsewhere in a prompt; naming the exact constructions — the light verbs, the
-# calqued connective frames, the transplanted subordinate stacks — is what actually moves
-# the output, because each one is a thing the model can check its own sentence against.
+# The prompt lists concrete DON'Ts because an abstract "write plainly" loses to the specific
+# constraints elsewhere in a prompt. Naming the exact constructions (the light verbs, the
+# calqued connective frames, the transplanted subordinate stacks) changes the output,
+# because each one is a thing the model can check its own sentence against.
 _ZH_HANS_REGISTER = (
     " Register: plain explanatory 白话 — the voice of an engineer walking a colleague "
     "through their own code — never formal 书面语, and never 翻译腔. Concretely: lead "
@@ -271,9 +271,9 @@ _PROFILES: dict[str, DocLanguage] = {
     ),
 }
 
-# Display names for tags with no bespoke profile. A generic profile is genuinely
-# adequate for these — they are spaced scripts whose title/prose rules are the
-# English ones — so the table only has to supply a name the model recognizes.
+# Display names for tags with no bespoke profile. These are spaced scripts whose
+# title/prose rules are the English ones, so the generic profile fits them and the
+# table only has to supply a name the model recognizes.
 _GENERIC_NAMES: dict[str, str] = {
     "ar": "Arabic / العربية", "cs": "Czech / Čeština", "de": "German / Deutsch",
     "es": "Spanish / Español", "fi": "Finnish / Suomi", "fr": "French / Français",
@@ -346,10 +346,9 @@ def resolve(code: str | None) -> DocLanguage:
 def workspace_doc_language(codoc_dir: str | Path | None) -> DocLanguage:
     """The doc language in force: env var > workspace config > English.
 
-    The env var wins so a one-off run can override, but it is checked *first*
-    rather than used as a fallback on purpose — a committed workspace setting
-    should not be silently defeated by a stale shell export, and if the operator
-    exports the var they mean it for this run.
+    The env var is checked first, so a one-off run can override the committed
+    workspace setting: an operator who exports the var means it for this run.
+    A stale export left in the shell overrides the setting too.
     """
     env = os.environ.get(ENV_VAR, "").strip()
     if env:
@@ -360,7 +359,7 @@ def workspace_doc_language(codoc_dir: str | Path | None) -> DocLanguage:
 
 
 # ---------------------------------------------------------------------------
-# Per-node language — observed, never imposed
+# Per-node language: observed, never imposed
 # ---------------------------------------------------------------------------
 # The workspace setting says what language codoc AUTHORS in. It does not say what
 # language the tree IS in, because an author is allowed to be inconsistent on
@@ -377,7 +376,7 @@ def workspace_doc_language(codoc_dir: str | Path | None) -> DocLanguage:
 
 # Spans that stay in the code's language no matter what the prose is: inline code,
 # markdown link labels + targets, and bare `codoc:` refs. Stripped before judging
-# what language a description is in — a well-cited Chinese description carries two
+# what language a description is in, because a well-cited Chinese description carries two
 # long identifiers against a dozen Han characters, so measuring the raw string
 # would call the correct answer wrong.
 _CODEISH = re.compile(r"`[^`]*`|\[[^\]]*\]\([^)]*\)|\bcodoc:[^\s)]+|https?://\S+")
@@ -385,10 +384,10 @@ _CODEISH = re.compile(r"`[^`]*`|\[[^\]]*\]\([^)]*\)|\bcodoc:[^\s)]+|https?://\S+
 #: Share of a script's letters needed to call prose "in" that script.
 SCRIPT_FLOOR = 0.30
 
-#: The floor for a script that is not spaced — far lower, and the asymmetry is the
-#: point. Borrowing runs one way: Chinese technical prose is full of English terms,
-#: while English technical prose essentially never reaches for 使用 or 。. And the
-#: two sides are not measured on the same scale — a Han content word is one or two
+#: The floor for a script that is not spaced, far lower on purpose. Borrowing runs
+#: one way: Chinese technical prose is full of English terms, while English
+#: technical prose almost never reaches for 使用 or 。. And the two sides are not
+#: measured on the same scale: a Han content word is one or two
 #: characters where the English term beside it is ten, so character share
 #: systematically overweights the Latin. "使用 tree-sitter 解析 Python 与
 #: TypeScript。" is 16% Han characters and unmistakably a Chinese sentence; a
@@ -407,7 +406,7 @@ def strip_code_spans(text: str) -> str:
 def prose_script(text: str) -> ScriptClass | None:
     """The script ``text``'s *prose* is written in, or None when there is no signal.
 
-    None means "draw no conclusion" — an empty description, a run of digits.
+    None means "draw no conclusion", as for an empty description or a run of digits.
     Callers must treat it as "keep whatever you would have done anyway".
 
     A non-spaced script wins on a much smaller share than a spaced one (see
@@ -451,7 +450,7 @@ def prose_letters(text: str) -> int:
 
     Callers use it as an evidence threshold. A title that is nothing but an
     identifier, or a two-word fragment, cannot support a claim about what language
-    it is in — and a check that makes one anyway will be wrong loudly and often.
+    it is in, and a check that makes one anyway will often be wrong.
     """
     return sum(1 for ch in strip_code_spans(text) if ch.isalpha())
 
@@ -460,8 +459,8 @@ def detect_prose_language(text: str, default: DocLanguage) -> DocLanguage:
     """The language ``text`` appears to be written in, falling back to ``default``.
 
     Resolution is by *script*, so it can tell Chinese from English but not French
-    from Spanish — and it returns ``default`` rather than guessing whenever the
-    scripts agree, which is exactly the case where a model reading the surrounding
+    from Spanish. It returns ``default`` rather than guessing whenever the
+    scripts agree, which is the case where a model reading the surrounding
     prose does better than a codepoint scan. Within one script, "match the writing
     you are editing" is the prompt's job, not this function's.
     """
@@ -496,16 +495,16 @@ def prompt_directive(lang: DocLanguage, *, for_code_agent: bool = False) -> str:
 
     Empty for English by design (see :attr:`DocLanguage.is_default`).
 
-    The identifier rule is the load-bearing line. Ask a model to write Chinese
-    documentation and it will helpfully translate ``parse_tree`` to ``解析树``
-    inside a ``codoc:`` link, and the binding it names stops resolving — a
-    translated tree that has quietly lost its attachment to the code is worse
-    than an English one. Prose is translated; anything that is an address is not.
+    The identifier rule matters most. A model asked to write Chinese
+    documentation will translate ``parse_tree`` to ``解析树`` inside a
+    ``codoc:`` link, and the binding it names stops resolving. A translated
+    tree that has lost its attachment to the code is worse than an English
+    one. Prose is translated; anything that is an address is not.
 
     ``for_code_agent`` is for the realize prompt, whose reader writes source
     files rather than tree nodes. It needs the opposite default: the tree is in
-    the doc language, but the code it is about to write is not automatically —
-    identifier and comment language is a property of the repo it is editing.
+    the doc language, but the code it is about to write is not automatically in
+    it: identifier and comment language is a property of the repo it is editing.
     """
     if lang.is_default:
         return ""

@@ -14,7 +14,7 @@ LANGUAGE_NAME = "typescript"
 
 # ---------------------------------------------------------------------------
 # Internal helpers: load the language once at import time.
-# Same ctypes shim as python.py — see that module for rationale.
+# Same ctypes shim as python.py; see that module for the rationale.
 # ---------------------------------------------------------------------------
 
 def _load_language(name: str) -> ts.Language:
@@ -97,7 +97,7 @@ def _simple_declarator_name(decl_node: ts.Node) -> str | None:
             if name and not name.startswith("_"):
                 return name
         elif child.type in {"object_pattern", "array_pattern"}:
-            return None  # destructuring — skip
+            return None  # destructuring: skip
     return None
 
 
@@ -206,7 +206,7 @@ def _extract_chunks_recursive(
                             )
                         )
             if not found_arrow:
-                # Plain const/let/var — emit as named chunk if a simple identifier
+                # Plain const/let/var: emit as named chunk if a simple identifier
                 # LHS is present; otherwise accumulate into module-level code.
                 named: str | None = None
                 for decl in inner.children:

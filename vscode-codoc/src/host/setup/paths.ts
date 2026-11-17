@@ -1,5 +1,5 @@
 /**
- * paths.ts — the commands and paths provisioning uses, as plain values.
+ * paths.ts: the commands and paths provisioning uses, as plain values.
  *
  * Everything setup/provision.ts decides without running a process is here:
  * the `uv` argument vectors, the installer command per platform, where the

@@ -43,7 +43,7 @@ EPOCH_STALE_SECONDS = 900
 
 
 def _empty_activity() -> dict:
-    """A fresh empty document (fresh nested dicts — callers mutate in place)."""
+    """A fresh empty document (fresh nested dicts, because callers mutate in place)."""
     return {
         "version": 1,
         "epoch": {"id": "", "origin": "interactive", "open": False,
@@ -127,7 +127,7 @@ def mark_feature_phase(codoc_dir: str | Path, feature_ids: list[str], phase: str
                 feats[fid] = {"phase": phase, "at": now}
             data["features"] = feats
             write_json(activity_path(codoc_dir), data)
-    except Exception:  # noqa: BLE001 — never break a tool/hook over an animation hint
+    except Exception:  # noqa: BLE001 (never break a tool/hook over an animation hint)
         pass
 
 
@@ -139,10 +139,10 @@ def close_epoch(codoc_dir: str | Path, expected_id: str, *,
     so a ``SessionStart`` that replaces the file with a fresh epoch is never
     overwritten by a lagging heal:
 
-    * ``expected_id`` — the epoch id the caller saw open. If the file no longer
-      names it, a newer session has taken the single epoch slot: no-op. An
+    * ``expected_id``: the epoch id the caller saw open. If the file does
+      not name it, a newer session has taken the single epoch slot: no-op. An
       empty ``expected_id`` matches whatever open epoch is present.
-    * ``stale_after`` — when given, the file mtime is re-checked under the
+    * ``stale_after``: when given, the file mtime is re-checked under the
       lock; a write that landed after the caller's own staleness check keeps
       the epoch alive: no-op.
 
@@ -155,7 +155,7 @@ def close_epoch(codoc_dir: str | Path, expected_id: str, *,
             data = read_activity(codoc_dir)
             ep = data.get("epoch") or {}
             if expected_id and ep.get("id") != expected_id:
-                return False  # a newer session took the epoch slot — leave it alone
+                return False  # a newer session took the epoch slot; leave it alone
             if stale_after is not None:
                 try:
                     mtime = dest.stat().st_mtime
@@ -164,10 +164,10 @@ def close_epoch(codoc_dir: str | Path, expected_id: str, *,
                 if (now if now is not None else _time.time()) - mtime <= stale_after:
                     return False  # a fresh write landed in the check→lock window
             if not (ep.get("open") or data.get("features")):
-                return False  # already closed and cleared — nothing to heal
+                return False  # already closed and cleared: nothing to heal
             data["epoch"] = {**ep, "open": False, "ended_at": _now_iso()}
             data["features"] = {}
             write_json(dest, data)
             return True
-    except Exception:  # noqa: BLE001 — heal is best-effort; never break the caller
+    except Exception:  # noqa: BLE001 (heal is best-effort; never break the caller)
         return False

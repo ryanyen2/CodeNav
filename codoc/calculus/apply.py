@@ -1,4 +1,4 @@
-"""``apply(store, op)`` — total, deterministic, O(the segments and marks of the
+"""``apply(store, op)``: total, deterministic, O(the segments and marks of the
 blocks it touches), plus the ordered insert a structural op pays
 (docs/model.md, What ``apply`` does).
 
@@ -11,8 +11,8 @@ already satisfied, not a reason to stop half way.
 
 On success the op leaves with its canonical payload (what it actually did) and
 its inverse (op bodies that undo it). The inverse of an inverse is the
-original — including a plan's mark toggle, whose redo names the record it is
-restoring rather than carrying the plan tag — which is what makes undo a new op
+original, including for a plan's mark toggle, whose redo names the record it
+is restoring rather than carrying the plan tag. This is what makes undo a new op
 and the timeline an un-apply through the same code.
 
 ``replay_recorded`` is how a RECORDED op comes back: as the record says, never
@@ -193,7 +193,7 @@ def _h_text_delete(store: Store, op: Op, touched: set[str]):
     in, not all of them: a delete whose range a split has since parted acts on
     every holder (``segments`` is the record that matters) and names one. A
     reader that needs the holders resolves ``segments`` by identity rather than
-    trusting this field — the timeline does."""
+    trusting this field, as the timeline does."""
     bid, path = op.target["bid"], op.target.get("path", "text")
     if "segments" in op.payload:
         segs = [(str(o), int(k), int(n)) for o, k, n in op.payload["segments"]]
@@ -233,16 +233,15 @@ def _only_own_plan(store: Store, op: Op, work, segs) -> None:
     plan reaching past its own words is not its to make.
 
     Under a plan, `text.delete` and `text.restore` may name ONLY characters
-    that plan minted. This is the whole of what a contributor needs beyond
-    tagged writes — Google Docs' rule, where every edit a suggester makes is
-    part of their suggestion — and it lives here, where anchors are resolved
-    and the segments are in hand, rather than in the policy, which has only the
-    plans to reason from."""
+    that plan minted. Beyond tagged writes, this is the only rule a contributor
+    needs, since every edit a suggester makes is part of their suggestion. It
+    lives here, where anchors are resolved and the segments are in hand, rather
+    than in the policy, which has only the plans to reason from."""
     if not op.plan:
         return
     if op.kind == K.TEXT_RESTORE:
         # A restore under a plan undoes a delete of that plan's. Reviving
-        # characters somebody ELSE killed would override their op — a
+        # characters somebody ELSE killed would override their op. A
         # maintainer removing a plan's words is an ordinary trunk delete and a
         # proposal does not get to answer it.
         undone = store.by_id.get(str(op.payload.get("by") or ""))
@@ -291,8 +290,8 @@ def _h_text_mark(store: Store, op: Op, touched: set[str]):
     if kind in PROPOSALS and on:
         # A new proposal must CARRY its plan. An op that only names one in
         # `attrs` is allowed in exactly one case: it restores a record that was
-        # already placed, and says which op placed it (`payload["op"]`) — the
-        # inverse of a plan mark's inverse, which must apply because the
+        # already placed, and says which op placed it (`payload["op"]`). That is
+        # the inverse of a plan mark's inverse, which must apply because the
         # inverse of an inverse is the original. Even then the plan must still
         # be open.
         pid = op.plan or (str(attrs.get("plan") or "") if op.payload.get("op") else "")
@@ -916,8 +915,8 @@ def _h_plan_accept(store: Store, op: Op, touched: set[str]):
             # A proposal to turn a WHOLE mark off whose mark the person has
             # already removed asks for a state the document is in. Agreeing
             # costs nothing; raising here would leave the strike above applied,
-            # the plan open, and every later accept failing the same way — the
-            # two-phase rule (see this module's header) broken in the one
+            # the plan open, and every later accept failing the same way. That
+            # would break the two-phase rule (see this module's header) in the
             # handler that mutates most.
             t.marks.remove(m)
             store.index_text(block.id, p, t)
@@ -1024,8 +1023,8 @@ def _h_plan_reopen(store: Store, op: Op, touched: set[str]):
         touched.add(i)
     _reattach(store, p.get("detached", []), touched)
     # A reopen re-applies the verdict's own record, so its `moved` and `sets`
-    # are the values it SETS. What it DISPLACED — which is what a reader of the
-    # page before it needs — has nowhere else to come from, so record it.
+    # are the values it SETS. What it DISPLACED (what a reader of the page
+    # before it needs) has nowhere else to come from, so record it.
     undid: dict = {"moved": [], "sets": []}
     for entry in p.get("sets", []):
         b = store.blocks[entry["bid"]]

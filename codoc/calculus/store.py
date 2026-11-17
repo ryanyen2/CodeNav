@@ -65,8 +65,8 @@ class Plan:
     ops: list[OpId] = field(default_factory=list)   # the plan's ops in apply order
     opened_by: OpId | None = None
     # Who answered. Without it a fold re-emits the verdict as the importer and
-    # the tree forgets who decided — the log says, until it is archived, which
-    # is exactly what a fold does to it. WHEN is not kept: every op a fold
+    # the tree forgets who decided. The log says who only until it is archived,
+    # and a fold archives it. WHEN is not kept: every op a fold
     # emits carries the fold's clock, so a stored `decided_at` would be the one
     # timestamp that looked authentic and was not.
     decided_by: str = ""
@@ -289,7 +289,7 @@ class Store:
         them, because nobody reads it there."""
         # By index, never by slicing `self.order`: these four walks are called
         # once per block by a cold publish, and an O(n) list copy each turns
-        # that into O(n²) — 450 ms of it alone at 10,000 features.
+        # that into O(n²): 450 ms of it alone at 10,000 features.
         i = self._index_of(bid)
         flows = lambda j: (b := self.blocks[self.order[j][1]]).live and in_flow(b.kind)
         prev = next((self.order[j][1] for j in range(i - 1, -1, -1) if flows(j)), None)
@@ -306,7 +306,7 @@ class Store:
 
     def prune_index(self, bid: str, path: str, text: Text, was: set[OpId]) -> None:
         """After a split or merge moved characters out of ``(bid, path)``, drop
-        the holders that no longer hold anything of an op. ``was`` is what the
+        the holders left holding nothing of an op. ``was`` is what the
         field held before the cut (``Text.ops()``), which is what keeps this
         O(the ops of one field) and not O(every op ever recorded)."""
         holder = (bid, path)

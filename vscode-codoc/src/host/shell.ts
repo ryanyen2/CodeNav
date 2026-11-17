@@ -1,5 +1,5 @@
 /**
- * shell.ts — one command line for the integrated terminal.
+ * shell.ts: one command line for the integrated terminal.
  *
  * codoc's long-running commands (`realize`, `sync`, `serve`) run in a terminal
  * so the person can watch and interrupt them, which means an argument vector

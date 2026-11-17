@@ -22,7 +22,7 @@ def read_config(codoc_dir: str | Path) -> dict:
     hand-mangled file must degrade to defaults."""
     try:
         return json.loads(config_path(codoc_dir).read_text(encoding="utf-8")) or {}
-    except Exception:  # noqa: BLE001 — missing, empty, or malformed: all defaults
+    except Exception:  # noqa: BLE001 (missing, empty, or malformed: all defaults)
         return {}
 
 

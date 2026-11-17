@@ -122,7 +122,7 @@ def translate_tree(ws: Workspace, codoc_dir: str | Path, *, language: DocLanguag
             try:
                 got = propose([items[f] for f in batch], lang, repo_name=repo_name, config=config)
                 res.calls += 1
-            except Exception as exc:  # noqa: BLE001 — one bad batch must not sink the run
+            except Exception as exc:  # noqa: BLE001 (one bad batch must not sink the run)
                 got = {}
                 for fid in batch:
                     res.skipped.append(Skipped(fid, items[fid]["title"], f"batch failed: {exc}"))

@@ -42,7 +42,7 @@ def deleted_ops(store: Store, target: dict, payload: dict) -> set[str]:
     """The ops that minted the characters a delete names. The ``segments`` form
     lists them; the ``from``/``to`` form has to be resolved against the text.
     Used by the DRAIN to decide whether a contributor's Backspace is a proposal
-    or their own words coming back — never by the policy, which has only the
+    or their own words coming back; never by the policy, which has only the
     plans to reason from (and the hub's door, which validates a stranger's log,
     has only what the log carries)."""
     if "segments" in payload:
@@ -61,7 +61,7 @@ def _ref(v) -> tuple[str, int]:
 
 def own_plan_words(store: Store, actor: str, minted_by: set[str]) -> bool:
     """Whether every one of these characters was put there by an open plan of
-    ``actor``'s — their own proposed words, which are theirs to take back."""
+    ``actor``'s: their own proposed words, which are theirs to take back."""
     if not minted_by:
         return False
     for oid in minted_by:
@@ -100,7 +100,7 @@ def _own_comment(store: Store, op: Op) -> bool:
 
     Editing INSIDE somebody's thread should mean replying in it. A reply is a
     new comment block, so adding one is always free, and so is writing into one
-    they minted — the words they are still typing. Deleting another person's
+    they minted (the words they are still typing). Deleting another person's
     words is not, and neither is resolving a thread they did not start:
     ``status`` is what the margin and ``Build it`` read, so marking a
     maintainer's request-for-work done is answering it on their behalf."""
@@ -132,7 +132,7 @@ class Roles:
       (``unknown:x``) is a suggester, not a machine. A contributor does not
       have to tag anything themselves: the drain opens the plan and tags their
       ops, turning a deletion into the plan's ``suggest_del``. What
-      it cannot carry under a plan — a merge, a block delete — stays refused.
+      it cannot carry under a plan (a merge, a block delete) stays refused.
       Nothing untagged but a comment: taking back words they proposed is the
       proposal getting smaller, so it rides in the plan like everything else
       (``ops.PLANNABLE`` carries ``text.delete``/``text.restore`` for exactly
@@ -143,7 +143,7 @@ class Roles:
 
     A comment is writable untagged by anyone: it hangs off words rather than
     standing among them, and there is nothing for a maintainer to accept. What
-    a contributor may write there is their OWN — a new comment (which is what a
+    a contributor may write there is their OWN: a new comment (which is what a
     reply is) and the words of one they minted. Deleting somebody else's words,
     or resolving a thread they did not start, is answering for them.
     """
@@ -180,7 +180,7 @@ class Roles:
             # The table says this person was REMOVED. Their session is gone, but
             # an inbox line drained after the revocation and a clone validating
             # their pull request's logs both come through here, and "everyone
-            # else" is a suggester — which would make the record of removal
+            # else" is a suggester, which would make the record of removal
             # grant exactly what a contributor has.
             return f"{op.actor} has no access"
         if role in (OWNER, "maintainer"):

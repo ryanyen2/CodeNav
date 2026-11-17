@@ -69,7 +69,7 @@ def _get_loop() -> asyncio.AbstractEventLoop:
     global _loop, _loop_thread
     with _loop_lock:
         # Recreate on a closed loop OR a dead thread (a died thread leaves the
-        # loop object open but nothing driving it — futures would never resolve).
+        # loop object open but nothing driving it, so futures would never resolve).
         if (_loop is None or _loop.is_closed()
                 or _loop_thread is None or not _loop_thread.is_alive()):
             _loop = asyncio.new_event_loop()
@@ -99,7 +99,7 @@ def invalidate_cache(codoc_dir: str | Path) -> None:
         if asyncio.iscoroutine(result):
             # fire-and-forget on the reader loop; never block the caller on it
             asyncio.run_coroutine_threadsafe(result, _loop)
-    except Exception:  # noqa: BLE001 — closing a dead handle must never raise
+    except Exception:  # noqa: BLE001 (closing a dead handle must never raise)
         pass
 
 
@@ -155,7 +155,7 @@ def read_all_chunks(
     try:
         return _run(_read_all(codoc_dir, files, with_source))
     except Exception:
-        # One retry on a fresh connection — covers a cached handle to an index
+        # One retry on a fresh connection. It covers a cached handle to an index
         # directory that was deleted + recreated underneath us.
         invalidate_cache(codoc_dir)
         return _run(_read_all(codoc_dir, files, with_source))

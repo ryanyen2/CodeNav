@@ -3,7 +3,7 @@
 A feature description can carry external `[label](https://…)` links that the
 realizing agent WebFetches. On a remote-triggered run those links are attacker-
 authorable, so the fetch path is locked down: https only, the host must be in a
-default-EMPTY allowlist, and the resolved IP must be public — loopback,
+default-EMPTY allowlist, and the resolved IP must be public: loopback,
 link-local/metadata (169.254/16), RFC1918, CGNAT, and reserved ranges are refused
 so a Consult link cannot reach the home LAN or a cloud metadata endpoint. DNS
 resolution is injected so the resolve-and-pin check is testable; the caller must

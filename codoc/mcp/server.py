@@ -1,4 +1,4 @@
-"""codoc MCP server (FastMCP, stdio) — the coding agent's surface.
+"""codoc MCP server (FastMCP, stdio): the coding agent's surface.
 
 Registered in ``<root>/.mcp.json`` by ``codoc init``. The ``.codoc`` directory
 is found by walking up from the agent's cwd. Tools return dicts; a missing
@@ -29,8 +29,8 @@ def _root(cd: str) -> str:
 
 @mcp.tool
 def codoc_context(files: list[str] | None = None, feature_id: str | None = None, include_bindings: bool = True) -> dict:
-    """The relevant slice of the feature tree for the code you are working on —
-    the PREFERRED read before editing or proposing. Pass repo-relative file paths
+    """The relevant slice of the feature tree for the code you are working on,
+    and the PREFERRED read before editing or proposing. Pass repo-relative file paths
     and/or a feature_id: returns the features bound to those files expanded one
     hop along call/import edges, each with its paragraphs BY BLOCK ID (an amend
     names the paragraph it changes), a title outline for orientation, and nearby
@@ -52,7 +52,7 @@ def codoc_status() -> dict:
     """Where the tree and the code stand: `state` (synced | edited | queued |
     realizing | proposed), the features with queued work (`queued_list`, what
     /codoc:sync implements), features with unsent edits, open proposals, and
-    citations that no longer resolve to code."""
+    citations that do not resolve to code."""
     cd, err = _need_dir()
     return err or tools.read_status(cd)
 
@@ -67,7 +67,7 @@ def codoc_history(feature_id: str, limit: int = 20) -> dict:
 
 @mcp.tool
 def codoc_reflect(ops: list[dict], rationale: str = "", caused_by: str | None = None) -> dict:
-    """Reflect what you just did to the code into the tree. Each op is one of:
+    """Reflect what you did to the code into the tree. Each op is one of:
     `{"kind": "attach"|"detach", "feature_id", "bindings": ["file.py::symbol", …]}`
     (lands at once); `{"kind": "amend", "feature_id", "title"?, "blocks": [{"id", "text"}
     | {"id", "delete": true} | {"text"}]}`, where `text` is one block as Markdown

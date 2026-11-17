@@ -197,7 +197,7 @@ class Daemon:
             paths = [p for _c, p in changes]
             try:
                 note = self.process_batch(paths)
-            except Exception as e:  # noqa: BLE001 — a bad batch must not kill the daemon
+            except Exception as e:  # noqa: BLE001 (a bad batch must not kill the daemon)
                 note = f"error: {e}"
             self.say(f"▸ {note}")
             if self.after_batch:

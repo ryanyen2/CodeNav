@@ -1,5 +1,5 @@
 /**
- * serve-manager.ts — the arguments for `codoc serve`, the hub.
+ * serve-manager.ts: the arguments for `codoc serve`, the hub.
  *
  * The hub is a separate process that serves this same editor to people in a
  * browser and supervises the daemon while it runs. The extension does not own

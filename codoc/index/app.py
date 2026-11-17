@@ -26,7 +26,7 @@ from codoc.index.tree_walk import walk as tree_walk
 _DEFAULT_LANCE_PATH = "./.codoc/lancedb"
 
 # Match every extension the tree-sitter adapters (codoc.index.lang.detect_language)
-# understand, so a file codoc *could* parse is never silently skipped at the walk.
+# understand, so the walk never skips a file codoc can parse.
 _INCLUDED_PATTERNS = ["**/*.py", "**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"]
 _EXCLUDED_PATTERNS = [
     ".*/**",                 # dot-dirs (.git, .tox, .mypy_cache, …)
@@ -47,7 +47,7 @@ _EXCLUDED_PATTERNS = [
     "**/.next/**",
     "**/coverage/**",
     "**/site-packages/**",
-    "**/*.d.ts",             # generated TypeScript declarations — not authored intent
+    "**/*.d.ts",             # generated TypeScript declarations, not authored intent
     "**/*.min.js",
     "**/*.min.ts",
 ]
@@ -61,7 +61,7 @@ _MAX_FILE_BYTES = 1_500_000
 def _gitignore_excludes(sourcedir: pathlib.Path) -> list[str]:
     """Best-effort: fold the repo's own ``.gitignore`` directory entries into the
     walker's exclude set so a project that ignores, say, ``env2/`` or ``generated/``
-    doesn't get it indexed anyway. Conservative by design — it only ADDS excludes,
+    doesn't get it indexed anyway. It is conservative: it only ADDS excludes,
     skips negations/comments and the catch-all ``*``/``**`` lines (which would nuke
     everything), and never touches include patterns. Full gitignore semantics are
     not reproduced; the common directory-ignore case is."""
@@ -76,11 +76,11 @@ def _gitignore_excludes(sourcedir: pathlib.Path) -> list[str]:
             continue
         line = line.rstrip("/")
         if line in ("", "*", "**", ".", "/"):
-            continue  # too broad — would exclude the whole repo
+            continue  # too broad: would exclude the whole repo
         anchored = line.startswith("/")
         body = line.lstrip("/")
         if "/" in body and not anchored:
-            continue  # a specific nested path — leave to git; avoid over-excluding
+            continue  # a specific nested path: leave to git; avoid over-excluding
         prefix = "" if anchored else "**/"
         patterns.append(f"{prefix}{body}/**")
         patterns.append(f"{prefix}{body}")
@@ -117,7 +117,7 @@ async def _process_file(
     if lang is None:
         return
     # Skip oversize files (minified bundles, generated blobs) before reading them into
-    # memory — they are not authored intent and would stall the loop / bloat the index.
+    # memory. They are not authored intent and would stall the loop / bloat the index.
     try:
         if file_abs.stat().st_size > _MAX_FILE_BYTES:
             return
@@ -130,7 +130,7 @@ async def _process_file(
     # system treats (file, symbol_path) as unique (bindings are UNIQUE on it, the
     # changeset keys on it). Real code legitimately repeats a qualified name
     # (@overload stubs, conditional/try-except redefinitions), which would yield
-    # the same memoized id and a "target state already declared" PK collision —
+    # the same memoized id and a "target state already declared" PK collision,
     # dropping the whole file. Keep the first chunk per symbol_path so the file
     # still indexes and the uniqueness invariant holds.
     seen: set[str] = set()
@@ -154,7 +154,7 @@ class _SymlinkAwareMatcher(PatternFilePathMatcher):
 
     A repo with a self-referential or ancestor-pointing directory symlink (a monorepo
     package link, ``docs/latest -> .``) would make the recursive walk descend without
-    bound — an unrecoverable hang during ``codoc init``. We refuse to descend into any
+    bound: an unrecoverable hang during ``codoc init``. We refuse to descend into any
     symlinked directory (indexing follows the real tree only); a symlink pointing
     OUTSIDE the repo is also refused, so the walk can't escape the repo root."""
 
@@ -162,10 +162,10 @@ class _SymlinkAwareMatcher(PatternFilePathMatcher):
         super().__init__(included_patterns=included_patterns, excluded_patterns=excluded_patterns)
         self._sourcedir = pathlib.Path(sourcedir).resolve()
 
-    def is_dir_included(self, path) -> bool:  # noqa: ANN001 — matches base signature
+    def is_dir_included(self, path) -> bool:  # noqa: ANN001 (matches base signature)
         try:
             # `path` is repo-relative (or absolute); joining an absolute right-hand
-            # side simply yields it, so this resolves correctly either way.
+            # side yields it, so this resolves correctly either way.
             abs_path = (self._sourcedir / pathlib.Path(str(path)))
             if abs_path.is_symlink():
                 return False

@@ -70,7 +70,7 @@ def bootstrap(ws: Workspace, rows: list, graph: Graph, *, repo_name: str = "code
         try:
             brief = propose_the_brief(readme, headers, repo_name=repo_name, config=config, doc_language=doc_language) or {}
             res.calls += 1
-        except Exception as exc:  # noqa: BLE001 — a bootstrap without a brief still works
+        except Exception as exc:  # noqa: BLE001 (a bootstrap without a brief still works)
             say(f"  ⚠ could not read the project's own prose ({exc})")
     titles: list[str] = [title(ws.store, h.id) for h in ws.store.headings()]
     step = max(1, len(files) // 40)
@@ -93,7 +93,7 @@ def bootstrap(ws: Workspace, rows: list, graph: Graph, *, repo_name: str = "code
                 try:
                     return propose_file(file, chunks, edges, snapshot, repo_name=repo_name, config=config,
                                         why=why, brief=brief, doc_language=doc_language)
-                except Exception as exc:  # noqa: BLE001 — per-file tolerance
+                except Exception as exc:  # noqa: BLE001 (per-file tolerance)
                     last = exc
             failures.append((file, last))
             return []
@@ -127,7 +127,7 @@ def bootstrap(ws: Workspace, rows: list, graph: Graph, *, repo_name: str = "code
                               brief=brief, flows=flow_lines(graph, exported), doc_language=doc_language)
             res.calls += 1
             _land_org(ws, res, ops, batch)
-        except Exception as exc:  # noqa: BLE001 — a flat tree is still usable
+        except Exception as exc:  # noqa: BLE001 (a flat tree is still usable)
             say(f"  ⚠ organization pass failed ({exc}); the tree stays flat")
     elif organize and len(top) > ORG_FEATURE_CAP:
         say(f"  ⚠ {len(top)} top-level features — skipping the organization pass")

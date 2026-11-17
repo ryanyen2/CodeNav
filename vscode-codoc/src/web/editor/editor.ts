@@ -1,5 +1,5 @@
 /**
- * editor.ts — `mountEditor`, which assembles the editor over a projection.
+ * editor.ts: `mountEditor`, which assembles the editor over a projection.
  *
  * The parts, and where each lives:
  *

@@ -46,12 +46,12 @@ from dotenv import dotenv_values, find_dotenv
 # <repo>` all set it), so usecwd=True is the right anchor.
 #
 # codoc runs against ARBITRARY user repos, so the repo's .env is treated as a
-# FALLBACK only — it fills in config the user has not already set in their real
+# FALLBACK only: it fills in config the user has not already set in their real
 # environment, and never OVERRIDES the shell. Overriding would let any checked-in
-# .env win over the user's actual intent (and silently bill a foreign key). Two
+# .env win over the user's actual intent (and bill a foreign key). Two
 # redirect/logging vars are refused from a repo .env entirely: a repo has no
 # legitimate reason to point codoc's API base URL elsewhere (key exfiltration) or
-# force prompt logging on — but an arbitrary/adversarial repo could. Set those in
+# force prompt logging on, but an arbitrary/adversarial repo could. Set those in
 # the shell if you genuinely need them.
 _UNTRUSTED_FROM_DOTENV = frozenset({
     "CODOC_BASE_URL", "OPENAI_BASE_URL", "ANTHROPIC_BASE_URL", "CODOC_LOG_PROMPTS",
@@ -98,10 +98,10 @@ _DEFAULT_MODELS = {
 
 # The FAST tier for structured-extraction calls (the per-save tree update, the
 # per-file bootstrap pass): they output small JSON op lists against explicit
-# rules — a fast model does this well at a fraction of the cost, and these are
+# rules. A fast model does this well at a fraction of the cost, and these are
 # the two highest-volume call sites in the system. The organization pass and
 # anything judgment-heavy stay on the standard tier. ``CODOC_MODEL`` (explicit
-# user choice) overrides both tiers; ``CODOC_MODEL_FAST`` overrides just this.
+# user choice) overrides both tiers; ``CODOC_MODEL_FAST`` overrides only this.
 _FAST_MODELS = {
     "openai": "gpt-5.4-mini",
     "anthropic": "claude-haiku-4-5",
@@ -168,7 +168,7 @@ def _temperature_from_env() -> float | None:
 
 def _resolve_provider() -> str:
     """Pick the LLM provider, honoring an explicit choice and otherwise inferring
-    one from which key is present — keyless Claude Code is the final fallback.
+    one from which key is present. Keyless Claude Code is the final fallback.
 
     An explicit ``CODOC_PROVIDER`` always wins (the VS Code setup writes it). With
     none set we infer: an ``OPENAI_API_KEY`` means the user opted into OpenAI, an
@@ -197,7 +197,7 @@ def get_llm_config() -> LLMConfig:
     default_model = _DEFAULT_MODELS.get(provider, "gpt-5.4-mini")
     model = os.environ.get("CODOC_MODEL") or default_model
     if not _model_fits_provider(provider, model):
-        # A stray cross-family CODOC_MODEL can't run on this provider — ignore it.
+        # A stray cross-family CODOC_MODEL can't run on this provider; ignore it.
         model = default_model
     if provider == "anthropic":
         api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -229,10 +229,10 @@ def complete(
 
     ``prefix_parts`` are STABLE prompt segments (frozen instructions, the
     feature-tree titles) that precede the volatile ``prompt``. Callers order
-    them most-stable-first; the provider layer exploits that for prompt
-    caching — Anthropic gets them as system blocks with ``cache_control``
+    them most-stable-first; the provider layer uses that for prompt
+    caching: Anthropic gets them as system blocks with ``cache_control``
     breakpoints (cache reads bill ~0.1×), OpenAI relies on automatic
-    prefix caching, and the other providers just concatenate. Semantics are
+    prefix caching, and the other providers concatenate them. Semantics are
     identical everywhere: the model sees prefix_parts + prompt in order.
     """
     if config is None:
@@ -305,7 +305,7 @@ def _complete_openai(prompt: str, config: LLMConfig, parts: list[str]) -> str:
             extra["prompt_cache_key"] = "codoc-" + hashlib.sha1(
                 os.getcwd().encode(), usedforsecurity=False
             ).hexdigest()[:16]
-        except Exception:  # noqa: BLE001 — cache hint only
+        except Exception:  # noqa: BLE001 (cache hint only)
             pass
     def _send(budget: int):
         kwargs = {
@@ -372,7 +372,7 @@ def _complete_anthropic(prompt: str, config: LLMConfig, parts: list[str]) -> str
     Stable prefix parts become system blocks, each with a ``cache_control``
     breakpoint (max 4 allowed; we use ≤2): consecutive loop passes re-send the
     same frozen instructions + titles and pay ~0.1× for them on a hit. Below the
-    model's minimum cacheable length the marker is silently ignored — harmless.
+    model's minimum cacheable length the API ignores the marker, which is harmless.
     """
     try:
         import anthropic
@@ -404,7 +404,7 @@ def _complete_anthropic(prompt: str, config: LLMConfig, parts: list[str]) -> str
         ] + [{"type": "text", "text": part} for part in parts[2:]]
     message = client.messages.create(**create_kwargs)
     # Concatenate the text blocks of the response (tool/thinking blocks, if any,
-    # carry no .text and are skipped) — the same raw-text contract as the others.
+    # carry no .text and are skipped). This is the same raw-text contract as the others.
     return "".join(
         block.text for block in message.content if getattr(block, "type", None) == "text"
     )
@@ -413,7 +413,7 @@ def _complete_anthropic(prompt: str, config: LLMConfig, parts: list[str]) -> str
 # The minimal identity every keyless completion runs under, REPLACING Claude
 # Code's default agent system prompt. Measured on this machine: the default
 # session context was ~37K tokens ingested per call (system prompt + tool
-# schemas + user config), none of it read back — $0.075/call on Haiku. With the
+# schemas + user config), none of it read back: $0.075/call on Haiku. With the
 # override + an empty toolset a completion is ~1-2K tokens ($0.0016) and the
 # stable prefix (this preamble + prefix_parts) gets cross-spawn prompt-cache
 # hits (verified: second identical call billed cache_creation=0).
@@ -425,18 +425,18 @@ _CLAUDE_MIN_SYSTEM = (
 
 def _complete_claude(prompt: str, config: LLMConfig, parts: list[str]) -> str:
     """Complete via the user's existing Claude credentials by shelling out to the
-    ``claude`` CLI in headless JSON mode — no separate API key.
+    ``claude`` CLI in headless JSON mode, with no separate API key.
 
     Why the CLI and not the ``anthropic`` SDK: the subscription OAuth token Claude
     Code stores is *not* a general API key, so only the ``claude`` binary can reuse
     that login. Guards that make the reuse correct and cheap:
 
-    * **never ``--bare``** — bare mode skips the OAuth/keychain read, forcing a key.
-    * **drop ``ANTHROPIC_API_KEY``** from the child env — if present it silently
+    * **never ``--bare``**: bare mode skips the OAuth/keychain read, forcing a key.
+    * **drop ``ANTHROPIC_API_KEY``** from the child env: if present it
       overrides the subscription and bills the wrong account.
-    * **neutral cwd** — run from a temp dir so codoc's *own* repo hooks / MCP /
+    * **neutral cwd**: run from a temp dir so codoc's *own* repo hooks / MCP /
       CLAUDE.md don't load (heavy, and risks the reflection re-triggering codoc).
-    * **minimal context** — ``--system-prompt-file`` replaces the default agent
+    * **minimal context**: ``--system-prompt-file`` replaces the default agent
       system prompt with a small codoc preamble + the caller's stable
       prefix_parts, and ``--disallowedTools "*"`` drops every tool schema. The
       stable prefix lands in the system block, so consecutive calls (the loop's
@@ -466,14 +466,14 @@ def _complete_claude(prompt: str, config: LLMConfig, parts: list[str]) -> str:
         raise ValueError(f"Refusing a flag-shaped CODOC_MODEL: {config.model!r}")
 
     # The system prompt carries repo-derived content (feature titles), so it goes
-    # through a file, never argv — argv is visible in `ps` and a crafted value
+    # through a file, never argv: argv is visible in `ps` and a crafted value
     # could be re-lexed into CLI options.
     system_text = "\n\n".join([_CLAUDE_MIN_SYSTEM] + parts)
     cmd = [
         claude, "-p",
         "--output-format", "json",
         "--max-turns", "1",
-        "--allowedTools", "",     # pure completion — no tools, no agent loop
+        "--allowedTools", "",     # pure completion: no tools, no agent loop
         "--disallowedTools", "*",  # and no tool schemas in the prompt at all
     ]
     if config.model:
@@ -489,7 +489,7 @@ def _complete_claude(prompt: str, config: LLMConfig, parts: list[str]) -> str:
     system_file = sf.name
     try:
         # Everything from first write to subprocess exit is covered by the
-        # unlink below — a failed write (disk full) must not leak the file.
+        # unlink below, because a failed write (disk full) must not leak the file.
         with sf:
             sf.write(system_text)
         proc = subprocess.run(

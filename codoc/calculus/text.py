@@ -2,7 +2,7 @@
 
 A Text is one sequence of *segments* in document order. A segment is a run of
 characters inserted by one op (``(op, k0 .. k0+len)``), carrying that op's actor
-and clock, an optional plan tag, and — once deleted — the op that deleted it.
+and clock, an optional plan tag, and, once deleted, the op that deleted it.
 Dead segments keep their place forever: a character that was deleted
 is still a position an insert, a split or a comment can name.
 

@@ -1,5 +1,5 @@
 /**
- * extension.ts — what the extension does when VS Code activates it.
+ * extension.ts: what the extension does when VS Code activates it.
  *
  * It registers the Codoc Tree editor (host/provider.ts), keeps a daemon
  * running for the repository, shows the daemon's status in the status bar,

@@ -1,5 +1,5 @@
 /**
- * commands.ts — the structural gestures, each emitting its ops and performing
+ * commands.ts: the structural gestures, each emitting its ops and performing
  * the equivalent ProseMirror change.
  *
  * Every command returns `{ tr, ops }`, or null when the gesture does not apply
@@ -62,7 +62,7 @@ function done(tr: Transaction, ops: OpBody[], cids: string[] = []): Gesture {
     return { tr: tr.setMeta(RECORDED, ops).setMeta(GESTURE_CIDS, cids).setMeta('addToHistory', false), ops, cids };
 }
 
-/** The position just past the top-level block with this id. */
+/** The position right after the top-level block with this id. */
 function blockEnd(doc: PMNode, bid: string): number {
     let end = doc.content.size;
     doc.forEach((n, p) => { if (n.attrs.bid === bid) end = p + n.nodeSize; });
@@ -468,7 +468,7 @@ function dominatedRange(doc: PMNode, index: number): [number, number] {
     return [index, end];
 }
 
-/** Move a block (with what it dominates) to just after `afterBid` (or START). */
+/** Move a block (with what it dominates) to directly after `afterBid` (or START). */
 export function moveBlock(state: EditorState, _env: Env, bid: string, afterBid: string, levelDelta = 0): Gesture | null {
     const doc = state.doc;
     let idx = -1, afterIdx = -1;

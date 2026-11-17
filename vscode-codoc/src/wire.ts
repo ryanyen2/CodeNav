@@ -1,5 +1,5 @@
 /**
- * wire.ts — the messages the editor page and its host exchange.
+ * wire.ts: the messages the editor page and its host exchange.
  *
  * The page (web/editor/app.ts) is one bundle that runs in two places. In VS
  * Code it is a webview and its host is the extension (host/provider.ts). On the

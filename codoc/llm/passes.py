@@ -6,15 +6,15 @@ an answer becomes.
 
 Bootstrap (``loops/bootstrap.py``):
 
-* :func:`propose_brief` — one call before anything else, over the project's own
+* :func:`propose_brief`: one call before anything else, over the project's own
   prose: README, package metadata, module docstrings and leading comments. It is
   the only pass that reads what the project says about itself rather than what
   its code does. Its output rides in every later bootstrap prompt, so a file is
   described as part of something rather than on its own terms.
-* :func:`propose_file_features_raw` — one call per source file. The model sees
+* :func:`propose_file_features_raw`: one call per source file. The model sees
   one file's chunks, so it cannot put unrelated symbols from other files into
   the same node. It returns ``add_node`` ops, optionally nested.
-* :func:`propose_organization_raw` — one call after every file is processed.
+* :func:`propose_organization_raw`: one call after every file is processed.
   Given the file-level features and their call/import coupling, it groups them
   under a few theme parents (``add_node`` themes, ``move_node`` of features).
 
@@ -23,13 +23,13 @@ feature names it as ``parent_id``, and the caller maps those to real ids.
 
 Reflect (``loops/reflect.py``):
 
-* :func:`propose_tree_update_raw` — one call over a whole change set, the
+* :func:`propose_tree_update_raw`: one call over a whole change set, the
   relevant subtree and every node title. Seeing all candidates and all titles
   at once is what lets it fold sibling chunks into one node.
 
 Translate (``loops/translate.py``):
 
-* :func:`propose_translations` — one call per batch of features.
+* :func:`propose_translations`: one call per batch of features.
 """
 from __future__ import annotations
 
@@ -72,12 +72,12 @@ def propose_brief(
     """One LLM call: read the project's own prose and form a picture of the whole.
 
     Runs before any file is described. Everything it produces is handed to every
-    per-file call, which is the point: without it each file is named on its own
+    per-file call, because without it each file is named on its own
     terms, and a tree assembled from twelve independent readings has no account
     of what the program is for or which of its rules were choices.
 
     Returns a dict with purpose, audience, out_of_scope, vocabulary, decisions
-    and ordering. Every field may be empty — an honest empty brief is worth more
+    and ordering. Every field may be empty. An empty brief is worth more
     than a guessed one, and the file prompt is written to cope with either.
     """
     raw = _call(
@@ -189,7 +189,7 @@ def propose_tree_update_raw(
             subtree=json.dumps(subtree, indent=2, sort_keys=True, ensure_ascii=False),
             all_titles=titles_outline(all_titles),
         )
-    except Exception as exc:  # noqa: BLE001 — a bad reply must not sink the pass
+    except Exception as exc:  # noqa: BLE001 (a bad reply must not sink the pass)
         _log.warning("codoc: unparseable tree-update response (%s); no ops", exc)
         return []
     return raw_ops(raw)

@@ -1,5 +1,5 @@
 /**
- * drag.ts — drag handles.
+ * drag.ts: drag handles.
  *
  * A handle before every block; dropping it above or below another block moves
  * the dragged block, with everything it dominates, through `moveBlock`, which

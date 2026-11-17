@@ -10,30 +10,29 @@ trusted because it runs locally, not because the URL is. ``blocked_ip`` is also
 what the hub's Consult gate (``serve/consult.py``) refuses addresses with.
 
 Guards, in order:
-- scheme allowlist (``http``/``https`` only — no ``file://``, no ``data:``, …).
+- scheme allowlist (``http``/``https`` only; no ``file://``, no ``data:``, …).
 - DNS-resolve the hostname and reject if ANY resolved address is
   private/loopback/link-local/multicast/reserved/unspecified (the ``ipaddress``
   module's own classification) or carrier-grade NAT. This is what stops a bare-IP or DNS-rebinding SSRF
   attempt aimed at cloud metadata endpoints (169.254.169.254), localhost, or an
-  internal service — a check on the literal hostname string alone would not catch
+  internal service. A check on the literal hostname string alone would not catch
   a hostname that *resolves* to one of those.
-- manual redirect handling (``follow_redirects=False``) — each hop is re-resolved
+- manual redirect handling (``follow_redirects=False``): each hop is re-resolved
   and re-validated before being followed, capped at a small number of hops, so a
   public URL that redirects to an internal one is still caught.
 - a streamed read capped at ``max_bytes``, with short connect/read timeouts.
 
-Residual risk (documented, not silently assumed away): there is a TOCTOU gap
-between the DNS check here and the connection httpx makes internally — a
-sufficiently active DNS-rebinding attacker could in principle swap the resolved
-address between our check and the actual connect. Closing that fully requires
+Residual risk: there is a TOCTOU gap between the DNS check here and the
+connection httpx makes internally. A sufficiently active DNS-rebinding
+attacker could in principle swap the resolved address between our check and the actual connect. Closing that fully requires
 pinning the connection to the validated IP (a custom transport + manual TLS SNI
 handling), which is real complexity this scope doesn't carry given the trust
 boundary above (this never runs against attacker-supplied input server-side). If
 this helper is ever reused somewhere that fetches on behalf of untrusted remote
 input, that gap needs closing first.
 
-Any violation returns ``None`` rather than raising — a blocked/unreachable URL
-just means "nothing to lift this pass," never a loop crash.
+Any violation returns ``None`` rather than raising: a blocked/unreachable URL
+means "nothing to lift this pass," never a loop crash.
 """
 from __future__ import annotations
 
@@ -92,7 +91,7 @@ def safe_get(
     URL (or any redirect hop) fails the SSRF guard, times out, or errors.
 
     Lazily imports ``httpx`` (an optional ``media`` extra) so a codoc install
-    without it simply never fetches — the caller (a plugin's ``lift``) treats
+    without it never fetches. The caller (a plugin's ``lift``) treats
     ``None`` as "no enrichment this pass," not an error.
     """
     try:

@@ -54,10 +54,9 @@ KINDS = frozenset({
 # inverse that ``plan.reject`` applies.
 # `text.delete` and `text.restore` are here for one case only, and the handler
 # enforces it: a plan taking back words IT proposed. That is the proposal
-# getting smaller, not a second act on the trunk — and it is why a suggester
-# needs no untagged op at all, which is what Google Docs' suggestion model has
-# always said. A plan may not delete anybody else's characters: `suggest_del`
-# is how a proposal asks for that.
+# getting smaller, not a second act on the trunk, and it is why a suggester
+# needs no untagged op at all. A plan may not delete anybody else's
+# characters: `suggest_del` is how a proposal asks for that.
 PLANNABLE = frozenset({TEXT_INSERT, TEXT_DELETE, TEXT_RESTORE, TEXT_MARK,
                        BLOCK_ADD, BLOCK_SET, BLOCK_SPLIT, BLOCK_MOVE, BIND_ATTACH})
 

@@ -1,5 +1,5 @@
 /**
- * pidfile.ts — `.codoc/watch.pid`, the daemon's claim on a repository.
+ * pidfile.ts: `.codoc/watch.pid`, the daemon's claim on a repository.
  *
  * The file holds the daemon's process id as decimal text and nothing else. The
  * daemon writes it when it starts and removes it when it exits; a daemon that

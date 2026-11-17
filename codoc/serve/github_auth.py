@@ -1,24 +1,24 @@
-"""github_auth.py — the live GitHub edge for the hub's authorization.
+"""github_auth.py: the live GitHub edge for the hub's authorization.
 
 ``auth.py`` is the pure decision layer (permission→capability, sessions, the
 ``authorize`` gate). This module is the thin LIVE edge that talks to GitHub and
 plugs into that layer:
 
-  • the OAuth authorization-code web flow — a visitor signs in on github.com and
-    the hub exchanges the returned code for a short-lived user token just long
-    enough to read their login;
-  • the collaborator-permission check — run with the MAINTAINER / App-installation
+  • the OAuth authorization-code web flow: a visitor signs in on github.com and
+    the hub exchanges the returned code for a short-lived user token, held only
+    long enough to read their login;
+  • the collaborator-permission check, run with the MAINTAINER / App-installation
     token (NEVER the visitor's), because ``GET /repos/{owner}/{repo}/collaborators/
     {login}/permission`` requires the caller to have push access .
 
 HTTP is injected (``http_get`` / ``http_post`` callables), so URL-building and
 response-parsing are unit-testable without network; the live default uses ``httpx``
-(the ``serve`` extra). Config comes from the environment — see
-``docs/serve-deployment.md``:
+(the ``serve`` extra). Config comes from the environment (see
+``docs/serve-deployment.md``):
 
     CODOC_GITHUB_CLIENT_ID / CODOC_GITHUB_CLIENT_SECRET  the OAuth App
     CODOC_GITHUB_TOKEN     a token WITH PUSH ACCESS to the repo (App installation
-                           token or a maintainer PAT) — used ONLY for the
+                           token or a maintainer PAT), used ONLY for the
                            collaborator-permission call, never handed to any agent
     CODOC_SERVE_REPO       owner/repo being served
     CODOC_GITHUB_API       API base (default https://api.github.com; set for GHE)
@@ -128,7 +128,7 @@ class GithubOAuth:
         }
         try:
             status, payload = self._post(url, data, {"Accept": "application/json"})
-        except Exception:  # noqa: BLE001 — a network failure denies by default
+        except Exception:  # noqa: BLE001 (a network failure denies by default)
             return None
         if status != 200:
             return None
@@ -149,7 +149,7 @@ class GithubOAuth:
 
 class GithubCollaboratorResolver:
     """Implements the ``CollaboratorResolver`` protocol against the live GitHub REST
-    API, using the MAINTAINER/App token (which has push access) — never a visitor
+    API, using the MAINTAINER/App token (which has push access), never a visitor
     token. A non-collaborator (404) or any error resolves to ``None`` so
     ``auth.authorize`` denies by default."""
 
@@ -164,7 +164,7 @@ class GithubCollaboratorResolver:
                f"/collaborators/{login}/permission")
         try:
             status, payload = self._get(url, _bearer(self.config.token))
-        except Exception:  # noqa: BLE001 — deny by default on any failure
+        except Exception:  # noqa: BLE001 (deny by default on any failure)
             return None
         if status != 200:
             return None  # 404 = not a collaborator; 403 = our token lacks push access
@@ -202,5 +202,5 @@ def _httpx_post(url: str, data: dict, headers: dict) -> "tuple[int, object]":
 def _json_or_none(resp) -> object:
     try:
         return resp.json()
-    except Exception:  # noqa: BLE001 — non-JSON body
+    except Exception:  # noqa: BLE001 (non-JSON body)
         return None

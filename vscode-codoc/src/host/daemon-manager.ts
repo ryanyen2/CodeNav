@@ -1,5 +1,5 @@
 /**
- * daemon-manager.ts — starts and stops `codoc watch` for a repository.
+ * daemon-manager.ts: starts and stops `codoc watch` for a repository.
  *
  * One daemon serves a repository, whoever started it: this window, another
  * window, `codoc serve`, or a person in a terminal. `startDaemon` is safe to

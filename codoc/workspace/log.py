@@ -157,7 +157,7 @@ def list_sessions(codoc_dir: str | Path) -> list[Path]:
 
 def list_archived(codoc_dir: str | Path) -> list[Path]:
     """The session files a fold moved aside. Nothing reads them in the ordinary
-    case — that is what folding them means — but a merge of two folds has to."""
+    case (that is what folding them means), but a merge of two folds has to."""
     d = log_dir(codoc_dir) / ARCHIVE_DIR
     return sorted(d.glob("*.jsonl")) if d.is_dir() else []
 
@@ -264,7 +264,7 @@ def submit(codoc_dir: str | Path, client: str, subs: list[Submission]) -> Path:
 @dataclass
 class InboxLine:
     """One complete inbox line: a valid submission, or the error that makes it
-    invalid (acked back so the client learns), and the offset just past it."""
+    invalid (acked back so the client learns), and the offset past its end."""
     sub: Submission | None
     error: str | None
     end: int
@@ -339,7 +339,7 @@ def ack(codoc_dir: str | Path, client: str, cid: str, op: Op | None = None, *, e
         status: str | None = None) -> None:
     """Tell the client what became of ``cid``: the op it minted (and its
     conflict, if any), or the error that kept it from minting one. ``status``
-    is for an outcome that is not a refusal — a whole-text write that asked for
+    is for an outcome that is not a refusal: a whole-text write that asked for
     nothing mints no op and conflicts with nothing."""
     path = inbox_dir(codoc_dir) / f"{client}.ack.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)

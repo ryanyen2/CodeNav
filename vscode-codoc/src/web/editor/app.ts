@@ -1,5 +1,5 @@
 /**
- * app.ts — the editor page: a tree pane, a toolbar, the document, a margin of
+ * app.ts: the editor page, made of a tree pane, a toolbar, the document, a margin of
  * comment cards and a status line.
  *
  * This is the entry of the page bundle, and it runs as soon as it loads. It
@@ -108,7 +108,7 @@ function renderTree(proj: Projection): void {
             row.addEventListener('click', () => reveal(h.id));
             // Step the cursor off the row before removing it. `at` walks the
             // live children and usually points at the row being replaced;
-            // `insertBefore` throws on a reference node that is no longer a child.
+            // `insertBefore` throws on a reference node that has been removed.
             if (at === hit?.row) at = at.nextElementSibling;
             hit?.row.remove();
             hit = { key, row };
@@ -257,7 +257,7 @@ function handoffAll(): void {
     editor?.flush();
     const batch = newBatch();
     // No `covers`: the applier fills it with its own frontier, which includes
-    // the ops just flushed. The projection's frontier predates them.
+    // the ops flushed above. The projection's frontier predates them.
     const fids = Object.entries(projection.phases).filter(([, p]) => p === 'edited').map(([f]) => f);
     submit(fids.map(fid => ({ cid: newCid(), batch, kind: 'feature.handoff', target: { fid }, payload: {} })));
 }

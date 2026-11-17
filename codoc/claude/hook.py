@@ -80,17 +80,17 @@ def _resolve_features(
     A file can be bound to several features (a shared helper, or every feature
     of a single-file project). When it is, narrow:
 
-    1. **Symbol level** — for an ``Edit``/``MultiEdit`` the exact text being
+    1. **Symbol level**: for an ``Edit``/``MultiEdit`` the exact text being
        changed is known (``old_string``); map it to the enclosing code symbol
        (a tree-sitter parse via :mod:`codoc.index.lang`) and attribute only to
        the feature(s) bound to that symbol.
-    2. **File level** — otherwise every feature bound to the file.
+    2. **File level**: otherwise every feature bound to the file.
     """
     entries = _bindings_by_file(codoc_dir).get(rel_path, [])
     all_fids = list(dict.fromkeys(e["feature_id"] for e in entries if "feature_id" in e))
     if len(all_fids) <= 1:
         return all_fids
-    # 1. symbol level — most precise, when this is a locatable edit
+    # 1. symbol level: most precise, when this is a locatable edit
     if tool_name and tool_input is not None and abs_path:
         scoped = _symbol_scoped_features(abs_path, rel_path, tool_name, tool_input, entries)
         scoped = [f for f in scoped if f in set(all_fids)]
@@ -108,8 +108,8 @@ def _symbol_scoped_features(
     back to ``new_string`` when the edit already applied) in the file, map each
     touched line to the INNERMOST bound symbol containing it, and return those
     symbols' features. Returns ``[]`` when it can't attribute at the symbol level
-    — unsupported language, anchor not found, or no touched line falls inside a
-    bound symbol — so the caller falls back to the file level.
+    (unsupported language, anchor not found, or no touched line falls inside a
+    bound symbol), so the caller falls back to the file level.
     Best-effort throughout: any parse/IO failure yields ``[]``, never raises.
     """
     edits: list[dict] = []
@@ -150,7 +150,7 @@ def _symbol_scoped_features(
         if lang is None:
             return []
         chunks = get_adapter(lang).extract_chunks(rel_path, source)
-    except Exception:  # noqa: BLE001 — parse is best-effort; never break the hook
+    except Exception:  # noqa: BLE001 (parse is best-effort; never break the hook)
         return []
 
     # symbol_path → feature_ids bound to it (only symbols bound in THIS file)
@@ -214,7 +214,7 @@ def handle_session_start(payload: dict[str, Any], codoc_dir: str) -> None:
 
 
 def _reopen_epoch_if_needed(payload: dict[str, Any], codoc_dir: str) -> None:
-    """Re-open the agent epoch when a turn starts — the rising edge for turns 2+.
+    """Re-open the agent epoch when a turn starts: the rising edge for turns 2+.
 
     ``SessionStart`` opens the epoch and ``Stop`` closes it at the end of EVERY
     turn, so without a re-opener every turn after the first would run with the
@@ -229,11 +229,11 @@ def _reopen_epoch_if_needed(payload: dict[str, Any], codoc_dir: str) -> None:
     Ownership mirrors :func:`handle_stop`: this session re-opens only its OWN
     closed epoch (turn 2+ of the same session), or claims the slot fresh when the
     closed epoch belongs to a session that is gone (a missed SessionStart). An
-    OPEN epoch — ours or a concurrent session's — is never touched.
+    OPEN epoch, ours or a concurrent session's, is never touched.
 
     ``touched`` resets on re-open: Stop closes each turn and the daemon reflects
     per turn, so each turn starts its own write set. ``recent`` (the rolling log
-    of tool calls) survives — it is display state, not a write set."""
+    of tool calls) survives, since it is display state, not a write set."""
     data = _read_activity(codoc_dir)
     ep = data.get("epoch") or {}
     if ep.get("open", False):
@@ -305,7 +305,7 @@ def _handle_tool(
 ) -> None:
     """Record a tool-call touch event in activity.json."""
     if phase == "pre":
-        # Turn rising edge (see _reopen_epoch_if_needed) — before the touch is
+        # Turn rising edge (see _reopen_epoch_if_needed), before the touch is
         # recorded, so the file lands in the freshly-reset per-turn write set.
         _reopen_epoch_if_needed(payload, codoc_dir)
     tool_name = payload.get("tool_name", "")
@@ -409,13 +409,13 @@ def _nudge_if_queue_grew(codoc_dir: str) -> None:
     ``additionalContext`` reaches the model within one tool round-trip. Emits
     ONLY when the count exceeds the last count this hook
     announced (tracked in activity.json), so a static queue nudges once, not on
-    every tool call — and a queue the agent is draining (count falling) stays
+    every tool call, and a queue the agent is draining (count falling) stays
     silent."""
     n = _queue_size(codoc_dir)
     data = _read_activity(codoc_dir)
     seen = int(data.get("realize_seen") or 0)
     if n == 0:
-        if seen:  # queue drained/closed — reset so the NEXT queue nudges again
+        if seen:  # queue drained/closed: reset so the NEXT queue nudges again
             data["realize_seen"] = 0
             _write_activity(codoc_dir, data)
         return
@@ -439,7 +439,7 @@ def handle_post_tool(payload: dict[str, Any], codoc_dir: str) -> None:
     _handle_tool(payload, codoc_dir, phase="post")
     try:
         _nudge_if_queue_grew(codoc_dir)
-    except Exception:  # noqa: BLE001 — a nudge must never break the turn
+    except Exception:  # noqa: BLE001 (a nudge must never break the turn)
         pass
 
 
@@ -452,7 +452,7 @@ def handle_user_prompt(payload: dict[str, Any], codoc_dir: str) -> None:
     reminder to run ``/codoc:sync``. Silent when nothing is queued."""
     try:
         _reopen_epoch_if_needed(payload, codoc_dir)
-    except Exception:  # noqa: BLE001 — epoch upkeep must never break the turn
+    except Exception:  # noqa: BLE001 (epoch upkeep must never break the turn)
         pass
     realize = Path(codoc_dir) / REALIZE
     if not realize.exists():
@@ -504,11 +504,11 @@ def main(argv: list[str] | None = None) -> int:  # noqa: D103
     cwd = payload.get("cwd") or os.getcwd()
     codoc_dir = _find_codoc_dir(cwd)
     if codoc_dir is None:
-        return 0  # repo not codoc-initialized — stay out of the way
+        return 0  # repo not codoc-initialized: stay out of the way
 
     try:
         handler(payload, codoc_dir)
-    except Exception:  # noqa: BLE001 — never block the agent
+    except Exception:  # noqa: BLE001 (never block the agent)
         pass
 
     return 0

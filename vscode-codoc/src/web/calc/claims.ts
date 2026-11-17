@@ -1,5 +1,5 @@
 /**
- * claims.ts — what to draw, from what the projection says.
+ * claims.ts: what to draw, from what the projection says.
  *
  * Every visual claim on the prose is read off the projection: a run's actor
  * and whether its op is inside the realized frontier give the human channel

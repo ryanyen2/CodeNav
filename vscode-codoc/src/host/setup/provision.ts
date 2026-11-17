@@ -1,5 +1,5 @@
 /**
- * provision.ts — installs the codoc Python core and remembers where it landed.
+ * provision.ts: installs the codoc Python core and remembers where it landed.
  *
  * `ensureUv` finds `uv` on PATH or runs its standalone installer.
  * `provisionCodoc` installs Python 3.11 and the wheel shipped in `bundled/`

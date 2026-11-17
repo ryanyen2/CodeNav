@@ -1,5 +1,5 @@
 /**
- * decorations.ts — everything drawn on the prose, as ProseMirror decorations.
+ * decorations.ts: everything drawn on the prose, as ProseMirror decorations.
  *
  * Nothing drawn is stored in the document. calc/claims.ts says what to paint
  * on each block in scalar offsets; `decorationsFor` places those paints at

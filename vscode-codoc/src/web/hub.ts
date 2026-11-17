@@ -1,5 +1,5 @@
 /**
- * hub.ts — the page's host connection when it runs in a browser on the hub.
+ * hub.ts: the page's host connection when it runs in a browser on the hub.
  *
  * The hub's HTML loads this script before the page bundle. It defines
  * `acquireVsCodeApi`, the function a VS Code webview gets from its host, so

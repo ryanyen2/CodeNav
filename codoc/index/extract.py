@@ -4,11 +4,11 @@
 the rows of changed files. ``Graph`` holds the result.
 
 Edge kinds:
-  contain  — synthesized from symbol_path nesting (MyClass.method → MyClass)
-  call     — function/method call site
-  import   — import statement
-  inherit  — base class in class definition
-  type_ref — type annotation reference
+  contain:   synthesized from symbol_path nesting (MyClass.method → MyClass)
+  call:      function/method call site
+  import:    import statement
+  inherit:   base class in class definition
+  type_ref:  type annotation reference
 
 internal=1 means the dst_symbol was resolved to a known project symbol;
 internal=0 keeps the edge for display but traversal follows internal=1 only.
@@ -71,7 +71,7 @@ def _resolve(
     Resolution order:
     1. Strip self/cls/super prefix (method calls).
     2. Exact symbol_path lookup.
-    3. Leaf-name lookup — same-file preference first.
+    3. Leaf-name lookup, preferring the same file.
     4. Module-prefix match for dotted names.
     5. First project candidate (best guess).
     """

@@ -1,5 +1,5 @@
 /**
- * markdown.ts — the reading half of the Markdown form, for paste.
+ * markdown.ts: the reading half of the Markdown form, for paste.
  *
  * A port of `codoc/calculus/block_md.parse` and `inline_md.parse`; the format
  * is docs/model.md, "The Markdown form". Both must give the same blocks and

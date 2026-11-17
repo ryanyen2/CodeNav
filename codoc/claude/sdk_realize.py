@@ -3,13 +3,13 @@
 ``claude_agent_sdk.query("/codoc:sync")`` streams every agent message back, so
 codoc reacts to each action as it happens:
 
-* **terminal** — one compact line per action (edit / read / reflect / fetch /
+* **terminal**: one compact line per action (edit / read / reflect / fetch /
   run), so the person can see what the agent is doing without reading the
   diff. Plain text, dim ANSI only on a tty.
-* **activity.json** — every file touch is recorded through the same code path
+* **activity.json**: every file touch is recorded through the same code path
   the interactive hooks use (``hook._handle_tool``), and a ``mcp__codoc__*``
   call marks the features it names ``reflecting``.
-* **status.json** — the pass holds the realizing lease and renews it from its
+* **status.json**: the pass holds the realizing lease and renews it from its
   own tool activity.
 
 Runnable as ``python -m codoc.claude.sdk_realize <root>`` so the daemon can
@@ -116,7 +116,7 @@ class RealizeMonitor:
         self._last_heartbeat = now
         try:
             renew_realizing(self.codoc_dir)
-        except Exception:  # noqa: BLE001 — the heartbeat is advisory, never break realize
+        except Exception:  # noqa: BLE001 (the heartbeat is advisory, never break realize)
             pass
 
     def _record_touch(self, name: str, tool_input: dict) -> None:
@@ -129,7 +129,7 @@ class RealizeMonitor:
             # REQUESTED, matching the interactive PreToolUse hook semantics.
             _handle_tool({"tool_name": name, "tool_input": tool_input},
                          self.codoc_dir, phase="pre")
-        except Exception:  # noqa: BLE001 — signals never break the run
+        except Exception:  # noqa: BLE001 (signals never break the run)
             pass
 
     # -- event entrypoints --------------------------------------------------
@@ -204,7 +204,7 @@ async def consume_stream(monitor: RealizeMonitor, stream: Any) -> None:
     try:
         async for msg in stream:
             monitor.handle_message(msg)
-    except Exception as exc:  # noqa: BLE001 — the queue file survives; report it
+    except Exception as exc:  # noqa: BLE001 (the queue file survives; report it)
         monitor.errored = True
         monitor.result_text = monitor.result_text or f"{type(exc).__name__}: {exc}"
 
@@ -217,7 +217,7 @@ async def _run(root_dir: str, codoc_dir: str, *, permission_mode: str,
         cwd=root_dir,
         permission_mode=permission_mode,
         # Load the repo's .mcp.json (codoc MCP server), .claude/settings.json
-        # (the codoc hooks) and commands (/codoc:sync) — the SDK loads no
+        # (the codoc hooks) and commands (/codoc:sync). The SDK loads no
         # filesystem settings unless asked.
         setting_sources=["user", "project", "local"],
     )
@@ -232,7 +232,7 @@ async def _run(root_dir: str, codoc_dir: str, *, permission_mode: str,
     os.environ[REALIZE_OWNER_ENV] = owner
     try:
         write_realizing(codoc_dir, detail=_DETAIL, owner=owner)
-    except Exception:  # noqa: BLE001 — status is advisory
+    except Exception:  # noqa: BLE001 (status is advisory)
         pass
 
     printer("codoc realize · /codoc:sync · claude-agent-sdk")
@@ -243,8 +243,9 @@ async def _run(root_dir: str, codoc_dir: str, *, permission_mode: str,
     os.environ.setdefault("CODOC_EPOCH_ORIGIN", "loop_b")
     try:
         await consume_stream(monitor, query(prompt="/codoc:sync", options=options))
-    except Exception:  # noqa: BLE001 — a SYNCHRONOUS raise from query() (invalid
-        # options, auth failure) lands here; mark failed, never propagate.
+    except Exception:  # noqa: BLE001
+        # A SYNCHRONOUS raise from query() (invalid options, auth failure) lands
+        # here; mark failed, never propagate.
         monitor.errored = True
     finally:
         if prev_origin is None:

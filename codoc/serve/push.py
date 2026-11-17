@@ -33,7 +33,7 @@ def _stamp(path: Path) -> tuple[float, int] | None:
 def status_message(codoc_dir: Path, actor: str = "") -> dict | None:
     """The status the editor reads, plus the three facts only the host knows:
     the tree's language, who this viewer is (undo inverts their batches), and
-    what they may write — a contributor's edits ride as a plan of theirs, so
+    what they may write. A contributor's edits ride as a plan of theirs, so
     the page must not offer them a verdict or a hand-off on somebody else's."""
     st = _read(codoc_dir / STATUS)
     if st is None:
@@ -80,7 +80,7 @@ class Feed:
             # Count back from the end of the last COMPLETE line, not from the
             # end of the file: a daemon caught mid-append leaves a half-written
             # tail, and subtracting the complete lines from the file's size
-            # lands the offset that many bytes inside the oldest replayed line —
+            # lands the offset that many bytes inside the oldest replayed line,
             # which then parses as garbage and takes its ack with it.
             data = ack.read_bytes()
             complete = data.split(b"\n")[:-1]
@@ -91,10 +91,11 @@ class Feed:
         # Acks FIRST, which is the order on disk: the daemon acks during the
         # drain and publishes afterwards. A projection ahead of the ack that
         # releases a block is skipped for that block (the page is right about a
-        # block it still holds), so sending it first made the hub the one
-        # surface where that always happened. The editor recovers either way —
-        # it re-reads a released block the projection's frontier covers — but
-        # the two surfaces should not differ in the order they deliver.
+        # block it still holds), so sending the projection first would make the
+        # hub the only surface where that always happens. The editor recovers
+        # either way (it re-reads a released block the projection's frontier
+        # covers), but the two surfaces should not differ in the order they
+        # deliver.
         out: list[dict] = []
         acks = self._acks()
         if acks:
@@ -134,8 +135,8 @@ class Feed:
             return []
         # A file shorter than where we stopped has been rotated (`rotate_acks`
         # trims to the newest lines at session open), not gone quiet. Reading
-        # from the start again costs a replay of acks the page already has —
-        # which is idempotent — where not reading leaves every block held.
+        # from the start again costs a replay of acks the page already has,
+        # which is idempotent; not reading would leave every block held.
         if path.stat().st_size < self.ack_offset:
             self.ack_offset = 0
         with path.open("rb") as fh:
@@ -160,12 +161,12 @@ async def event_source(codoc_dir: str | Path, client: str, *, is_disconnected=No
     watch on ``.codoc`` would also wake on every index write).
 
     The door is re-asked every tick, because a stream is a long-lived READ of
-    the whole tree and the door was only checked at connect: a collaborator
-    removed from the repository kept receiving every projection until they
-    closed the tab, for as long as the browser held it open. Two questions —
-    the tracked roles table, which is what a revocation writes and is asked
-    here, and ``still_allowed``, which the app fills in with its own session
-    check. A revoked viewer's stream ends; their next request meets the door.
+    the whole tree: a door checked only at connect would let a collaborator
+    removed from the repository keep receiving every projection for as long as
+    the browser held the tab open. It asks two questions: the tracked roles
+    table, which is what a revocation writes, and ``still_allowed``, which the
+    app fills in with its own session check. A revoked viewer's stream ends;
+    their next request meets the door.
     """
     feed = Feed(codoc_dir, client)
     actor = L.actor_for(client)

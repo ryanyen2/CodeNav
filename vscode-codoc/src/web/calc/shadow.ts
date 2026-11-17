@@ -1,5 +1,5 @@
 /**
- * shadow.ts — a block's live characters with their identities.
+ * shadow.ts: a block's live characters with their identities.
  *
  * The store's truth for a field, as the editor last saw it, advanced by the
  * editor's own unacked ops. It answers the one question recording needs: which

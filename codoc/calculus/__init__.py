@@ -7,19 +7,20 @@ imports the rest of codoc.
 
 Module map:
 
-- ``ids``    — op, character, block, plan and session identities.
-- ``rank``   — fractional order keys for blocks.
-- ``text``   — ``Text``: a sequence of attributed segments (live and dead) plus
+- ``ids``:     op, character, block, plan and session identities.
+- ``rank``:    fractional order keys for blocks.
+- ``text``:    ``Text``: a sequence of attributed segments (live and dead) plus
                marks over character identity. Every text mutation lives here.
-- ``doc``    — ``Block`` and the heading fold (features are a view).
-- ``ops``    — the ``Op`` record and its wire form.
-- ``store``  — the in-memory state the applier mutates.
-- ``apply``  — ``apply(store, op)``: total, deterministic, O(touched blocks),
+- ``doc``:     ``Block`` and the heading fold (features are a view).
+- ``ops``:     the ``Op`` record and its wire form.
+- ``store``:   the in-memory state the applier mutates.
+- ``apply``:   ``apply(store, op)``: total, deterministic, O(touched blocks),
                records canonical payloads, inverses and conflicts.
-- ``ingest`` — whole new text for one field → ops: the one place a diff decides.
-- ``inline_md``, ``block_md`` — the Markdown codecs for text and for blocks.
-- ``derive`` — pure views over the store: what a feature says, who wrote which
+- ``ingest``:  whole new text for one field → ops; the only module where a diff
+               decides what changed.
+- ``inline_md``, ``block_md``: the Markdown codecs for text and for blocks.
+- ``derive``:  pure views over the store: what a feature says, who wrote which
                word, the three channels, the phase, the projection.
-- ``export`` — the document as ``tree.codoc``.
-- ``window`` — the timeline window: the last ops and the text around them.
+- ``export``:  the document as ``tree.codoc``.
+- ``window``:  the timeline window: the last ops and the text around them.
 """

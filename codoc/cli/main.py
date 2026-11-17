@@ -1,4 +1,4 @@
-"""codoc — the command line.
+"""codoc: the command line.
 
     codoc init        index the repo, build the first tree, install the agent hooks
     codoc watch       the daemon: reflect code into the tree, apply edits, publish

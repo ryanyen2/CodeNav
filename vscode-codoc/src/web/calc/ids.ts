@@ -1,5 +1,5 @@
 /**
- * ids.ts — the identifiers a page mints.
+ * ids.ts: the identifiers a page mints.
  *
  * A block id (`b-` + 12 hex) names a block for good. A batch id groups the
  * submissions of one gesture or one settle of typing, and is the undo unit. A

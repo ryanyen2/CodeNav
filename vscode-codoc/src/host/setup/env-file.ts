@@ -1,5 +1,5 @@
 /**
- * env-file.ts — the text of the repository's `.env`, edited in place.
+ * env-file.ts: the text of the repository's `.env`, edited in place.
  *
  * codoc's Python side loads the repository-root `.env` in every process it
  * runs as: the daemon, the hooks and the MCP server, most of which the

@@ -5,7 +5,7 @@ Given a change set from the index, the pass:
 1. maintains bindings deterministically: ``bind.refresh`` for modified bound
    chunks, ``bind.detach`` for removed ones, ``bind.attach`` for relocations
    (identical content moved, or a unique AST shape renamed);
-2. opens a ``delete`` plan for every feature that just lost its last binding
+2. opens a ``delete`` plan for every feature that lost its last binding in this pass
    (the loop never deletes; it proposes);
 3. asks one LLM pass to place the added chunks and repair stale prose. Each
    edit in its answer is compiled by ``loops.edits`` and landed by ``_land``:
@@ -57,7 +57,7 @@ class ReflectResult:
     refused: list[tuple[str, str]] = field(default_factory=list)   # (bid or kind, reason)
     impacted: list[str] = field(default_factory=list)
     caused: dict[str, str] = field(default_factory=dict)            # fid -> handoff op cited
-    removed: set[tuple[str, str]] = field(default_factory=set)      # (file, symbol) the code no longer has
+    removed: set[tuple[str, str]] = field(default_factory=set)      # (file, symbol) removed from the code
     ops: list[Op] = field(default_factory=list)                     # everything this pass wrote
 
     def summary(self) -> str:
@@ -256,7 +256,7 @@ def _emptied(store: Store) -> list[str]:
             continue
         # "Once had code" is any attach it ever held, not a detach: a feature
         # whose only symbol was re-attached elsewhere (I8 displacement) has no
-        # detach of its own and is just as empty. The store remembers it, so a
+        # detach of its own and is equally empty. The store remembers it, so a
         # snapshot does not make the tree forget.
         if h.id in store.bound_once:
             out.append(h.id)

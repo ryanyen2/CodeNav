@@ -182,7 +182,7 @@ def pdf_lift(ctx: LiftContext) -> dict | None:
                 if sum(map(len, parts)) >= EXCERPT_MAX:
                     break
             text, pages = "\n".join(parts), len(reader.pages)
-        except Exception:  # noqa: BLE001 — a bad file is "nothing to lift"
+        except Exception:  # noqa: BLE001 (a bad file is "nothing to lift")
             text, pages = "", 0
     return {"status": "ok" if text else "error", "extracted": ref, "pages": pages, "excerpt": _truncate(text), "attempted_at": now}
 

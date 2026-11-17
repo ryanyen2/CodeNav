@@ -1,5 +1,5 @@
 /**
- * paste.ts — what a paste brings, as pieces for `pasteBlocks` (commands.ts).
+ * paste.ts: what a paste brings, as pieces for `pasteBlocks` (commands.ts).
  *
  * Into prose: plain text that reads as Markdown with some structure (a
  * heading, a list item, a table, a fence, or an inline mark) becomes those

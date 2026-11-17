@@ -1,5 +1,5 @@
 /**
- * workspace.ts — which folder holds `.codoc`, and what the daemon says about it.
+ * workspace.ts: which folder holds `.codoc`, and what the daemon says about it.
  *
  * The extension host keeps no model of the tree. It needs the repository root,
  * whether that root has been initialised, whether a daemon is running, and the

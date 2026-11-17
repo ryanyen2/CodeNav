@@ -1,5 +1,5 @@
 /**
- * comments.ts — comment threads as kind blocks (docs/model.md, "Block kinds").
+ * comments.ts: comment threads as kind blocks (docs/model.md, "Block kinds").
  *
  * A comment is a block of kind `comment` (one message per block, `thread`
  * shared by replies) anchored by a `comment{block}` mark on the words it
@@ -97,7 +97,7 @@ export interface MarginHost {
     newBid(): string;
     featureOf(bid: string): string | null;
     /** The viewer, and whether they answer for the tree. A contributor may
-     *  resolve only a thread they started — the applier refuses the rest, and a
+     *  resolve only a thread they started. The applier refuses the rest, and a
      *  button whose refusal reloads the card is worse than no button. */
     me?(): { actor: string; decides: boolean };
 }

@@ -1,5 +1,5 @@
 /**
- * adopt.ts — a projection becomes ProseMirror nodes, per block.
+ * adopt.ts: a projection becomes ProseMirror nodes, per block.
  *
  * `blockNode` builds one block's node from its projected Text field. For a
  * heading or a prose block that is the live text with the projection's spans
@@ -90,7 +90,7 @@ export function adoptionPlan(current: Array<{ bid: string; head: number }>, proj
     }
     target.forEach((b, i) => {
         const c = have.get(b.id);
-        // A held block the page does not have is one the person just removed:
+        // A held block the page does not have is one the person removed:
         // the projection predates the gesture and does not get to bring it back.
         if (!c) { if (!held.has(b.id)) steps.push({ kind: 'insert', bid: b.id, index: i }); }
         else if (!held.has(b.id) && c.head !== b.head) steps.push({ kind: 'replace', bid: b.id, index: i });

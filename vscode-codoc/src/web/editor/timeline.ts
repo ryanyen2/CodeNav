@@ -1,5 +1,5 @@
 /**
- * timeline.ts — the History scrubber: a read-only reconstruction
+ * timeline.ts: the History scrubber, a read-only reconstruction
  * of the page at a position in the window, with that moment's change marked.
  * It never touches the live editor: pushing Tuesday's prose through the
  * recorder would record the author reverting the tree.

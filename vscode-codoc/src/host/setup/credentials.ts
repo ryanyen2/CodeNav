@@ -1,5 +1,5 @@
 /**
- * credentials.ts — the setup step that picks the LLM provider.
+ * credentials.ts: the setup step that picks the LLM provider.
  *
  * The person chooses one of three: Claude Code, which reuses their existing
  * login and needs no key, an OpenAI API key, or an Anthropic API key.

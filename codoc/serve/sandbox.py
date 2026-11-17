@@ -4,24 +4,24 @@ A remote-triggered realization runs with the maintainer's keys on a git worktree
 so its filesystem + tool scope must be an ENFORCED boundary, not a prompt
 instruction. This module is the pure, fully-tested policy:
 
-  • ``ALLOWED_TOOLS`` — a minimal set; Bash (arbitrary shell) is excluded.
-  • ``edit_allowed`` — an Edit/Write target must be inside the directive's
+  • ``ALLOWED_TOOLS``: a minimal set; Bash (arbitrary shell) is excluded.
+  • ``edit_allowed``: an Edit/Write target must be inside the directive's
     ``Edit only:`` scope AND outside the denylist (.github/, .claude/, .codoc/,
-    .mcp.json, the package manifest/lockfiles) — the paths a malicious suggestion
+    .mcp.json, the package manifest/lockfiles), the paths a malicious suggestion
     would use to persist (workflow injection, hook/MCP registration, dependency
     confusion) past PR review.
-  • ``under_root`` — every path a tool names stays inside the worktree: a
+  • ``under_root``: every path a tool names stays inside the worktree: a
     ``file_path`` or ``path``, and a ``Glob``'s ``pattern``, which is a path
     too (a ``Grep``'s is a regex and is not). A Read of ``~/.config/gh/hosts.yml`` is one hop
     from the token that opens the PR, and Write is confined to files the
     directive already names, so an unconfined Read is an exfiltration path with
     a publisher attached.
-  • ``is_secret_path`` — a Read, Grep or Glob target inside the worktree that
+  • ``is_secret_path``: a Read, Grep or Glob target inside the worktree that
     still looks like a secret (.env, *.key, a token cache) is refused, so the
     repo's own secrets can't be exfiltrated into a PR either. A Grep or Glob
     that names no path searches the worktree, which is the repository the agent
     is here to change.
-  • ``can_use_tool`` — the decision itself; ``out_of_scope_changes`` is the
+  • ``can_use_tool``: the decision itself; ``out_of_scope_changes`` is the
     post-run gate that fails PR creation when the agent wrote outside scope.
 
 This is the policy. The live wiring installs it as the SDK's **PreToolUse
@@ -35,7 +35,7 @@ from __future__ import annotations
 import fnmatch
 import os
 
-# Read/Edit/Write/Glob/Grep only — no Bash. WebFetch is allowed only through the
+# Read/Edit/Write/Glob/Grep only; no Bash. WebFetch is allowed only through the
 # Consult gate (``consult.py``), wired separately.
 ALLOWED_TOOLS = ("Read", "Edit", "Write", "Glob", "Grep")
 
@@ -82,7 +82,7 @@ def _posix(path: str, root: str | None = None) -> str:
 
 
 def _static_prefix(pattern: str) -> str:
-    """The part of a glob before its first wildcard — the deepest directory it
+    """The part of a glob before its first wildcard: the deepest directory it
     is certainly rooted at. ``/Users/*/.ssh/*`` is a question about ``/Users``;
     ``../../etc/*`` is one about ``../../etc``, which `under_root` resolves."""
     head = pattern.split("*")[0].split("?")[0].split("[")[0]
@@ -151,7 +151,7 @@ def can_use_tool(tool_name: str, tool_input: dict | None, *,
     target = ""
     if tool_input:
         # A GLOB takes its target in `pattern` too, and a pattern that names a
-        # place — absolute, or climbing out with `..` — lists files anywhere.
+        # place (absolute, or climbing out with `..`) lists files anywhere.
         # `Read` still refuses them, so what leaks is names, and a boundary that
         # answers "no" to the contents has no business answering "yes" to the
         # listing. Only the static prefix is a path; the glob part is not. A

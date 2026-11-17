@@ -1,5 +1,5 @@
 /**
- * keymap.ts — which key runs which gesture.
+ * keymap.ts: which key runs which gesture.
  *
  * Enter, Backspace, Delete, Tab and the `## `, `- `, `1. ` input rules change
  * the document's structure, so each is bound to a command that emits its own
