@@ -16,7 +16,7 @@
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { type EditorState, Selection, TextSelection, type Transaction } from '@tiptap/pm/state';
 
-import { ITEMS, PROSE, SOURCE, START, isOneLine, isProvisional, kindOf, nfc, pathOf, textField, type CharRef, type OpBody,
+import { ITEMS, PROSE, SOURCE, START, isOneLine, kindOf, nfc, pathOf, type CharRef, type OpBody,
          type Projection, type Span } from '../calc/projection';
 import { inlineNodes } from '../calc/adopt';
 import { SENT_MARKS, deleteOf, scalarOffset } from '../calc/recorder';
@@ -43,7 +43,7 @@ export interface Env {
     nextCid: () => string;
     /** Told why a gesture was not performed; the page shows it as a one-line notice. */
     refuse?: (why: string) => void;
-    /** The projection in hand: its frontier and the features' bindings. */
+    /** The projection in hand, for the features' bindings. */
     projection?: () => Projection;
 }
 
@@ -278,29 +278,18 @@ function merge(state: EditorState, env: Env, into: PMNode, intoPos: number, dyin
  * Backspace or Delete in an empty block that has nothing to merge with on that
  * side: an empty paragraph next to a heading, a source or a plugin block, or
  * an empty source block next to anything. The block is deleted and the caret
- * goes into its neighbour. An empty heading goes the same way only when it
- * has no body and owns no code; otherwise the person is pointed to Delete
- * feature, which says what goes with it.
+ * goes into its neighbour.
  */
 export function removeEmpty(state: EditorState, env: Env, dir: 'back' | 'forward'): Gesture | null {
     const { $from, empty } = state.selection;
     if (!empty || $from.depth !== 1 || $from.parent.content.size || state.doc.childCount < 2) return null;
     const cur = $from.parent;
     const kind = kindOf(cur);
+    if (kind !== 'paragraph' && !SOURCE.has(kind)) return null;
+    const n = $from.index(0) + (dir === 'back' ? -1 : 1);
+    if (n < 0 || n >= state.doc.childCount) return null;
+    if (kind === 'paragraph' && PROSE.has(kindOf(state.doc.child(n)))) return null;   // a merge does this
     const bid = cur.attrs.bid as string;
-    const at = $from.index(0);
-    if (kind === 'heading') {
-        const next = at + 1 < state.doc.childCount ? state.doc.child(at + 1) : null;
-        if ((next && next.type.name !== 'heading') || env.projection?.().bindings.by_feature[bid]?.length) {
-            env.refuse?.('Delete feature from the / menu');
-            return null;
-        }
-    } else {
-        if (kind !== 'paragraph' && !SOURCE.has(kind)) return null;
-        const n = at + (dir === 'back' ? -1 : 1);
-        if (n < 0 || n >= state.doc.childCount) return null;
-        if (kind === 'paragraph' && PROSE.has(kindOf(state.doc.child(n)))) return null;   // a merge does this
-    }
     if (!env.shadows.get(bid)) return null;
     let tr = state.tr.delete($from.before(1), $from.after(1));
     const near = dir === 'back' ? $from.before(1) - 1 : tr.mapping.map($from.after(1) + 1);
@@ -392,11 +381,10 @@ export function insertSource(state: EditorState, env: Env, kind: string, content
 }
 
 /**
- * Enter at the end of a paragraph that holds only ```` ```lang ```` or a table
- * row: the paragraph becomes a code block (a diagram for `mermaid`) or a table
- * holding that row. A row is `|…|…|`, and only one the person typed in this
- * block since the projection in hand: prose that happens to start and end
- * with a bar, or a row another actor wrote, splits as usual.
+ * Enter at the end of a paragraph that holds only ```` ```lang ```` or one
+ * table row (`|…|…|`): the paragraph becomes a code block (a diagram for
+ * `mermaid`) or a table holding that row. Prose such as `|x| is the absolute
+ * value` does not end with a bar and splits as usual.
  */
 export function sourceFromMarker(state: EditorState, env: Env): Gesture | null {
     const { $from, empty } = state.selection;
@@ -408,13 +396,7 @@ export function sourceFromMarker(state: EditorState, env: Env): Gesture | null {
         return lang === 'mermaid' ? insertSource(state, env, 'diagram', {}, '', text.length)
             : insertSource(state, env, 'code', lang ? { lang } : {}, '', text.length);
     }
-    if (!/^\|.*\|.*\|$/.test(text)) return null;
-    // Typed here since the projection: unacked, or by an op the projection does not show anywhere.
-    const proj = env.projection?.();
-    const seen = new Set(proj?.blocks.flatMap(b => textField(b, pathOf(b.kind))?.runs ?? []).map(r => r.op));
-    const typedHere = (r: CharRef) => isProvisional(r) || (proj !== undefined && !seen.has(r[0]));
-    return env.shadows.get($from.parent.attrs.bid as string)?.refs.every(typedHere)
-        ? insertSource(state, env, 'table', {}, text, text.length) : null;
+    return /^\|.*\|.*\|$/.test(text) ? insertSource(state, env, 'table', {}, text, text.length) : null;
 }
 
 /** An empty paragraph after the caret's block: the way out of a source block. */

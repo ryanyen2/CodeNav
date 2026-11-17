@@ -430,8 +430,9 @@ removed. The paragraph reads `Retries once.`
   hand-off is waiting.
 - The daemon writes `feature.realized` as `loop`, and only on evidence: the reflect pass
   that ran because an agent session closed tags its ops on a queued feature with
-  `caused_by` the feature's latest hand-off, and the feature settles when one of those
-  ops is an applied binding op.
+  `caused_by` the feature's latest hand-off, and the feature settles once any op since
+  the hand-off is an applied binding op citing it. A build that spans two agent sessions
+  settles on the second pass if only that one moved bound code.
 - A deleted heading with a hand-off waiting settles when that pass saw every symbol the
   heading owned removed from the code. If the hand-off did not set `delete_code`, it
   settles on the pass alone.
@@ -550,13 +551,15 @@ It adopts each new projection block by block.
   does not contain the last op the applier applied for it (that op is outside the
   projection's `frontier`). A held block keeps its node and its place.
 - A gesture holds every block it names and every block it added or removed.
-- A projection from another `store` resets the page's holds and is adopted whole; within
+- A projection from another `store` drops the page's last-applied ops and re-reads every
+  block with no op in flight; ops in flight keep their blocks held. Within
   one `store`, one whose `head` is lower than the one already shown is dropped.
 - A block that is not held and whose `head` is unchanged is left alone. Any other
   unheld block is replaced by the projection's.
 - An adoption that changes only words replaces those blocks in place. One that adds,
   removes or moves a block rebuilds the document.
-- A conflicted ack drops the op and re-adopts that block.
+- A conflicted ack drops the op. The block keeps its other unacked words and is
+  re-adopted once none of its ops is in flight.
 
 ## Rejected
 

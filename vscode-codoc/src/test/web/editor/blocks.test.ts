@@ -161,27 +161,35 @@ describe('removing an empty paragraph next to a heading', () => {
     });
 });
 
-describe('Backspace and Delete in an empty heading', () => {
-    it('delete it when it has no body and owns no code', () => {
-        const m = mount([block('a', 'heading', 'A'), block('p', 'paragraph', 'x'), block('e', 'heading', ''), block('b', 'heading', 'B')]);
-        select(m.view, posIn(m.view, 'e', 0));
+describe('Backspace at the start of a heading', () => {
+    it('turns a stray `# ` with a body under it back into a paragraph', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', ''), block('q', 'paragraph', 'after')]);
+        typeRule(m.view, 'p', '#');
+        select(m.view, posIn(m.view, 'p', 0));
         key(m.view, 'Backspace', 8);
-        expect(sent(m)).toEqual([{ kind: 'block.delete', target: { bid: 'e' }, payload: {} }]);
-        expect(ids(m.view.state.doc)).toEqual(['heading:a', 'paragraph:p', 'heading:b']);
-        expect(m.view.state.selection.from).toBe(posIn(m.view, 'p', 1));
+        expect(sent(m).at(-1)).toEqual({ kind: 'block.set', target: { bid: 'p', path: 'kind' }, payload: { value: 'paragraph' } });
+        expect(shape(m.view.state.doc)).toEqual(['heading:1', 'paragraph', 'paragraph']);
+        expect(m.conflicts).toEqual([]);
         expect(shadowFaults(m)).toEqual([]);
     });
 
-    it('do nothing but say how when it has a body or bound code', () => {
-        const m = mount([block('a', 'heading', 'A'), block('e', 'heading', ''), block('p', 'paragraph', 'x'), block('f', 'heading', '')],
+    it('on a heading that owns code does nothing but say how', () => {
+        const m = mount([block('a', 'heading', 'A'), block('f', 'heading', 'F'), block('p', 'paragraph', 'x')],
                         { bindings: { by_feature: { f: [{ file: 'a.py', symbol: 'a.py::f' }] }, by_file: {} } });
-        select(m.view, posIn(m.view, 'e', 0));
-        key(m.view, 'Backspace', 8);
         select(m.view, posIn(m.view, 'f', 0));
+        key(m.view, 'Backspace', 8);
+        expect(sent(m)).toEqual([]);
+        expect(m.conflicts).toEqual(['Delete feature from the / menu']);
+        expect(m.view.state.selection.from).toBe(posIn(m.view, 'f', 0));
+    });
+
+    it('Delete in an empty heading moves into the next block and leaves the title empty', () => {
+        const m = mount([block('h', 'heading', ''), block('p', 'paragraph', 'body')]);
+        select(m.view, posIn(m.view, 'h', 0));
         key(m.view, 'Delete', 46);
         expect(sent(m)).toEqual([]);
-        expect(m.conflicts).toEqual(['Delete feature from the / menu', 'Delete feature from the / menu']);
-        expect(m.view.state.selection.from).toBe(posIn(m.view, 'f', 0));
+        expect(texts(m.view.state.doc)).toEqual(['', 'body']);
+        expect(m.view.state.selection.from).toBe(posIn(m.view, 'p', 0));
     });
 });
 
@@ -223,8 +231,16 @@ describe('source blocks from a marker', () => {
         expect(shadowFaults(m)).toEqual([]);
     });
 
-    it('Enter after prose that starts with a bar, or a row the page did not type, splits as usual', () => {
-        for (const text of ['|x| is the absolute value', '| a |', '| a | b |']) {
+    it('a row the projection already holds then Enter makes a table too', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', '|a|b|')]);
+        select(m.view, posIn(m.view, 'p', 5));
+        key(m.view, 'Enter', 13);
+        expect(shape(m.view.state.doc)).toEqual(['heading:1', 'table']);
+        expect(sent(m)[1].payload).toEqual({ kind: 'table', after: 'h', content: {} });
+    });
+
+    it('Enter after prose that starts with a bar splits as usual', () => {
+        for (const text of ['|x| is the absolute value', '| a |']) {
             const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', text)]);
             select(m.view, posIn(m.view, 'p', text.length));
             key(m.view, 'Enter', 13);

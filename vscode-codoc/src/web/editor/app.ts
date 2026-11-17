@@ -214,31 +214,40 @@ function submit(subs: Submission[]): void {
     send({ kind: 'submit', subs });
 }
 
+/** Send `ops` as one new batch, after the editor's queued ops: an anchor may
+ *  name `$cid` refs of ops still waiting out the settle, and the daemon
+ *  resolves those only in submission order. */
+function submitOps(ops: OpBody[]): void {
+    editor?.flush();
+    const batch = newBatch();
+    submit(ops.map(op => ({ cid: newCid(), batch, ...op })));
+}
+
+/** A hand-off of `fid`. No `covers`: the applier fills it with its own
+ *  frontier, which includes the ops flushed before it. */
+const handoff = (fid: string, asked?: string): OpBody =>
+    ({ kind: 'feature.handoff', target: { fid }, payload: asked ? { asked } : {} });
+
 /** Accept or reject plans, in one batch. Accepting also hands off each feature
  *  the plan lists in `handoff`, so what was accepted gets built. */
 function verdicts(pids: string[], accept: boolean): void {
-    editor?.flush();
-    const batch = newBatch();
     const ops: OpBody[] = pids.map(pid => ({ kind: accept ? 'plan.accept' : 'plan.reject', target: { pid }, payload: {} }));
     if (accept) {
         const asked = new Map<string, string[]>();
         for (const p of projection?.plans ?? []) {
             if (pids.includes(p.id)) for (const fid of p.handoff ?? []) asked.set(fid, [...(asked.get(fid) ?? []), `Build the plan ${p.id}.`]);
         }
-        for (const [fid, asks] of asked) ops.push({ kind: 'feature.handoff', target: { fid }, payload: { asked: asks.join(' ') } });
+        for (const [fid, asks] of asked) ops.push(handoff(fid, asks.join(' ')));
     }
-    submit(ops.map(op => ({ cid: newCid(), batch, ...op })));
+    submitOps(ops);
 }
 
 /** Build it: hand the thread's feature off with the comment as the request, then run the build. */
 function buildThread(t: Thread): void {
-    if (!projection) return;
-    editor?.flush();
-    const fid = featureOfBlock(t.anchor);
+    const fid = projection && featureOfBlock(t.anchor);
     if (!fid) return;
     if (!decides()) { notify('your note is saved; a maintainer hands the feature off'); return; }
-    const asked = t.messages.map(m => m.body).join(' ');
-    submit([{ cid: newCid(), batch: newBatch(), kind: 'feature.handoff', target: { fid }, payload: { asked } }]);
+    submitOps([handoff(fid, t.messages.map(m => m.body).join(' '))]);
     send({ kind: 'realize' });
 }
 
@@ -254,12 +263,7 @@ function featureOfBlock(bid: string): string | null {
 
 function handoffAll(): void {
     if (!projection) return;
-    editor?.flush();
-    const batch = newBatch();
-    // No `covers`: the applier fills it with its own frontier, which includes
-    // the ops flushed above. The projection's frontier predates them.
-    const fids = Object.entries(projection.phases).filter(([, p]) => p === 'edited').map(([f]) => f);
-    submit(fids.map(fid => ({ cid: newCid(), batch, kind: 'feature.handoff', target: { fid }, payload: {} })));
+    submitOps(Object.entries(projection.phases).filter(([, p]) => p === 'edited').map(([fid]) => handoff(fid)));
 }
 
 function select(fid: string): void {
@@ -326,14 +330,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToPage>) => {
                 });
                 timeline = new Timeline(page, () => editor?.view.dom ?? null);
                 margin = new Margin(page, () => editor?.view ?? null, {
-                    submit: ops => {
-                        // Flush first: a thread's anchor may be `$cid` refs of
-                        // ops still waiting out the settle, and the daemon
-                        // resolves those only in submission order.
-                        editor?.flush();
-                        const batch = newBatch();
-                        submit(ops.map(op => ({ cid: newCid(), batch, ...op })));
-                    },
+                    submit: submitOps,
                     build: buildThread,
                     newBid,
                     featureOf: featureOfBlock,

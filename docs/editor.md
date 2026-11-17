@@ -85,9 +85,10 @@ The gestures (`commands.ts`, bound in `keymap.ts`):
 | Mod-Enter | `block.add` of a paragraph after the block. The way out of a code block at the end of the page. |
 | `#`..`######` and a space at a block's start | `text.delete` of the hashes, `block.set(kind = heading, level)`. |
 | `- `, `* `, `1. ` at a paragraph's start | `text.delete` of the marker, `block.set(kind = bullet or numbered, level = 1)`. |
-| ```` ``` ````, ```` ```lang ````, ```` ```mermaid ```` or a `\|` row, then Enter, in an otherwise empty paragraph | `block.delete` of the paragraph, `block.add` of a code block (with `lang`), a diagram or a table (with that row). |
+| ```` ``` ````, ```` ```lang ```` or ```` ```mermaid ```` as a paragraph's whole text, or one row `\| a \| b \|` as its whole text, then Enter | `block.delete` of the paragraph, `block.add` of a code block (with `lang`), a diagram or a table (with that row). Prose such as `\|x\| is the absolute value` does not end with a bar and splits as usual. |
 | `/` menu | Heading 1-3, Paragraph, Bullet list, Numbered list, Table, Code block, Diagram: `text.delete` of the typed `/query` and `block.set(kind)` or a new block. In a heading, also Delete feature. |
-| Backspace at a list item's start | `block.set(kind = paragraph)`. |
+| Backspace at a list item's start | Above level 1, `block.set(level - 1)`; at level 1, `block.set(kind = paragraph)`. |
+| Backspace at a heading's start | `block.set(kind = paragraph)` when the heading owns no bound code, so a stray `# ` is undone in one key; its body joins the feature above. A heading that owns code is left alone, with the notice "Delete feature from the / menu". |
 | Backspace at a paragraph's start, Delete at its end, next to a paragraph or item | `block.merge`. When the other block is empty, `block.delete` of it instead, so the block with words keeps its id and kind. |
 | Backspace or Delete in an empty paragraph next to a heading, source or plugin block | `block.delete` of the paragraph. |
 | Typing, Backspace, Delete, Enter or cut over a selection across blocks | `text.delete` at each end, `block.delete` per block wholly inside, `block.merge` of the two ends when both are heading or prose. Refused with a notice when it crosses a heading that is not wholly selected, or would remove every block or every feature. |
@@ -124,16 +125,17 @@ one its provisional refs were minted under. The page holds every block an op nam
 for that `cid` arrives.
 
 An ack `{cid, op, conflict}` releases the hold. An applied op resolves the shadow's
-provisional refs and becomes the block's last applied op. A conflicted op drops the block's
-local state: the page re-adopts the block from the projection in hand and reports the
-conflict.
+provisional refs and becomes the block's last applied op. A conflicted op is dropped and
+the conflict is reported at once. The block keeps its other unacked words, and the page
+re-adopts it from the projection in hand once none of its ops is in flight.
 
 ## 6. Adopting a projection
 
 `adopt` in `adoption.ts`, with the plan from `calc/adopt.ts`:
 
-1. A projection from another `store` (the daemon rebuilt) drops every hold and every
-   last-applied op, keeps queued ops, and is adopted whole. Within one `store`, a
+1. A projection from another `store` (the daemon rebuilt it: a commit, a checkout, a
+   fold) forgets every last-applied op and re-reads every block that has no op in flight.
+   Queued and unacked ops stay, and the new store answers them. Within one `store`, a
    projection whose `head` is lower than the one shown is dropped.
 2. Queued ops are flushed.
 3. A block is held while one of its ops is unacked, or while its last applied op is

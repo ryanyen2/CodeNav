@@ -180,11 +180,10 @@ export class Outbox {
         return refused;
     }
 
-    /** The blocks a projection with this frontier must leave alone. `force` names blocks to re-adopt regardless. */
-    held(frontier: Record<string, number>, force: ReadonlySet<string>): Set<string> {
-        const out = new Set<string>([...this.composed].filter(bid => !force.has(bid)));
+    /** The blocks a projection with this frontier must leave alone. */
+    held(frontier: Record<string, number>): Set<string> {
+        const out = new Set<string>(this.composed);
         for (const bid of new Set([...this.unacked.keys(), ...this.lastOp.keys()])) {
-            if (force.has(bid)) continue;
             const op = this.lastOp.get(bid);
             if ((this.unacked.get(bid)?.size ?? 0) > 0 || (op !== undefined && !inFrontier(op, frontier))) out.add(bid);
         }
@@ -195,18 +194,17 @@ export class Outbox {
      *  none of their ops in flight, and their last applied op in it. Each is
      *  returned once. */
     reloadable(frontier: Record<string, number>): Set<string> {
-        const held = this.held(frontier, new Set());
+        const held = this.held(frontier);
         const out = new Set([...this.stale].filter(bid => !held.has(bid)));
         for (const bid of out) this.stale.delete(bid);
         return out;
     }
 
-    /** The daemon rebuilt its store (a checkout, a fold), so what it applied
-     *  before means nothing now: drop every hold and every last-applied op.
-     *  Ops still queued stay queued. */
+    /** The daemon rebuilt its store (a commit, a checkout, a fold), so the ops
+     *  it applied before say nothing about the new frontier: forget them. Ops
+     *  in flight still hold their blocks; the new store answers them. */
     rebuilt(): void {
-        for (const bid of [...this.unacked.keys(), ...this.lastOp.keys()]) this.onHoldChange(bid);
-        this.unacked.clear();
+        for (const bid of this.lastOp.keys()) this.onHoldChange(bid);
         this.lastOp.clear();
         this.stale.clear();
     }

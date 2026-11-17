@@ -15,7 +15,7 @@
  *
  * A block whose op the daemon refused is re-read once nothing of it is in
  * flight (`Outbox.reloadable`). A projection of a different `store` comes from
- * a daemon that rebuilt its store: every hold is dropped and every block is
+ * a daemon that rebuilt its store: every block without an op in flight is
  * re-read, because positions and frontiers of the old store say nothing about
  * the new one.
  */
@@ -86,15 +86,16 @@ export function adopter(view: EditorView, shadows: Map<string, Shadow>, outbox: 
         if (!rebuilt && next.head < shown.projection.head) return;
         outbox.flush();
         if (rebuilt) outbox.rebuilt();
-        const force = new Set<string>();
-        if (rebuilt) view.state.doc.forEach(n => force.add(n.attrs.bid as string));
-        else for (const bid of outbox.reloadable(next.frontier)) force.add(bid);
+        // Re-read every block after a rebuild, and a refused block once it is free.
+        // A block with an op in flight stays held either way.
+        const held = outbox.held(next.frontier);
+        const force = rebuilt ? new Set<string>() : outbox.reloadable(next.frontier);
+        if (rebuilt) view.state.doc.forEach(n => { if (!held.has(n.attrs.bid)) force.add(n.attrs.bid as string); });
         const prev = shown.projection, wasRealizing = shown.realizing;
         shown.projection = next;
         shown.realizing = nowRealizing;
         const current: Array<{ bid: string; head: number }> = [];
         view.state.doc.forEach(n => current.push({ bid: n.attrs.bid as string, head: force.has(n.attrs.bid) ? -1 : n.attrs.head as number }));
-        const held = outbox.held(next.frontier, force);
         const plan = adoptionPlan(current, next, held);
         if (!plan.length) {
             markPaints(prev, next, new Set(), false, wasRealizing);

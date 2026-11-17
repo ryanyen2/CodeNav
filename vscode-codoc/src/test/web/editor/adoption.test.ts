@@ -245,7 +245,22 @@ describe('a refused op', () => {
 });
 
 describe('a projection of a rebuilt store', () => {
-    it('is adopted whole though its head is lower, and releases every hold', () => {
+    it('keeps words still in flight, and the next keystroke anchors on them once acked', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', 'abc')], { head: 9, store: 'a' });
+        select(m.view, posIn(m.view, 'p', 3));
+        typeText(m.view, 'XYZ');
+        m.handle.flush();
+        m.handle.adopt(proj([block('h', 'heading', 'T'), block('p', 'paragraph', 'abc')], { head: 9, store: 'b' }));
+        expect(texts(m.view.state.doc)).toEqual(['T', 'abcXYZ']);
+        m.handle.ack([{ cid: m.submitted[0].cid, op: 's2:1', conflict: null }]);
+        select(m.view, posIn(m.view, 'p', 6));
+        typeText(m.view, '!');
+        m.handle.flush();
+        expect(m.submitted.at(-1)!.payload).toEqual({ after: ['s2:1', 2], text: '!' });
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it('is adopted whole though its head is lower, and forgets what the old store applied', () => {
         const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', 'mine')], { head: 40, frontier: { s1: 39 }, store: 'a' });
         select(m.view, posIn(m.view, 'p', 4));
         typeText(m.view, '!');

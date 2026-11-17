@@ -33,10 +33,6 @@ export function gestureKeys(env: Env, openLink: () => boolean): Plugin[] {
     };
     const caretKind = (state: EditorState): string | null =>
         (state.selection.$from.depth === 1 ? kindOf(state.selection.$from.parent) : null);
-    /** The caret is in a heading with no words: Backspace and Delete delete it
-     *  or say why not, and never move the caret out of it. */
-    const emptyHeading = (state: EditorState): boolean =>
-        state.selection.empty && caretKind(state) === 'heading' && state.selection.$from.parent.content.size === 0;
 
     /** A selection across blocks is deleted as ops, or refused with a notice.
      *  'none' when the selection is empty or inside one block. */
@@ -86,12 +82,16 @@ export function gestureKeys(env: Env, openLink: () => boolean): Plugin[] {
                 // An item steps out one level at a time, then becomes a paragraph.
                 return run(view!, $from.parent.attrs.level > 1 ? indent(state, env, -1) : setKind(state, env, 'paragraph'));
             }
-            if (emptyHeading(state)) { run(view!, removeEmpty(state, env, 'back')); return true; }
+            if (empty && $from.parentOffset === 0 && caretKind(state) === 'heading') {
+                // A heading that owns no code becomes a paragraph, so a stray `# ` is undone in one key.
+                if (!env.projection?.().bindings.by_feature[$from.parent.attrs.bid]?.length) return run(view!, setKind(state, env, 'paragraph'));
+                env.refuse?.('Delete feature from the / menu');
+                return true;
+            }
             return run(view!, mergeBackward(state, env) ?? removeEmpty(state, env, 'back')) || stepAcross(state, view!, 'back');
         },
         Delete: (state, _dispatch, view) => {
             if (cutAcross(state, view!) !== 'none') return true;
-            if (emptyHeading(state)) { run(view!, removeEmpty(state, env, 'forward')); return true; }
             return run(view!, mergeForward(state, env) ?? removeEmpty(state, env, 'forward')) || stepAcross(state, view!, 'forward');
         },
         // Tab never leaves the editor: where nothing indents, it does nothing.
