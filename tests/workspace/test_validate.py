@@ -61,6 +61,34 @@ def test_a_suggesters_op_on_a_plan_the_pull_request_opens_is_fine(tmp_path):
     assert validate_logs(L.list_sessions(cd), roles=Roles.load(cd)) == []
 
 
+def test_an_op_under_a_plan_after_its_verdict_is_refused(tmp_path):
+    """Bob writes under his plan, the owner rejects it, Bob writes under it
+    again. The applier refused the second write; a log that drops that
+    conflict is caught."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    write_roles(cd, {"human:gh:bob": "suggest"})
+    ws.roles = Roles.load(cd)
+    ws.store.policy = ws.roles.policy
+    seed(ws)
+    own = ws.open_plan(actor="human:gh:bob", kind="edit", target="p1")
+
+    def bob_writes(text: str):
+        return ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                           "payload": {"after": "START", "text": text}}], actor="human:gh:bob", plan=own)[0]
+
+    assert bob_writes("Mine. ").conflict is None
+    ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": own}, "payload": {}}], actor=H)
+    late = bob_writes("Again. ")
+    assert late.conflict == "plan_not_open"
+    ws.close()
+    roles = Roles.load(cd)
+    assert validate_logs(L.list_sessions(cd), roles=roles) == []
+    _forge(L.list_sessions(cd)[0], late.id)
+    found = validate_logs(L.list_sessions(cd), roles=roles)
+    assert len(found) == 1 and "after its verdict" in found[0].reason, found
+
+
 def test_a_snapshot_and_a_far_future_stamp_are_refused(tmp_path):
     cd = tmp_path / ".codoc"
     ws = Workspace(cd)

@@ -270,6 +270,7 @@ rebuilds. `codoc validate-logs` checks the session files a merge would add or ch
 | An op recorded as applied that the role table would refuse. | A forged or unauthorised write. |
 | A snapshot file. | It states a whole state; only the workspace that folds its own log may write one. |
 | A stamp more than 24 hours ahead of this machine's clock. | It would pull every clock that observes it into the future. |
+| An op recorded as applied under a plan after that plan's verdict (by clock, with no reopen between). | The applier refuses it with `plan_not_open`; a log that drops the conflict would put words into a decided plan. |
 | Any failure of the read checks in section 2. | |
 
 `codoc rebuild` prints, per actor, how many applied ops in the local store the table
@@ -613,6 +614,3 @@ It adopts each new projection block by block.
 1. With two snapshots the rebuild uses the newest by file name, whichever fold covers more.
 2. A `cid` resubmitted after its ack has been trimmed from the ack file (more than 2000
    acks later) is applied again.
-3. `validate-logs` judges a suggester's tagged op by the plans in the local store and in
-   the files under check. It does not replay the files, so it does not check that the
-   plan was still open.

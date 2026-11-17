@@ -8,7 +8,7 @@ somebody already wrote. So a log file is a capability: edit the recorded
 accept the plan. `codoc validate-logs` runs these checks over the session
 files a merge would add or change, against the tracked role table.
 
-Four refusals, and nothing else:
+Five refusals, and nothing else:
 
 - an op recorded as a **success** whose `(actor, kind)` the table would refuse,
   which is the forged verdict;
@@ -17,7 +17,11 @@ Four refusals, and nothing else:
 - a **snapshot** file, which claims a whole state rather than a sequence of ops
   and is legitimate only when the workspace wrote it by folding its own log;
 - a stamp **far ahead of wall time**, which would drag every clock that
-  observes it into the future and order real work behind it.
+  observes it into the future and order real work behind it;
+- an op **tagged with a plan after that plan's verdict**, recorded as applied,
+  which the applier would have refused (`plan_not_open`). The verdicts are the
+  workspace's and these files', ordered by clock; one a fold re-emitted is
+  stamped with the fold's clock, so it never flags an op written before it.
 
 Everything else a log can be wrong about (a torn tail, an out-of-sequence id,
 an unreadable line) `log.read_session` already reports and the rebuild already
@@ -70,9 +74,13 @@ def validate_logs(paths, *, roles: Roles, store: Store | None = None, now_ms: in
         f = L.read_session(p)
         out.extend(Finding(str(p), pr.line, pr.reason) for pr in f.problems)
         view = _policy_view(store, f.ops)
+        turns = sorted((o.at, o.kind, str(o.target.get("pid"))) for o in [*(store.ops if store else []), *f.ops]
+                       if o.kind in _TURNS and o.conflict is None)
         for i, op in enumerate(f.ops, start=2):        # line 1 is the header
             if op.conflict is None and (why := roles.policy(view, op)):
                 out.append(Finding(str(p), i, f"recorded as applied, but the roles table refuses it: {why}"))
+            if op.conflict is None and op.plan and op.kind not in _TURNS and _decided(turns, op.plan, op.at):
+                out.append(Finding(str(p), i, f"recorded as applied under plan {op.plan} after its verdict"))
             if forged := [k for k in K.SNAPSHOT_ONLY.get(op.kind, ()) if k in op.payload]:
                 out.append(Finding(str(p), i, f"{op.kind} carries {', '.join(forged)}, which only a snapshot writes"))
             ahead = _ms(op.at) - now_ms
@@ -136,6 +144,20 @@ def _policy_view(store: Store | None, ops: list[Op]) -> Store:
             view.ops_by_block.setdefault(str(bid), []).append(len(view.ops))
             view.ops.append(op)
     return view
+
+
+_TURNS = (K.PLAN_ACCEPT, K.PLAN_REJECT, K.PLAN_REOPEN)
+
+
+def _decided(turns: list[tuple[str, str, str]], pid: str, at: str) -> bool:
+    """Whether plan ``pid``'s latest verdict or reopen before clock ``at`` is a verdict."""
+    last = None
+    for when, kind, p in turns:
+        if when >= at:
+            break
+        if p == pid:
+            last = kind
+    return last in (K.PLAN_ACCEPT, K.PLAN_REJECT)
 
 
 def _ms(stamp: str) -> int:
