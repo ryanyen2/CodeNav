@@ -41,7 +41,7 @@ const pageOf = (m: Mounted): Array<[string, string, number, string]> => {
     const out: Array<[string, string, number, string]> = [];
     m.view.state.doc.forEach(n => {
         const card = n.type.name === 'kindBlock'
-            ? (m.container.querySelector(`[data-bid="${n.attrs.bid}"] textarea[data-path="${(n.attrs.text as string[])[0]}"]`) as HTMLTextAreaElement | null)
+            ? (m.container.querySelector(`[data-bid="${n.attrs.bid}"] textarea[data-path="${(n.attrs.layout as { text: string[] }).text[0]}"]`) as HTMLTextAreaElement | null)
             : null;
         out.push([n.attrs.bid, kindOf(n), n.type.name === 'heading' ? n.attrs.level : 0, card ? card.value : n.textBetween(0, n.content.size, '\n')]);
     });

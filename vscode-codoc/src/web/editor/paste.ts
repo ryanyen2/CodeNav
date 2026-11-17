@@ -16,6 +16,7 @@ import { LAYOUT_KEY, fenceLayout, parseBlocks, parseInline } from '../calc/markd
 import { SOURCE, isOneLine, kindOf, nfc, type Span } from '../calc/projection';
 import { SENT_MARKS, markAttrs } from '../calc/recorder';
 import type { Piece } from './commands';
+import { cardFence } from './schema';
 
 /** The pieces of a paste, or null when the slice holds inline words only,
  *  which ProseMirror pastes and the recorder reads. */
@@ -36,26 +37,18 @@ export function piecesFromMarkdown(md: string): Piece[] {
         if (isOneLine(b.kind)) return { kind: b.kind, level: b.level, ...parseInline(b.text), content: {} };
         if (b.kind === 'code') return { kind: 'code', level: 0, text: b.text, spans: [], content: typeof b.content.lang === 'string' ? { lang: b.content.lang } : {} };
         if (SOURCE.has(b.kind)) return { kind: b.kind, level: 0, text: b.text, spans: [], content: {} };
-        // Any other kind's `codoc:` fence keeps its kind. Its `$layout` names the
-        // Text fields, given as inline Markdown; every other key is JSON. A fence
-        // with no valid layout has no Text fields (ingest.block_bodies does the same
-        // when no plugin declares the kind).
-        const layout = fenceLayout(b.content) ?? { text: [], flow: true, export: true };
-        const content: Record<string, unknown> = {};
-        const texts: Record<string, { text: string; spans: Span[] }> = {};
-        for (const [k, v] of Object.entries(b.content)) {
-            if (k === LAYOUT_KEY) continue;
-            if (!layout.text.includes(k)) content[k] = v;
-            else if (typeof v === 'string') texts[k] = parseInline(v);
-        }
-        return { kind: b.kind, level: 0, text: '', spans: [], content, layout, texts };
+        // Any other kind's `codoc:` fence keeps its kind and every field, and its
+        // `$layout` when it has a valid one; pasteBlocks splits the fields.
+        const { [LAYOUT_KEY]: _layout, ...content } = b.content;
+        return { kind: b.kind, level: 0, text: '', spans: [], content, layout: fenceLayout(b.content) ?? undefined };
     });
 }
 
-/** The slice's blocks. A plugin block is left out: the editor does not author one. */
+/** The slice's blocks. A card is read as its `codoc:` fence. */
 export function piecesFromSlice(slice: Slice): Piece[] {
     const out: Piece[] = [];
     slice.content.forEach(node => {
+        if (node.type.name === 'kindBlock') { out.push(...piecesFromMarkdown(cardFence(node))); return; }
         if (!node.isTextblock) return;
         const kind = kindOf(node);
         if (SOURCE.has(kind)) out.push({ kind, level: 0, text: nfc(node.textContent), spans: [], content: node.attrs.lang ? { lang: node.attrs.lang } : {} });

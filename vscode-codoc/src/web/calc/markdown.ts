@@ -251,3 +251,87 @@ function boldAt(cs: string[], i: number, out: string[], spans: Span[]): number {
     out.push(...text);
     return close + 2;
 }
+
+// ── writing ─────────────────────────────────────────────────────────────────
+
+const DEPTH: Record<string, number> = { link: 0, cite: 0, bold: 1, code: 2 };
+const OPEN: Record<string, string> = { link: '[', cite: '[', bold: '**', code: '`' };
+
+function closeOf(s: Span): string {
+    if (s.kind === 'cite') return `](codoc:${s.attrs.file ?? ''}${s.attrs.symbol ? `#${s.attrs.symbol}` : ''})`;
+    if (s.kind === 'link') return `](${s.attrs.href ?? ''})`;
+    return OPEN[s.kind];
+}
+
+/** The spans of `kind`, each cut at every edge that falls inside it. */
+function cutAt(spans: Span[], kind: string, edges: number[]): Span[] {
+    const out: Span[] = [];
+    for (const s of spans) {
+        if (s.kind !== kind || s.end <= s.start) continue;
+        const cuts = [...new Set([s.start, s.end, ...edges.filter(p => s.start < p && p < s.end)])].sort((a, b) => a - b);
+        for (let i = 0; i + 1 < cuts.length; i++) out.push({ kind, attrs: {}, start: cuts[i], end: cuts[i + 1] });
+    }
+    return out;
+}
+
+/** Inline Markdown for `text` with `spans`: a port of `inline_md.render`.
+ *  Characters that would read as markup are escaped. */
+export function renderInline(text: string, spans: Span[]): string {
+    const cs = Array.from(text);
+    const links = spans.filter(s => (s.kind === 'link' || s.kind === 'cite') && s.end > s.start).sort((a, b) => a.start - b.start);
+    const bolds = cutAt(spans, 'bold', links.flatMap(l => [l.start, l.end]));
+    const codes = cutAt(spans, 'code', [...links, ...bolds].flatMap(s => [s.start, s.end]));
+    const opens = new Map<number, Span[]>(), closes = new Map<number, Span[]>();
+    for (const s of [...links, ...bolds, ...codes]) {
+        opens.set(s.start, [...(opens.get(s.start) ?? []), s]);
+        closes.set(s.end, [...(closes.get(s.end) ?? []), s]);
+    }
+    const covered = (list: Span[]) => {
+        const f = new Array<boolean>(cs.length + 1).fill(false);
+        for (const s of list) for (let i = s.start; i < s.end; i++) f[i] = true;
+        return f;
+    };
+    const inLabel = covered(links), inCode = covered(codes);
+    const boldEdge = new Set(bolds.flatMap(s => [s.start, s.end]));
+    let out = '';
+    for (let i = 0; i <= cs.length; i++) {
+        for (const s of [...(closes.get(i) ?? [])].sort((a, b) => DEPTH[b.kind] - DEPTH[a.kind])) out += closeOf(s);   // innermost first
+        for (const s of [...(opens.get(i) ?? [])].sort((a, b) => DEPTH[a.kind] - DEPTH[b.kind])) out += OPEN[s.kind];   // outermost first
+        if (i < cs.length) out += escaped(cs, i, inLabel[i], inCode[i], boldEdge.has(i) || boldEdge.has(i + 1));
+    }
+    return out;
+}
+
+function escaped(cs: string[], i: number, inLabel: boolean, inCode: boolean, atBoldEdge: boolean): string {
+    const c = cs[i];
+    if (inCode) return CODE_ESCAPABLE.has(c) ? `\\${c}` : c;
+    if (c === '\\') return '\\\\';
+    if (c === '*' && (atBoldEdge || cs[i - 1] === '*' || cs[i + 1] === '*')) return '\\*';
+    if (c === ']' && inLabel) return '\\]';
+    if (c === '[' || c === '`') return `\\${c}`;      // a plain bracket never opens a link, a plain backtick never opens code
+    return opensBlock(cs, i) ? `\\${c}` : c;
+}
+
+/** Would `cs[i]` make the line read as a heading, a list item or a table row? */
+function opensBlock(cs: string[], i: number): boolean {
+    const c = cs[i];
+    if (i === 0) return c === '#' || c === '|' || ('-+*'.includes(c) && cs[1] === ' ');
+    return c === '.' && i <= 9 && /^\d+$/.test(cs.slice(0, i).join('')) && cs[i + 1] === ' ';
+}
+
+/** JSON with every object's keys sorted, as `json.dumps(sort_keys=True)` orders them. */
+const sortedJson = (v: unknown): string => JSON.stringify(v, (_k, x: unknown) =>
+    (x && typeof x === 'object' && !Array.isArray(x)
+        ? Object.fromEntries(Object.entries(x as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : x));
+
+/** A block of a non-builtin kind as its `codoc:` fence: `$layout`, every other
+ *  field as JSON, and each non-empty Text field as inline Markdown. `fields`
+ *  are projected fields, where a Text field is `{text, spans, ...}`. */
+export function fenceOf(kind: string, fields: Record<string, unknown>, layout: Layout): string {
+    const obj: Record<string, unknown> = { [LAYOUT_KEY]: layout };
+    for (const [k, v] of Object.entries(fields)) {
+        if (!layout.text.includes(k)) obj[k] = v;
+        else if ((v as { text?: string })?.text) obj[k] = renderInline((v as { text: string }).text, (v as { spans?: Span[] }).spans ?? []);
+    }
+    return `\`\`\`codoc:${kind}\n${sortedJson(obj)}\n\`\`\``;
+}

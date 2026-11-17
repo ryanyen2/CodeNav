@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { TextSelection } from '@tiptap/pm/state';
 
-import type { ProjectedBlock } from '../../../web/calc/projection';
+import { textPaths, type ProjectedBlock } from '../../../web/calc/projection';
 import { bodies, block, ids, mount, pasteText, posIn, proj, shadowFaults, type Mounted } from './harness';
 
 const UNKNOWN_KIND_NOTE = 'made by a newer codoc or a plugin this editor does not have';
@@ -114,5 +114,85 @@ describe('a block of a kind this editor does not know', () => {
         const off = { ...chart(), layout: { text: ['title'], flow: false, export: false } };
         const m = mount([block('h', 'heading', 'T'), off, block('p', 'paragraph', 'x')]);
         expect(ids(m.view.state.doc)).toEqual(['heading:h', 'paragraph:p']);
+    });
+
+    it('keeps focus and the caret, by character, when its text changes underneath', () => {
+        const m = mount([block('h', 'heading', 'T'), chart()]);
+        document.body.append(m.container);
+        const a = area(m, 'title');
+        a.focus();
+        a.setSelectionRange(2, 2);                                          // "Q3|"
+        m.handle.adopt(proj([block('h', 'heading', 'T'), chart(2, '', [{ op: 'b:1', text: 'Big ', actor: 'human:bob' },
+                                                                         { op: 'k:1', text: 'Q3 sales', actor: 'human:a' }])], { head: 20 }));
+        expect(area(m, 'title')).toBe(a);
+        expect(a.value).toBe('Big Q3 sales');
+        expect(document.activeElement).toBe(a);
+        expect([a.selectionStart, a.selectionEnd]).toEqual([6, 6]);        // still after "Q3"
+    });
+
+    it('holds the block while an IME composition is open, and records it when it ends', () => {
+        const m = mount([block('h', 'heading', 'T'), chart()]);
+        edit(m, 'title', 'Q3 sales你', { isComposing: true });
+        m.handle.adopt(proj([block('h', 'heading', 'T'), chart(2, '', [{ op: 'k:1', text: 'Q3 sales', actor: 'human:a' },
+                                                                         { op: 'b:1', text: '!', actor: 'human:bob' }])], { head: 20 }));
+        expect(area(m, 'title').value).toBe('Q3 sales你');
+        area(m, 'title').dispatchEvent(new window.CompositionEvent('compositionend', { bubbles: true }));
+        expect(sent(m)).toEqual([{ kind: 'text.insert', target: { bid: 'k', path: 'title' }, payload: { after: ['k:1', 7], text: '你' } }]);
+    });
+
+    it('has no Text fields without a layout', () => {
+        expect(textPaths({ id: 'i', kind: 'image', level: 0, rank: 'i', head: 1,
+                           fields: { caption: { text: 'c', runs: [], spans: [], suggest_del: [] } } })).toEqual([]);
+    });
+});
+
+describe('a pasted `codoc:` fence with no `$layout`', () => {
+    const fence = '```codoc:image\n{"asset": "a.png", "caption": "A **cat**"}\n```';
+
+    it('sends no layout, and splits its fields by the layout the projection shows for the kind', () => {
+        const img: ProjectedBlock = { id: 'i', kind: 'image', level: 0, rank: 'i', head: 1, layout: { text: ['alt', 'caption'], flow: true, export: true },
+                                      fields: { asset: 'b.png', alt: { text: '', runs: [], spans: [], suggest_del: [] }, caption: { text: '', runs: [], spans: [], suggest_del: [] } } };
+        const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', ''), img]);
+        m.view.dispatch(m.view.state.tr.setSelection(TextSelection.create(m.view.state.doc, posIn(m.view, 'p', 0))));
+        pasteText(m, fence);
+        const ops = sent(m);
+        expect(ops[0].payload).toEqual({ kind: 'image', after: 'p', content: { asset: 'a.png' } });
+        expect(ops.slice(1).map(o => [o.kind, o.target.path])).toEqual([['text.insert', 'caption'], ['text.mark', 'caption']]);
+    });
+
+    it('splits by the layout the projection says the kind registers, and still sends no layout', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', '')],
+                        { kinds: { image: { text: ['alt', 'caption'], flow: true, export: true } } });
+        m.view.dispatch(m.view.state.tr.setSelection(TextSelection.create(m.view.state.doc, posIn(m.view, 'p', 0))));
+        pasteText(m, fence);
+        const ops = sent(m);
+        expect(ops[0].payload).toEqual({ kind: 'image', after: 'p', content: { asset: 'a.png' } });
+        expect(ops.slice(1).map(o => [o.kind, o.target.path])).toEqual([['text.insert', 'caption'], ['text.mark', 'caption']]);
+    });
+
+    it('sends no layout and every field as content when the page knows no layout for the kind', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', '')]);
+        m.view.dispatch(m.view.state.tr.setSelection(TextSelection.create(m.view.state.doc, posIn(m.view, 'p', 0))));
+        pasteText(m, fence);
+        expect(sent(m)).toEqual([{ kind: 'block.add', target: { bid: ids(m.view.state.doc)[2].split(':')[1] },
+                                   payload: { kind: 'image', after: 'p', content: { asset: 'a.png', caption: 'A **cat**' } } }]);
+    });
+});
+
+describe('copying a card', () => {
+    it('puts its `codoc:` fence with `$layout` on the clipboard, and pasting it here adds the same card', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one'), chart(), block('p2', 'paragraph', 'two')]);
+        m.view.dispatch(m.view.state.tr.setSelection(TextSelection.create(m.view.state.doc, posIn(m.view, 'p1', 0), posIn(m.view, 'p2', 3))));
+        const data: Record<string, string> = {};
+        const clipboardData = { clearData: () => undefined, setData: (t: string, v: string) => { data[t] = v; }, getData: (t: string) => data[t] ?? '' };
+        m.view.dom.dispatchEvent(Object.assign(new window.Event('copy', { bubbles: true, cancelable: true }), { clipboardData }));
+        expect(data['text/plain']).toContain('```codoc:chart\n{"$layout":{"export":true,"flow":true,"text":["title","caption"]},"spec":{"series":[1,2,3],"type":"bar"},"title":"Q3 sales"}\n```');
+        m.view.dispatch(m.view.state.tr.setSelection(TextSelection.create(m.view.state.doc, posIn(m.view, 'p2', 3))));
+        m.view.dom.dispatchEvent(Object.assign(new window.Event('paste', { bubbles: true, cancelable: true }), { clipboardData }));
+        const card = sent(m).find(o => o.kind === 'block.add' && o.payload.kind === 'chart')!;
+        expect(card.payload).toMatchObject({ kind: 'chart', content: { spec: { type: 'bar', series: [1, 2, 3] } },
+                                             layout: { text: ['title', 'caption'], flow: true, export: true } });
+        expect(m.container.querySelectorAll('[data-kind="chart"]').length).toBe(2);
+        expect(shadowFaults(m)).toEqual([]);
     });
 });

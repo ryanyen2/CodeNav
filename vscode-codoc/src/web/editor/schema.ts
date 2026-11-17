@@ -31,6 +31,10 @@
 import { Mark, Node, getSchema, mergeAttributes } from '@tiptap/core';
 import Document from '@tiptap/extension-document';
 import Text from '@tiptap/extension-text';
+import type { Node as PMNode } from '@tiptap/pm/model';
+
+import { fenceOf } from '../calc/markdown';
+import type { Layout } from '../calc/projection';
 
 export const MAX_LEVEL = 6;
 
@@ -147,7 +151,7 @@ const Source = Node.create({
 
 /** A block of any kind without a node type here: a plugin kind (an image, a
  *  url) or one a newer codoc made. `fields` are its projected fields and
- *  `text` the names of its Text fields; the card view (card.ts) draws it. */
+ *  `layout` which of them are Text; the card view (card.ts) draws it. */
 const KindBlock = Node.create({
     name: 'kindBlock',
     group: 'block',
@@ -157,16 +161,23 @@ const KindBlock = Node.create({
     addAttributes() {
         return {
             ...idAttrs(),
-            kind: { default: '', renderHTML: (attrs: Record<string, unknown>) => ({ 'data-kind': String(attrs.kind ?? '') }) },
+            kind: { default: '', parseHTML: (el: HTMLElement) => el.getAttribute('data-kind') ?? '',
+                    renderHTML: (attrs: Record<string, unknown>) => ({ 'data-kind': String(attrs.kind ?? '') }) },
             fields: { default: {}, renderHTML: () => ({}) },
-            text: { default: [], renderHTML: () => ({}) },
+            layout: { default: { text: [], flow: true, export: true }, renderHTML: () => ({}) },
+            // Read back from a copy: the block as its `codoc:` fence, which a paste reads.
+            fence: { default: null, parseHTML: (el: HTMLElement) => el.getAttribute('data-fence'), renderHTML: () => ({}) },
         };
     },
     parseHTML() { return [{ tag: 'div[data-kind]' }]; },
     renderHTML({ node, HTMLAttributes }) {
-        return ['div', mergeAttributes(HTMLAttributes, { class: 'codoc-kind', 'data-kind': node.attrs.kind }), 0];
+        return ['div', mergeAttributes(HTMLAttributes, { class: 'codoc-kind', 'data-kind': node.attrs.kind, 'data-fence': cardFence(node) })];
     },
 });
+
+/** A card node as its `codoc:` fence. */
+export const cardFence = (node: PMNode): string =>
+    (node.attrs.fence as string | null) ?? fenceOf(String(node.attrs.kind), node.attrs.fields as Record<string, unknown>, node.attrs.layout as Layout);
 
 const Bold = Mark.create({
     name: 'bold',

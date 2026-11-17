@@ -193,6 +193,7 @@ export class Outbox {
     /** The blocks a projection with this frontier must leave alone. */
     held(frontier: Record<string, number>): Set<string> {
         const out = new Set<string>(this.composed);
+        for (const [bid, card] of this.cards) if (card.composing) out.add(bid);
         for (const bid of new Set([...this.unacked.keys(), ...this.lastOp.keys()])) {
             const op = this.lastOp.get(bid);
             if ((this.unacked.get(bid)?.size ?? 0) > 0 || (op !== undefined && !inFrontier(op, frontier))) out.add(bid);

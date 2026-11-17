@@ -1,5 +1,5 @@
 {
- "_comment": "Generated from codoc.calculus.block_md.parse and inline_md.parse. Offsets are Unicode scalars, end exclusive.",
+ "_comment": "Generated from codoc.calculus.block_md.parse, inline_md.parse and inline_md.render. Offsets are Unicode scalars, end exclusive.",
  "blocks": [
   {
    "name": "headings and paragraphs",
@@ -925,6 +925,178 @@
    "md": "a*b*c and 2*3**4",
    "text": "a*b*c and 2*3**4",
    "spans": []
+  }
+ ],
+ "render": [
+  {
+   "name": "escapes at the start and inside",
+   "text": "# not a heading [x] a*b `c` \\d",
+   "spans": [],
+   "md": "\\# not a heading \\[x] a*b \\`c\\` \\\\d"
+  },
+  {
+   "name": "a leading item marker and a leading number",
+   "text": "- not an item",
+   "spans": [],
+   "md": "\\- not an item"
+  },
+  {
+   "name": "a leading number",
+   "text": "12. not numbered",
+   "spans": [],
+   "md": "12\\. not numbered"
+  },
+  {
+   "name": "bold, code and a link",
+   "text": "see the big fn now",
+   "spans": [
+    {
+     "kind": "link",
+     "attrs": {
+      "href": "https://x.io"
+     },
+     "start": 4,
+     "end": 14
+    },
+    {
+     "kind": "bold",
+     "attrs": {},
+     "start": 8,
+     "end": 11
+    },
+    {
+     "kind": "code",
+     "attrs": {},
+     "start": 12,
+     "end": 14
+    }
+   ],
+   "md": "see [the **big** `fn`](https://x.io) now"
+  },
+  {
+   "name": "bold across a link edge is cut",
+   "text": "ab cd ef",
+   "spans": [
+    {
+     "kind": "bold",
+     "attrs": {},
+     "start": 0,
+     "end": 5
+    },
+    {
+     "kind": "link",
+     "attrs": {
+      "href": "https://h"
+     },
+     "start": 3,
+     "end": 8
+    }
+   ],
+   "md": "**ab **[**cd** ef](https://h)"
+  },
+  {
+   "name": "code across a bold edge is cut",
+   "text": "abcdef",
+   "spans": [
+    {
+     "kind": "bold",
+     "attrs": {},
+     "start": 0,
+     "end": 3
+    },
+    {
+     "kind": "code",
+     "attrs": {},
+     "start": 2,
+     "end": 5
+    }
+   ],
+   "md": "**ab`c`**`de`f"
+  },
+  {
+   "name": "a cite with and without a symbol",
+   "text": "Client README",
+   "spans": [
+    {
+     "kind": "cite",
+     "attrs": {
+      "file": "c.py",
+      "symbol": "Client"
+     },
+     "start": 0,
+     "end": 6
+    },
+    {
+     "kind": "cite",
+     "attrs": {
+      "file": "README.md",
+      "symbol": ""
+     },
+     "start": 7,
+     "end": 13
+    }
+   ],
+   "md": "[Client](codoc:c.py#Client) [README](codoc:README.md)"
+  },
+  {
+   "name": "stars next to a bold edge",
+   "text": "a**b",
+   "spans": [
+    {
+     "kind": "bold",
+     "attrs": {},
+     "start": 1,
+     "end": 3
+    }
+   ],
+   "md": "a**\\*\\***b"
+  },
+  {
+   "name": "a bracket in a label",
+   "text": "a]b",
+   "spans": [
+    {
+     "kind": "link",
+     "attrs": {
+      "href": "https://x"
+     },
+     "start": 0,
+     "end": 3
+    }
+   ],
+   "md": "[a\\]b](https://x)"
+  },
+  {
+   "name": "code holding a backtick and a backslash",
+   "text": "a`b\\c",
+   "spans": [
+    {
+     "kind": "code",
+     "attrs": {},
+     "start": 0,
+     "end": 5
+    }
+   ],
+   "md": "`a\\`b\\\\c`"
+  },
+  {
+   "name": "astral characters",
+   "text": "😀 b 𝒳 c",
+   "spans": [
+    {
+     "kind": "bold",
+     "attrs": {},
+     "start": 2,
+     "end": 3
+    },
+    {
+     "kind": "code",
+     "attrs": {},
+     "start": 6,
+     "end": 7
+    }
+   ],
+   "md": "😀 **b** 𝒳 `c`"
   }
  ]
 }

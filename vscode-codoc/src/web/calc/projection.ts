@@ -100,6 +100,8 @@ export interface Projection {
     claims: Record<string, Claim[]>;
     /** Per feature, the hand-off and realized frontiers (absent when neither). */
     watermarks?: Record<string, Watermarks>;
+    /** The layout each plugin kind registered in this checkout gives a new block. */
+    kinds?: Record<string, Layout>;
 }
 
 export const NO_WATERMARKS: Watermarks = { handoff: {}, realized: {} };
@@ -121,12 +123,11 @@ export const pathOf = (kind: string): string => (SOURCE.has(kind) ? 'source' : '
 export const isBuiltin = (kind: string): boolean => isOneLine(kind) || SOURCE.has(kind);
 
 /** A block's Text fields: fixed for heading, prose and source kinds; for any
- *  other kind, what the block's own layout says. A projection without a layout
- *  still marks each Text field by its shape. */
-export function textPaths(b: ProjectedBlock): string[] {
-    if (isBuiltin(b.kind)) return [pathOf(b.kind)];
-    return b.layout?.text ?? Object.keys(b.fields).filter(k => textField(b, k));
-}
+ *  other kind, what the block's own layout says. */
+export const textPaths = (b: ProjectedBlock): string[] => (isBuiltin(b.kind) ? [pathOf(b.kind)] : b.layout?.text ?? []);
+
+/** The layout of a non-builtin block, as the projection gives it. */
+export const layoutOf = (b: ProjectedBlock): Layout => b.layout ?? { text: [], flow: true, export: true };
 
 /** The store kind of an editor node: its type for heading and prose, its
  *  `kind` attribute for a source block or a plugin block. */

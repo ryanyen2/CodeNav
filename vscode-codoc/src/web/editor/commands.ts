@@ -16,9 +16,10 @@
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { type EditorState, Selection, TextSelection, type Transaction } from '@tiptap/pm/state';
 
-import { ITEMS, PROSE, SOURCE, START, isOneLine, isProvisional, kindOf, nfc, pathOf, type CharRef, type Layout, type OpBody,
+import { ITEMS, PROSE, SOURCE, START, isBuiltin, isOneLine, isProvisional, kindOf, nfc, pathOf, type CharRef, type Layout, type OpBody,
          type Projection, type Span } from '../calc/projection';
 import { inlineNodes } from '../calc/adopt';
+import { parseInline } from '../calc/markdown';
 import { SENT_MARKS, deleteOf, scalarOffset } from '../calc/recorder';
 import { Shadow } from '../calc/shadow';
 import type { CardFields } from './card';
@@ -55,12 +56,9 @@ export interface Env {
 /** One block as it arrives in a paste: inline Markdown already read into
  *  plain `text` and `spans` for a heading or prose kind, raw text for a source
  *  kind, whose `content` holds `lang` or `derived`. A block of any other kind
- *  carries its `layout`, its JSON fields in `content`, and each Text field the
- *  layout names, read the same way, in `texts`. */
-export interface Piece {
-    kind: string; level: number; text: string; spans: Span[]; content: Record<string, unknown>;
-    layout?: Layout; texts?: Record<string, { text: string; spans: Span[] }>;
-}
+ *  has every field of its `codoc:` fence in `content`, Text fields as inline
+ *  Markdown, and the fence's `layout` when it carried one. */
+export interface Piece { kind: string; level: number; text: string; spans: Span[]; content: Record<string, unknown>; layout?: Layout }
 
 function blockAt(state: EditorState, pos: number): { node: PMNode; pos: number; index: number } | null {
     const $p = state.doc.resolve(pos);
@@ -621,14 +619,23 @@ export function pasteBlocks(state: EditorState, env: Env, pieces: Piece[]): Gest
     let after = bid;
     for (const p of rest) {
         const nb = env.nextBid();
-        if (p.layout) {
-            // A card: added with its layout, each Text field inserted at START, the rest as JSON.
-            const payload: Record<string, unknown> = { kind: p.kind, after, ...(Object.keys(p.content).length ? { content: p.content } : {}), layout: p.layout };
+        if (!isBuiltin(p.kind)) {
+            // A card. Its fields split by the fence's layout, which the add then
+            // records. A fence with none sends none, so the applier records its
+            // registry's, and is split by the layout the projection says the kind
+            // registers, else by a block of that kind on the page, else all JSON.
+            const proj = env.projection?.();
+            const split = p.layout ?? proj?.kinds?.[p.kind] ?? proj?.blocks.find(b => b.kind === p.kind && b.layout)?.layout
+                ?? { text: [], flow: true, export: true };
+            const json = Object.fromEntries(Object.entries(p.content).filter(([k]) => !split.text.includes(k)));
+            const payload: Record<string, unknown> = { kind: p.kind, after, ...(Object.keys(json).length ? { content: json } : {}),
+                                                       ...(p.layout ? { layout: p.layout } : {}) };
             ops.push({ kind: 'block.add', target: { bid: nb }, payload });
-            const fields: Record<string, unknown> = { ...p.content };
+            const fields: Record<string, unknown> = { ...json };
             const shadows = new Map<string, Shadow>();
-            for (const path of p.layout.text) {
-                const t = p.texts?.[path] ?? { text: '', spans: [] };
+            for (const path of split.text) {
+                const md = p.content[path];
+                const t = typeof md === 'string' ? parseInline(md) : { text: '', spans: [] };
                 const sh = new Shadow();
                 shadows.set(path, sh);
                 fields[path] = { text: t.text, runs: [], spans: t.spans, suggest_del: [] };
@@ -645,7 +652,7 @@ export function pasteBlocks(state: EditorState, env: Env, pieces: Piece[]): Gest
             }
             // The card reads these shadows, not the fields' runs, which this page has not seen yet.
             env.cards?.set(nb, { from: fields, shadows });
-            tr = tr.insert(blockEnd(tr.doc, after), state.schema.nodes.kindBlock.create({ bid: nb, head: 0, kind: p.kind, fields, text: p.layout.text }));
+            tr = tr.insert(blockEnd(tr.doc, after), state.schema.nodes.kindBlock.create({ bid: nb, head: 0, kind: p.kind, fields, layout: split }));
             after = nb;
             continue;
         }

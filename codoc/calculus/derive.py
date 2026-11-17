@@ -14,6 +14,7 @@ from codoc.calculus import block_md
 from codoc.calculus.block_md import BlockSpec
 from codoc.calculus.doc import (
     HEADING, LAYOUT_KEY, PROSE, SOURCE, Block, TreeNode, fold_tree, is_source_field, layout_entry,
+    registered_layouts,
 )
 from codoc.calculus.ids import OpId, is_human
 from codoc.calculus.inline_md import Span, render
@@ -507,7 +508,10 @@ def projection(store: Store, realizing: set[str] = frozenset(), phases: dict[str
                   for fid, w in store.watermarks_by_fid.items() if (w.handoff or w.realized) and fid in phases}
     return {"store": store.id, "head": store.pos, "frontier": dict(store.frontier), "blocks": blocks,
             "phases": phases, "plans": [{**p.to_json(), "handoff": accept_handoffs(store, p)} for p in open_plans(store)],
-            "watermarks": watermarks}
+            "watermarks": watermarks,
+            # The layouts this checkout's plugin kinds give a new block, so a
+            # paste of a fence without `$layout` splits its fields the same way.
+            "kinds": {k: layout.to_json() for k, layout in sorted(registered_layouts().items())}}
 
 
 def plan_features(store: Store, plan) -> list[str]:

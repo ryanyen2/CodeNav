@@ -88,6 +88,11 @@ def layout_entry(kind: str, layout: Layout) -> dict:
     return {} if kind in BUILTIN else {"layout": layout.to_json()}
 
 
+def registered_layouts() -> dict[str, Layout]:
+    """The plugin kinds this process knows, with the layout each gives a new block."""
+    return dict(_REGISTERED)
+
+
 def register_kind(kind: str, layout: Layout) -> None:
     """Declare the layout a writer gives a new block of a plugin kind. A
     builtin kind's layout is fixed and is not changed."""

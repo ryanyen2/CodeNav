@@ -149,6 +149,15 @@ def test_mcp_write_block_adds_and_edits_as_the_agent(tmp_path):
     assert "unknown kind" in tools.write_block(str(cd), kind="gif", feature_id="h1", content={})["error"]
 
 
+def test_the_projection_names_the_layout_each_plugin_kind_gives_a_new_block(tmp_path):
+    """So an editor pasting a fence without `$layout` splits its fields as the applier would."""
+    from codoc.calculus.derive import projection
+    ws = Workspace(tmp_path / ".codoc"); seed_loop(ws)
+    kinds = projection(ws.store)["kinds"]
+    assert kinds["image"] == layout_of("image").to_json() and "paragraph" not in kinds
+    ws.close()
+
+
 def test_a_block_whose_kind_has_no_code_here_takes_writes_to_its_text_fields(tmp_path):
     """The block's recorded layout says which fields are Text, so they can be
     written; other fields have no schema here and are refused."""

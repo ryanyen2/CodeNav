@@ -48,7 +48,7 @@ import { LinkInput, Menus } from './menus';
 import { Outbox } from './outbox';
 import { clipboardPieces } from './paste';
 import { cardView, type CardFields } from './card';
-import { codocSchema } from './schema';
+import { cardFence, codocSchema } from './schema';
 
 export interface EditorHost {
     /** Send submissions to the daemon's inbox. */
@@ -149,6 +149,9 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             settle();
             if (tr.selectionSet || tr.docChanged) { host.onFeature?.(featureAt(next.selection.from)); menus?.update(); }
         },
+        // A copied card is its `codoc:` fence in the plain text, like the export writes it.
+        clipboardTextSerializer: slice => slice.content.textBetween(0, slice.content.size, '\n\n',
+                                                                    n => (n.type.name === 'kindBlock' ? cardFence(n) : '')),
         handlePaste(_v, event, slice) {
             settle();
             const plain = (event.clipboardData?.getData('text/plain') ?? '').replace(/\r\n?/g, '\n');

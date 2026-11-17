@@ -6,14 +6,14 @@
  * as marks, plan-tagged runs as `plan` marks and suggested deletions as
  * `suggest_del` marks; for a source block (table, diagram, code) it is the raw
  * `source`. Any other kind is a card (editor/card.ts) whose node carries the
- * projected fields and the names of its Text fields; the card keeps its own
+ * projected fields and its layout; the card keeps its own
  * shadows. `adoptionPlan` says which blocks to replace, insert, remove or
  * reorder given the document's current blocks and the set of held blocks
  * (editor/outbox.ts). Pure: no editor, no DOM.
  */
 import type { Node as PMNode, Schema } from '@tiptap/pm/model';
 
-import { SOURCE, isBuiltin, refsOf, textField, textPaths, type ProjectedBlock, type Projection, type TextField } from './projection';
+import { SOURCE, isBuiltin, layoutOf, refsOf, textField, type ProjectedBlock, type Projection, type TextField } from './projection';
 import { Shadow } from './shadow';
 
 /** The blocks the document shows: everything in the reading flow. Comment
@@ -32,7 +32,7 @@ export function blockNode(schema: Schema, b: ProjectedBlock): { node: PMNode; sh
         return { node, shadow: f ? Shadow.fromField(f.text, refsOf(f)) : null };
     }
     if (!isBuiltin(b.kind)) {
-        return { node: schema.nodes.kindBlock.create({ bid: b.id, head: b.head, kind: b.kind, fields: b.fields, text: textPaths(b) }), shadow: null };
+        return { node: schema.nodes.kindBlock.create({ bid: b.id, head: b.head, kind: b.kind, fields: b.fields, layout: layoutOf(b) }), shadow: null };
     }
     const f = textField(b);
     const type = schema.nodes[b.kind];
