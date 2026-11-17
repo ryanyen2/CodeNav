@@ -20,6 +20,7 @@ code change that satisfies it.
 ## Rules
 
 - Stay inside the code the feature is bound to (`codoc_context` lists it). When an item needs new code, add the smallest new symbol or file that fits. Do not refactor unrelated code to host it.
+- When the request needs a change to a symbol another feature owns (a shared default or constant), change that symbol; it is not unrelated code. Say which in the `codoc_reflect` rationale.
 - Do not rename, reword or tidy anything no item asks you to change.
 - Keep existing tests unless one contradicts the new intent.
 - Never edit anything under `.codoc/`. The tree and the queue are maintained by codoc.

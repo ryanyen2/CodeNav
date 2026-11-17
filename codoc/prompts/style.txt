@@ -9,24 +9,32 @@ shape:
 
 | block | use it for | do not use it for |
 |---|---|---|
-| one plain sentence | the first line, always: what this part does | a lead-in to the list below it |
+| one plain sentence | the first line, always: what goes in and what comes out, who calls it, or when it runs. Something the title does not already say. | a lead-in to the list below it, or the title in other words |
 | `- ` bullets | separate facts: rules, limits, defaults, failure behaviour, what must stay true | one idea chopped into pieces |
 | `1. ` numbered list | steps whose order matters | facts that could be reordered |
 | table | three or more parallel cases: input and outcome, setting and default | two items, or anything with one column of real content |
 | ```` ```mermaid ```` diagram | a flow with a branch or a loop, a state machine | a straight line of calls, a list of files |
 
-Size it to the code. A small helper gets the sentence and nothing else. Most
-features get the sentence and two to five bullets. A list, a table and a
-diagram in one description is almost always too much.
+Size it to the code. A small helper gets the sentence and nothing else. A list,
+a table and a diagram in one description is almost always too much.
+
+Check the shape before writing bullets:
+
+1. Three or more bullets that read case → outcome (a status and its action, a type and what it becomes, a setting and its default) are a table.
+2. Three or more bullets that each start with a sibling symbol doing the same kind of thing are a table with a column for what differs.
+3. A loop or a branch that decides what happens next is a diagram.
+4. Anything else is bullets.
 
 ### Each line
 
 - One fact per bullet. Fragments are fine: "Retries on timeout only; a `4xx` is returned as is."
+- A bullet past about 200 characters is two or three facts: split it, or nest the cases under it.
 - Say the actual number, name or condition. `MAX_RETRIES = 3`, not "a configurable limit".
 - Identifiers, literals, file names and settings go in backticks.
 - Say which way a choice went. "Months line up on the payment date, weeks on the posting date" is checkable; "the alignment is configurable" is not.
-- Give a reason only when the code, a comment, the brief or a commit states one. Put it after the fact: "Hyphen at a line end is dropped. Why: the typesetter added it."
-- State the reason itself. Never say where a claim came from: no docstring, comment, header comment, note, brief or commit, and not "the code marks" or "per the function's notes". Write "Why: it runs before a URL is logged", not "Why: the class docstring says it runs before a URL is logged".
+- Give a reason only when the code, a comment, the brief or a commit states one, and only for the fact it explains. Write it as a clause of that fact: "A hyphen at a line end is dropped, because the typesetter added it."
+- State the reason itself. Never say where a claim came from: no docstring, comment, header comment, note, brief or commit, and not "the code marks" or "per the function's notes". Write "…, because it runs before a URL is logged", not "…, as the class docstring says".
+- A reason that restates the fact ("kept for backwards compatibility" on a compatibility shim) or only says a source said so is no reason: leave it out.
 - No reason available: state what the code does and stop. Do not guess one.
 - Write about the code, not about your input. Never mention chunks, what you were or were not shown, or source that was cut off. Long chunks are shortened before you see them; describe what is there and leave out what is not.
 - Nest a bullet one level only when it qualifies the bullet above it.
@@ -72,7 +80,7 @@ Where order matters:
     2. Join words split across lines.
     3. Merge lines into paragraphs by indent.
 
-    - Step 1 must run first. Why: a header left in place is joined into the paragraph above it in step 3.
+    - Step 1 runs first, because a header left in place is joined into the paragraph above it in step 3.
     - A one-page document can never show the repeat pattern, so its header is kept.
 
 Where the cases are parallel:
@@ -84,3 +92,14 @@ Where the cases are parallel:
     | `2xx` | return the body |
     | `429`, `503` | wait `Retry-After` seconds, then resend |
     | other `4xx`, `5xx` | raise `HTTPError` |
+
+Where sibling symbols do the same kind of thing (not one bullet each):
+
+    Infers the Vega-Lite type of a column from its dtype.
+
+    | dtype | type |
+    |---|---|
+    | integer, float | `quantitative` |
+    | datetime, period | `temporal` |
+    | ordered categorical | `ordinal` |
+    | anything else | `nominal` |

@@ -119,7 +119,7 @@ def format_brief(brief: dict | None) -> str:
         if d.get("choice"):
             line = f"- {sentence(d['choice'])}"
             if d.get("because"):
-                line += f" Why: {sentence(d['because'])}"
+                line = f"- {sentence(d['choice'])[:-1]}, because {sentence(d['because'])}"
             if d.get("gave_up"):
                 line += f" Gives up: {sentence(d['gave_up'])}"
             choices.append(line)
