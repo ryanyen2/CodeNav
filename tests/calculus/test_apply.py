@@ -1,70 +1,17 @@
-"""The applier: canonical payloads, inverses, conflicts, replay (spec §5, §8, §9)."""
+"""The applier: canonical payloads, inverses, conflicts, replay."""
 import copy
 import random
 
+import pytest
+
 from codoc.calculus import ops as K
-from codoc.calculus.apply import apply, replay_recorded
+from codoc.calculus.apply import apply
 from codoc.calculus.doc import HEADING, PARAGRAPH
 from codoc.calculus.ids import START
 from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
-from codoc.calculus.text import BOLD, SUGGEST_DEL
-
-
-# One monotone clock for every Mint in a test, because one applier stamps every
-# op it applies (01 §7.1) and an HLC only ever goes forward: two Mints with
-# counters of their own would give the second actor's ops timestamps BEFORE the
-# first's, which no store can observe. A test that wants two clones gives each
-# its own `Clock`.
-class Clock:
-    def __init__(self) -> None:
-        self.n = 0
-
-    def tick(self) -> str:
-        self.n += 1
-        return f"{self.n:020d}"
-
-
-_CLOCK = Clock()
-
-
-class Mint:
-    """Mints ops for one session; the clock is shared unless one is given."""
-
-    def __init__(self, session="s", actor="human:a", clock: Clock | None = None):
-        self.session, self.actor, self.n = session, actor, 0
-        self.clock = clock or _CLOCK
-
-    def op(self, kind, target, payload, *, actor=None, plan=None, batch="b", caused_by=None):
-        self.n += 1
-        return Op(id=f"{self.session}:{self.n}", at=self.clock.tick(), actor=actor or self.actor, batch=batch,
-                  kind=kind, target=dict(target), payload=dict(payload), plan=plan, caused_by=caused_by)
-
-
-def heading(m: Mint, store: Store, bid: str, title: str, level=1, after=START, plan=None, actor=None):
-    apply(store, m.op(K.BLOCK_ADD, {"bid": bid}, {"kind": HEADING, "level": level, "after": after}, plan=plan, actor=actor))
-    return apply(store, m.op(K.TEXT_INSERT, {"bid": bid, "path": "text"}, {"after": START, "text": title}, plan=plan, actor=actor))
-
-
-def paragraph(m: Mint, store: Store, bid: str, body: str, after, plan=None, actor=None):
-    apply(store, m.op(K.BLOCK_ADD, {"bid": bid}, {"kind": PARAGRAPH, "after": after}, plan=plan, actor=actor))
-    return apply(store, m.op(K.TEXT_INSERT, {"bid": bid, "path": "text"}, {"after": START, "text": body}, plan=plan, actor=actor))
-
-
-def replay(store: Store) -> Store:
-    """As a rebuild replays: what the record says, not what today would judge."""
-    fresh = Store(store.policy)
-    for o in store.ops:
-        replay_recorded(fresh, Op.from_json(copy.deepcopy(o.to_json())))
-    return fresh
-
-
-def invert(store: Store, m: Mint, op: Op) -> list[Op]:
-    """Apply the recorded inverse as new ops (undo)."""
-    out = []
-    for body in op.inverse:
-        out.append(apply(store, m.op(body["kind"], body["target"], body["payload"])))
-    return out
+from codoc.calculus.text import BOLD, CITE, LINK, SUGGEST_DEL
+from tests.helpers import Mint, apply_mark, heading, invert, paragraph, replay
 
 
 def test_feature_view_and_tree_fold():
@@ -123,7 +70,7 @@ def test_every_op_inverts_and_replays(tmp_path):
     invert(s, m, de)
     assert [b.id for b in s.ordered()] == ["h1", "p1", "h2", "p3"]
     # bindings with displacement
-    a1 = apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"file": "f.py", "symbol": "g", "fingerprint": "x"}))
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"file": "f.py", "symbol": "g", "fingerprint": "x"}))
     a2 = apply(s, m.op(K.BIND_ATTACH, {"fid": "h2"}, {"file": "f.py", "symbol": "g", "fingerprint": "y"}))
     assert s.bindings[("f.py", "g")].feature == "h2" and a2.payload["displaced"]["feature"] == "h1"
     invert(s, m, a2)
@@ -141,12 +88,11 @@ def test_every_op_inverts_and_replays(tmp_path):
 def test_conflicts_are_recorded_and_state_untouched():
     m, s = Mint(), Store()
     heading(m, s, "h1", "Top")
-    before = s.state_fingerprint()
     bad = apply(s, m.op(K.TEXT_INSERT, {"bid": "h1", "path": "text"}, {"after": ["nope:1", 0], "text": "x"}))
     assert bad.conflict is not None
     dup = apply(s, m.op(K.BLOCK_ADD, {"bid": "h1"}, {"kind": PARAGRAPH, "after": START}))
     assert dup.conflict == "duplicate_block"
-    p = paragraph(m, s, "p1", "x", after="h1")
+    paragraph(m, s, "p1", "x", after="h1")
     mh = apply(s, m.op(K.BLOCK_MERGE, {"into": "p1", "bid": "h1"}, {}))
     assert mh.conflict == "merge_heading"
     assert s.blocks["h1"].live
@@ -243,7 +189,7 @@ def test_split_heading_yields_heading_plus_paragraph_and_id_follows_text():
     invert(s, m, sp)
     assert [b.id for b in s.ordered()] == ["h1"]
     # Split at END: new empty paragraph after.
-    sp2 = apply(s, m.op(K.BLOCK_SPLIT, {"bid": "h1", "path": "text"}, {"at": [ins.id, 4], "new": "n2"}))
+    apply(s, m.op(K.BLOCK_SPLIT, {"bid": "h1", "path": "text"}, {"at": [ins.id, 4], "new": "n2"}))
     assert [b.id for b in s.ordered()] == ["h1", "n2"] and s.blocks["n2"].kind == PARAGRAPH
     assert replay(s).state_fingerprint() == s.state_fingerprint()
 
@@ -321,11 +267,10 @@ def _live_view_from(fp):
 
 
 def test_reopen_never_binds_code_to_a_dead_heading(tmp_path):
+    """A dead heading owns no code, so a reopen that restores the bindings a
+    reject removed does not bind them to a heading that died since."""
     from codoc.workspace import Workspace
-    from tests.substrate.test_review5 import H, seed
-    """01 §3 block.delete: 'a dead heading owns no code'. plan.reopen restores
-    the bindings a reject removed without asking whether the heading is still
-    alive."""
+    from tests.helpers import H, seed
     ws = Workspace(tmp_path / ".codoc"); seed(ws)
     a = ws.open_plan(actor="loop", kind="edit", target="h1")
     ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "d.py", "symbol": "d.py::x"}}], actor="loop", plan=a)
@@ -339,9 +284,8 @@ def test_reopen_never_binds_code_to_a_dead_heading(tmp_path):
 
 
 def test_a_reopen_naming_an_unknown_block_in_marks_back_is_a_conflict_not_a_crash():
-    """01 §5: apply is total. `_h_plan_reopen` checks every block it will touch
-    except the ones under `marks_back`; a KeyError there escapes apply (and a
-    rebuild that meets it in a merged log dies)."""
+    """`apply` is total: a reopen naming an unknown block under `marks_back`
+    is a recorded conflict, not an exception that would stop a rebuild."""
     m, s = Mint(), Store()
     heading(m, s, "h1", "Client")
     paragraph(m, s, "p1", "Retries once.", after="h1")
@@ -357,3 +301,14 @@ def test_a_reopen_naming_an_unknown_block_in_marks_back_is_a_conflict_not_a_cras
         pytest.fail(f"apply raised {e!r} instead of recording a conflict")
     assert out.conflict is not None
     assert s.plans["P"].status == "rejected"
+
+
+def test_merged_link_keeps_the_existing_placer_even_when_it_also_displaces():
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "C")
+    ins = paragraph(m, s, "p1", "read the client docs", after="h1")
+    human = apply_mark(m, s, "p1", ins, 0, 3, LINK, {"href": "https://u"})
+    apply_mark(m, s, "p1", ins, 9, 14, CITE, {"file": "c.py", "symbol": "C"})
+    apply_mark(m, s, "p1", ins, 4, 14, LINK, {"href": "https://u"}, actor="loop")
+    links = [mk for mk in s.blocks["p1"].text().marks if mk.kind == LINK]
+    assert [(mk.actor, mk.op) for mk in links] == [("human:a", human.id)]

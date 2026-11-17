@@ -123,7 +123,7 @@ class AuthContext:
 
 def record_role(codoc_dir: str | Path, login: str, role: str) -> None:
     """Remember a login's role where every clone reads it: the tracked
-    ``config.json`` (``roles: {actor: role}``, spec §7.3), so a rebuild on any
+    ``config.json`` (``roles: {actor: role}``), so a rebuild on any
     machine applies that contributor's ops under the same authority. The actor
     is ``log.hub_actor``, never a bare ``human:<login>``, so no GitHub login can
     name the maintainer's own identity."""

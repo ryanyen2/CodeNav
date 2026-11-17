@@ -1,4 +1,5 @@
-"""Who may write what: the roles table and the policy the applier runs (spec §7.3).
+"""Who may write what: the roles table and the policy the applier runs
+(docs/concurrency.md, Roles and authority).
 
 ``Roles`` maps an actor to a role and answers, for one op against the current
 store, whether that actor may write it. The helpers around it say whether an
@@ -73,8 +74,8 @@ def own_plan_words(store: Store, actor: str, minted_by: set[str]) -> bool:
 
 def is_comment_op(store: Store, kind: str, target: dict, payload: dict) -> bool:
     """Whether this op is part of writing a comment. A comment hangs off words
-    rather than standing among them, so 02 §3.6 lets a suggester write one on
-    the trunk: there is nothing for a maintainer to accept, only a thread to
+    rather than standing among them, so a suggester may write one on the
+    trunk: there is nothing for a maintainer to accept, only a thread to
     answer. Everything else they write becomes a plan of theirs."""
     if kind == K.BLOCK_ADD:
         return payload.get("kind") == COMMENT
@@ -118,7 +119,7 @@ def _own_comment(store: Store, op: Op) -> bool:
 
 @dataclass
 class Roles:
-    """Actor → role, and the policy the applier runs (spec §7.3).
+    """Actor → role, and the policy the applier runs.
 
     - ``owner`` / ``maintainer``: everything.
     - ``machine`` (agents, the loop, translators, imports): the trunk and plans,
@@ -130,14 +131,15 @@ class Roles:
       is by the actor's KIND, so an actor the grammar does not name
       (``unknown:x``) is a suggester, not a machine. A contributor does not
       have to tag anything themselves: the drain opens the plan and tags their
-      ops, turning a deletion into the plan's ``suggest_del`` (02 §3.6). What
+      ops, turning a deletion into the plan's ``suggest_del``. What
       it cannot carry under a plan — a merge, a block delete — stays refused.
       Nothing untagged but a comment: taking back words they proposed is the
       proposal getting smaller, so it rides in the plan like everything else
       (``ops.PLANNABLE`` carries ``text.delete``/``text.restore`` for exactly
-      that, and the applier holds them to the plan's own characters). This
-      matters beyond tidiness: a policy that reads only ``plans`` is one the
-      hub's door can evaluate for a stranger's log, which is all it has.
+      that, and the applier holds them to the plan's own characters). The
+      policy reads only ``plans`` and who added a comment block, so
+      ``validate-logs`` can check a log without the document it was written
+      against.
 
     A comment is writable untagged by anyone: it hangs off words rather than
     standing among them, and there is nothing for a maintainer to accept. What

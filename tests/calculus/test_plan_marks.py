@@ -1,17 +1,30 @@
-"""A plan's marks are proposals: placed by an op, undone by that op (spec 01 §3).
-
-Review 5's A4: matching a mark by value let a second plan's toggle, or a bold
-grown over text typed at its edge, survive the plan that placed it.
-"""
+"""A plan's mark changes are proposals: `suggest_mark` records beside the
+document's own marks, applied on accept and removed on reject."""
 import json
 import random
 
 from codoc.calculus import ops as K
+from codoc.calculus.apply import apply
 from codoc.calculus.derive import block_entry, live_spans, markdown, plan_claims
+from codoc.calculus.export import export_markdown
 from codoc.calculus.inline_md import parse
+from codoc.calculus.store import Store
 from codoc.calculus.text import BOLD, CITE, COMMENT, LINK, PROPOSALS, SUGGEST_DEL
 from codoc.workspace import Workspace
-from tests.substrate.test_review5 import H, T, bold_chars, ins, mark, refs, seed
+from tests.helpers import (
+    H,
+    Mint,
+    T,
+    apply_mark,
+    bold_chars,
+    heading,
+    ins,
+    mark,
+    paragraph,
+    refs,
+    seed,
+    seed_loop,
+)
 
 
 def test_two_plans_on_one_span_rejected_in_order_leave_no_phantom_mark(tmp_path):
@@ -32,8 +45,8 @@ def test_two_plans_on_one_span_rejected_in_order_leave_no_phantom_mark(tmp_path)
 
 
 def test_rejected_read_mode_does_not_resurrect_a_rejected_plans_mark(tmp_path):
-    """A rejected, B open (B's toggle removed A's mark). The export (rejected
-    mode) is 'the document without any open plan' — which never held A's bold."""
+    """A rejected, B open. The export (rejected mode) is the document without
+    any open plan, which never held A's bold."""
     ws = Workspace(tmp_path / ".codoc"); seed(ws)
     r = refs(ws, "p1")
     a = ws.open_plan(actor="loop", kind="edit", target="p1")
@@ -112,7 +125,6 @@ def test_projection_spans_agree_with_rejected_markdown_by_character_identity(tmp
             # compare
             t = ws.store.blocks["p1"].text()
             e = block_entry(ws.store, ws.store.blocks["p1"])
-            lt = t.live_text()
             offs = {i: ref for ref, i in t.live_offsets().items()}
             proj = {(s["kind"], json.dumps(s["attrs"], sort_keys=True), offs[i]) for s in e["fields"]["text"]["spans"] for i in range(s["start"], s["end"])}
             # rejected mode over identities: recompute on a clone the way markdown() does
@@ -137,14 +149,10 @@ def marks_of_kind(text, kind):
     return sorted(((m.start, m.end, m.op) for m in text.marks if m.kind == kind))
 
 
-
-
 def test_a_plan_bold_that_widens_a_human_bold_is_undone_by_reject(tmp_path):
-    """01 §3 plan.reject: 'Marks are removed by the op that placed them'.
-    A widening used to merge into the person's mark and keep THEIR placer, so
-    nothing could find what the plan had placed. A proposal is a record beside
-    the document, so the person's bold is exactly what it was until a verdict,
-    and accepting is the one thing that widens it."""
+    """A proposal is a record beside the document, so a plan bold that widens
+    the person's bold leaves it exactly as it was until a verdict. Reject keeps
+    it; accept widens it to one mark over the whole range."""
     ws = Workspace(tmp_path / ".codoc"); seed(ws)
     r = refs(ws, "p1")
     mark(ws, "p1", BOLD, r[0], r[6])                                  # the person bolds "Retries"
@@ -169,7 +177,7 @@ def test_a_plan_bold_that_widens_a_human_bold_is_undone_by_reject(tmp_path):
 
 
 def test_rejected_read_mode_hides_a_plan_bold_that_widened_a_human_bold(tmp_path):
-    """01 §6 read modes: `rejected` is the document without any open plan."""
+    """The `rejected` read mode is the document without any open plan."""
     ws = Workspace(tmp_path / ".codoc"); seed(ws)
     r = refs(ws, "p1")
     mark(ws, "p1", BOLD, r[0], r[6])
@@ -183,15 +191,15 @@ def test_rejected_read_mode_hides_a_plan_bold_that_widened_a_human_bold(tmp_path
 
 
 def test_two_open_plans_with_adjacent_bolds_each_reject_cleanly(tmp_path):
-    """Plan B's bold merged into plan A's adjacent bold; the merged mark keeps
-    A's op. Rejecting B alone must remove B's part and leave A's."""
+    """Two open plans propose adjacent bolds. Each is its own record, so
+    rejecting B leaves the document's bold marks as they were with A open."""
     ws = Workspace(tmp_path / ".codoc"); seed(ws)
     r = refs(ws, "p1")
     a = ws.open_plan(actor="loop", kind="edit", target="p1")
     mark(ws, "p1", BOLD, r[0], r[6], actor="loop", plan=a)             # "Retries"
     only_a = bold_chars(ws.store.blocks["p1"].text())
     b = ws.open_plan(actor="agent:x", kind="edit", target="p1")
-    mark(ws, "p1", BOLD, r[7], r[11], actor="agent:x", plan=b)         # " once", adjacent to "Retries" so set_mark merges
+    mark(ws, "p1", BOLD, r[7], r[11], actor="agent:x", plan=b)         # " once", adjacent to "Retries"
     merged = bold_chars(ws.store.blocks["p1"].text())
     ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": b}, "payload": {}}], actor=H)
     t = ws.store.blocks["p1"].text()
@@ -199,10 +207,9 @@ def test_two_open_plans_with_adjacent_bolds_each_reject_cleanly(tmp_path):
 
 
 def test_a_plan_cite_that_displaced_a_human_link_is_undone_whole_by_reject(tmp_path):
-    """EXCLUSIVE displacement records the displaced link in `removed` and its
-    outer pieces (with the LINK's placer) in `added`. Reject must remove the
-    pieces AND the cite and put the one link back; otherwise the text holds
-    three overlapping links and the Markdown no longer round-trips."""
+    """A plan cite inside a person's link would displace the link if
+    accepted. While the plan is open the link is untouched, and after a reject
+    the marks are exactly what they were and the Markdown round-trips."""
     ws = Workspace(tmp_path / ".codoc"); seed(ws)
     r = refs(ws, "p1")
     mark(ws, "p1", LINK, r[0], r[11], attrs={"href": "https://x.test/"})     # [Retries once](…)
@@ -228,9 +235,8 @@ def test_rejected_read_mode_while_the_displacing_plan_is_open(tmp_path):
 
 
 def test_a_plan_that_unbolds_the_middle_of_a_bold_is_undone_by_reject(tmp_path):
-    """A partial `off` records the bold in `removed` and its two outer pieces
-    (same placer) in `added`. Reject must remove the pieces and restore the
-    whole; otherwise the text holds a whole bold plus two overlapping pieces."""
+    """A plan that proposes unbolding the middle of a bold leaves the bold
+    whole while it is open, in the export, and after a reject."""
     ws = Workspace(tmp_path / ".codoc"); seed(ws)
     r = refs(ws, "p1")
     mark(ws, "p1", BOLD, r[0], r[11])                                 # **Retries once**
@@ -252,12 +258,9 @@ def test_a_plan_that_unbolds_the_middle_of_a_bold_is_undone_by_reject(tmp_path):
 
 
 def test_a_plan_bold_that_widened_a_human_bold_is_undone_after_the_person_split_the_paragraph(tmp_path):
-    """01 §3: reject removes 'what the op RECORDED putting there — its own
-    `added` entries, matched on kind, attrs, start and placer'. The recorded
-    mark is (bold, r0..r11, placer=the person). An Enter inside the widened
-    part cuts it into two pieces; the tail piece starts at the cut, not at r0,
-    and carries the person's placer, so no key finds it. The extension the
-    plan proposed stays bold after the plan is rejected."""
+    """A plan bold widens the person's bold, then the person presses Enter
+    inside the widened part. After a reject the tail block has no bold and the
+    head keeps exactly the person's bold."""
     ws = Workspace(tmp_path / ".codoc"); seed(ws)
     r = refs(ws, "p1")
     mark(ws, "p1", BOLD, r[0], r[6])                                   # the person: **Retries**
@@ -269,14 +272,14 @@ def test_a_plan_bold_that_widened_a_human_bold_is_undone_after_the_person_split_
     rej = ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": a}, "payload": {}}], actor=H)[0]
     assert rej.conflict is None
     head, tail = ws.store.blocks["p1"].text(), ws.store.blocks["p1b"].text()
-    assert markdown(tail) == "nce.", (markdown(tail), bolds(tail))
-    assert bold_chars(head) == set(r[0:7]), (markdown(head), bolds(head))
+    assert markdown(tail) == "nce.", (markdown(tail), marks_of_kind(tail, BOLD))
+    assert bold_chars(head) == set(r[0:7]), (markdown(head), marks_of_kind(head, BOLD))
 
 
 def test_the_rejected_read_mode_agrees_after_the_split_while_the_plan_is_open(tmp_path):
-    """01 §6: `rejected` is the document without any open plan; the export is
-    rendered from it. The tail block's bold has the person's placer and a
-    start no `added` entry names."""
+    """The `rejected` read mode is the document without any open plan, and the
+    export is rendered from it. After the split, the tail block shows no bold
+    in that mode or in the projection."""
     ws = Workspace(tmp_path / ".codoc"); seed(ws)
     r = refs(ws, "p1")
     mark(ws, "p1", BOLD, r[0], r[6])
@@ -291,10 +294,8 @@ def test_the_rejected_read_mode_agrees_after_the_split_while_the_plan_is_open(tm
 
 
 def test_rejecting_one_of_two_plans_that_bold_the_same_words_keeps_the_other_proposal(tmp_path):
-    """Two plans propose the same bold. `set_mark` merges the second into the
-    first and keeps the first's placer, so the one live mark is recorded under
-    plan A's op by BOTH plans. Rejecting A removes it whole; B is still open,
-    still offered, and now proposes nothing — accepting it bolds nothing."""
+    """Two plans propose the same bold. Rejecting A leaves B open, and
+    accepting B bolds the words."""
     ws = Workspace(tmp_path / ".codoc"); seed(ws)
     r = refs(ws, "p1")
     a = ws.open_plan(actor="loop", kind="edit", target="p1")
@@ -310,11 +311,9 @@ def test_rejecting_one_of_two_plans_that_bold_the_same_words_keeps_the_other_pro
 
 
 def test_accepting_a_strike_kills_what_it_proposed_and_not_what_was_typed_inside(tmp_path):
-    """Review 8: a `suggest_del` was a Mark over two anchors, struck with a
-    RANGE delete, so a word the person typed inside the proposal died with it.
-    `text.delete` has recorded its explicit segments since round 3 for exactly
-    this reason (01 §3); the proposal form records them at placement now, and
-    the accept kills by identity."""
+    """A `suggest_del` records the characters it strikes when it is placed,
+    and the accept kills exactly those, so a word the person typed inside the
+    struck range survives."""
     ws = Workspace(tmp_path / ".codoc")
     seed(ws)
     r = refs(ws, "p1")
@@ -327,11 +326,8 @@ def test_accepting_a_strike_kills_what_it_proposed_and_not_what_was_typed_inside
 
 
 def test_a_verdict_on_a_mark_the_person_already_removed_leaves_the_plan_decided(tmp_path):
-    """`plan.accept` struck first and applied the mark records after, so a
-    proposal to turn a WHOLE mark off whose mark the person had already removed
-    raised midway: the strike stood, the accept was recorded `mark_partial`,
-    the plan stayed open, and every later accept failed the same way. A
-    proposal for a state the document is already in is satisfied."""
+    """A proposal to turn off a whole mark the person already removed is
+    satisfied: the accept applies, its strike lands, and the plan is decided."""
     ws = Workspace(tmp_path / ".codoc")
     seed(ws)
     r = refs(ws, "p1")
@@ -353,3 +349,33 @@ def test_a_verdict_on_a_mark_the_person_already_removed_leaves_the_plan_decided(
     assert acc.conflict is None, acc.conflict
     assert ws.store.plans[pid].status == "accepted"
     assert T(ws.store, "p1") == "Retries ."
+
+
+def test_a_plan_bold_on_trunk_words_stays_out_of_the_export():
+    m, s = Mint(), Store()
+    heading(m, s, "b-000000000001", "T")
+    ins = paragraph(m, s, "b-000000000002", "alpha beta", after="b-000000000001")
+    apply(s, m.op(K.PLAN_OPEN, {"pid": "p-1"}, {"kind": "edit"}, actor="loop"))
+    apply_mark(m, s, "b-000000000002", ins, 0, 4, actor="loop", plan="p-1")
+    assert "**alpha**" not in export_markdown(s)
+    assert markdown(s.blocks["b-000000000002"].text(), "accepted", s) == "**alpha** beta"
+
+
+def test_the_page_keeps_a_mark_a_plan_proposes_to_remove(tmp_path):
+    """A proposed unbold leaves the word bold and says so beside it, the way a
+    proposed deletion leaves the words struck rather than gone."""
+    from codoc.calculus.derive import block_entry, plan_claims
+    from codoc.calculus.text import BOLD
+    ws = Workspace(tmp_path / ".codoc")
+    seed_loop(ws)
+    ins = [o for o in ws.store.ops if o.kind == K.TEXT_INSERT and o.payload["bid"] == "p1"][0]
+    ws.submit([{"kind": K.TEXT_MARK, "target": {"bid": "p1", "path": "text"},
+                "payload": {"kind": BOLD, "attrs": {}, "start": [ins.id, 8], "end": [ins.id, 11], "on": True}}], actor="human:local")
+    pid = ws.open_plan(actor="loop", kind="edit", target="p1")
+    ws.submit([{"kind": K.TEXT_MARK, "target": {"bid": "p1", "path": "text"},
+                "payload": {"kind": BOLD, "attrs": {}, "start": [ins.id, 8], "end": [ins.id, 11], "on": False}}], actor="loop", plan=pid)
+    spans = block_entry(ws.store, ws.store.blocks["p1"])["fields"]["text"]["spans"]
+    assert [(s["kind"], s["start"], s["end"]) for s in spans] == [(BOLD, 8, 12)]
+    assert [(c.stage, c.text) for c in plan_claims(ws.store, "h1") if c.stage == "unmarked"] == [("unmarked", "bold:once")]
+    ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor="human:local")
+    assert block_entry(ws.store, ws.store.blocks["p1"])["fields"]["text"]["spans"] == []

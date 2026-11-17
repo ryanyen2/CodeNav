@@ -1,6 +1,6 @@
 [project]
 name = "codoc"
-version = "0.2.18"
+version = "0.3.0"
 description = "codoc: a feature-tree system that maintains a human-intent-level view of a codebase, synchronized to the underlying code."
 license = { text = "MIT" }
 readme = "README.md"
@@ -46,6 +46,9 @@ media = [
 local = [
     "ollama>=0.3.0",             # provider="ollama"; imported only on that path
 ]
+anthropic = [
+    "anthropic>=0.40.0",         # provider="anthropic"; imported only on that path
+]
 
 [project.scripts]
 codoc = "codoc.cli.main:app"
@@ -70,3 +73,7 @@ include = ["codoc*"]
 # fail on import, because they are not installed and are not meant to be.
 norecursedirs = ["docs/study-materials/projects/*"]
 testpaths = ["tests"]
+
+[tool.ruff]
+# Source samples the language-adapter tests parse; not code that runs.
+extend-exclude = ["tests/fixtures"]

@@ -1,21 +1,32 @@
 """The hub's realize worker: a hand-off becomes a PR, under the sandbox."""
-import json
 import os
 import time
 
 from codoc.calculus import ops as K
 from codoc.loops.realize import handoff
 from codoc.serve.realize_agent import realize_tool_policy
-from codoc.serve.sandbox import can_use_tool, edit_allowed, is_secret_path, out_of_scope_changes
-from codoc.serve.worker import Request, branch_name, pending, process_ready, read_ledger, realize_one
+from codoc.serve.sandbox import (
+    can_use_tool,
+    edit_allowed,
+    is_secret_path,
+    out_of_scope_changes,
+)
+from codoc.serve.worker import (
+    Request,
+    branch_name,
+    pending,
+    process_ready,
+    read_ledger,
+    realize_one,
+)
 from codoc.workspace import Workspace
-from tests.loops.test_reflect import seed
+from tests.helpers import seed_loop
 
 
 def ready(tmp_path):
     cd = tmp_path / ".codoc"
     ws = Workspace(cd)
-    seed(ws)
+    seed_loop(ws)
     t = ws.store.blocks["p1"].text()
     ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
                 "payload": {"after": list(t.last_live_ref()), "text": " Retry twice."}}], actor="human:local")
@@ -81,12 +92,11 @@ def test_the_sandbox_is_the_boundary(tmp_path):
 
 
 def test_a_branch_the_agent_already_built_is_published_not_rebuilt(tmp_path):
-    """Review 7: the `built:` ledger entry is written after the push and the PR
-    have both been tried, so a hub killed in between left the commit on the
-    branch and nothing in the ledger. The next pass's `worktree add -b` then
-    failed, was classed transient-and-not-built, and `_cleanup` ran `branch -D`
-    on the agent's work — after which the pass following paid for a fresh model
-    session. A branch by the hand-off's name IS the record: resume at the push."""
+    """The `built:` ledger entry is written after the push and the PR have
+    both been tried, so a hub killed in between leaves the commit on the branch
+    and nothing in the ledger. A branch by the hand-off's name is the record:
+    the next pass resumes at the push and does not delete the agent's work or
+    run the model again."""
     cd, ws, ho = ready(tmp_path)
     ws.close()
     branch = branch_name(ho.id)
@@ -194,11 +204,9 @@ def test_the_worker_comes_back_to_an_unanswered_request_before_the_tree_moves(tm
 
 
 def test_the_live_sdk_run_gates_every_tool_through_a_hook(monkeypatch):
-    """The predicate is only a boundary if the SDK asks it. An `allowed_tools`
-    entry naming a whole tool auto-approves that tool BEFORE `can_use_tool`
-    runs — the SDK warns about exactly this — so the five tools the sandbox
-    guards were the five it was never consulted about. A PreToolUse hook runs
-    whatever the allow rules say."""
+    """An `allowed_tools` entry naming a whole tool auto-approves that tool
+    before `can_use_tool` runs, so the live run gates every tool through a
+    PreToolUse hook, which runs whatever the allow rules say."""
     from codoc.serve import realize_agent as R
     captured = {}
 
@@ -233,10 +241,9 @@ def test_every_github_credential_is_scrubbed_from_the_agents_environment():
 
 
 def test_a_grep_pattern_is_a_regex_and_a_glob_pattern_is_a_path():
-    """Review 8: the `pattern` check round 7 added for `Glob` also read
-    `Grep`'s, which is a REGEX — so an agent searching for `/api/message`, or
-    any literal starting with a slash, was refused. And a Glob that climbs out
-    with `..` was not confined at all."""
+    """`Grep`'s `pattern` is a regex and is not checked as a path, so a search
+    for `/api/message` is allowed. `Glob`'s `pattern` is a path, so one that
+    climbs out with `..` or names another home directory is refused."""
     wt = "/srv/repo/.codoc/worktrees/codoc-realize-s-9"
     policy = realize_tool_policy(["c.py"], consult_allowlist=frozenset(), resolve=lambda h: [], root=wt)
     assert policy("Grep", {"pattern": "/api/message"}) == (True, "")

@@ -1,10 +1,10 @@
-"""The one boundary where content becomes ops.
+"""Where kind-block content becomes ops (docs/model.md, Content as ops).
 
 An agent (through ``codoc_write_block``), the loop's lift pass and the editor's
 kind NodeViews all hand in *content*; this module turns it into ``block.set``
 for non-Text fields and ``ingest`` for Text fields, with the caller's actor and
-plan. Nobody emits ops against a kind block from anywhere else, which is what
-keeps attribution honest for media (`03-extensions.md` §6).
+plan. No other module emits ops against a kind block, so every word in one is
+attributed by ``ingest``.
 
 ``plan_write`` is pure (content → what to submit); ``write_block`` and
 ``add_block`` run it against a workspace. A second process (the MCP server)

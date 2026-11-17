@@ -1,4 +1,5 @@
-"""Derived views over the store (spec §6). Pure functions; nothing here writes.
+"""Derived views over the store (docs/model.md, Derived views). Pure functions;
+nothing here writes.
 
 Every user-facing question is one of these: what does a feature say, who wrote
 which word, what is the person's unsent ink, what did the loop change under
@@ -21,11 +22,11 @@ from codoc.calculus.store import Store
 from codoc.calculus.text import CITE, PROPOSALS, SUGGEST_DEL, SUGGEST_MARK, Mark, Text, struck_chars
 
 LOOP = "loop"
-# A feature with pending intent: the document wins over a machine's repair
-# (01 §4 rule 8), whatever its size.
+# A feature with pending intent: the document wins over a machine's repair,
+# whatever its size (docs/concurrency.md, The machine gate).
 HELD = ("edited", "queued", "planned")
 # The fraction of a block a machine may delete on the trunk before the repair
-# becomes a proposal instead (01 §4 rule 5); a person's prose is held tighter.
+# becomes a proposal instead; a person's prose is held tighter.
 GATE_MACHINE = 0.5
 GATE_HUMAN = 0.15
 
@@ -203,7 +204,7 @@ def prose_blocks(store: Store, fid: str) -> list[Block]:
     """The feature's blocks that are the document. A comment hangs off words
     rather than standing among them, so writing one is not editing the prose:
     it must not ink the feature, turn it `edited`, or offer a hand-off of a
-    note (01 §6)."""
+    note."""
     return [b for b in store.feature_body(fid) if in_flow(b.kind)]
 
 
@@ -301,11 +302,11 @@ def _suggest_spans(t: Text, store: Store) -> list[Span]:
 
 def open_plans_on(store: Store, fid: str) -> list[str]:
     """The open plans this feature is waiting on: one targeting a block of
-    hers, or one whose ops landed in her.
+    its body, or one whose ops landed in it.
 
     Over `store.open_plans`, not every plan the tree ever had: a decided plan
-    is answered, and walking all of them per feature made `phases()` cost
-    O(features × plans) — 41 → 195 ms as a tree accumulated 3,000 verdicts."""
+    is answered, and walking all of them per feature would make `phases()`
+    cost O(features × plans)."""
     ids = _body_ids(store, fid)
     out = {pid for pid, p in store.open_plans.items() if p.target in ids}
     out.update(o.plan for o in store.ops_on(ids)
@@ -327,12 +328,11 @@ PHASES = ("edited", "realizing", "queued", "planned", "proposed", "drifted", "sy
 def unsent_removal(store: Store, fid: str) -> bool:
     """Whether the person has removed words here that no hand-off has carried.
 
-    Not part of `ink`, which is INK: 09-editor §7 draws what the person wrote
-    and deliberately not what they removed, because they are the one who
-    removed it. But a removal is pending intent all the same — 02 §2's "empty a
-    title by deleting characters → flagged", and the directive already carries
-    it as a `removed:` line — so the phase has to see it or the person is told
-    there is nothing to hand off while there is."""
+    Not part of `ink`, which the editor draws as what the person wrote and
+    not what they removed. A removal is pending intent all the same (emptying
+    a title by deleting characters flags the feature, and the directive
+    carries it as a `removed:` line), so the phase sees it; otherwise the
+    person would be told there is nothing to hand off while there is."""
     w = store.watermarks(fid)
     for b in prose_blocks(store, fid):
         for f in text_fields(b.kind):
@@ -364,21 +364,18 @@ def phase(store: Store, fid: str, realizing: set[str] = frozenset()) -> str:
 
 def reads_its_ops(store: Store, fid: str) -> bool:
     """Whether a view still reads this feature's OPS and not just its state —
-    which is what a snapshot may not fold away (01 §7.5).
+    which is what a snapshot may not fold away.
 
-    ONE does: an open plan's verdict undoes the plan's own ops by identity, and
-    a proposal is in flight by definition — a fold that took its ops would be
-    folding away the answer to a question nobody has answered yet.
+    One does: an open plan's verdict undoes the plan's own ops by identity, so
+    a fold may not take them.
 
-    Everything else reads state, and the rule that got them there is 01 §7.5's:
-    put on the THING what the reader needs. A segment carries its minter's
-    actor and clock and now its killer's; a mark carries its actor, its placing
-    op and its clock; a watermark carries when the code last moved and when a
-    realization last settled; a dead heading carries what it owned. So the
-    directive's `removed:` and `Focus:`, `ground`'s reds and greens, drift, and
-    a phantom's settle are all questions about the document — which they had to
-    become, because three of them are asked by a hand-off given AFTER the fold
-    and nothing at fold time could know it was coming.
+    Everything else reads state. A segment carries its minter's actor and clock
+    and its killer's; a mark carries its actor, its placing op and its clock; a
+    watermark carries when the code last moved and when a realization last
+    settled; a dead heading carries what it owned. So the directive's
+    `removed:` and `Focus:`, `ground`'s reds and greens, drift, and a deleted
+    heading's settle read the document, and a hand-off given after a fold
+    still finds what it needs.
     """
     b = store.blocks.get(fid)
     return b is not None and b.live and bool(open_plans_on(store, fid))
@@ -443,7 +440,7 @@ def dead_cites(store: Store, known: set[tuple[str, str]]) -> list[tuple[str, Mar
 def block_entry(store: Store, b: Block) -> dict:
     """One block as the editor reads it. Pure, and a function of the block's
     own state plus which plans are open, so a caller may memoize it on
-    ``(block_head[b.id], plans_head)`` (spec §6, ``projection``).
+    ``(block_head[b.id], plans_head)`` (docs/model.md, Cache keys).
 
     The spans are the document's own marks, and nothing else: a plan never
     changes them, so a proposal to unbold a word leaves the word bold, the way

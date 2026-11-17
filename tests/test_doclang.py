@@ -1,10 +1,8 @@
 """The doc-language surface: script inference, the lexical helpers built on it,
 profile resolution, and the workspace setting.
 
-The through-line of these tests is a single claim: **English behaviour must not
-move.** Every helper here replaced a Latin-only regex or a hard-coded character
-count that other parts of the loop were tuned against, so each one is pinned
-twice — once for the new script and once to prove the old answer is unchanged.
+Each helper is pinned twice: once for a non-Latin script, and once to show that
+the English answer, which other parts of the loop are tuned against, holds.
 """
 from __future__ import annotations
 
@@ -181,9 +179,9 @@ def test_corrupt_config_degrades_to_the_default(codoc_dir):
 
 
 def test_chinese_gets_a_register_rule_like_every_other_cjk_language():
-    """Japanese was told である/だ体 and Korean 해라체; Chinese was told only where to put
-    its spaces. With no register instruction a model writes 书面语 for "documentation",
-    and the result reads harder than the English it came from."""
+    """Japanese names である/だ体 and Korean 해라체; Chinese names a register too.
+    With no register instruction a model writes 书面语 for "documentation", and
+    the result reads harder than the English it came from."""
     for tag in ("zh-Hans", "zh-Hant"):
         rule = dl.resolve(tag).prose_rule
         assert "白话" in rule or "白話" in rule

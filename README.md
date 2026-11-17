@@ -2,13 +2,13 @@
 
 codoc keeps a **document of features** beside your code and keeps the two in
 step, in both directions, while you, a coding agent and codoc's own loop all
-edit it. A feature is a heading and a few paragraphs of intent that cite the
-code inline; the document is the surface where you read what a codebase does,
-say what it should do, and review what an agent did to it.
+edit it. A feature is a heading followed by prose, lists, tables, diagrams and
+code that cite the code inline; the document is where you read what a codebase
+does, say what it should do, and review what an agent did to it.
 
-Every word in the document carries who wrote it, so the editor can show your
+Every word in the document records who wrote it, so the editor can show your
 unsent edits in blue, an agent's proposal in gray, and what the code changed
-underneath in green and red, without ever diffing prose to guess.
+underneath in green and red, without diffing prose to guess.
 
 ## How it works
 
@@ -27,19 +27,21 @@ underneath in green and red, without ever diffing prose to guess.
   the tree, attach code, repair prose and propose plans, under the same rules as
   everyone else.
 
-The substrate is an attributed edit calculus: an append-only op log, character
-identity, recorded inverses, plans as tags. Read `docs/architecture.md` for the
-map and `docs/substrate/01-calculus.md` for the design.
+The document is an op log: every edit is an op that names characters by
+identity, records its inverse, and carries its author. One daemon applies the
+ops; every view is computed from the log. `docs/model.md` defines the document
+and the ops, `docs/concurrency.md` who may write and how logs merge.
 
 ## Requirements
 
 - The **codoc VS Code extension** (it provisions everything else).
 - **Claude Code**, for the interactive workflow and, by default, as the engine
-  for codoc's own model calls (no separate key). An OpenAI key is the fallback.
+  for codoc's own model calls (no separate key). An OpenAI or Anthropic key is
+  the alternative.
 
-The extension installs Python 3.11+ in an isolated `uv` environment with
-cocoindex + LanceDB (the incremental code index) and tree-sitter (Python and
-TypeScript).
+The extension installs Python 3.11 or 3.12 in an isolated `uv` environment
+with cocoindex and LanceDB (the incremental code index) and tree-sitter
+(Python and TypeScript).
 
 ## Quick start
 
@@ -47,8 +49,8 @@ TypeScript).
 2. Open your repository and run **"codoc: Set up codoc"** (offered on first
    run, or from the status bar). Setup bootstraps `uv`, installs the core, wires
    the Claude Code plugin (hooks, MCP server, slash commands), runs `codoc init`
-   to index the repository and propose the first tree, and starts the daemon
-   for you. A trusted workspace is required.
+   to index the repository and propose the first tree, and starts the daemon.
+   A trusted workspace is required.
 3. Open the tree (**codoc: Open tree**). Read, edit, hand off.
 
 ### The CLI (no IDE, or scripting)
@@ -72,15 +74,17 @@ codoc realize                         # implement the queue now, in the foregrou
 codoc history <feature>               # ops and per-word attribution
 codoc lang [tag] | codoc translate    # the authoring language; convert an existing tree
 codoc rebuild | codoc snapshot        # replay the logs; fold them
-codoc import-v1                       # bring a v1 workspace into the log
+codoc validate-logs                   # check the session logs a pull request adds
+codoc serve                           # serve the tree to GitHub collaborators
 ```
 
 ## Editing the tree
 
-The editor is a document. Type; press Enter for a new paragraph; type `## ` or
-`/` at the start of a line for a heading; Tab and Shift-Tab change a heading's
-level; drag the handle to move a feature with everything under it; `@` cites a
-symbol the tree already knows; ⌘F finds and ⌘⌥F replaces.
+The editor is a document. Type; press Enter for a new paragraph; type `## ` at
+the start of a line, or `/`, for a heading; Tab and Shift-Tab change a
+heading's level; drag the handle to move a feature with everything under it;
+`@` cites a symbol the tree already knows; ⌘F finds and ⌘⌥F replaces. Lists,
+tables, code blocks and diagrams are shown read-only for now.
 
 Two signals in prose are instructions: **bold** is *Focus* (the agent is told
 which words matter) and an external link is *Consult* (the agent reads it
@@ -92,10 +96,10 @@ What you see:
 | colour | meaning |
 |---|---|
 | blue underline, pulsing | yours, not yet handed off |
-| blue underline, steady | yours, handed off and being built |
+| blue underline, steady | yours, handed off and not yet built |
 | gray text | a plan awaiting your verdict (struck gray: it proposes removing these words) |
-| green / red ground | what the code loop added / removed under you |
-| History | who wrote each run of words |
+| green / red | what the code loop added / removed since you last edited the feature |
+| History | who wrote each run of words, and a scrubber over the recent ops |
 
 Nothing forces a verdict. A plan you ignore stays gray; accepting it keeps the
 agent as the author of its words; rejecting it removes exactly what it added.
@@ -104,30 +108,33 @@ agent as the author of its words; rejecting it removes exactly what it added.
 
 | file | role | git |
 |---|---|---|
-| `log/<session>.jsonl` | the truth: one append-only file per daemon session | tracked |
-| `tree.codoc` | the Markdown export (`## Title {#b-id}`), for review and for people without codoc; derived, regenerate on conflict | tracked |
-| `config.json` | the authoring language and other settings that travel with the repo | tracked |
-| `projection.json`, `history.json`, `status.json`, `realize.md`, `activity.json` | derived and ephemeral | ignored |
+| `log/<session>.jsonl` | the truth: one append-only file per session | tracked |
+| `log/snapshot-*.jsonl`, `log/archive/` | a folded prefix of the log, and the files it folded | tracked |
+| `tree.codoc` | the Markdown export (`## Title {#b-id}`), for review and for people without codoc; derived, regenerated on every publish | tracked |
+| `config.json` | the authoring language and the roles table | tracked |
+| `projection.json`, `history.json`, `status.json`, `realize.md`, `activity.json`, `ask.json` | derived and local state | ignored |
 | `inbox/` | client submissions and the daemon's acks | ignored |
 | `cache/`, `lancedb/`, `cocoindex.db` | the code index and graph | ignored |
 
 Two branches never write the same log file, so git merges them by adding
-both; the daemon replays the union deterministically after a pull.
+both; the daemon rebuilds from the union after a pull.
 
 ## Authoring language
 
 The tree can be written in any language (`codoc lang zh-Hans`, or the toolbar
 switcher). Prose is translated; identifiers, symbol paths and citations are
 not. `codoc translate` converts an existing tree and refuses any block whose
-translation would drop a citation or a person's emphasis.
+translation would drop a citation, a link or a person's bold.
 
 ## Development
 
 ```bash
-pip install -e .
+pip install -e '.[dev]'
 python -m pytest tests/                                            # Python (deterministic)
 cd vscode-codoc && npx vitest run && npx tsc --noEmit && node esbuild.config.mjs
 ```
 
-`docs/substrate/` holds the design notes and the adversarial reviews of each
-stage; `docs/architecture.md` is the code map; `CONCEPTS.md` the glossary.
+`CLAUDE.md` is the map of the code. The specs are in `docs/`: `model.md`,
+`concurrency.md`, `workflows.md`, `kinds.md`, `editor.md`, and
+`architecture.md` for modules and environment variables. `CONCEPTS.md` is the
+glossary.

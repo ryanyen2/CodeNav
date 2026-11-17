@@ -1,34 +1,48 @@
 # Concepts
 
-**Feature** — a heading block and the paragraphs before the next heading
-(its body); it dominates every following block until a heading at the same
-or a shallower level. A feature *is* its heading block: one id space.
+Definitions are in `docs/model.md`; this is the glossary.
 
-**Block** — a heading, paragraph or plugin kind, with a rank (fractional
-order key), a level (headings), and content whose Text fields are attributed.
+**Feature**: a live heading. Its *range* is the heading and every following
+block up to the next heading at the same or a shallower level; its *body* is
+the heading and the following non-heading blocks up to the next heading of any
+level. A feature *is* its heading block: one id space.
 
-**Segment / run** — a stretch of characters inserted by one op, carrying its
-actor and clock; dead segments are positioned tombstones. Runs are what the
-editor paints and what History reads.
+**Block**: one unit of the document, with an id, a kind, a rank (a fractional
+order key) and a level (headings and list items). Kinds: `heading`; the prose
+kinds `paragraph`, `bullet`, `numbered`; the source kinds `table`, `diagram`,
+`code`; the plugin kinds `image`, `screenshot`, `url`, `pdf`, `comment`.
 
-**Mark** — a range over character identity: bold (Focus), link (Consult),
-cite (a code reference), comment, suggest_del (a plan's proposed removal).
-Suggestion and comment anchors never grow (I2).
+**Segment / run**: a stretch of characters minted by one op, carrying its
+actor and clock. A dead segment keeps its place. Runs are what the editor
+paints and what History reads.
 
-**Op** — one of twenty operations with a canonical payload, a recorded
-inverse and, when it could not apply, a conflict. Ids are `session:seq`.
+**Mark**: a range over character identity: `bold` (Focus), `code`, `link`
+(Consult), `cite` (a code reference), `comment`, `suggest_del` (a plan's
+proposed removal), `suggest_mark` (a plan's proposed mark change). Only `bold`
+grows when text is typed at its end (I2).
 
-**Plan** — an agent's or the loop's proposal: ops tagged with a plan id that
-apply live as gray text until a verdict. Accept hands the feature off.
+**Op**: one of twenty operations, applied by one process, recorded with its
+canonical payload, its inverse and, when it could not apply, a conflict code.
+Ids are `session:seq`.
 
-**Hand-off / realized** — per-feature frontiers (watermarks). Queued work is
-the difference; ink past the hand-off is unsent.
+**Plan**: a proposal by an agent, the loop, a translator or a contributor: ops
+tagged with a plan id that apply at once and show as gray text until a
+verdict. Accept keeps the proposer as author; reject kills its words by
+identity.
 
-**Phase** — synced · edited · queued · realizing · proposed · drifted ·
-planned; one derived enum for the marker, the rows and the rail.
+**Hand-off / realized**: per-feature frontiers (watermarks). A feature is
+queued while its hand-off frontier is not covered by its realized frontier.
+Ink outside the hand-off is unsent.
 
-**Ingest** — the one boundary where a whole-text write becomes ops through a
-diff, against a stated base, with marks kept by identity.
+**Phase**: `edited`, `realizing`, `queued`, `planned`, `proposed`, `drifted`,
+`synced`; the first that holds. One derived value for the marker, the tree
+rows and the agent.
 
-**Projection** — the daemon's per-block view for the editor (text, runs,
-spans, phases, claims, watermarks). Adopted per block.
+**Ingest**: the one place where whole new text for a field becomes ops through
+a diff, against a stated base, with marks kept by identity.
+
+**Machine gate**: where a machine's ingest lands when it named no plan: the
+trunk, or a plan when the feature is held or the rewrite deletes too much.
+
+**Projection**: the daemon's per-block view for the editor (text, runs, spans,
+phases, claims, watermarks), adopted per block.

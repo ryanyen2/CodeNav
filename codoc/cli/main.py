@@ -242,10 +242,10 @@ def accept(plan: str, root: str = ROOT,
            build: bool = typer.Option(True, "--build/--no-build", help="Hand the feature off in the same batch.")):
     """Accept a plan (the whole of it), and hand its feature off.
 
-    A plan is a request to build, so the verdict queues it (02 §5). The gesture
-    belongs to whoever sends the verdict, not to the applier — the editor sends
-    both in one batch and so does this. `--no-build` takes the words without
-    the work. A `kind=delete` plan is never handed off from here: removing the
+    A plan is a request to build, so this command sends `feature.handoff` for
+    every feature the plan touches in the same batch as the verdict; the
+    applier never adds one. The editor's Accept sends the verdict alone. `--no-build` takes the
+    words without the work. A `kind=delete` plan is never handed off from here: removing the
     code is its own decision, and `codoc handoff --delete-code` is where a
     person makes it.
     """
@@ -405,7 +405,7 @@ def snapshot(root: str = ROOT):
         path = write_snapshot(cd, ws.store, ws.clock)
     client.release(cd)
     if path is None:
-        typer.echo("Nothing to fold: every feature has work in flight (04 §5).")
+        typer.echo("Nothing to fold: every feature has work in flight.")
         return
     typer.echo(f"✓ {path.name}")
 

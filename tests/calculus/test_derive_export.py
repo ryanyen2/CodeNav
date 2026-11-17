@@ -1,34 +1,27 @@
-"""Derived views and the Markdown export fixed point (spec §6, §9)."""
+"""Derived views and the Markdown export fixed point."""
 from codoc.calculus import ops as K
 from codoc.calculus.apply import apply
-from codoc.calculus.derive import attribution, description, ground, history, ink, markdown, phase, plan_claims, projection
-from codoc.loops.realize import directive
-from codoc.calculus import block_md
+from codoc.calculus.derive import (
+    attribution,
+    description,
+    ground,
+    history,
+    ink,
+    markdown,
+    phase,
+    plan_claims,
+    projection,
+)
+from codoc.calculus.doc import HEADING, PARAGRAPH
 from codoc.calculus.export import export_markdown
 from codoc.calculus.ids import START
-from codoc.calculus.ingest import block_bodies, resolve_pending_refs
+from codoc.calculus.inline_md import Span, render
+from codoc.calculus.ops import covered
 from codoc.calculus.store import Store
-from codoc.calculus.text import BOLD, SUGGEST_DEL
-
-from tests.calculus.test_apply import Mint, heading, paragraph
-
-
-def import_markdown(md: str) -> list[dict]:
-    """Op bodies that build the document ``md`` describes, keeping the ids it carries."""
-    return block_bodies(block_md.parse(md), after=START, keep_ids=True)[0]
-
-
-def build(store: Store, m: Mint, bodies: list[dict], actor="import"):
-    """Apply a batch of bodies the way ``Workspace.submit`` does, resolving ``$ins`` anchors."""
-    insert_ids: list[str] = []
-    for b in bodies:
-        payload = dict(b["payload"])
-        resolve_pending_refs(payload, insert_ids)
-        op = apply(store, m.op(b["kind"], b["target"], payload, actor=actor))
-        assert op.conflict is None, (b, op.conflict)
-        if b["kind"] == K.TEXT_INSERT:
-            insert_ids.append(op.id)
-
+from codoc.calculus.text import BOLD, CITE, LINK
+from codoc.loops.realize import directive
+from codoc.workspace import Workspace
+from tests.helpers import Mint, build, heading, import_markdown, paragraph, seed_loop
 
 SAMPLE = """# Networking {#b-000000000001}
 
@@ -78,7 +71,7 @@ def test_three_channels_and_phase():
     ins = paragraph(m, s, "p1", "Retries once.", after="h1", actor="loop")
     assert phase(s, "h1") == "synced"
     # Human types: unsent ink, phase edited.
-    h = apply(s, m.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [ins.id, 12], "text": " Then stops."}))
+    apply(s, m.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [ins.id, 12], "text": " Then stops."}))
     claims = ink(s, "h1")
     assert [(c.stage, c.text) for c in claims] == [("unsent", " Then stops.")]
     assert phase(s, "h1") == "edited"
@@ -134,12 +127,10 @@ def test_focus_from_human_bold_only():
 
 
 def test_a_person_who_only_deleted_words_has_something_to_hand_off(tmp_path):
-    """02 §2: "empty a title by deleting characters → a feature with an empty
-    title, flagged". `ink` is what the person WROTE — 09-editor §7 draws
-    removals not at all, because they are the one who removed them — so a
-    delete-only edit left the phase `synced`, the status bar silent and the
-    hand-off unoffered, while the directive was already carrying a `removed:`
-    line for it."""
+    """`ink` holds only what a person wrote, but a person's kill outside both
+    watermarks also makes the phase `edited`. A delete-only edit therefore
+    shows in the phase, and so in the status bar and the hand-off, as it does
+    in the directive's `removed:` line."""
     m, s = Mint(), Store()
     loop = Mint("l", "loop")
     heading(loop, s, "h1", "Client")
@@ -151,3 +142,90 @@ def test_a_person_who_only_deleted_words_has_something_to_hand_off(tmp_path):
     apply(s, m.op(K.FEATURE_HANDOFF, {"fid": "h1"}, {"asked": "drop the retry"}))
     assert phase(s, "h1") in ("queued", "planned")
     assert 'removed: "once"' in directive(s, "h1")
+
+
+def test_ink_keeps_unsent_words_apart_from_sent_neighbours():
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Client", actor="loop")
+    ins = paragraph(m, s, "p1", "Retries once.", after="h1", actor="loop")
+    a = apply(s, m.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [ins.id, 12], "text": " A"}))
+    apply(s, m.op(K.FEATURE_HANDOFF, {"fid": "h1"}, {}))
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"file": "c.py", "symbol": "C"}))
+    apply(s, m.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [a.id, 1], "text": " B"}))
+    assert [(c.stage, c.text) for c in ink(s, "h1")] == [("sent", " A"), ("unsent", " B")]
+    assert phase(s, "h1") == "edited"
+    assert phase(s, "h1", realizing={"h1"}) == "edited"          # the document wins over the lease
+    d = directive(s, "h1")
+    assert 'added: " A"' in d and '" A B"' not in d
+
+
+def test_partial_realization_is_one_fact():
+    a, b, s = Mint("a", "human:a"), Mint("b", "human:a"), Store()
+    heading(a, s, "h1", "C", actor="loop")
+    ins = paragraph(a, s, "p1", "x", after="h1", actor="loop")
+    apply(s, a.op(K.BIND_ATTACH, {"fid": "h1"}, {"file": "c.py", "symbol": "C"}))
+    apply(s, b.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [ins.id, 0], "text": "y"}))
+    apply(s, a.op(K.FEATURE_HANDOFF, {"fid": "h1"}, {}))
+    w = s.watermarks("h1")
+    apply(s, a.op(K.FEATURE_REALIZED, {"fid": "h1"}, {"covers": {"a": 5}}))
+    assert not covered(w.handoff, w.realized) and phase(s, "h1") == "queued"
+    assert [c.stage for c in ink(s, "h1")] == ["sent"]
+
+
+def test_bold_across_a_cite_edge_and_literal_markup_round_trip():
+    assert render("abc", [Span(LINK, {"href": "https://u"}, 0, 2), Span(BOLD, {}, 1, 3)]) == "[a**b**](https://u)**c**"
+    m, s = Mint(), Store()
+    heading(m, s, "b-000000000001", "T")
+    ins = paragraph(m, s, "b-000000000002", "see the client now", after="b-000000000001")
+    apply(s, m.op(K.TEXT_MARK, {"bid": "b-000000000002", "path": "text"},
+                  {"kind": CITE, "attrs": {"file": "c.py", "symbol": "C"}, "start": [ins.id, 4], "end": [ins.id, 13], "on": True}))
+    apply(s, m.op(K.TEXT_MARK, {"bid": "b-000000000002", "path": "text"}, {"kind": BOLD, "attrs": {}, "start": [ins.id, 8], "end": [ins.id, 13], "on": True}))
+    paragraph(m, s, "b-000000000003", "# Not a heading {#b-000000000009}", after="b-000000000002")
+    paragraph(m, s, "b-000000000004", "type **stars** to bold and [x](https://y) too", after="b-000000000003")
+    md1 = export_markdown(s)
+    s2 = Store()
+    build(s2, Mint("t"), import_markdown(md1))
+    assert export_markdown(s2) == md1
+    paras = [b for b in s2.ordered() if b.kind == PARAGRAPH]
+    assert [p.text().live_text() for p in paras] == ["see the client now", "# Not a heading {#b-000000000009}",
+                                                      "type **stars** to bold and [x](https://y) too"]
+    assert sorted(mk.kind for mk in paras[0].text().marks) == [BOLD, CITE] and paras[1].text().marks == []
+    assert len([b for b in s2.ordered() if b.kind == HEADING]) == 1
+
+
+def test_history_follows_an_op_to_the_block_it_landed_in_and_lists_conflicts():
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "One")
+    paragraph(m, s, "a", "aaa", after="h1")
+    heading(m, s, "h2", "Two", after="a")
+    b = paragraph(m, s, "b", "bbb", after="h2")
+    apply(s, m.op(K.BLOCK_MOVE, {"bid": "b"}, {"after": "a"}))
+    apply(s, m.op(K.BLOCK_MERGE, {"into": "a", "bid": "b"}, {}))
+    ins = apply(s, m.op(K.TEXT_INSERT, {"bid": "b", "path": "text"}, {"after": [b.id, 2], "text": "!"}))
+    bad = apply(s, m.op(K.TEXT_INSERT, {"bid": "a", "path": "text"}, {"after": ["nope:1", 0], "text": "?"}))
+    assert ins.payload["bid"] == "a" and bad.conflict == "unknown_anchor"
+    h = history(s, "h1")
+    assert ins in h and bad in h and ins not in history(s, "h2")
+
+
+def test_ground_paints_nothing_on_a_tree_nobody_touched_and_shows_repairs_after():
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Client", actor="loop")
+    ins = paragraph(m, s, "p1", "Retries once.", after="h1", actor="loop")
+    assert ground(s, "h1") == []
+    apply(s, m.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [ins.id, 12], "text": " Mine."}))
+    loop = Mint("l", "loop")
+    apply(s, loop.op(K.TEXT_DELETE, {"bid": "p1", "path": "text"}, {"from": [ins.id, 8], "to": [ins.id, 11]}))
+    apply(s, loop.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [ins.id, 11], "text": "twice"}))
+    assert [(c.stage, c.text) for c in ground(s, "h1")] == [("removed", "once"), ("added", "twice")]
+
+
+def test_verdicts_are_in_the_features_history(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    seed_loop(ws)
+    pid = ws.open_plan(actor="loop", kind="edit", target="h1")
+    ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "P "}}], actor="loop", plan=pid)
+    bad = ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor="agent:x")[0]
+    acc = ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor="human:local")[0]
+    h = history(ws.store, "h1")
+    assert bad.conflict == "authority" and bad in h and acc in h

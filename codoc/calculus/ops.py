@@ -1,4 +1,4 @@
-"""The ``Op`` record and the op vocabulary (spec §3).
+"""The ``Op`` record and the op vocabulary (docs/model.md, Operations).
 
 An op on the wire carries its target and payload as the client wrote them.
 The applier fills ``payload`` with the canonical form (a delete's explicit
@@ -145,5 +145,5 @@ def in_frontier(op_id: OpId, frontier: dict) -> bool:
 
 def covered(handoff: dict, realized: dict) -> bool:
     """Every op the hand-off frontier names is inside the realized frontier:
-    the one definition of "nothing queued" (spec §3, §6)."""
+    the definition of "nothing queued" that every caller uses."""
     return all(realized.get(s, -1) >= n for s, n in handoff.items())

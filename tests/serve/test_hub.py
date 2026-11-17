@@ -4,14 +4,22 @@ import json
 from fastapi.testclient import TestClient
 
 from codoc.calculus import ops as K
+from codoc.daemon.publish import publish
 from codoc.serve.app import build_app, client_name
-from codoc.serve.auth import COOKIE_NAME, MAINTAINER, SUGGEST, AuthContext, SessionStore, read_roles, role_for_permission
+from codoc.serve.auth import (
+    COOKIE_NAME,
+    MAINTAINER,
+    SUGGEST,
+    AuthContext,
+    SessionStore,
+    read_roles,
+    role_for_permission,
+)
 from codoc.serve.push import Feed
+from codoc.workspace import Workspace
 from codoc.workspace import log as L
 from codoc.workspace.log import Submission
-from codoc.daemon.publish import publish
-from codoc.workspace import Workspace
-from tests.loops.test_reflect import seed
+from tests.helpers import seed_loop
 
 
 class FakeOAuth:
@@ -36,7 +44,7 @@ class FakeResolver:
 def workspace(tmp_path):
     cd = tmp_path / ".codoc"
     ws = Workspace(cd)
-    seed(ws)
+    seed_loop(ws)
     publish(cd, ws.store, root_dir=str(tmp_path))
     ws.close()
     return cd
@@ -113,11 +121,10 @@ def test_feed_sends_a_snapshot_then_only_changes_and_this_viewers_acks(tmp_path)
 
 
 def test_a_viewer_keeps_receiving_acks_after_the_daemon_trims_the_ack_file(tmp_path):
-    """Review 7: `rotate_acks` rewrites the file to its newest lines at every
-    daemon start, and both tails (this one and `provider.ts`'s `readFrom`)
-    follow it by byte offset. A file shorter than where they stopped read as
-    "nothing new" for the rest of the session, so every block stayed held and
-    ⌘Z waited for ever."""
+    """`rotate_acks` rewrites the ack file to its newest lines at every daemon
+    start, and both tails (this one and `provider.ts`'s `readFrom`) follow it
+    by byte offset. A file shorter than where a tail stopped is read again from
+    the start, so acks keep arriving and held blocks are released."""
     cd = workspace(tmp_path)
     for i in range(2100):
         L.ack(cd, "hub-alice", f"c{i}", None)
@@ -132,8 +139,8 @@ def test_a_viewer_keeps_receiving_acks_after_the_daemon_trims_the_ack_file(tmp_p
 def test_the_feed_sends_acks_before_the_projection_that_followed_them(tmp_path):
     """Disk order: the daemon acks during the drain and publishes afterwards.
     The editor skips a held block when it adopts, and the ack is what lifts the
-    hold — so a feed that sends the projection first made the hub the one
-    surface where a block was always still held when its projection landed."""
+    hold, so the feed sends the acks first and the block is free when its
+    projection lands."""
     cd = workspace(tmp_path)
     feed = Feed(cd, "ide")
     feed.pending()
@@ -152,15 +159,14 @@ def test_a_contributor_and_the_person_edit_one_checkout_at_once(tmp_path):
     """The workflow the hub exists for: a suggester proposes from the browser
     while the person types in VS Code, and only a maintainer's verdict lands it."""
     from codoc.calculus.derive import markdown, phase, plan_claims
-    from codoc.calculus.ids import START
-    from codoc.workspace.config import write_config
     from codoc.daemon.publish import Publisher
+    from codoc.workspace.config import write_config
 
     cd = tmp_path / ".codoc"
     cd.mkdir()
     write_config(cd, roles={"human:gh:alice": SUGGEST, "human:gh:bob": MAINTAINER})
     ws = Workspace(cd)
-    seed(ws)
+    seed_loop(ws)
     t = ws.store.blocks["p1"].text()
     L.submit(cd, "ide", [Submission(cid="i1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
                                     payload={"after": list(t.last_live_ref()), "text": " Mine."}, batch="b-ide")])
@@ -244,18 +250,16 @@ def hub_ws(tmp_path):
     cd.mkdir()
     (cd / "config.json").write_text(json.dumps({"roles": {"human:gh:alice": SUGGEST, "human:gh:bob": MAINTAINER}}))
     ws = Workspace(cd)
-    seed(ws)
+    seed_loop(ws)
     return cd, ws
 
 
 def test_a_contributor_cannot_resolve_or_rewrite_somebody_elses_comment_thread(tmp_path):
-    """Review 7: a comment is writable untagged by anyone, because a thread is
-    something to answer rather than accept. But editing INSIDE somebody's
-    thread should mean replying in it: a `suggest` login could mark a
-    maintainer's request-for-work resolved — the state `Build it` and the margin
-    read — and delete the words of the request."""
+    """A comment is writable untagged by anyone, because a thread is
+    something to answer rather than accept. Inside somebody else's thread a
+    `suggest` login may only reply: it may not resolve the thread or rewrite
+    the words of the request."""
     cd, ws = hub_ws(tmp_path)
-    t = ws.store.blocks["p1"].text()
     ws.submit([
         {"kind": K.BLOCK_ADD, "target": {"bid": "c1"},
          "payload": {"kind": "comment", "after": "p1", "content": {"thread": "c1", "anchor": "p1",
@@ -287,17 +291,15 @@ def test_a_contributor_cannot_resolve_or_rewrite_somebody_elses_comment_thread(t
 
 
 def test_a_revoked_collaborator_recorded_as_none_is_not_a_suggester(tmp_path):
-    """`auth.session` writes `none` to the tracked table on revocation.
-    `Roles.policy` knew owner, maintainer, machine and "everyone else" — and
-    `none` was everyone else, so the record that says a person was REMOVED
-    granted exactly what a contributor has. Their session is gone, but an inbox
-    line drained after the revocation, and a clone validating their pull
-    request's logs, both come through the policy."""
+    """`auth.session` writes `none` to the tracked table on revocation, and
+    `none` may write nothing, not even what a suggester may. Their session is
+    gone, but an inbox line drained after the revocation, and a clone
+    validating their pull request's logs, both go through the policy."""
     cd = tmp_path / ".codoc"
     cd.mkdir()
     (cd / "config.json").write_text(json.dumps({"roles": {"human:gh:eve": "none"}}))
     ws = Workspace(cd)
-    seed(ws)
+    seed_loop(ws)
     L.submit(cd, client_name("eve"), [
         Submission(cid="e1", kind=K.PLAN_OPEN, target={"pid": "pl-eve"},
                    payload={"kind": "edit", "target": "p1", "note": "hi"}, batch="pl-eve"),
@@ -310,11 +312,10 @@ def test_a_revoked_collaborator_recorded_as_none_is_not_a_suggester(tmp_path):
 
 
 def test_a_revoked_collaborators_open_stream_stops_carrying_the_tree(tmp_path):
-    """Review 8: `/api/events` checked the session once, at connect. A stream
-    is a long-lived READ of the whole tree, so a collaborator taken off the
-    repository kept receiving every projection until they closed the tab — and
-    the browser reopens it by itself. Their writes were refused at the next
-    POST; their reading was not."""
+    """A stream is a long-lived read of the whole tree, so `/api/events`
+    re-checks the role while it runs: a collaborator taken off the repository
+    stops receiving projections, although the browser would reopen the tab's
+    stream by itself."""
     import asyncio
 
     from codoc.serve.auth import NONE, record_role
@@ -343,9 +344,8 @@ def test_a_revoked_collaborators_open_stream_stops_carrying_the_tree(tmp_path):
 
 
 def test_one_message_may_not_carry_an_unbounded_number_of_submissions(tmp_path):
-    """The rate limit counts REQUESTS, so one POST is one request however much
-    it carries: 5,000 inserts in one body were 5,000 drains, and for a
-    suggester 5,000 plans."""
+    """The rate limit counts requests, and one POST is one request however
+    much it carries, so a POST may carry at most `MAX_SUBS` submissions."""
     from codoc.serve.app import MAX_SUBS
     cd = workspace(tmp_path)
     c = TestClient(build_app(str(cd)))

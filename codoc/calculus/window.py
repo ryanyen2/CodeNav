@@ -1,4 +1,4 @@
-"""The timeline window (spec §6 ``timeline``): the last ``limit`` ops with, per
+"""The timeline window (docs/model.md, ``history_window``): the last ``limit`` ops with, per
 op, the text of every block it touched as it read right after the op, and
 each touched block's text as it read before the window. Derived by
 un-applying the window backwards on clones of the live fields, so the

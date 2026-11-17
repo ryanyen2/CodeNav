@@ -1,12 +1,12 @@
 """``apply(store, op)`` — total, deterministic, O(the segments and marks of the
-blocks it touches), plus the ordered insert a structural op pays (spec §5).
+blocks it touches), plus the ordered insert a structural op pays
+(docs/model.md, What ``apply`` does).
 
 Every op is recorded: applied, or stored with ``conflict`` set and the state
 untouched. Handlers are two-phase: they RESOLVE every anchor, block and mark
 they will touch before the first mutation, so a conflict discovered midway
-never leaves a partial change behind. A verdict is the handler where this is
-hardest and has been got wrong twice: it undoes, strikes and applies mark
-records in turn, and a proposal it cannot apply is one the document has
+never leaves a partial change behind. A verdict undoes, strikes and applies
+mark records in turn; a proposal it cannot apply is one the document has
 already satisfied, not a reason to stop half way.
 
 On success the op leaves with its canonical payload (what it actually did) and
@@ -115,11 +115,11 @@ def replay_recorded(store: Store, op: Op) -> Op:
     """Apply a RECORDED op as its record says, not as today would judge it.
 
     A refused op is recorded refused and applied not at all: the authority
-    check is a question about the moment the op arrived (01 §7.3), and so is
-    every other conflict — an op that failed on an anchor its neighbours have
-    since restored must not quietly succeed on the second reading. Rebuild and
-    the snapshot's fold both replay, so both go through here; the one door is
-    what keeps `replay(log) == store` (I6) true of a folded log too.
+    check is a question about the moment the op arrived, and so is every
+    other conflict: an op that failed on an anchor its neighbours have since
+    restored must not succeed on the second reading. Rebuild and the
+    snapshot's fold both replay through this function, which keeps
+    `replay(log) == store` (I6) true of a folded log too.
     """
     wire = Op(id=op.id, at=op.at, actor=op.actor, batch=op.batch, kind=op.kind,
               target=dict(op.target), payload=dict(op.payload), base=dict(op.base),
@@ -241,8 +241,8 @@ def _only_own_plan(store: Store, op: Op, work, segs) -> None:
     if op.kind == K.TEXT_RESTORE:
         # A restore under a plan undoes a delete of that plan's. Reviving
         # characters somebody ELSE killed would override their op — a
-        # maintainer removing a plan's words is an ordinary trunk delete (01
-        # §3) and a proposal does not get to answer it.
+        # maintainer removing a plan's words is an ordinary trunk delete and a
+        # proposal does not get to answer it.
         undone = store.by_id.get(str(op.payload.get("by") or ""))
         if undone is None or undone.plan != op.plan:
             raise Conflict("not_this_plans_delete", str(op.payload.get("by") or ""))
@@ -290,8 +290,9 @@ def _h_text_mark(store: Store, op: Op, touched: set[str]):
         # A new proposal must CARRY its plan. An op that only names one in
         # `attrs` is allowed in exactly one case: it restores a record that was
         # already placed, and says which op placed it (`payload["op"]`) — the
-        # inverse of a plan mark's inverse, which 01 §9 requires to apply. Even
-        # then the plan must still be open.
+        # inverse of a plan mark's inverse, which must apply because the
+        # inverse of an inverse is the original. Even then the plan must still
+        # be open.
         pid = op.plan or (str(attrs.get("plan") or "") if op.payload.get("op") else "")
         plan = store.plans.get(pid)
         if plan is None or plan.status != "open":
@@ -299,10 +300,9 @@ def _h_text_mark(store: Store, op: Op, touched: set[str]):
         attrs["plan"] = pid
     if kind == SUGGEST_DEL and on and "chars" not in attrs:
         # WHICH characters this proposes to cut, by identity, recorded when it
-        # is placed. `text.delete` has stored its explicit segments since round
-        # 3 for exactly this reason (01 §3): a range struck later would take
-        # whatever had since been typed between the ends with it — including
-        # the person's own answer to the proposal.
+        # is placed, as `text.delete` stores its explicit segments: a range
+        # struck later would take whatever had since been typed between the
+        # ends with it, including the person's own answer to the proposal.
         attrs["chars"] = ",".join(f"{o}:{k}" for o, k in text.ops_between_refs(start, end))
     # A restored mark keeps its original placer and actor: only an inverse says
     # so, and an inverse is the person's own op. Both ride in the canonical
@@ -314,7 +314,7 @@ def _h_text_mark(store: Store, op: Op, touched: set[str]):
         # A plan proposes; it does not edit the trunk's marks. The toggle is
         # recorded beside them and a verdict is what applies or drops it, so
         # nothing later has to find a mark that a merge, a split or another
-        # plan has moved since (01 §3).
+        # plan has moved since.
         record = Mark(SUGGEST_MARK, {"plan": op.plan, "mark": kind, "on": "1" if on else "",
                                      **{f"a:{k}": v for k, v in attrs.items()}}, start, end, actor, placer, at)
         if record not in text.marks:
@@ -563,8 +563,8 @@ def _h_block_move(store: Store, op: Op, touched: set[str]):
 
 
 def _detach_dead(store: Store, fids: list[str], touched: set[str]) -> list[dict]:
-    """A dead heading owns no code (spec §3): drop its bindings, remember them
-    ON THE BLOCK (the phantom's settle and the undo both read them there, so a
+    """A dead heading owns no code: drop its bindings, remember them
+    ON THE BLOCK (the deleted heading's settle and the undo both read them there, so a
     fold may take this op away), and return them for the inverse."""
     out = []
     for fid in fids:
@@ -784,7 +784,7 @@ def _undo_plan_op(store: Store, o: Op, by: OpId, touched: set[str], record: dict
         # A plan's mark toggle never touched the trunk: it is a record beside
         # it, and undoing the op is dropping the record. Found by the plan it
         # names, so a merge, a split or another plan moving the trunk's marks
-        # cannot hide it (01 §3).
+        # cannot hide it.
         for block, p in store.mark_holders(o.id):
             t = block.text(p)
             for m in [x for x in t.proposals(o.plan) if x.op == o.id]:
@@ -1047,7 +1047,7 @@ def _h_plan_reopen(store: Store, op: Op, touched: set[str]):
     for entry in p.get("binds", []):
         owner = store.blocks.get(entry["fid"])
         if owner is None or not owner.live:
-            continue        # a dead heading owns no code (spec §3), whatever the verdict undid
+            continue        # a dead heading owns no code, whatever the verdict undid
         key = (entry["file"], entry["symbol"])
         prior = store.bindings.get(key)
         if prior is not None:
@@ -1114,7 +1114,7 @@ def _h_feature_realized(store: Store, op: Op, touched: set[str]):
         raise Conflict("no_feature", fid)
     w = store.watermarks(fid)
     if covered(w.handoff, w.realized):
-        # Realization settles a request (spec §3). With none there is nothing
+        # Realization settles a request. With none there is nothing
         # to settle, and recording a no-op would report it as done.
         raise Conflict("nothing_queued", fid)
     covers = dict(op.payload.get("covers") or w.handoff)

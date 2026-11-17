@@ -9,12 +9,12 @@ from codoc.calculus.derive import markdown, phase
 from codoc.calculus.doc import PARAGRAPH
 from codoc.calculus.ids import START
 from codoc.calculus.text import BOLD
-from codoc.loops.realize import handoff
-from codoc.mcp import tools
 from codoc.daemon import client
 from codoc.daemon.publish import publish
+from codoc.loops.realize import handoff
+from codoc.mcp import tools
 from codoc.workspace import Workspace
-from tests.substrate.test_review5 import H, refs, seed
+from tests.helpers import H, refs, seed
 
 
 def workspace(tmp_path):
@@ -26,9 +26,8 @@ def workspace(tmp_path):
 
 
 def test_an_agents_rewrite_of_a_queued_feature_is_a_plan(tmp_path):
-    """01 §4 rule 8: while a feature is queued the document wins, whatever the
-    size of the repair. The gate used to live only in the loop's own pass, so
-    the same words arriving through the tool landed on the trunk."""
+    """While a feature is queued the document wins, whatever the size of the
+    repair: an agent's rewrite through the tool is a plan, as the loop's is."""
     cd, ws = workspace(tmp_path)
     handoff(ws, "h1", actor=H, asked="retry twice")
     assert phase(ws.store, "h1") == "queued"
@@ -46,8 +45,8 @@ def test_an_agents_rewrite_of_a_queued_feature_is_a_plan(tmp_path):
 
 
 def test_an_agents_amend_does_not_drop_a_mark_the_person_placed(tmp_path):
-    """01 §4 rule 5. The refusal covered the loop and a translator; an agent
-    rewriting the same sentence took the bold with it."""
+    """A rewriter may not drop a mark a person placed. An agent's amend
+    through the tool is held to it, as the loop and a translator are."""
     cd, ws = workspace(tmp_path)
     r = refs(ws, "p1")
     ws.submit([{"kind": K.TEXT_MARK, "target": {"bid": "p1", "path": "text"},
@@ -77,10 +76,8 @@ def test_a_small_repair_to_the_machines_own_prose_still_lands(tmp_path):
 
 
 def test_one_amend_over_two_paragraphs_is_one_proposal(tmp_path):
-    """01 §4 rule 8: "One amend is one plan: every block it repairs ... rides
-    under the same plan id, so one repair gets one verdict." The tool sent one
-    ingest per block with no batch, and `_plan_for` fell back to keying on the
-    block id — a proposal per paragraph for the person to answer."""
+    """One amend is one plan: every block it repairs rides under the same
+    plan id, so one repair gets one verdict, not one per paragraph."""
     cd = tmp_path / ".codoc"
     ws = Workspace(cd)
     seed(ws)
@@ -103,10 +100,10 @@ def test_one_amend_over_two_paragraphs_is_one_proposal(tmp_path):
 
 
 def test_a_repair_never_rides_in_the_agents_open_proposal_to_delete(tmp_path):
-    """`_plan_for` reused "an open plan of theirs on the same block" whatever
-    its kind, so an agent that proposed retiring a feature and then repaired
-    its title had the repair filed under the DELETE: accepting the deletion
-    accepted the repair, rejecting it dropped it."""
+    """The applier reuses an open `edit` plan of the actor on the same block,
+    never a `delete` plan. A repair an agent makes after proposing to retire a
+    feature is therefore its own proposal, and the verdict on the deletion does
+    not decide it."""
     cd = tmp_path / ".codoc"
     ws = Workspace(cd)
     seed(ws)
@@ -127,10 +124,9 @@ def test_a_repair_never_rides_in_the_agents_open_proposal_to_delete(tmp_path):
 
 
 def test_the_tools_do_not_offer_a_proposal_nobody_can_answer(tmp_path):
-    """`derive.open_plans`: a plan whose target block is gone "is not decidable
-    from any surface, so it is not offered". `read_tree` and `read_status`
-    counted every open plan, so an agent read proposals the editor never drew
-    and a count the person could not clear."""
+    """A plan whose target block is dead is not offered (`derive.open_plans`),
+    and `read_tree` and `read_status` count the plans the editor draws, so the
+    agent never reads a proposal the person cannot answer."""
     cd = tmp_path / ".codoc"
     ws = Workspace(cd)
     seed(ws)

@@ -5,7 +5,15 @@ import random
 
 from codoc.calculus import block_md
 from codoc.calculus.block_md import BlockSpec
-from codoc.calculus.doc import BULLET, CODE_BLOCK, DIAGRAM, HEADING, NUMBERED, PARAGRAPH, TABLE
+from codoc.calculus.doc import (
+    BULLET,
+    CODE_BLOCK,
+    DIAGRAM,
+    HEADING,
+    NUMBERED,
+    PARAGRAPH,
+    TABLE,
+)
 from codoc.calculus.inline_md import Span, parse, render
 from codoc.calculus.text import BOLD, CITE, CODE, LINK
 
@@ -205,3 +213,21 @@ def test_block_round_trip_fuzz():
             specs.append(spec(prev))
         md = block_md.render(specs)
         assert block_md.parse(md) == specs, (trial, specs, md)
+
+
+def test_render_parse_edges():
+    for text, spans in (("*a", [Span(BOLD, {}, 1, 2)]), ("a*b", [Span(BOLD, {}, 2, 3)]),
+                        ("a]b", [Span(LINK, {"href": "https://u"}, 0, 3)]), ("\\a]", [Span(CITE, {"file": "c.py", "symbol": "C"}, 1, 3)]),
+                        ("**x", []), ("[a](https://b)", [Span(BOLD, {}, 0, 3)])):
+        assert parse(render(text, spans)) == (text, spans), (text, spans, render(text, spans))
+    rng = random.Random(5)
+    alphabet = "ab*[]()#`\\ "
+    for _ in range(2000):
+        text = "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 8)))
+        spans = []
+        if rng.random() < 0.8:
+            i, j = sorted(rng.sample(range(len(text) + 1), 2)) if len(text) > 1 else (0, 1)
+            kind = rng.choice([BOLD, LINK, CITE])
+            spans = [Span(kind, {} if kind == BOLD else {"href": "https://u"} if kind == LINK else {"file": "c.py", "symbol": "C"}, i, j)]
+        md = render(text, spans)
+        assert parse(md) == (text, spans), (text, spans, md)

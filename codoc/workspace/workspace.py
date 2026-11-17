@@ -1,4 +1,4 @@
-"""``Workspace``: a ``.codoc`` directory opened as the applier (spec §5, §7).
+"""``Workspace``: a ``.codoc`` directory opened as the applier (docs/concurrency.md).
 
 One process opens a workspace; it is the applier. Opening replays the logs
 (snapshot first, then every op outside the snapshot's frontier, in
@@ -79,7 +79,7 @@ class Workspace:
             # Two clones each folded and the merge brought both. Only one state
             # can be the state, and the other's log is in `log/archive/`, which
             # nothing reads — so say so, and read the archive, rather than
-            # losing a feature quietly (04 §5: fold on the integration branch).
+            # losing a feature quietly. Fold once, on one branch.
             self.problems.append(L.LogProblem(str(snaps[-1]), 1, (
                 f"{len(snaps)} snapshots: {', '.join(p.name for p in snaps[:-1])} was folded by another clone; "
                 "replaying its archived log. Re-fold once, on one branch.")))
@@ -196,8 +196,8 @@ class Workspace:
 
         A machine writing prose on its own is gated HERE, because this is where
         every machine write passes — the loop's own pass, a translator, and the
-        agent through ``codoc_reflect``. 01 §4 rules 5 and 8: a repair the trunk
-        refuses because it would drop a mark the person placed, one that deletes
+        agent through ``codoc_reflect`` (docs/concurrency.md, The machine
+        gate). A repair the trunk refuses because it would drop a mark the person placed, one that deletes
         more of the block than its gate allows, or any repair at all to a
         feature with pending intent, becomes a plan of that actor's. The
         document wins and the person decides. A caller that sees the whole
@@ -208,9 +208,9 @@ class Workspace:
         authored — the lift pass's re-derived diagram, and nothing else. The
         gate exists to keep a machine from overwriting words somebody meant,
         and a derived field holds none: it is attribution, like a binding
-        refresh (03 §5.1). Gating it would make the always-on channel stop and
-        ask whenever the code moved far enough, which is precisely when the
-        picture most needs to follow."""
+        refresh. Gating it would turn every large code change into a proposal
+        to redraw the diagram, which is when the diagram most needs to follow
+        the code."""
         res = self.plan_ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, trunk=plan is None)
         opened = None
         if plan is None and not derived and (why := self.must_propose(bid, actor, res)):
@@ -230,9 +230,8 @@ class Workspace:
         """Why this machine write may not land on the trunk, or None.
 
         Public because a caller that sees a whole repair asks it per block and
-        opens ONE plan for all of them (``reflect._amend``). It is the only
-        implementation of the rule: 01 §4 rule 7 puts the gate at one boundary,
-        and a second copy is how two of them came to differ."""
+        opens ONE plan for all of them (``reflect._amend``). Every machine
+        write is gated by this function and no other copy of the rule."""
         if actor_kind(actor) not in MACHINE_KINDS:
             return None
         if res.refused:
@@ -299,7 +298,7 @@ class Workspace:
 
     def _as_proposal(self, actor: str, s: L.Submission) -> L.Submission:
         """A suggester's Backspace, as a proposal. A plan proposes and never
-        kills (01 §3), so a range ``text.delete`` from a contributor is the
+        kills, so a range ``text.delete`` from a contributor is the
         plan's ``suggest_del`` over the same range — which is what
         ``as_plan_bodies`` already does for their ingest — unless the range
         holds nothing but words their own open plan put there, which is theirs
@@ -345,9 +344,8 @@ class Workspace:
         return pid
 
     def _suggester_plan(self, actor: str, kind: str, target: dict, payload: dict, batch: str) -> str | None:
-        """The plan a contributor's trunk edit rides in (02 §3.6: "a
-        contributor's edit on the trunk is applied as a plan with that actor").
-        The daemon opens it, because the browser has no way to know it needs
+        """The plan a contributor's trunk edit rides in: a suggester's
+        untagged edit is applied as a plan of that actor. The daemon opens it, because the browser has no way to know it needs
         one, and one per submitted batch, because a plan per keystroke would be
         a verdict per keystroke. A comment needs none; anything the calculus
         cannot carry under a plan is left untagged for the policy to refuse."""

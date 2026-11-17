@@ -1,27 +1,28 @@
-"""The door for a log this workspace did not write (spec `01` §7.3, `04` §6).
+"""Checks for a log this workspace did not write (docs/concurrency.md, Roles
+and authority).
 
 Authority is checked when an op arrives and the answer is recorded; replay
 honours the record, so a role changed after the fact never deletes what
-somebody already wrote. The price of that is exact: a log file is a capability.
-Edit the recorded `conflict` off a refused `plan.accept` and every clone that
-rebuilds will accept the plan. The specs say the hub validates a pull request's
-session files against the tracked table before they are merged. This is that.
+somebody already wrote. So a log file is a capability: edit the recorded
+`conflict` off a refused `plan.accept` and every clone that rebuilds will
+accept the plan. `codoc validate-logs` runs these checks over the session
+files a merge would add or change, against the tracked role table.
 
-Three refusals, and deliberately nothing else:
+Three refusals, and nothing else:
 
 - an op recorded as a **success** whose `(actor, kind)` the table would refuse,
   which is the forged verdict;
 - a **snapshot** file, which claims a whole state rather than a sequence of ops
   and can only honestly be written by the workspace folding its own log;
 - a stamp **far ahead of wall time**, which would drag every clock that
-  observes it into the future and order real work behind it (`04` §2).
+  observes it into the future and order real work behind it.
 
 Everything else a log can be wrong about — a torn tail, an out-of-sequence id,
 an unreadable line — `log.read_session` already reports and the rebuild already
 skips the file whole; those are reported here too, under the same eye.
 
-This is a gate for a *foreign* log. A log the hub wrote itself went through the
-applier, where the same table already answered.
+These checks are for a *foreign* log. A log this workspace wrote went through
+the applier, where the same table already answered.
 """
 from __future__ import annotations
 

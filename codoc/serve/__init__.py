@@ -1,5 +1,5 @@
 """The hub (`codoc serve`): the same editor, served to GitHub-authorized people
-from the maintainer's machine (`04-version-control.md` §6, `06-cut-list.md` §1).
+from the maintainer's machine.
 
 It adds nothing to the format. A contributor's edits are submissions appended
 to ``inbox/hub-<login>.jsonl``; the daemon stamps ``human:gh:<login>`` and applies

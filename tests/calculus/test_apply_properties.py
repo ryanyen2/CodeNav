@@ -1,6 +1,6 @@
-"""The properties the kernel review demanded (07-design-review-1.md §E, kernel-review §E):
-verdicts and undo resolve by identity under concurrent structure; a conflict never
-moves the state; un-applying a suffix equals replaying the prefix."""
+"""Properties of the applier: verdicts and undo resolve by identity under
+concurrent structure; a conflict never moves the state; un-applying a suffix
+equals replaying the prefix."""
 import copy
 import random
 
@@ -11,15 +11,9 @@ from codoc.calculus.ids import START
 from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
 from codoc.calculus.text import BOLD, SUGGEST_DEL
+from tests.helpers import Mint, T, heading, invert, paragraph, replay
 
-from tests.calculus.test_apply import Mint, heading, invert, paragraph, replay
-
-
-def T(s: Store, bid: str) -> str:
-    return s.blocks[bid].text().live_text()
-
-
-# ── A1/A2: one holder per identity; verdicts find their characters ──────────
+# ── one holder per identity; verdicts find their characters ──────────
 
 def test_merge_moves_characters_and_lookup_follows_them():
     m, s = Mint(), Store()
@@ -67,7 +61,7 @@ def test_verdicts_resolve_by_identity_under_split_move_merge():
     assert replay(snap).state_fingerprint() == snap.state_fingerprint()
 
 
-# ── A3: segment deletes kill only the named characters ──────────────────────
+# ── segment deletes kill only the named characters ──────────────────────
 
 def test_redo_of_a_segment_delete_spares_characters_typed_inside_the_range():
     m, s = Mint(), Store()
@@ -80,7 +74,7 @@ def test_redo_of_a_segment_delete_spares_characters_typed_inside_the_range():
     assert redo[0].conflict is None and T(s, "p1") == "X"
 
 
-# ── A4: a conflict never moves the state ────────────────────────────────────
+# ── a conflict never moves the state ────────────────────────────────────
 
 def test_midway_conflict_leaves_state_untouched():
     m, s = Mint(), Store()
@@ -93,7 +87,7 @@ def test_midway_conflict_leaves_state_untouched():
     assert s.state_fingerprint() == before
 
 
-# ── A5/A6: subsets govern marks; reopen carries the subset ──────────────────
+# ── subsets govern marks; reopen carries the subset ──────────────────
 
 def test_subset_accept_rejects_unaccepted_marks_and_redo_keeps_subset():
     m, s = Mint(), Store()
@@ -115,7 +109,7 @@ def test_subset_accept_rejects_unaccepted_marks_and_redo_keeps_subset():
     assert redo[0].conflict is None and T(s, "p1") == "keep this!"
 
 
-# ── A7: ranks are re-derived on restore ─────────────────────────────────────
+# ── ranks are re-derived on restore ─────────────────────────────────────
 
 def test_move_undo_never_collides_ranks():
     m, s = Mint(), Store()
@@ -132,7 +126,7 @@ def test_move_undo_never_collides_ranks():
     assert nxt.conflict is None
 
 
-# ── A8: set(kind) keeps the level through undo ──────────────────────────────
+# ── set(kind) keeps the level through undo ──────────────────────────────
 
 def test_set_kind_round_trip_keeps_level():
     m, s = Mint(), Store()
@@ -143,7 +137,7 @@ def test_set_kind_round_trip_keeps_level():
     assert s.blocks["h1"].kind == HEADING and s.blocks["h1"].level == 3
 
 
-# ── A9: reject undoes every plan op kind, without clobbering later moves ────
+# ── reject undoes every plan op kind, without clobbering later moves ────
 
 def test_reject_undoes_split_and_set_and_respects_later_human_move():
     m, s = Mint(), Store()
@@ -169,7 +163,7 @@ def test_reject_undoes_split_and_set_and_respects_later_human_move():
     assert [x.id for x in s2.ordered()] == ["h1", "b", "a", "c"]
 
 
-# ── A10/A11/A13: refusals ───────────────────────────────────────────────────
+# ── refusals ───────────────────────────────────────────────────
 
 def test_refusals():
     m, s = Mint(), Store()
@@ -190,7 +184,7 @@ def test_refusals():
     assert s.watermarks("h1").handoffs == [h2.id]
 
 
-# ── A12: replay carries the policy ──────────────────────────────────────────
+# ── replay carries the policy ──────────────────────────────────────────
 
 def test_replay_with_policy_keeps_forged_writes_out():
     def policy(store, op):
@@ -203,7 +197,7 @@ def test_replay_with_policy_keeps_forged_writes_out():
     assert replay(s).state_fingerprint() == s.state_fingerprint()
 
 
-# ── T1/T2: the two fuzz properties ──────────────────────────────────────────
+# ── the two fuzz properties ──────────────────────────────────────────
 
 def random_op(rng: random.Random, m: Mint, s: Store, step: int) -> Op:
     blocks = s.ordered()

@@ -1,4 +1,4 @@
-"""Text: identity-addressed segments and marks (spec §2, §3)."""
+"""Text: identity-addressed segments and marks."""
 import random
 
 import pytest

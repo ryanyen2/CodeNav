@@ -7,7 +7,7 @@ from codoc.calculus.ids import START
 from codoc.calculus.store import Store
 from codoc.calculus.text import BOLD
 from codoc.calculus.window import history_window
-from tests.calculus.test_apply import Mint, paragraph
+from tests.helpers import Mint, paragraph
 
 
 def block(m: Mint, s: Store, bid: str, kind: str, text: str, after=START, level=None, path="text"):

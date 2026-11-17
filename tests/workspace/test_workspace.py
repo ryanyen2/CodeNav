@@ -1,0 +1,420 @@
+"""Session logs, the inbox drain, rebuild and merge, the ingest gate, and the clock."""
+import json
+import random
+import shutil
+from pathlib import Path
+
+from codoc.calculus import ops as K
+from codoc.calculus.derive import phase
+from codoc.calculus.doc import PARAGRAPH
+from codoc.calculus.export import export_markdown
+from codoc.calculus.ids import START
+from codoc.calculus.text import BOLD, LINK
+from codoc.daemon.daemon import Daemon
+from codoc.index.changes import ChangeSet
+from codoc.loops.realize import directive
+from codoc.workspace import Workspace
+from codoc.workspace import log as L
+from codoc.workspace.clock import Clock, fmt
+from codoc.workspace.log import Submission
+from tests.helpers import H, T, seed, seed_loop, ws_paragraph
+
+
+def test_session_log_is_written_validated_and_rebuilt(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws, bind=False)
+    ws.close()
+    files = L.list_sessions(tmp_path / ".codoc")
+    assert len(files) == 1
+    f = L.read_session(files[0])
+    assert f.valid and len(f.ops) == 4 and f.ops[0].id == f"{f.session}:1"
+    ws2 = Workspace(tmp_path / ".codoc")
+    assert ws2.store.blocks["p1"].text().live_text() == "Retries once."
+    assert ws2.store.state_fingerprint() == ws.store.state_fingerprint()
+    assert ws2.session != ws.session
+    # A second session continues the same tree; both files replay together.
+    ws2.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                 "payload": {"after": list(ws2.store.blocks["p1"].text().last_live_ref()), "text": " Then gives up."}}],
+               actor="human:local")
+    ws2.close()
+    ws3 = Workspace(tmp_path / ".codoc")
+    assert ws3.store.blocks["p1"].text().live_text() == "Retries once. Then gives up."
+    assert len(L.list_sessions(tmp_path / ".codoc")) == 2   # ws3 wrote nothing, so it left no file
+
+
+def test_tampered_log_is_skipped_whole_and_reported(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws, bind=False)
+    ws.close()
+    path = L.list_sessions(tmp_path / ".codoc")[0]
+    lines = path.read_text().splitlines()
+    d = json.loads(lines[2])
+    d["id"] = d["id"].rsplit(":", 1)[0] + ":9"   # out of sequence
+    lines[2] = json.dumps(d)
+    path.write_text("\n".join(lines) + "\n")
+    ws2 = Workspace(tmp_path / ".codoc")
+    assert ws2.problems and "out of sequence" in ws2.problems[0].reason
+    assert "h1" not in ws2.store.blocks   # nothing from that file applied
+
+
+def test_inbox_drain_is_idempotent_and_stamps_actor(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws, bind=False)
+    L.submit(tmp_path / ".codoc", "ide", [
+        Submission(cid="c1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                   payload={"after": list(ws.store.blocks["p1"].text().last_live_ref()), "text": " More."}),
+    ])
+    done = ws.drain_inbox({"ide": "human:local"})
+    assert len(done) == 1 and done[0].actor == "human:local" and done[0].conflict is None
+    assert ws.store.blocks["p1"].text().live_text() == "Retries once. More."
+    # Resubmitting the same client id applies nothing.
+    L.submit(tmp_path / ".codoc", "ide", [Submission(cid="c1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                                                       payload={"after": START, "text": "X"})])
+    assert ws.drain_inbox({"ide": "human:local"}) == []
+    # An unknown client is ignored.
+    L.submit(tmp_path / ".codoc", "stranger", [Submission(cid="z", kind=K.BLOCK_DELETE, target={"bid": "h1"}, payload={})])
+    assert ws.drain_inbox({"ide": "human:local"}) == []
+    assert ws.store.blocks["h1"].live
+    ws.close()
+
+
+def test_a_new_session_reads_the_inbox_where_the_last_one_stopped(tmp_path):
+    """The consumed offset is remembered, so a restart does not re-read every
+    submission ever made — which is what lets the ack file be trimmed at all."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed(ws, bind=False)
+    L.submit(cd, "ide", [Submission(cid="c1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                                    payload={"after": list(ws.store.blocks["p1"].text().last_live_ref()), "text": " More."})])
+    assert len(ws.drain_inbox({"ide": "human:local"})) == 1
+    ws.close()
+    # The ack that made the drain idempotent is gone; the offset stands in for it.
+    (cd / "inbox" / "ide.ack.jsonl").write_text("", encoding="utf-8")
+    ws2 = Workspace(cd)
+    assert ws2.drain_inbox({"ide": "human:local"}) == []
+    assert ws2.store.blocks["p1"].text().live_text() == "Retries once. More."
+    L.submit(cd, "ide", [Submission(cid="c2", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                                    payload={"after": "START", "text": "New. "})])
+    assert len(ws2.drain_inbox({"ide": "human:local"})) == 1
+    assert ws2.store.blocks["p1"].text().live_text() == "New. Retries once. More."
+    ws2.close()
+
+
+def test_suggest_role_writes_only_plans(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws, bind=False)
+    denied = ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "X"}}],
+                       actor="human:contrib")
+    assert denied[0].conflict == "authority"
+    pid = ws.open_plan(actor="human:contrib", note="suggestion")
+    ok = ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "X"}}],
+                   actor="human:contrib", plan=pid)
+    assert ok[0].conflict is None
+    assert ws.store.blocks["p1"].text().segs[0].plan == pid
+
+
+def test_ingest_through_workspace_lands_on_trunk_or_under_a_plan(tmp_path):
+    """A machine may repair a person's prose on the trunk up to a point; past
+    the gate the same words are a proposal. The gate is in `Workspace.ingest`,
+    which every machine write passes through."""
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws, actor="loop", bind=False)
+    t = ws.store.blocks["p1"].text()
+    res, ops = ws.ingest("p1", "text", base_text=t.live_text(), new_md="Retries three times.", actor="loop")
+    assert res.refused is None and all(o.plan is None for o in ops)     # its own prose, a small repair
+    assert ws.store.blocks["p1"].text().live_text() == "Retries three times."
+    # The same repair to a person's paragraph is a proposal: it deletes a third
+    # of it, and a person's prose is held tighter than the loop's own.
+    h = Workspace(tmp_path / "h" / ".codoc")
+    seed(h, bind=False)
+    res, ops = h.ingest("p1", "text", base_text="Retries once.", new_md="Retries three times.", actor="loop")
+    assert ops and {o.plan for o in ops} != {None}
+    assert h.store.plans[ops[0].plan].actor == "loop" and h.store.plans[ops[0].plan].status == "open"
+    from codoc.calculus.derive import markdown
+    assert markdown(h.store.blocks["p1"].text(), "rejected", h.store) == "Retries once."
+    h.close()
+    pid = ws.open_plan(actor="loop", kind="edit", target="p1")
+    t = ws.store.blocks["p1"].text()
+    res, ops = ws.ingest("p1", "text", base_text=t.live_text(), new_md="Completely new words here.", actor="loop", plan=pid)
+    assert ops and all(o.plan == pid for o in ops)
+    assert ws.store.plans[pid].status == "open" and "Retries three times." in ws.store.blocks["p1"].text().live_text()
+
+
+def test_clock_observes_every_replayed_stamp():
+    c = Clock("n")
+    a = c.tick()
+    b = c.tick()
+    assert a < b
+    w = c.wall
+    c.observe(fmt(w + 1000, 0, "other"))
+    assert c.tick() > fmt(w + 999, 0, "zzz")
+    # A peer's fast clock moves ours forward too: the log is the truth, and
+    # an op typed after replaying it must still sort after it.
+    far = fmt(c.wall + 60 * 60 * 1000, 0, "far")
+    c.observe(far)
+    assert c.tick() > far
+
+
+def test_rebuild_replays_a_far_future_stamp_and_later_ops_anchor_to_it(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "p1"}, "payload": {"kind": PARAGRAPH, "after": START}}], actor="human:local")
+    ws.clock.wall += 60 * 60 * 1000 - 1                       # a peer's fast clock stamped this
+    ins = ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "hello"}}], actor="human:local")[0]
+    ws.close()
+    ws2 = Workspace(tmp_path / ".codoc")
+    assert ws2.store.blocks["p1"].text().live_text() == "hello"
+    nxt = ws2.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": [ins.id, 4], "text": "!"}}], actor="human:local")[0]
+    assert nxt.conflict is None and nxt.at > ins.at
+
+
+def test_provisional_anchors_chain_a_typing_batch(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws, bind=False)
+    last = list(ws.store.blocks["p1"].text().last_live_ref())
+    L.submit(tmp_path / ".codoc", "ide", [
+        Submission(cid="t1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"}, payload={"after": last, "text": " ab"}),
+        Submission(cid="t2", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"}, payload={"after": ["$cid", "t1", 2], "text": "c"}),
+        Submission(cid="t3", kind=K.TEXT_DELETE, target={"bid": "p1", "path": "text"}, payload={"from": ["$cid", "t1", 1], "to": ["$cid", "t2", 0]}),
+    ])
+    done = ws.drain_inbox({"ide": "human:local"})
+    assert [o.conflict for o in done] == [None, None, None]
+    assert ws.store.blocks["p1"].text().live_text() == "Retries once. "
+
+
+def test_restored_mark_keeps_its_placer_through_rebuild(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    ins = ws_paragraph(ws, "p1", "the client")
+    ws.submit([{"kind": K.TEXT_MARK, "target": {"bid": "p1", "path": "text"},
+                "payload": {"kind": LINK, "attrs": {"href": "https://a"}, "start": [ins.id, 0], "end": [ins.id, 9], "on": True}}], actor="human:local")
+    disp = ws.submit([{"kind": K.TEXT_MARK, "target": {"bid": "p1", "path": "text"},
+                       "payload": {"kind": LINK, "attrs": {"href": "https://b"}, "start": [ins.id, 4], "end": [ins.id, 9], "on": True}}], actor="loop")[0]
+    ws.submit([dict(b) for b in disp.inverse], actor="human:local")           # undo, as the person
+    marks = ws.store.blocks["p1"].text().marks
+    assert [(m.attrs["href"], m.actor) for m in marks] == [("https://a", "human:local")]
+    ws.close()
+    ws2 = Workspace(tmp_path / ".codoc")
+    assert ws2.store.state_fingerprint() == ws.store.state_fingerprint()
+
+
+def _random_body(rng, store, step):
+    live = [b for b in store.ordered() if b.kind == PARAGRAPH and b.text().live_len()]
+    if not live or rng.random() < 0.1:
+        return {"kind": K.BLOCK_ADD, "target": {"bid": f"b{step}"}, "payload": {"kind": PARAGRAPH, "after": START}}
+    b = rng.choice(live)
+    t = b.text()
+    n = t.live_len()
+    r = rng.random()
+    if r < 0.45:
+        return {"kind": K.TEXT_INSERT, "target": {"bid": b.id, "path": "text"},
+                "payload": {"after": list(t.ref_at(rng.randrange(n))), "text": rng.choice([" a", " bb", "c "])}}
+    if r < 0.65:
+        i, j = sorted(rng.sample(range(n), 2)) if n > 1 else (0, 0)
+        return {"kind": K.TEXT_DELETE, "target": {"bid": b.id, "path": "text"},
+                "payload": {"from": list(t.ref_at(i)), "to": list(t.ref_at(j))}}
+    if r < 0.85:
+        i, j = sorted(rng.sample(range(n), 2)) if n > 1 else (0, 0)
+        return {"kind": K.TEXT_MARK, "target": {"bid": b.id, "path": "text"},
+                "payload": {"kind": rng.choice([BOLD, LINK]), "attrs": {} if rng.random() < 0.5 else {"href": "https://x"},
+                            "start": list(t.ref_at(i)), "end": list(t.ref_at(j)), "on": rng.random() < 0.7}}
+    if r < 0.93 and n > 1:
+        return {"kind": K.BLOCK_SPLIT, "target": {"bid": b.id, "path": "text"},
+                "payload": {"new": f"s{step}", "at": list(t.ref_at(rng.randrange(n - 1)))}}
+    return {"kind": K.BLOCK_MOVE, "target": {"bid": b.id}, "payload": {"after": START}}
+
+
+def test_workspace_rebuild_equals_live_store_through_verdicts_and_undo(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    seed_loop(ws)
+    rng = random.Random(3)
+    ws.clock.wall += 5 * 60 * 1000
+    for step in range(250):
+        body = _random_body(rng, ws.store, step)
+        actor = rng.choice(["human:local", "loop", "agent:x"])
+        if body["kind"] == K.TEXT_MARK and body["payload"]["kind"] == LINK and not body["payload"]["attrs"]:
+            body["payload"]["attrs"] = {"href": "https://y"}
+        got = ws.submit([body], actor=actor)[0]
+        if got.conflict is None and got.inverse and rng.random() < 0.2:
+            ws.submit([dict(b) for b in got.inverse], actor="human:local")
+        if step % 40 == 0:
+            live = [b for b in ws.store.ordered() if b.kind == PARAGRAPH and b.text().live_len()]
+            if live:
+                b = live[0]
+                pid = ws.open_plan(actor="agent:x")
+                ids = [o.id for o in ws.submit([
+                    {"kind": K.TEXT_INSERT, "target": {"bid": b.id, "path": "text"}, "payload": {"after": list(b.text().ref_at(0)), "text": "P"}},
+                    {"kind": K.TEXT_INSERT, "target": {"bid": b.id, "path": "text"}, "payload": {"after": list(b.text().ref_at(0)), "text": "Q"}},
+                ], actor="agent:x", plan=pid)]
+                verdict = {"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {"subset": ids[:1]}} if rng.random() < 0.6 \
+                    else {"kind": K.PLAN_REJECT, "target": {"pid": pid}, "payload": {}}
+                v = ws.submit([verdict], actor="human:local")[0]
+                if rng.random() < 0.5 and v.inverse:
+                    ws.submit([dict(b) for b in v.inverse], actor="human:local")
+    ws.close()
+    ws2 = Workspace(tmp_path / ".codoc")
+    assert ws2.problems == []
+    assert ws2.store.state_fingerprint() == ws.store.state_fingerprint()
+    assert export_markdown(ws2.store) == export_markdown(ws.store)
+
+
+def test_torn_and_malformed_inbox_lines(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "p1"}, "payload": {"kind": PARAGRAPH, "after": START}}], actor="human:local")
+    d = L.inbox_dir(tmp_path / ".codoc")
+    d.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(Submission(cid="c1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"}, payload={"after": START, "text": "X"}).__dict__)
+    (d / "ide.jsonl").write_text(line[:20])
+    assert ws.drain_inbox({"ide": "human:local"}) == []
+    with (d / "ide.jsonl").open("a") as fh:
+        fh.write(line[20:] + "\n")
+    assert len(ws.drain_inbox({"ide": "human:local"})) == 1 and T(ws.store, "p1") == "X"
+    bad = json.dumps({"cid": "c2", "kind": K.TEXT_INSERT, "target": None, "payload": {}})
+    good = json.dumps({"cid": "c3", "kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "Y"}})
+    with (d / "ide.jsonl").open("a") as fh:
+        fh.write(bad + "\n" + good + "\n")
+    assert len(ws.drain_inbox({"ide": "human:local"})) == 1 and T(ws.store, "p1") == "YX"
+    acks = [json.loads(l) for l in (d / "ide.ack.jsonl").read_text().splitlines()]
+    assert [(a["cid"], a["op"] != "", a["conflict"]) for a in acks] == [("c1", True, None), ("c2", False, "target must be an object"), ("c3", True, None)]
+    assert ws.drain_inbox({"ide": "human:local"}) == []          # nothing re-applied
+
+
+def test_ingest_refuses_a_dead_block_and_a_non_text_path(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "p1"}, "payload": {"kind": PARAGRAPH, "after": START}},
+               {"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "old"}},
+               {"kind": K.BLOCK_DELETE, "target": {"bid": "p1"}, "payload": {}}], actor="human:local")
+    res, ops = ws.ingest("p1", "text", base_text="old", new_md="new", actor="loop")
+    assert res.refused == "dead_block" and ops == []
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "p2"}, "payload": {"kind": PARAGRAPH, "after": START}}], actor="human:local")
+    res, ops = ws.ingest("p2", "rank", base_text="", new_md="new", actor="loop")
+    assert res.refused == "not_text" and ops == []
+    assert all(o.conflict is None for o in ws.store.ops)                   # nothing refused reached the log
+
+
+def test_deleting_a_bound_heading_detaches_and_undo_reattaches(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    seed_loop(ws)
+    d = ws.submit([{"kind": K.BLOCK_DELETE, "target": {"bid": "h1"}, "payload": {}}], actor="human:local")[0]
+    assert ("c.py", "c.py::send") not in ws.store.bindings and d.payload["detached"][0]["symbol"] == "c.py::send"
+    ws.submit([dict(b) for b in d.inverse], actor="human:local")
+    assert ws.store.bindings[("c.py", "c.py::send")].feature == "h1"
+    ws.close()
+    ws2 = Workspace(tmp_path / ".codoc")
+    assert ws2.store.state_fingerprint() == ws.store.state_fingerprint()
+
+
+def test_a_malformed_ingest_submission_is_acked_and_the_next_line_applies(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "p1"}, "payload": {"kind": PARAGRAPH, "after": START}}], actor="human:local")
+    L.submit(tmp_path / ".codoc", "ide", [
+        Submission(cid="c1", kind="ingest", target={}, payload={"base_text": "", "new_md": "x"}),
+        Submission(cid="c2", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"}, payload={"after": START, "text": "ok"})])
+    ws.drain_inbox()
+    assert T(ws.store, "p1") == "ok"
+    acks = [json.loads(l) for l in (L.inbox_dir(tmp_path / ".codoc") / "ide.ack.jsonl").read_text().splitlines()]
+    assert acks[0]["cid"] == "c1" and acks[0]["conflict"].startswith("ingest target.bid")
+    ws.close()
+    ws2 = Workspace(tmp_path / ".codoc")
+    assert ws2.drain_inbox() == []
+    # A provisional anchor from a previous drain still resolves.
+    L.submit(tmp_path / ".codoc", "ide", [Submission(cid="c3", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"}, payload={"after": ["$cid", "c2", 1], "text": "!"})])
+    got = ws2.drain_inbox()
+    assert got[0].conflict is None and T(ws2.store, "p1") == "ok!"
+
+
+def test_torn_last_line_keeps_the_prefix_and_the_daemon_cuts_it(tmp_path):
+    root = tmp_path / "repo"
+    cd = root / ".codoc"
+    cd.mkdir(parents=True)
+    ws = Workspace(cd)
+    seed_loop(ws)
+    ws.close()
+    p = L.list_sessions(cd)[0]
+    p.write_bytes(p.read_bytes() + b'{"id": "' + ws.session.encode() + b':6", "at": "0000')
+    ws2 = Workspace(cd)
+    assert "h1" in ws2.store.blocks and len(ws2.problems) == 1 and ws2.torn
+    ws2.close()
+    d = Daemon(root, changeset=lambda *a: ChangeSet(), propose=lambda *a, **k: [], printer=lambda *_: None)
+    assert L.read_session(p).valid and L.read_session(p).torn_tail is None and "h1" in d.ws.store.blocks
+    d.ws.close()
+
+
+def test_an_undo_that_kills_nothing_is_indexed_the_same_after_rebuild(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    ins = ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "p1"}, "payload": {"kind": PARAGRAPH, "after": START}},
+                     {"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "abc"}}], actor="human:local")[1]
+    ws.submit([{"kind": K.TEXT_DELETE, "target": {"bid": "p1", "path": "text"}, "payload": {"from": [ins.id, 0], "to": [ins.id, 2]}}], actor="loop")
+    ws.submit([dict(b) for b in ins.inverse], actor="human:local")
+    live = {k: list(v) for k, v in ws.store.ops_by_block.items()}
+    ws.close()
+    ws2 = Workspace(tmp_path / ".codoc")
+    assert {k: list(v) for k, v in ws2.store.ops_by_block.items()} == live
+
+
+def test_a_clients_own_scalar_index_survives_normalisation(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "p1"}, "payload": {"kind": PARAGRAPH, "after": START}}], actor="human:local")
+    L.submit(tmp_path / ".codoc", "ide", [
+        Submission(cid="c1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"}, payload={"after": START, "text": "é"}),
+        Submission(cid="c2", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"}, payload={"after": ["$cid", "c1", 1], "text": "x"})])
+    ops = ws.drain_inbox()
+    assert [o.conflict for o in ops] == [None, None]
+    assert T(ws.store, "p1") == "éx"
+
+
+def test_a_handoff_covers_what_arrived_with_it(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    seed_loop(ws)
+    last = ws.store.blocks["p1"].text().last_live_ref()
+    L.submit(tmp_path / ".codoc", "ide", [
+        Submission(cid="c1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                   payload={"after": list(last), "text": " Twice."}, batch="t1"),
+        Submission(cid="c2", kind=K.FEATURE_HANDOFF, target={"fid": "h1"}, payload={"asked": "twice"}, batch="t2")])
+    ws.drain_inbox()
+    assert phase(ws.store, "h1") == "queued" and "Twice." in directive(ws.store, "h1")
+
+
+def _fork(tmp_path, name: str, base: Path) -> Path:
+    cd = tmp_path / name / ".codoc"
+    cd.parent.mkdir()
+    shutil.copytree(base, cd)
+    return cd
+
+
+def test_two_clones_appending_after_the_same_block_merge_without_a_rank_collision(tmp_path):
+    """Given the same set of log files the rebuild is deterministic and every
+    later op still applies. Two clones each append a paragraph after `p1` and
+    compute the same rank; after the merge, the next append after either does
+    not fail."""
+    base = tmp_path / "base" / ".codoc"
+    ws = Workspace(base); seed(ws); ws.close()
+    a, b = _fork(tmp_path, "a", base), _fork(tmp_path, "b", base)
+    wa, wb = Workspace(a), Workspace(b)
+    wa.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "pa"}, "payload": {"kind": PARAGRAPH, "after": "p1"}},
+               {"kind": K.TEXT_INSERT, "target": {"bid": "pa", "path": "text"}, "payload": {"after": START, "text": "from a"}}], actor=H)
+    wb.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "pb"}, "payload": {"kind": PARAGRAPH, "after": "p1"}},
+               {"kind": K.TEXT_INSERT, "target": {"bid": "pb", "path": "text"}, "payload": {"after": START, "text": "from b"}}], actor=H)
+    wa.close(); wb.close()
+    # git merge: the union of session files
+    for f in L.list_sessions(b):
+        if not (a / "log" / f.name).exists():
+            shutil.copy(f, a / "log" / f.name)
+    m = Workspace(a)
+    assert {x.id for x in m.store.ordered()} == {"h1", "p1", "pa", "pb"}
+    ranks = [m.store.blocks[x].rank for x in ("pa", "pb")]
+    assert len(set(ranks)) == 2, f"two live blocks share one rank: {ranks}"
+    first = m.store.ordered()[2].id
+    op = m.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "pc"}, "payload": {"kind": PARAGRAPH, "after": first}}], actor=H)[0]
+    assert op.conflict is None, op.conflict
+    m.close()
+
+
+def test_a_read_only_command_leaves_no_session_file_behind(tmp_path):
+    """`codoc rebuild` and `codoc snapshot` open a writing Workspace and write
+    nothing. A session file is created by its first op, so such a run leaves
+    no log file behind."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws); ws.close()
+    n = len(L.list_sessions(cd))
+    for _ in range(3):
+        w = Workspace(cd); w.close()
+    assert len(L.list_sessions(cd)) == n, "a Workspace that wrote no op left a log file"

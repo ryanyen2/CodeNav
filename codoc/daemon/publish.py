@@ -1,4 +1,4 @@
-"""The derived files an applier writes after a turn (spec §6).
+"""The derived files an applier writes after a turn (docs/model.md, Derived views).
 
     tree.codoc        the Markdown export (tracked)
     projection.json   what the editor and the hub render
@@ -13,8 +13,8 @@ the realizing lease. A realize pass takes it with ``write_realizing``, renews it
 by rewriting the file, and it lapses ``REALIZING_LEASE_SECONDS`` after the last
 write (``realizing_is_fresh``).
 
-A ``Publisher`` memoizes the per-block views on the keys §6 names — a block's
-own head, the structural head, the plans head — so a settle in one paragraph
+A ``Publisher`` memoizes the per-block views on the cache keys of
+docs/model.md (a block's own head, the structural head, the plans head), so a settle in one paragraph
 re-renders that paragraph and not the tree. The memo is a pure-function cache:
 every key is a state counter the store advances when the answer can change, so
 a cold ``publish()`` and a warm one write the same bytes (a property test).

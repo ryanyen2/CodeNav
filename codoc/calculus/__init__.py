@@ -1,6 +1,6 @@
 """The codoc calculus: the attributed edit model of the document.
 
-Spec: ``docs/substrate/01-calculus.md``. Everything in this package is pure
+Spec: ``docs/model.md``. Everything in this package is pure
 Python over in-memory structures; persistence (the log) and IO live in
 ``codoc.workspace``. Nothing here reads a file or a clock, and nothing here
 imports the rest of codoc.

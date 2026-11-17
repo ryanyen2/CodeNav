@@ -2,7 +2,7 @@
 
 An ``OpId`` is ``"<session>:<seq>"``: globally unique because a session id is
 random and a session is written by exactly one daemon, stable because nothing
-ever renumbers it (spec §2). A ``CharRef`` is ``(op, k)``: the k-th Unicode
+ever renumbers it. A ``CharRef`` is ``(op, k)``: the k-th Unicode
 scalar the op inserted. Blocks and plans carry random ids minted by whoever
 creates them; the applier only checks uniqueness.
 
@@ -58,7 +58,7 @@ def ref_to_json(r: CharRef | str):
 
 # The actor grammar is closed: ``human:<who>``, ``agent:<which>``,
 # ``translator:<lang>``, ``loop`` (the daemon's own passes) and ``import``
-# (a v1 or Markdown import). Everything that decides by actor decides by kind.
+# (the ops a snapshot writes). Everything that decides by actor decides by kind.
 ACTOR_KINDS = frozenset({"human", "agent", "translator", "loop", "import"})
 
 

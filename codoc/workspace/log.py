@@ -1,4 +1,4 @@
-"""Session logs and the client inbox (spec §7.1, §7.4, `04-version-control.md`).
+"""Session logs and the client inbox (docs/concurrency.md, Files and A submission's path).
 
 Layout under ``<repo>/.codoc``:
 
@@ -372,8 +372,8 @@ def rotate_acks(codoc_dir: str | Path, keep: int = ACK_KEEP) -> None:
     line, and the only cost left is the read at every daemon start. Called at
     session open, while this process holds the workspace.
 
-    This bounds 01 §7.4's rule — "a resubmitted client id is acked with the same
-    OpId" — to the newest ``keep`` acks per client. What is left is a client
+    This bounds the rule that a resubmitted client id is acked with the same
+    OpId to the newest ``keep`` acks per client. What is left is a client
     that re-APPENDS an id it sent more than that many acks ago, which means it
     lost its own state and kept its counter; the editor mints ids under a
     per-page random prefix, so a page that restarts never collides with one."""

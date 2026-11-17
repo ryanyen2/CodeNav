@@ -102,7 +102,7 @@ def settle(ws: Workspace, res, *, sha: str = "", files: list[str] | None = None,
 
 def _phantom_done(store: Store, fid: str, did: str, removed: set[tuple[str, str]]) -> bool:
     """A deleted feature settles on its code going away, never on a binding op:
-    the delete already detached its bindings (spec §3), so no ``bind.*`` op can
+    the delete already detached its bindings, so no ``bind.*`` op can
     cite the hand-off and the phantom would queue forever. What it owned is
     what the delete recorded as detached. A hand-off that did not ask for the
     code to go has nothing to build, so the pass that ran under the epoch
@@ -165,8 +165,8 @@ def directive(store: Store, fid: str) -> str:
 
 
 def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[str]]:
-    """What this feature's plugin-kind blocks put in front of the agent (03
-    §5.1): every in-flow block's ``consult``, then the directive each block's
+    """What this feature's kind blocks put in front of the agent: every
+    in-flow block's ``consult``, then the directive each block's
     ``lower`` codec derives from what changed since the last realization. An
     out-of-flow block (a comment) is not prose the agent reads — only a
     request, which its own codec words."""
@@ -216,8 +216,7 @@ def _at_realized(store: Store, text: Text, realized: dict) -> Text:
 def _authored(store: Store, op_id: OpId) -> bool:
     """Whether a reader would call this the author's word: a person wrote it,
     or a person ACCEPTED it. Accepting is how an author adopts an agent's
-    words — "a plan is by definition a request to build" (02 §3.3) — so an
-    accepted edge has to reach the directive the same way a typed one does."""
+    words, since a plan is a request to build, so an accepted edge has to reach the directive the same way a typed one does."""
     o = store.by_id.get(op_id)
     if o is None:
         return False
@@ -247,8 +246,8 @@ def _human_changes(store: Store, fid: str, w: Watermarks) -> list[str]:
 
 
 def _focus(store: Store, fid: str, w: Watermarks) -> list[str]:
-    """The words a person bolded and has not had realized — 02 §2's focus
-    spans, as the directive names them.
+    """The words a person bolded and has not had realized: the directive's
+    ``Focus:`` lines.
 
     A mark carries its own actor and placing op, so this reads the MARKS, not
     the ops that placed them: a mark since turned off is simply not here to

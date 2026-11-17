@@ -1,4 +1,5 @@
-"""The daemon (``codoc watch``): one process, the only applier (spec §1, §7.1).
+"""The daemon (``codoc watch``): one process, the only applier
+(docs/concurrency.md, Processes and The daemon's batch).
 
 Per debounced batch of filesystem events it does, in order:
 

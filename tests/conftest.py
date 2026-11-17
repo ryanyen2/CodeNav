@@ -1,4 +1,4 @@
-"""Minimal shared fixtures for the rewritten test suite."""
+"""Shared pytest fixtures."""
 from __future__ import annotations
 
 from pathlib import Path

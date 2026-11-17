@@ -1,4 +1,4 @@
-"""The ``.codoc`` directory: persistence and IO around the calculus (spec §7).
+"""The ``.codoc`` directory: persistence and IO around the calculus.
 
 - ``layout``    — the names of the files in it, atomic write, tolerant read, flock.
 - ``config``    — the tracked ``config.json`` (doc language, roles).

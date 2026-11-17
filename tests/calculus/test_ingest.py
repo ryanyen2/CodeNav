@@ -1,14 +1,13 @@
-"""inline_md round trip and the ingest boundary (spec §4)."""
+"""The inline Markdown round trip, and `ingest`: new text for a field becomes text ops."""
+import random
+
 from codoc.calculus import ops as K
 from codoc.calculus.apply import apply
-from codoc.calculus.ids import START
-from codoc.calculus.ingest import ingest, resolve_pending_refs, tokenize
-from codoc.calculus.inline_md import Span, parse, render
-from codoc.calculus.ops import Op
+from codoc.calculus.ingest import ingest, tokenize
+from codoc.calculus.inline_md import parse, render
 from codoc.calculus.store import Store
 from codoc.calculus.text import BOLD, CITE, LINK
-
-from tests.calculus.test_apply import Mint, heading, paragraph
+from tests.helpers import Mint, apply_mark, heading, md_of, paragraph, run_ingest
 
 
 def test_inline_md_parse_and_render_fixed_point():
@@ -27,25 +26,6 @@ def test_tokenize_is_lossless_and_script_aware():
     toks = tokenize(s)
     assert "".join(toks) == s
     assert "你" in toks and "hello" in toks and "  " in toks and toks[-1] == "ok"
-
-
-def run_ingest(store: Store, m: Mint, bid: str, new_md: str, actor="loop", plan=None, base=None):
-    t = store.blocks[bid].text()
-    res = ingest(t, bid=bid, path="text", base_text=t.live_text(), new_md=new_md, actor=actor, trunk=plan is None)
-    if res.refused:
-        return res, []
-    ops = []
-    insert_ids = []
-    for b in res.bodies:
-        op = m.op(b["kind"], b["target"], b["payload"], actor=actor, plan=plan)
-        if b["kind"] == K.TEXT_INSERT:
-            insert_ids.append(op.id)
-        ops.append(op)
-    # Marks may reference inserts by ordinal; resolve then apply in order.
-    for o in ops:
-        resolve_pending_refs(o.payload, insert_ids)
-    applied = [apply(store, o) for o in ops]
-    return res, applied
 
 
 def test_ingest_repairs_keep_human_words_and_attribute_new_ones_to_loop():
@@ -111,3 +91,135 @@ def test_ingest_refuses_paragraph_breaks_and_full_rewrite_is_measured():
     assert res.refused == "multi_paragraph"
     res = ingest(t, bid="p1", path="text", base_text=t.live_text(), new_md="entirely different words", actor="loop")
     assert res.deleted_fraction == 1.0   # whitespace never survives on its own
+
+
+def test_ingest_turns_a_bold_off_widens_one_and_appends_without_reauthoring():
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "C")
+    ins = paragraph(m, s, "p1", "alpha beta", after="h1")
+    apply(s, m.op(K.TEXT_MARK, {"bid": "p1", "path": "text"}, {"kind": BOLD, "attrs": {}, "start": [ins.id, 0], "end": [ins.id, 4], "on": True}))
+    res, _ = run_ingest(s, Mint("h", "human:a"), "p1", "alpha **beta**", actor="human:a")
+    assert res.refused is None and md_of(s, "p1") == "alpha **beta**"
+    m2, s2 = Mint(), Store()
+    heading(m2, s2, "h1", "C")
+    ins2 = paragraph(m2, s2, "p1", "Retries once via x.", after="h1")
+    apply(s2, m2.op(K.TEXT_MARK, {"bid": "p1", "path": "text"}, {"kind": BOLD, "attrs": {}, "start": [ins2.id, 8], "end": [ins2.id, 11], "on": True}))
+    res, _ = run_ingest(s2, Mint("h", "human:a"), "p1", "**Retries once** via x.", actor="human:a")
+    assert md_of(s2, "p1") == "**Retries once** via x."
+    assert s2.blocks["p1"].text().marks[0].actor == "human:a"
+    m3, s3 = Mint(), Store()
+    heading(m3, s3, "h1", "C")
+    ins3 = paragraph(m3, s3, "p1", "Retries once", after="h1")
+    apply(s3, m3.op(K.TEXT_MARK, {"bid": "p1", "path": "text"}, {"kind": BOLD, "attrs": {}, "start": [ins3.id, 8], "end": [ins3.id, 11], "on": True}))
+    res, _ = run_ingest(s3, Mint("l", "loop"), "p1", "Retries **once** more")
+    assert res.refused is None and res.deleted == 0 and md_of(s3, "p1") == "Retries **once** more"
+    assert [(seg.actor, seg.chars) for seg in s3.blocks["p1"].text().segs if seg.live] == [("human:a", "Retries once"), ("loop", " more")]
+
+
+def test_ingest_is_a_fixed_point_on_text_and_marks_fuzzed():
+    rng = random.Random(11)
+    words = ["alpha", "beta", "gamma", "delta", "once", "twice", "client", "retries"]
+    seen_ok = 0
+    for trial in range(200):
+        m, s = Mint(), Store()
+        heading(m, s, "h1", "T")
+        base_words = [rng.choice(words) for _ in range(rng.randint(1, 8))]
+        ins = paragraph(m, s, "p1", " ".join(base_words), after="h1")
+        t = s.blocks["p1"].text()
+        lt = t.live_text()
+        cited = None
+        for kind, attrs in ((BOLD, {}), (CITE, {"file": "c.py", "symbol": "C"})):
+            w = rng.choice(base_words)
+            lo = lt.index(w)
+            apply(s, m.op(K.TEXT_MARK, {"bid": "p1", "path": "text"},
+                          {"kind": kind, "attrs": attrs, "start": list(t.ref_at(lo)), "end": list(t.ref_at(lo + len(w) - 1)), "on": True}))
+            if kind == CITE:
+                cited = w
+        new_words = [w for w in base_words if rng.random() > 0.3] + [rng.choice(words) for _ in range(rng.randint(0, 3))]
+        rng.shuffle(new_words)
+        actor = rng.choice(["human:a", "loop"])
+        parts = []
+        for w in new_words:
+            if w == cited and (actor == "loop" or rng.random() < 0.5):
+                parts.append(f"[{w}](codoc:c.py#C)")
+            elif rng.random() < 0.3:
+                parts.append(f"**{w}**")
+            else:
+                parts.append(w)
+        new_md = " ".join(parts) or "x"
+        res, applied = run_ingest(s, Mint("i", actor), "p1", new_md, actor=actor)
+        if res.refused:
+            assert actor == "loop" and res.refused.startswith("would_drop_human_"), (trial, res.refused, new_md)
+            continue
+        assert all(o.conflict is None for o in applied), (trial, new_md, [(o.kind, o.conflict) for o in applied])
+        t2 = s.blocks["p1"].text()
+        assert md_of(s, "p1") == new_md, (trial, base_words, new_md, md_of(s, "p1"))
+        for seg in t2.segs:
+            if seg.live and seg.op == ins.id:
+                assert seg.chars in " ".join(base_words)
+        seen_ok += 1
+    assert seen_ok > 100
+
+
+def test_insert_inside_a_live_mark_is_not_captured_by_it():
+    for kind, attrs, new in ((BOLD, {}, "**alpha** gamma **beta**"),
+                             (LINK, {"href": "https://u"}, "[alpha](https://u) gamma [beta](https://u)")):
+        m, s = Mint(), Store()
+        heading(m, s, "h1", "C")
+        ins = paragraph(m, s, "p1", "alpha beta", after="h1")
+        apply_mark(m, s, "p1", ins, 0, 9, kind, attrs)
+        res, applied = run_ingest(s, Mint("h", "human:a"), "p1", new, actor="human:a")
+        assert res.refused is None and all(o.conflict is None for o in applied)
+        assert md_of(s, "p1") == new
+
+
+def test_append_after_a_bold_whose_end_char_is_dead_is_not_bolded():
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "C")
+    ins = paragraph(m, s, "p1", "alpha beta", after="h1")
+    apply_mark(m, s, "p1", ins, 0, 9)
+    apply(s, m.op(K.TEXT_DELETE, {"bid": "p1", "path": "text"}, {"from": [ins.id, 5], "to": [ins.id, 9]}))
+    assert md_of(s, "p1") == "**alpha**"
+    run_ingest(s, Mint("l", "loop"), "p1", "**alpha** gamma")
+    assert md_of(s, "p1") == "**alpha** gamma"
+
+
+def test_ingest_fixed_point_with_multi_word_marks_and_inner_inserts_fuzzed():
+    rng = random.Random(7)
+    words = ["alpha", "beta", "gamma", "delta", "once", "twice"]
+    for trial in range(300):
+        m, s = Mint(), Store()
+        heading(m, s, "h1", "T")
+        base = [rng.choice(words) for _ in range(rng.randint(2, 6))]
+        paragraph(m, s, "p1", " ".join(base), after="h1")
+        t = s.blocks["p1"].text()
+        lt = t.live_text()
+        kind, attrs = rng.choice([(BOLD, {}), (LINK, {"href": "https://u"}), (CITE, {"file": "c.py", "symbol": "C"})])
+        i, j = sorted(rng.sample(range(len(base)), 2))
+        lo = lt.index(base[i]) if i == 0 else len(" ".join(base[:i])) + 1
+        hi = len(" ".join(base[:j + 1])) - 1
+        apply(s, m.op(K.TEXT_MARK, {"bid": "p1", "path": "text"},
+                      {"kind": kind, "attrs": attrs, "start": list(t.ref_at(lo)), "end": list(t.ref_at(hi)), "on": True}))
+        marked = set(range(i, j + 1))
+        if rng.random() < 0.4:                        # a dead tail on the mark
+            apply(s, m.op(K.TEXT_DELETE, {"bid": "p1", "path": "text"},
+                          {"from": list(t.ref_at(hi - len(base[j]) + 1)), "to": list(t.ref_at(hi))}))
+            base_now = base[:j] + base[j + 1:]
+            marked = {k for k in marked if k != j}
+            marked = {k if k < j else k - 1 for k in marked}
+        else:
+            base_now = list(base)
+        k = rng.randint(0, len(base_now))
+        new_words = base_now[:k] + [rng.choice(words)] + base_now[k:]
+        wrap = lambda w, on: (f"**{w}**" if kind == BOLD else f"[{w}](https://u)" if kind == LINK else f"[{w}](codoc:c.py#C)") if on else w
+        parts = []
+        for idx, w in enumerate(new_words):
+            orig = idx if idx < k else idx - 1
+            on = idx != k and orig in marked and rng.random() < 0.9
+            parts.append(wrap(w, on))
+        new_md = " ".join(parts)
+        res, applied = run_ingest(s, Mint("i", "human:a"), "p1", new_md, actor="human:a")
+        assert res.refused is None and all(o.conflict is None for o in applied), (trial, new_md, [o.conflict for o in applied])
+        got = md_of(s, "p1")
+        # Adjacent same-kind spans render merged; compare on the parsed form.
+        assert parse(got) == parse(new_md), (trial, base, new_md, got)

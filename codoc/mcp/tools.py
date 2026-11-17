@@ -16,7 +16,8 @@ written and the error names it.
 | ``reflect`` | anything else | as one plan, as ``propose`` would |
 | ``propose`` | all | as one plan the person accepts or rejects |
 
-Accepting a plan hands the feature off: a plan is a request to build.
+`codoc accept` hands off every feature the plan touches with the verdict; the
+editor's Accept sends the verdict alone.
 """
 from __future__ import annotations
 

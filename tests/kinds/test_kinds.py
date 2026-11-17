@@ -1,18 +1,16 @@
-"""Block kinds on the extension interface (`03-extensions.md`)."""
+"""Block kinds: declarations, writes, lift and lower (docs/kinds.md)."""
 from codoc.calculus import ops as K
 from codoc.calculus.derive import attribution, markdown
-from codoc.loops.realize import directive
 from codoc.calculus.doc import text_fields
 from codoc.calculus.export import export_markdown
-from codoc.calculus.ids import START
 from codoc.index.graph import Graph
 from codoc.kinds import LowerContext, get, plain
 from codoc.kinds.builtins import diagram_lower, edges_of
 from codoc.kinds.lift import lift_pass
 from codoc.kinds.write import add_block, write_block
-from codoc.loops.realize import handoff
+from codoc.loops.realize import directive, handoff
 from codoc.workspace import Workspace
-from tests.loops.test_reflect import seed
+from tests.helpers import seed_loop
 
 
 def test_registration_declares_text_fields_and_schema_validation():
@@ -28,7 +26,7 @@ def test_registration_declares_text_fields_and_schema_validation():
 
 def test_add_and_write_block_attribute_text_fields_and_set_the_rest(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
-    seed(ws)
+    seed_loop(ws)
     w = add_block(ws, "image", {"asset": ".codoc/media/ui.png", "alt": "the login form", "caption": "Before the **fix**."},
                   after="p1", actor="human:local")
     assert w.ok and ws.store.blocks[w.bid].kind == "image"
@@ -37,7 +35,7 @@ def test_add_and_write_block_attribute_text_fields_and_set_the_rest(tmp_path):
     assert [r.actor for r in attribution(blk.text("alt"))] == ["human:local"]
     # An agent's write goes through the same boundary, as the agent — and the
     # feature holds the person's unsent ink, so the agent's words are a proposal
-    # on the page rather than prose on the trunk (01 §4 rule 8).
+    # on the page rather than prose on the trunk.
     w2 = write_block(ws, w.bid, {"caption": "Before the **fix**, after login.", "source": "agent"}, actor="agent:claude-code")
     assert w2.ok
     assert blk.content["source"] == "agent"
@@ -59,7 +57,7 @@ def test_add_and_write_block_attribute_text_fields_and_set_the_rest(tmp_path):
 
 def test_diagram_lifts_from_the_graph_and_lowers_an_edge_delta(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
-    seed(ws)
+    seed_loop(ws)
     ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": "c.py::retry"}}], actor="loop")
     g = Graph([{"src_symbol": "c.py::send", "dst_name": "retry", "dst_symbol": "c.py::retry", "kind": "call", "src_file": "c.py", "internal": True}])
     d = add_block(ws, "diagram", {"source": "", "derived": True}, after="p1", actor="loop")
@@ -87,16 +85,15 @@ def test_diagram_lifts_from_the_graph_and_lowers_an_edge_delta(tmp_path):
 
 
 def test_a_lift_lands_on_the_trunk_however_much_of_the_picture_changed(tmp_path):
-    """Review 7: a lift "is attribution, like a binding refresh, never intent"
-    (03 §5.1), so the machine gate in `Workspace.ingest` does not apply to it.
-    It used to: when the code moved far enough, the re-derived diagram deleted
-    more than half its source and the always-on channel stopped to ask."""
+    """A lift is content read off the code, like a binding refresh, not
+    intent, so the machine gate in `Workspace.ingest` does not apply to it: a
+    re-derived diagram lands on the trunk however much of its source changed."""
     def graph(*edges):
         return Graph([{"src_symbol": s, "dst_name": d.split("::")[-1], "dst_symbol": d,
                        "kind": "call", "src_file": "c.py", "internal": True} for s, d in edges])
 
     ws = Workspace(tmp_path / ".codoc")
-    seed(ws)
+    seed_loop(ws)
     for sym in ("retry", "backoff", "jitter"):
         ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": f"c.py::{sym}"}}], actor="loop")
     d = add_block(ws, "diagram", {"source": "", "derived": True}, after="p1", actor="loop")
@@ -111,12 +108,12 @@ def test_a_lift_lands_on_the_trunk_however_much_of_the_picture_changed(tmp_path)
 
 
 def test_an_accepted_plan_on_a_diagram_reaches_the_directive(tmp_path):
-    """02 §3.3: "a plan is by definition a request to build". `_at_realized`
-    holds back what the AUTHOR changed since the last realization, and
-    accepting a plan is how an author adopts an agent's words — so the edge
-    they accepted has to reach `lower` as theirs, not sit in `old` already."""
+    """Accepting a plan is how an author adopts an agent's words, and an
+    accepted plan is a request to build. `_at_realized` holds back what the
+    author changed since the last realization, so an edge they accepted
+    reaches `lower` as theirs, not in `old`."""
     ws = Workspace(tmp_path / ".codoc")
-    seed(ws)
+    seed_loop(ws)
     ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": "c.py::retry"}}], actor="loop")
     d = add_block(ws, "diagram", {"source": "", "derived": True}, after="p1", actor="loop")
     assert d.ok and lift_pass(ws, Graph([])) == 1                     # no edges in the code yet
@@ -136,7 +133,7 @@ def test_mcp_write_block_adds_and_edits_as_the_agent(tmp_path):
     from codoc.mcp import tools
     cd = tmp_path / ".codoc"
     ws = Workspace(cd)
-    seed(ws)
+    seed_loop(ws)
     ws.close()
     r = tools.write_block(str(cd), kind="diagram", feature_id="h1", content={"source": "flowchart TB\n  a[Start] --> b"})
     assert r["ok"] and r["ingested"] and all(i["refused"] is None for i in r["ingested"])
@@ -156,7 +153,7 @@ def test_a_feature_carrying_media_survives_every_whole_feature_pass(tmp_path):
     """A block whose Text fields are not called `text` (a diagram, a comment)
     is in the body like any other: the author gate, the blame read, a delete
     plan and a translation all walk its own fields."""
-    from codoc.calculus.derive import description, plan_claims
+    from codoc.calculus.derive import description
     from codoc.doclang import resolve
     from codoc.loops.context import block_written_by, written_by
     from codoc.loops.edits import strike_bodies
@@ -164,7 +161,7 @@ def test_a_feature_carrying_media_survives_every_whole_feature_pass(tmp_path):
     from codoc.mcp import tools
 
     ws = Workspace(tmp_path / ".codoc")
-    seed(ws)
+    seed_loop(ws)
     d = add_block(ws, "diagram", {"source": "flowchart TB\n  a --> b"}, after="p1", actor="loop")
     c = add_block(ws, "comment", {"thread": "t1", "anchor": "p1", "anchor_text": "once", "body": "Twice?"},
                   after=d.bid, actor="human:local")
@@ -193,7 +190,7 @@ def test_the_directive_speaks_through_the_kind_codecs(tmp_path):
     words. An open comment thread reaches it once, as the request its codec words."""
     from codoc.loops.realize import directive
     ws = Workspace(tmp_path / ".codoc")
-    seed(ws)
+    seed_loop(ws)
     ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": "c.py::send"}}], actor="loop")
     add_block(ws, "diagram", {"source": "flowchart TB\n  send --> recv", "derived": True}, after="p1", actor="human:local")
     add_block(ws, "comment", {"thread": "t1", "anchor": "p1", "anchor_text": "once", "body": "Twice?", "scope": "code"},

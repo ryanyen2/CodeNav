@@ -291,7 +291,7 @@ def concat_bodies(first: list[dict], more: list[dict]) -> list[dict]:
 def as_plan_bodies(bodies: list[dict], plan: str) -> list[dict]:
     """A plan proposes; it never kills. Every ``text.delete`` an ingest produced
     becomes a ``suggest_del`` mark tagged with the plan, so the words stay live
-    and struck until a verdict (spec §3, ``plan.open``)."""
+    and struck until a verdict."""
     out = []
     for b in bodies:
         if b["kind"] == K.TEXT_DELETE:

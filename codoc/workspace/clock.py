@@ -1,4 +1,4 @@
-"""Hybrid logical clock (spec §7.2).
+"""Hybrid logical clock (docs/concurrency.md, Clock).
 
 An HLC string is ``"<wall ms:020d>-<logical:020d>-<node>"`` so lexicographic
 order is the clock's total order in Python and JavaScript alike. The

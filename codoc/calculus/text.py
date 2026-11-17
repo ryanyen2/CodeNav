@@ -3,7 +3,7 @@
 A Text is one sequence of *segments* in document order. A segment is a run of
 characters inserted by one op (``(op, k0 .. k0+len)``), carrying that op's actor
 and clock, an optional plan tag, and — once deleted — the op that deleted it.
-Dead segments keep their place forever (spec §2): a character that was deleted
+Dead segments keep their place forever: a character that was deleted
 is still a position an insert, a split or a comment can name.
 
 Every mutation is by character identity, never by offset, and a character
@@ -87,13 +87,11 @@ class Seg:
     at: str
     plan: str | None = None
     dead: OpId | None = None
-    # Who removed these characters. An `OpId` names the SESSION, not the actor
-    # (one file, many actors — 01 §7.1), so without this the killer's identity
-    # lives only on the op, and every reader that wants it — the directive's
-    # `removed:` line, `ground`, the window — has to be handed the log. A
-    # segment already carries its MINTER's actor for exactly this reason
-    # (01 §7.5: "attribution survives because segments carry their actor");
-    # this is the other half, and it is what lets a fold take the ops away.
+    # Who removed these characters. An `OpId` names the session, not the actor
+    # (one session file holds many actors), so without this the killer's
+    # identity lives only on the op, and every reader that wants it (the
+    # directive's `removed:` line, `ground`, the window) would need the log.
+    # With the minter's actor above, it lets a snapshot drop the ops.
     dead_actor: str = ""
     dead_at: str = ""              # and when, for the same reason
 

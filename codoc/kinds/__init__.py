@@ -1,17 +1,18 @@
-"""Block kinds: a schema plus the arrows a kind supports (`03-extensions.md`).
+"""Block kinds: a schema plus the codecs a kind supports (docs/model.md, Block kinds).
 
-The calculus knows ``heading`` and ``paragraph``. Every other kind registers
-here: which content fields are attributed ``Text`` (identity, per-word
-attribution, plans, translation and History come with that for free), a
-schema for the rest, and up to five codecs:
+The calculus knows the heading and prose kinds and the ``source`` field of the
+source kinds. Every source and plugin kind registers here: which content
+fields are attributed ``Text`` (identity, per-word attribution, plans,
+translation and History come with that), a schema for the rest, and up to
+three codecs:
 
     lift(ctx)                  code → content; read-only on code; idempotent; run by the loop
     lower(old, new, ctx)       content → a directive string, or None; run when a hand-off renders
     consult(content)           what the realizing agent reads before implementing
 
-A kind never touches ops. ``write.py`` is the one boundary that turns content
-into ops: ``block.set`` for a non-Text field, ``ingest`` for a Text field, both
-with the caller's actor and, when the caller proposes, a plan tag.
+A kind never touches ops. ``write.py`` turns content into ops: ``block.set``
+for a non-Text field, ``ingest`` for a Text field, both with the caller's
+actor and, when the caller proposes, a plan tag.
 ``export.py`` fences every plugin kind as JSON; a kind with ``exported=False``
 (a comment) is left out of ``tree.codoc``.
 """

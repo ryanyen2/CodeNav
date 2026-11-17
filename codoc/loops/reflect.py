@@ -233,7 +233,7 @@ def _bind(kind: str, fid: str, file: str, symbol: str, fingerprint: str = "", ty
 
 
 def _emptied(store: Store) -> list[str]:
-    """Live features with no bindings that used to have some, and no delete
+    """Live features with no bindings that had some once, and no delete
     plan (of any verdict: a rejected one is an answer, not an invitation)."""
     bound = {b.feature for b in store.bindings.values()}
     proposed = {pl.target for pl in store.plans.values() if pl.kind == "delete"}

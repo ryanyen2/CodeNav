@@ -1,4 +1,5 @@
-"""Snapshots: fold the settled prefix of the log into one file (spec §7.5).
+"""Snapshots: fold the settled prefix of the log into one file
+(docs/concurrency.md, Snapshots).
 
 A snapshot is a session file whose header carries the ``Frontier`` it folded
 and whose ops rebuild the store at that frontier: one ``block.add`` per block,
@@ -9,27 +10,22 @@ actors, clocks, marks) as ``texts``; one ``bind.attach`` per binding; one
 ``feature.handoff`` — with the words the person asked for — and one
 ``feature.realized`` per watermark.
 
-**The fold stops where the work in flight begins.** State is not all a reader
-reads: the directive's ``Focus:`` and ``removed:`` lines, the reds and greens
-``ground`` paints, the symbols a phantom settles against, and the ops a verdict
-must undo are all read from the ops themselves. So the fold runs only up to the
-last point at which nothing was in flight — the *critical version*, in
-Eg-walker's sense — and everything after that stays an ordinary session log. A
-tree nobody is editing folds whole; a tree with a proposal open folds up to the
-proposal and no further. Nothing derived is persisted, nothing loses its order,
-and no reader has to be taught about a second kind of op: what is still read is
-still the log.
+**The fold stops at the first op of open work.** A verdict on an open plan
+undoes the plan's own ops by identity, so those ops stay in the log. The fold
+runs up to the first op that names a feature with an open plan on it, an open
+plan, its target or one of its ops; everything from there on stays an ordinary
+session log. A tree with no open plan folds whole.
 
-Replay applies a snapshot first, without the authority check (these ops were
-authorized when they were written; a fold is not a new decision), then every
-op outside its frontier with the check on.
+Replay applies a snapshot first, then every op outside its frontier. Neither
+is checked for authority again: an op was judged when it arrived, and replay
+applies it as its record says.
 
 Dead blocks are kept because anchors may still name their characters from a
 branch forked before the snapshot. Attribution survives because segments carry
-their actor — and so do the directive, drift, `ground` and a phantom's settle,
-because what each reads is on the document now (01 §7.5). ``state_fingerprint``
-is equal across a fold and so is every derived view OF THE DOCUMENT; `history`
-and the timeline are views of the log, and a fold is the log ending.
+their actor, and the directive, drift and `ground` read clocks and actors kept
+on segments, marks and watermarks. ``state_fingerprint`` is equal across a
+fold and so is every derived view of the document; `history` and the timeline
+are views of the log and lose the folded ops.
 """
 from __future__ import annotations
 

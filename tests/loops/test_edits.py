@@ -8,7 +8,7 @@ from codoc.calculus.doc import BULLET, NUMBERED, PARAGRAPH, TABLE
 from codoc.calculus.ingest import ingest, resolve_pending_refs
 from codoc.calculus.store import Store
 from codoc.loops.edits import Change, Compiler, strike_bodies, validate
-from tests.calculus.test_apply import Mint
+from tests.helpers import Mint
 
 
 def submit(store: Store, m: Mint, bodies: list[dict], actor="loop", plan=None) -> None:

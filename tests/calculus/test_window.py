@@ -1,27 +1,13 @@
-"""The timeline window un-applies the log backwards on clones (spec §6, §9)."""
+"""The timeline window un-applies the log backwards on clones."""
 import random
 
 from codoc.calculus import ops as K
 from codoc.calculus.apply import apply
-from codoc.calculus.store import Store
 from codoc.calculus.doc import PARAGRAPH
+from codoc.calculus.store import Store
 from codoc.calculus.text import BOLD, SUGGEST_DEL
 from codoc.calculus.window import history_window
-from tests.calculus.test_apply import Mint, heading, invert, paragraph
-
-
-def texts_after_each_op(store: Store) -> list[dict[str, str]]:
-    """Ground truth: replay the prefix up to each op and read every block."""
-    from codoc.calculus.ops import Op
-    import copy
-    out = []
-    fresh = Store()
-    for o in store.ops:
-        apply(fresh, Op.from_json(copy.deepcopy(o.to_json())))
-        # What the page showed: a dead block reads as nothing, whatever text the
-        # store still holds so its characters can be named.
-        out.append({b.id: (b.text().live_text() if b.live else "") for b in fresh.all_blocks()})
-    return out
+from tests.helpers import Mint, heading, invert, paragraph, texts_after_each_op
 
 
 def test_window_matches_prefix_replay_through_text_split_merge_and_marks():
@@ -156,9 +142,7 @@ def test_window_equals_prefix_replay_under_every_kind_fuzzed():
 def test_the_window_carries_the_order_a_verdict_undid():
     """A `plan.reject` that undoes a planned move re-ranks blocks, and a page
     from before it is in the order the plan had produced. The window records
-    the rank each op displaced, so the reader folds back to it; before this it
-    read displaced ranks from `block.move` alone and a rejected move left the
-    past pages in today's order."""
+    the rank each op displaced, so the reader folds back to it."""
     m, s = Mint(), Store()
     heading(m, s, "h1", "A")
     paragraph(m, s, "p1", "a", after="h1")
@@ -175,10 +159,9 @@ def test_the_window_carries_the_order_a_verdict_undid():
 
 
 def test_the_window_carries_the_order_a_reopen_undid():
-    """Review 7: the same for the other direction. A reopen re-applies the
-    verdict's own record, so its `moved` rows are the ranks it SET; reading
-    them as the ranks it displaced put the page before a reopen in the order
-    the reopen produced. The reopen records what it displaced, as `undid`."""
+    """The same for a reopen. A reopen re-applies the verdict's own record,
+    so its `moved` rows are the ranks it set; it records the ranks it
+    displaced as `undid`, and the window folds back to those."""
     m, s = Mint(), Store()
     heading(m, s, "h1", "A")
     paragraph(m, s, "p1", "a", after="h1")
@@ -194,3 +177,30 @@ def test_the_window_carries_the_order_a_reopen_undid():
     w = history_window(s, limit=1)
     assert w["ops"][0]["kind"] == K.PLAN_REOPEN
     assert w["ranks"].get("h2") == was, (w["ranks"], was)
+
+
+def test_window_unapplies_verdicts_and_omits_blocks_born_inside_it():
+    from codoc.calculus.text import SUGGEST_DEL
+    from codoc.calculus.window import history_window
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "T")
+    ins = paragraph(m, s, "p1", "keep this maybe", after="h1")
+    apply(s, m.op(K.PLAN_OPEN, {"pid": "pl"}, {"kind": "edit", "target": "h1"}, actor="loop"))
+    apply(s, m.op(K.TEXT_MARK, {"bid": "p1", "path": "text"},
+                  {"kind": SUGGEST_DEL, "attrs": {}, "start": [ins.id, 5], "end": [ins.id, 9], "on": True}, actor="loop", plan="pl"))
+    apply(s, m.op(K.PLAN_ACCEPT, {"pid": "pl"}, {}))
+    apply(s, m.op(K.PLAN_OPEN, {"pid": "p2"}, {"kind": "edit", "target": "h1"}, actor="loop"))
+    pi = apply(s, m.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [ins.id, 14], "text": " later"}, actor="loop", plan="p2"))
+    apply(s, m.op(K.PLAN_REJECT, {"pid": "p2"}, {}))
+    truth = texts_after_each_op(s)
+    w = history_window(s, limit=500)
+    for e in w["ops"]:
+        for bid, text in e["blocks"].items():
+            assert text == truth[e["pos"]][bid], (e["kind"], bid, text, truth[e["pos"]][bid])
+    assert next(e for e in w["ops"] if e["id"] == pi.id)["blocks"]["p1"] == "keep maybe later"
+    short = history_window(s, limit=2)
+    assert "p1" in short["before"]
+    m2, s2 = Mint(), Store()
+    heading(m2, s2, "h1", "T")
+    paragraph(m2, s2, "p1", "one", after="h1")
+    assert "p1" not in history_window(s2, limit=2)["before"]     # born inside the window

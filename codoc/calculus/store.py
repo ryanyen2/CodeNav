@@ -1,4 +1,4 @@
-"""The in-memory state the applier mutates (spec §5).
+"""The in-memory state the applier mutates (docs/model.md, Definitions).
 
 Everything here is a cache of the op log: ``replay(log)`` rebuilds it exactly
 (I6). Persistence lives in ``codoc.workspace``; this module knows no files.
@@ -83,11 +83,9 @@ class Watermarks:
     handoffs: list[OpId] = field(default_factory=list)   # hand-off op ids, oldest first
     # When the code under this feature last MOVED (a `bind.refresh` or a
     # `bind.detach`), and when a realization last settled it. Drift is
-    # "the code moved and nobody has looked at the prose since", which used to
-    # be a comparison of op ORDER and so kept the feature's whole log alive
-    # through every fold. These two clocks and the ones on the segments and
-    # marks make it a comparison of state (01 §7.5's rule, applied to the other
-    # half of what a reader needs).
+    # "the code moved and nobody has looked at the prose since": these two
+    # clocks and the ones on the segments and marks make it a comparison of
+    # state, so a snapshot can fold the ops away.
     code_at: str = ""
     realized_at: str = ""
 
