@@ -29,7 +29,7 @@ from codoc.calculus.doc import (
     HEADING, ITEMS, LEVELLED, PARAGRAPH, Block, clamp_level, empty_content, is_one_line, is_text_field, level_for,
     text_fields,
 )
-from codoc.calculus.ids import END, START, CharRef, OpId, ref_from_json, ref_to_json
+from codoc.calculus.ids import END, START, CharRef, OpId, actor_kind, ref_from_json, ref_to_json
 from codoc.calculus.ops import Op, OpBody, body, covered, frontier_union
 from codoc.calculus.rank import RankError
 from codoc.calculus.store import Binding, Plan, Store
@@ -749,7 +749,9 @@ def _h_plan_open(store: Store, op: Op, touched: set[str]):
     # now live in the archive; an ordinary plan.open sends neither.
     ops = [str(i) for i in op.payload.get("ops") or []]
     opened_by = op.payload.get("opened_by") or op.id
-    build = bool(op.payload.get("build"))
+    # A build request is a coding agent's proposal made before the code; from
+    # anyone else (a suggester's plan is about words) it is dropped, on replay too.
+    build = bool(op.payload.get("build")) and actor_kind(op.actor) == "agent"
     store.plans[pid] = store.open_plans[pid] = Plan(
         pid, op.actor, kind, target, op.payload.get("note", ""), "open", ops, opened_by, build)
     canonical = {"kind": kind, "target": target, "note": op.payload.get("note", "")}

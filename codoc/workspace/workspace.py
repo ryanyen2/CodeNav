@@ -474,10 +474,6 @@ class Workspace:
             # get to assert it about itself.
             s = replace(s, caused_by=None)
         s = replace(s, payload=client_payload(self.store, s.kind, s.payload, actor))
-        if s.kind == K.PLAN_OPEN and s.payload.get("build") and actor_kind(actor) != "agent":
-            # A build request is a coding agent's proposal made before the
-            # code. A suggester's plan is about words, whoever accepts it.
-            s = replace(s, payload={k: v for k, v in s.payload.items() if k != "build"})
         if s.kind == "amend":
             # The amend decides its own plan, so no suggester plan is opened for it.
             p = s.payload

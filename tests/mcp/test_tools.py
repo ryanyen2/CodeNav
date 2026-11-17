@@ -13,7 +13,7 @@ from codoc.daemon import client
 from codoc.daemon.publish import publish
 from codoc.mcp import tools
 from codoc.workspace import Workspace
-from tests.helpers import H, handoff, refs, seed
+from tests.helpers import H, T, handoff, refs, seed
 
 
 def workspace(tmp_path):
@@ -183,11 +183,33 @@ def test_a_proposal_that_writes_nothing_says_so_and_leaves_no_plan(tmp_path):
             return tools.propose(str(cd), ops=[{"kind": "amend", "feature_id": "h1",
                                                 "blocks": [{"id": "p1", "text": text}]}], root_dir=str(tmp_path))
 
+        unchanged = reword(T(ws.store, "p1"))
+        assert not unchanged["ok"] and "already says that" in unchanged["error"]
         assert reword("Retries twice.")["ok"]
         second = reword("Retries three times.")
         assert not second["ok"] and "open_plan" in second["error"]
         st = client.read(cd).store
         assert [p for p in st.open_plans.values() if not p.ops] == []
+    finally:
+        client.release(cd)
+
+
+def test_a_refused_part_does_not_hide_the_plans_that_were_written(tmp_path):
+    """A refused rewording beside a removal: the call is ok, names the delete
+    plan it opened (a delete plan needs no struck words), and reports the refusal."""
+    cd, ws = workspace(tmp_path)
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "h2"}, "payload": {"kind": "heading", "level": 1, "after": "p1"}},
+               {"kind": K.TEXT_INSERT, "target": {"bid": "h2", "path": "text"}, "payload": {"after": START, "text": "Old"}}],
+              actor=H)
+    publish(cd, ws.store, root_dir=str(tmp_path))
+    ws.close()
+    try:
+        reword = {"kind": "amend", "feature_id": "h1", "blocks": [{"id": "p1", "text": "Retries twice."}]}
+        assert tools.propose(str(cd), ops=[reword], root_dir=str(tmp_path))["ok"]
+        got = tools.propose(str(cd), ops=[reword, {"kind": "retire_node", "feature_id": "h2"}], root_dir=str(tmp_path))
+        st = client.read(cd).store
+        assert got["ok"] and [st.plans[p].kind for p in got["plan_ids"]] == ["delete"]
+        assert any("open_plan" in r for r in got["refused"])
     finally:
         client.release(cd)
 

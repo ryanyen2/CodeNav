@@ -106,6 +106,9 @@ class Store:
         self.id = uuid.uuid4().hex[:12]
         self.blocks: dict[str, Block] = {}
         self.order: list[tuple[str, str]] = []
+        # Feature id -> the blocks that recorded it when they died (``Block.dead_in``).
+        # A revived block stays listed and is filtered out on read.
+        self.removed: dict[str, set[str]] = {}
         self.bindings: dict[tuple[str, str], Binding] = {}
         self.plans: dict[str, Plan] = {}
         # The open ones, kept as they open and close. Every reader that asks
@@ -149,6 +152,8 @@ class Store:
             block.rank = R.between(lo, block.rank)
         self.blocks[block.id] = block
         bisect.insort(self.order, (block.rank, block.id))
+        if block.dead_in:                    # a snapshot restoring a removed block
+            self.removed.setdefault(block.dead_in, set()).add(block.id)
         self.rank_head[block.id] = self.pos + 1
 
     def set_rank(self, bid: str, rank: str) -> str:
@@ -254,8 +259,9 @@ class Store:
         deleted among them later moves none of them to another feature."""
         if not self.blocks[fid].live:
             return []
-        return [b for b in (self.blocks[i] for _, i in self.order)
-                if not b.live and b.kind != HEADING and b.dead_in == fid]
+        out = [self.blocks[i] for i in self.removed.get(fid, ())]
+        return sorted((b for b in out if not b.live and b.kind != HEADING and b.dead_in == fid),
+                      key=lambda b: (b.rank, b.id))
 
     def kill(self, ids: list[str], op: OpId, actor: str, at: str) -> None:
         """Kill ``ids``, each recording the feature it was in. Read for all of
@@ -264,6 +270,8 @@ class Store:
         features = {i: self.feature_of(i) or "" for i in ids}
         for i in ids:
             self.blocks[i].kill(op, actor, at, features[i])
+            if features[i]:
+                self.removed.setdefault(features[i], set()).add(i)
 
     def feature_range(self, fid: str) -> list[Block]:
         h = self.blocks[fid]

@@ -253,25 +253,23 @@ def _write_plans(codoc_dir: str, store, changes: list[Change], *, note: str, cau
     deletion, by an open plan or earlier in this call, is not proposed again.
     ``build`` says accepting the plan asks for the code: true for a proposal
     made before the code, false for a reflection of code already written.
-    Returns the first plan's id and every id."""
+    Returns every plan written, and why each part that was not written was
+    refused; an error only when no plan was written."""
     removals: dict[str, Change] = {}
     for c in changes:
         if c.kind == "retire_node" and c.target not in removals and not delete_open(store, c.target):
             removals[c.target] = c
     rest = [c for c in changes if c.kind != "retire_node"]
-    results = [_write_plan(codoc_dir, store, [c], note=c.note or note, caused_by=caused_by, root_dir=root_dir,
-                           build=False) for c in removals.values()]
-    if rest:
-        results.insert(0, _write_plan(codoc_dir, store, rest, note=note, caused_by=caused_by, root_dir=root_dir,
-                                      build=build))
-    if not results:
-        return _err("every feature named is already proposed for removal")
-    failed = next((r for r in results if not r.get("ok")), None)
-    if failed:
-        return failed
-    out = {"ok": True, "plan_id": results[0]["plan_id"], "plan_ids": [r["plan_id"] for r in results],
-           "ops": sum(r["ops"] for r in results), "note": results[0]["note"]}
-    if refused := [x for r in results for x in r.get("refused", [])]:
+    groups = ([(rest, note, build)] if rest else []) + [([c], c.note or note, False) for c in removals.values()]
+    results = [_write_plan(codoc_dir, store, group, note=n, caused_by=caused_by, root_dir=root_dir, build=b)
+               for group, n, b in groups]
+    written = [r for r in results if r.get("ok")]
+    if not written:
+        return results[0] if results else _err("every feature named is already proposed for removal")
+    out = {"ok": True, "plan_id": written[0]["plan_id"], "plan_ids": [r["plan_id"] for r in written],
+           "ops": sum(r["ops"] for r in written), "note": written[0]["note"]}
+    refused = [x for r in written for x in r.get("refused", [])] + [r["error"] for r in results if not r.get("ok")]
+    if refused:
         out["refused"] = refused
     return out
 
@@ -290,30 +288,45 @@ def _write_plan(codoc_dir: str, store, changes: list[Change], *, note: str, caus
         batch=pid, caused_by=caused_by, root_dir=root_dir)
     if opened and opened[0].get("conflict"):
         return _err(f"plan.open refused: {opened[0]['conflict']}")
-    refusals: list[str | None] = []          # one per submission: why it was refused, or None
+    # Per submission: why it was refused, and whether it may have landed (an op
+    # was applied, or the ack did not arrive in time). An unchanged rewrite did not.
+    refused: list[str] = []
+    landed = 0
+
+    def took(conflict, ops, status, label=""):
+        nonlocal landed
+        if conflict:
+            refused.append(f"{label}{conflict}")
+        elif ops or status is None:
+            landed += 1
+
     for c in changes:
         if c.bodies:
-            refusals += [a["conflict"] for a in client.write(codoc_dir, client=AGENT, bodies=c.bodies, plan=pid,
-                                                              batch=pid, caused_by=caused_by, root_dir=root_dir)]
+            for a in client.write(codoc_dir, client=AGENT, bodies=c.bodies, plan=pid, batch=pid,
+                                  caused_by=caused_by, root_dir=root_dir):
+                took(a["conflict"], a["ops"], a["status"])
         for r in c.rewrites:
             base = store.blocks[r.bid].text(r.path).live_text()
             got = client.ingest(codoc_dir, client=AGENT, bid=r.bid, path=r.path, base_text=base, new_md=r.new_md,
                                 plan=pid, caused_by=caused_by, root_dir=root_dir)
-            refusals.append(f"{r.bid}: {got['refused']}" if got["refused"] else None)
+            took(got["refused"], got["ops"], got["status"], f"{r.bid}: ")
         strikes = strike_bodies(store, c.strikes, pid)
         if strikes:
-            refusals += [a["conflict"] for a in client.write(codoc_dir, client=AGENT, bodies=strikes, plan=pid,
-                                                              batch=pid, caused_by=caused_by, root_dir=root_dir)]
-    refused = [r for r in refusals if r]
-    if refusals and len(refused) == len(refusals):
-        # Nothing landed: take the empty plan back, or the person is asked to
-        # accept nothing (and, with build, to queue a build of nothing).
+            for a in client.write(codoc_dir, client=AGENT, bodies=strikes, plan=pid, batch=pid,
+                                  caused_by=caused_by, root_dir=root_dir):
+                took(a["conflict"], a["ops"], a["status"])
+    if not landed and kind != "delete":
+        # Take the empty plan back, or the person is asked to accept nothing
+        # (and, with build, to queue a build of nothing). A delete plan is the
+        # proposal by itself: accepting it deletes its target, struck words or not.
         client.write(codoc_dir, client=AGENT, bodies=[{"kind": K.PLAN_REJECT, "target": {"pid": pid}, "payload": {}}],
                      batch=pid, root_dir=root_dir)
-        return _err("nothing was written: " + "; ".join(refused))
-    out = {"ok": True, "plan_id": pid, "ops": len(refusals) - len(refused),
+        return _err("nothing was written: " + ("; ".join(refused) or "the text already says that"))
+    out = {"ok": True, "plan_id": pid, "ops": landed,
            "note": "The person accepts or rejects this plan in the editor. "
-                   + ("Accepting it queues the work for you." if build else
+                   + ("Accepting it deletes the feature; removing its code is a separate hand-off."
+                      if kind == "delete" else
+                      "Accepting it queues the work for you." if build else
                       "Accepting it takes the words only; nothing is queued.")}
     if refused:
         out["refused"] = refused
