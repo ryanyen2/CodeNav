@@ -26,7 +26,7 @@ diagram in one description is almost always too much.
 - Identifiers, literals, file names and settings go in backticks.
 - Say which way a choice went. "Months line up on the payment date, weeks on the posting date" is checkable; "the alignment is configurable" is not.
 - Give a reason only when the code, a comment, the brief or a commit states one. Put it after the fact: "Hyphen at a line end is dropped. Why: the typesetter added it."
-- State the reason itself. Do not say where it came from ("the comment says", "per the docstring", "the source notes").
+- State the reason itself. Do not say where it came from ("the comment says", "per the docstring", "the source notes"). Write "Why: it runs before a URL is logged", not "Why: the docstring says it runs before a URL is logged".
 - No reason available: state what the code does and stop. Do not guess one.
 - Write about the code, not about your input. Never mention chunks, what you were or were not shown, or source that was cut off. Long chunks are shortened before you see them; describe what is there and leave out what is not.
 - Nest a bullet one level only when it qualifies the bullet above it.
