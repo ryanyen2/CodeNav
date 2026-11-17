@@ -110,18 +110,18 @@ def test_directive_names_the_language_and_protects_identifiers():
     assert "Never translate code" in d
     # The title rule rides the directive. It now also STEERS the shape, because an
     # English modifier stack transliterates into a noun pile no one would say.
-    assert "4–12 character phrase" in d
-    assert "never an English-ordered stack of modifiers" in d
+    assert "4 to 12 characters" in d
+    assert "Not an English-ordered stack of modifiers" in d
 
 
 def test_code_agent_directive_exempts_the_source_code():
     """The realize prompt's reader writes code, not tree nodes: the tree's language
     must not leak into identifiers and comments."""
     d = dl.prompt_directive(dl.resolve("zh-Hans"), for_code_agent=True)
-    assert "source code is not translated" in d
+    assert "Source code is not translated" in d
     assert "codoc_reflect" in d
-    # It is not asked to emit JSON, so the JSON-envelope rules are absent.
-    assert "JSON envelope" not in d
+    # It is not asked to emit JSON, so the JSON rules are absent.
+    assert "JSON" not in d
 
 
 def test_directive_offers_safe_quotation_marks():
@@ -187,8 +187,7 @@ def test_chinese_gets_a_register_rule_like_every_other_cjk_language():
         assert "白话" in rule or "白話" in rule
         assert "书面语" in rule or "書面語" in rule
         assert "翻译腔" in rule or "翻譯腔" in rule
-        # The concrete DON'Ts are what actually move the output — an abstract "write
-        # plainly" loses to the specific constraints elsewhere in the prompt.
+        # The rules name constructions; a general "write plainly" does not change the output.
         assert "进行" in rule or "進行" in rule          # the light verbs to drop
         assert "被" in rule                              # the passive rule
     # …and the punctuation guidance every CJK language shares is still there.

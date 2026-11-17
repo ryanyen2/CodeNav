@@ -12,7 +12,8 @@ run is one batch, and a person cannot undo it.
 
 Every chunk ends up bound. What the model did not place goes to the file's
 largest new node; a file the model returned nothing for gets one node named
-after the file, with no description.
+after the file, with no description. A file's ``__module__`` chunk always goes
+to its first top-level node.
 """
 from __future__ import annotations
 
@@ -130,7 +131,7 @@ def bootstrap(ws: Workspace, rows: list, graph: Graph, *, repo_name: str = "code
         except Exception as exc:  # noqa: BLE001 (a flat tree is still usable)
             say(f"  ⚠ organization pass failed ({exc}); the tree stays flat")
     elif organize and len(top) > ORG_FEATURE_CAP:
-        say(f"  ⚠ {len(top)} top-level features — skipping the organization pass")
+        say(f"  ⚠ {len(top)} top-level features, so the organization pass is skipped")
     res.features = len(ws.store.headings())
     return res
 
@@ -159,12 +160,22 @@ def _land_file(ws: Workspace, res: BootstrapResult, ops: list[dict], frows: list
 
 
 def _land_org(ws: Workspace, res: BootstrapResult, ops: list[dict], batch: str) -> None:
-    """Theme nodes first, then the moves that put features under them."""
+    """Theme nodes first, then the moves that put features under them. A theme
+    titled like an existing feature is refused with its moves
+    (``bootstrap_org.txt`` rule 7), so those features stay at the top."""
     compiler = Compiler(ws.store)
+    taken = {title(ws.store, h.id).strip().casefold() for h in ws.store.headings()}
+    refused: set[str] = set()
     for o in sorted((o for o in ops if o.get("kind") in ("add_node", "move_node")),
                     key=lambda o: o["kind"] != "add_node"):
         if o["kind"] == "add_node":
+            if (o.get("title") or "").strip().casefold() in taken:
+                res.refused.append(("add_node", "a theme titled like a feature"))
+                refused.add(o.get("id") or "")
+                continue
             o = {**o, "parent_id": None, "bindings": []}       # themes sit at the top and own no code
+        elif o.get("parent_id") and o["parent_id"] in refused:
+            continue
         _land(ws, res, compiler, o, batch)
 
 
@@ -190,9 +201,14 @@ def _file_edges(frows: list, graph: Graph) -> list[dict]:
 
 
 def _ensure_file_coverage(ops: list[dict], frows: list, file: str) -> list[dict]:
-    """Every chunk of the file bound by exactly one node: bindings outside the
-    file or bound twice are dropped, and what no node bound goes to the node
-    with the most bindings (or to a new node named after the file)."""
+    """Every chunk of the file bound by exactly one node.
+
+    - A binding outside the file, or bound twice, is dropped.
+    - What no node bound goes to the node with the most bindings, or to a new
+      node named after the file.
+    - ``__module__`` goes to the first top-level node. A node left owning
+      nothing, with no children, is dropped: it described only imports
+      (``bootstrap_file.txt`` rule 3)."""
     keys = {(r.file, r.symbol_path) for r in frows}
     seen: set[tuple[str, str]] = set()
     for o in ops:
@@ -204,14 +220,21 @@ def _ensure_file_coverage(ops: list[dict], frows: list, file: str) -> list[dict]
                 kept.append(key[1])
         o["bindings"] = kept
     uncovered = [s for _, s in sorted(keys - seen)]
-    if not uncovered:
-        return ops
     adds = [o for o in ops if o.get("kind") == "add_node" and (o.get("title") or "").strip()]
-    if adds:
+    if uncovered and not adds:
+        return list(ops) + [{"kind": "add_node", "title": title_from_file(file), "description": "",
+                             "bindings": uncovered, "rationale": "no node for this file"}]
+    if uncovered:
         max(adds, key=lambda o: len(o["bindings"]))["bindings"].extend(uncovered)
-        return ops
-    return list(ops) + [{"kind": "add_node", "title": title_from_file(file), "description": "",
-                         "bindings": uncovered, "rationale": "no node for this file"}]
+    roots = [o for o in adds if not o.get("parent_id")]
+    holder = next((o for o in adds if any(s.endswith("::__module__") for s in o["bindings"])), None)
+    if roots and holder is not None and holder is not roots[0]:
+        module = next(s for s in holder["bindings"] if s.endswith("::__module__"))
+        holder["bindings"].remove(module)
+        roots[0]["bindings"].append(module)
+        if not holder["bindings"] and holder.get("id") not in {o.get("parent_id") for o in ops} - {None}:
+            ops = [o for o in ops if o is not holder]
+    return ops
 
 
 def _feature_coupling(store, graph: Graph) -> list[str]:

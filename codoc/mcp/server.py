@@ -19,7 +19,7 @@ mcp = FastMCP("codoc")
 def _need_dir() -> tuple[str | None, dict | None]:
     cd = find_codoc_dir(os.getcwd())
     if cd is None:
-        return None, {"ok": False, "error": "no .codoc directory found from cwd — run `codoc init` first"}
+        return None, {"ok": False, "error": "no .codoc directory found from cwd. Run `codoc init` first"}
     return cd, None
 
 

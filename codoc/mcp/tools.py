@@ -345,7 +345,7 @@ def realize_progress(codoc_dir: str, *, done: int, total: int, current: str = ""
     """Renew the realizing lease so the editor shows 'implementing n of m'."""
     shown = min(done + 1, total)
     write_realizing(codoc_dir, pending=max(0, total - done),
-                    detail=f"implementing {shown} of {total}" + (f" — {current}" if current else ""))
+                    detail=f"implementing {shown} of {total}" + (f": {current}" if current else ""))
     return {"ok": True}
 
 
@@ -384,7 +384,7 @@ def walkthrough(codoc_dir: str, *, question: str, answer: str = "", steps: list[
                              file=str(row.get("file") or ""), symbol=str(row.get("symbol") or ""),
                              line=int(line) if isinstance(line, (int, float)) else None))
     if not built:
-        return _err("no step named a live feature — read the tree first and pass real ids")
+        return _err("no step named a live feature. Read the tree first and pass real ids")
     walk = build_walkthrough(question, answer, built)
     write_walkthrough(codoc_dir, walk)
     out: dict = {"ok": True, "id": walk.id, "steps": len(walk.steps), "labels": [s.label for s in walk.steps]}

@@ -48,7 +48,7 @@ def _maintain_table(codoc_path: Path) -> None:
         import logging
 
         logging.getLogger(__name__).warning(
-            "codoc: LanceDB optimize failed at %s (%s) — index upkeep skipped "
+            "codoc: LanceDB optimize failed at %s (%s); index upkeep skipped "
             "this pass", codoc_path, exc)
 
 

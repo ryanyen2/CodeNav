@@ -198,12 +198,12 @@ def process_ready(root_dir: str, codoc_dir: str, *, base: str = "main", run=_run
             # A write outside scope is refused, recorded, and not retried: the same
             # unsafe directive would do the same thing again.
             record_pr(codoc_dir, req.handoff, "refused: out of scope")
-            printer(f"  ✗ hub realize {req.fid} wrote out of scope ({', '.join(res.out_of_scope)}) — no PR")
+            printer(f"  ✗ hub realize {req.fid} wrote out of scope ({', '.join(res.out_of_scope)}), so no PR")
         elif res.transient and res.built and tried + 1 >= MAX_ATTEMPTS:
             # The work is done and the remote will not take it. Stop paying for
             # attempts and say what stopped, with the branch still there.
             record_pr(codoc_dir, req.handoff, f"refused after {tried + 1} attempts: {res.reason}")
-            printer(f"  ✗ hub realize {req.fid}: {res.reason} — gave up after {tried + 1}; branch {res.branch} kept")
+            printer(f"  ✗ hub realize {req.fid}: {res.reason}. Gave up after {tried + 1}; branch {res.branch} kept")
         elif res.transient:
             # git or gh failed, or the sandbox could not run: the request was
             # never answered, so the next interval tries again rather than

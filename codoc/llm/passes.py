@@ -98,47 +98,43 @@ def format_brief(brief: dict | None) -> str:
     pass has to weigh it against the code in front of it, and a paragraph is
     easier to weigh than a nested object.
     """
+    none = "(no brief: describe this file on its own terms)"
     if not brief:
-        return "(no brief — describe this file on its own terms)"
+        return none
     out: list[str] = []
     if brief.get("purpose"):
-        out.append(f"**What this program is for.** {brief['purpose']}")
+        out.append(f"For: {brief['purpose']}")
     if brief.get("audience"):
-        out.append(f"**Who its output is for.** {brief['audience']}")
+        out.append(f"Output read by: {brief['audience']}")
     if brief.get("out_of_scope"):
-        items = "; ".join(str(x) for x in brief["out_of_scope"])
-        out.append(f"**Deliberately not in scope.** {items}")
-    if brief.get("vocabulary"):
-        lines = "\n".join(f"- **{v.get('term','')}** — {v.get('means','')}"
-                           for v in brief["vocabulary"] if v.get("term"))
-        if lines:
-            out.append(f"**Words this codebase uses in its own way**\n{lines}")
-    if brief.get("decisions"):
-        lines = []
-        for d in brief["decisions"]:
-            if not d.get("choice"):
-                continue
-            line = f"- {d['choice']}"
+        out.append("Not in scope: " + "; ".join(str(x) for x in brief["out_of_scope"]))
+    terms = [f"- {v['term']}: {v.get('means', '')}" for v in brief.get("vocabulary") or [] if v.get("term")]
+    if terms:
+        out.append("Terms with a meaning of their own here:\n" + "\n".join(terms))
+    def sentence(s) -> str:
+        return str(s).strip().rstrip(".") + "."
+
+    choices = []
+    for d in brief.get("decisions") or []:
+        if d.get("choice"):
+            line = f"- {sentence(d['choice'])}"
             if d.get("because"):
-                line += f" — because {d['because']}"
+                line += f" Why: {sentence(d['because'])}"
             if d.get("gave_up"):
-                line += f" (what that gives up: {d['gave_up']})"
-            lines.append(line)
-        if lines:
-            out.append("**Choices this project made where another could have chosen "
-                       "otherwise**\n" + "\n".join(lines))
-    if brief.get("ordering"):
-        lines = []
-        for o in brief["ordering"]:
-            if not o.get("before"):
-                continue
-            line = f"- {o['before']} runs before {o.get('then','')}"
+                line += f" Gives up: {sentence(d['gave_up'])}"
+            choices.append(line)
+    if choices:
+        out.append("Choices where another was possible:\n" + "\n".join(choices))
+    order = []
+    for o in brief.get("ordering") or []:
+        if o.get("before"):
+            line = f"- {sentence(str(o['before']) + ' runs before ' + str(o.get('then', '')))}"
             if o.get("otherwise"):
-                line += f", or {o['otherwise']}"
-            lines.append(line)
-        if lines:
-            out.append("**Order that matters**\n" + "\n".join(lines))
-    return "\n\n".join(out) or "(no brief — describe this file on its own terms)"
+                line += f" Otherwise: {sentence(o['otherwise'])}"
+            order.append(line)
+    if order:
+        out.append("Order that matters:\n" + "\n".join(order))
+    return "\n\n".join(out) or none
 
 
 def propose_file_features_raw(file, chunks, edges, existing_titles, *, repo_name="codebase", config=None,

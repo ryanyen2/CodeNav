@@ -143,7 +143,7 @@ def _article(raw: bytes) -> tuple[str, str]:
 
 def url_consult(c: dict) -> str:
     if c.get("status") == "ok" and c.get("excerpt"):
-        return f"Consult this reference ({c.get('url')} — \"{c.get('title') or c.get('url')}\"):\n{c['excerpt']}"
+        return f"Consult this reference ({c.get('url')}, \"{c.get('title') or c.get('url')}\"):\n{c['excerpt']}"
     return f"Consult: {c.get('url', '')}"
 
 

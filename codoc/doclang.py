@@ -187,66 +187,52 @@ class DocLanguage:
         return self.code == "en"
 
 
+# ``prose_rule`` is a list of ``- `` lines: the directive below appends them to its
+# own bullets, and translate.txt puts them under its Register heading.
 _CJK_PUNCT = (
-    "Use this language's own punctuation (。，；：、「」《》) rather than ASCII "
-    "punctuation. Put a space on each side of Latin text embedded in a sentence "
-    "(so `使用 parse_tree 解析`), which is the convention readers expect and "
-    "keeps identifiers selectable."
+    "- Use the language's own punctuation (。，；：、「」《》), not ASCII.\n"
+    "- Put a space on each side of Latin text inside a sentence: `使用 parse_tree 解析`."
 )
 
-# Register. With no instruction, a model asked for "documentation" in Chinese writes
-# 书面语, and the result is prose a native reader finds HARDER to read than the English
-# it came from: nominalized, 被-heavy, and shaped around English clause order.
-#
-# The prompt lists concrete DON'Ts because an abstract "write plainly" loses to the specific
-# constraints elsewhere in a prompt. Naming the exact constructions (the light verbs, the
-# calqued connective frames, the transplanted subordinate stacks) changes the output,
-# because each one is a thing the model can check its own sentence against.
+# Register. Asked for "documentation" in Chinese with nothing else, a model writes
+# 书面语: nominalized, 被-heavy, in English clause order, and harder to read than the
+# English it came from. Each line names one construction the model can check its own
+# sentence against; a general "write plainly" does not change the output.
 _ZH_HANS_REGISTER = (
-    " Register: plain explanatory 白话 — the voice of an engineer walking a colleague "
-    "through their own code — never formal 书面语, and never 翻译腔. Concretely: lead "
-    "with verbs rather than nominalizations (「先解析，再判断」, not "
-    "「进行解析之后作出判断」); drop the light verbs 进行/作出/实现 wherever a bare verb "
-    "says it; use 被 only when the doer is genuinely unknown (「规则会去掉页眉」, not "
-    "「页眉会被规则移除」); never calque English connective frames — 「通过…的方式」"
-    "「在…的情况下」「这就是…的原因」 read as translation artifacts, so state the thought "
-    "the way Chinese states it (「提交前想知道改动的影响，就用它看一眼」, not "
-    "「这就是你在提交之前查看规则变更会带来什么影响的方式」); and break a long English "
-    "sentence at its clause boundaries with 。 and ， instead of carrying its whole "
-    "subordinate structure into one Chinese sentence. English library and API terms "
-    "embedded in the prose stay in English."
+    "\n- Plain spoken 白话, as an engineer explains their own code to a colleague. Not 书面语, not 翻译腔."
+    "\n- Lead with the verb: 「先解析，再判断」, not 「进行解析之后作出判断」."
+    "\n- Drop 进行、作出、实现 where a bare verb says it."
+    "\n- Use 被 only when the doer is unknown: 「规则会去掉页眉」, not 「页眉会被规则移除」."
+    "\n- No English connective frames (「通过…的方式」「在…的情况下」「这就是…的原因」): "
+    "「提交前想知道改动的影响，就用它看一眼」, not 「这就是你在提交之前查看规则变更会带来什么影响的方式」."
+    "\n- Break a long English sentence at its clauses, with 。 and ，."
 )
 _ZH_HANT_REGISTER = (
-    " Register: plain explanatory 白話 — the voice of an engineer walking a colleague "
-    "through their own code — never formal 書面語, and never 翻譯腔. Concretely: lead "
-    "with verbs rather than nominalizations (「先解析，再判斷」, not "
-    "「進行解析之後作出判斷」); drop the light verbs 進行/作出/實現 wherever a bare verb "
-    "says it; use 被 only when the doer is genuinely unknown (「程式會略過空行」, not "
-    "「空行會被程式略過」); never calque English connective frames — 「通過…的方式」"
-    "「在…的情況下」「這就是…的原因」 read as translation artifacts, so state the thought "
-    "the way Chinese states it; and break a long English sentence at its clause "
-    "boundaries with 。 and ， instead of carrying its whole subordinate structure into "
-    "one sentence. English library and API terms embedded in the prose stay in English."
+    "\n- Plain spoken 白話, as an engineer explains their own code to a colleague. Not 書面語, not 翻譯腔."
+    "\n- Lead with the verb: 「先解析，再判斷」, not 「進行解析之後作出判斷」."
+    "\n- Drop 進行、作出、實現 where a bare verb says it."
+    "\n- Use 被 only when the doer is unknown: 「程式會略過空行」, not 「空行會被程式略過」."
+    "\n- No English connective frames (「透過…的方式」「在…的情況下」「這就是…的原因」)."
+    "\n- Break a long English sentence at its clauses, with 。 and ，."
 )
 
-# A title is where the calques show first: an English modifier stack ("transfer-aware
-# dedup") transliterates into a noun pile no one would say. Chinese titles are most
-# naturally verb-object.
+# Calques show first in titles: an English modifier stack ("transfer-aware dedup")
+# becomes a noun pile no one would say. Chinese titles are most naturally verb-object.
 _ZH_TITLE = (
-    "a 4–12 character phrase, most naturally verb-object (「读取银行对账单」) or a plain "
-    "noun phrase (「脚注识别」) — never an English-ordered stack of modifiers "
-    "(not 「转账感知去重」; say 「去重时排除转账」), no trailing punctuation"
+    "a phrase of 4 to 12 characters, verb-object (「读取银行对账单」) or a plain noun phrase "
+    "(「脚注识别」), with no trailing punctuation. Not an English-ordered stack of modifiers: "
+    "「去重时排除转账」, not 「转账感知去重」"
 )
 _ZH_HANT_TITLE = (
-    "a 4–12 character phrase, most naturally verb-object (「讀取銀行對帳單」) or a plain "
-    "noun phrase (「腳註識別」) — never an English-ordered stack of modifiers "
-    "(not 「轉帳感知去重」; say 「去重時排除轉帳」), no trailing punctuation"
+    "a phrase of 4 to 12 characters, verb-object (「讀取銀行對帳單」) or a plain noun phrase "
+    "(「腳註識別」), with no trailing punctuation. Not an English-ordered stack of modifiers: "
+    "「去重時排除轉帳」, not 「轉帳感知去重」"
 )
 
 _PROFILES: dict[str, DocLanguage] = {
     "en": DocLanguage(
         code="en", name="English", script=SPACED,
-        title_rule="a 3–6 word sentence-case noun phrase",
+        title_rule="a sentence-case noun phrase of 3 to 6 words",
         prose_rule="",
     ),
     "zh-hans": DocLanguage(
@@ -261,13 +247,13 @@ _PROFILES: dict[str, DocLanguage] = {
     ),
     "ja": DocLanguage(
         code="ja", name="Japanese / 日本語", script=LOGOGRAPHIC,
-        title_rule="a 4–16 character noun phrase (体言止め), no trailing punctuation",
-        prose_rule=_CJK_PUNCT + " Write descriptions in である/だ体, not です・ます体.",
+        title_rule="a noun phrase of 4 to 16 characters (体言止め), with no trailing punctuation",
+        prose_rule=_CJK_PUNCT + "\n- Write である/だ体, not です・ます体.",
     ),
     "ko": DocLanguage(
         code="ko", name="Korean / 한국어", script=HANGUL,
-        title_rule="a 2–5 word noun phrase, no trailing punctuation",
-        prose_rule="Write descriptions in the plain declarative (해라체/-다) form.",
+        title_rule="a noun phrase of 2 to 5 words, with no trailing punctuation",
+        prose_rule="- Write the plain declarative form (해라체, -다).",
     ),
 }
 
@@ -302,9 +288,9 @@ def _generic(code: str) -> DocLanguage:
     script = UNSPACED_ALPHA if key.split("-")[0] in ("th", "km", "lo", "my") else SPACED
     return DocLanguage(
         code=code, name=name, script=script,
-        title_rule=("a short noun phrase of about 3–6 words"
+        title_rule=("a noun phrase of 3 to 6 words"
                     if script is SPACED else
-                    "a short noun phrase, no trailing punctuation"),
+                    "a short noun phrase, with no trailing punctuation"),
         prose_rule="",
     )
 
@@ -508,68 +494,35 @@ def prompt_directive(lang: DocLanguage, *, for_code_agent: bool = False) -> str:
     """
     if lang.is_default:
         return ""
-
+    no_code = ("- Never translate code. Identifiers, symbol paths, file paths, type names, `codoc:` link "
+               "targets and anything in backticks stay exactly as in the code. A translated symbol names "
+               "a binding that does not exist.")
     if for_code_agent:
-        opening = (
-            f"The intent text below is written in **{lang.name}** — read it as the "
-            f"authoritative statement of what to build. Anything you write BACK to "
-            f"the feature tree (a `codoc_reflect` title, description, or rationale) "
-            f"must also be in {lang.name}."
-        )
+        lines = [
+            f"The intent below is in {lang.name}. What you write back to the tree (a `codoc_reflect` "
+            f"title, description or rationale) is in {lang.name} too.",
+            "",
+            no_code,
+            "- Source code is not translated either. Identifiers, comments and docstrings follow the "
+            "language the neighbouring files use.",
+        ]
     else:
-        opening = (
-            f"This tree is authored in **{lang.name}**. The instructions and examples "
-            f"in this prompt are in English for your benefit only — never copy their "
-            f"language."
-        )
-
-    bullets = [
-        "**Never translate code.** Identifiers, symbol paths, file paths, type "
-        "names, `codoc:` link targets, and anything inside backticks stay EXACTLY "
-        "as they appear in the code, in their original language. An inline "
-        "citation must be copied verbatim — a translated symbol names a binding "
-        "that does not exist.",
-    ]
-    if for_code_agent:
-        bullets.append(
-            "**The source code is not translated either.** Write identifiers, "
-            "comments, and docstrings in whatever language the surrounding files "
-            "already use — read a neighbouring file and match it. The tree's "
-            "language says nothing about the code's."
-        )
-    else:
-        bullets += [
-            f"**Prose you originate goes in {lang.name}** — a new node's title and "
-            f"description, and any rationale.",
-            "**Prose you EDIT stays in the language it is already written in.** When "
-            "you amend a description, match the language of the text you are "
-            "amending, even where that is not the tree's language: an author who "
-            "wrote that node in another language chose to, and an amend that "
-            "translates it is an unrequested rewrite of their words. Judge from the "
-            "existing `description` in this prompt, not from this instruction.",
-            "**Mixing is normal, not an error.** Technical terms, library and API "
-            "names, and established jargon belong in whatever form readers of this "
-            f"code actually use — usually the original English. {lang.name} prose "
-            "carrying English terms is correct writing; do not translate the terms "
-            "to make a description look monolingual, and do not switch the whole "
-            "sentence to English because it contains one.",
-            f"A title is {lang.title_rule} when you are writing a new one.",
-            "Field names, enum values, and every other part of the JSON envelope "
-            "stay in English. Only the human-readable values change language.",
+        lines = [
+            f"Write in {lang.name}. This prompt's instructions and examples are in English; do not "
+            "copy their language.",
+            "",
+            no_code,
+            f"- New prose is in {lang.name}: a new node's title and description, and a rationale.",
+            f"- An amend keeps the language of the text it changes, even when that is not {lang.name}. "
+            "Read it from the existing description.",
+            "- Technical terms, library and API names stay in the form readers of this code use, usually "
+            "English. Do not translate them, and do not switch a sentence to English because it holds one.",
+            f"- A new title is {lang.title_rule}.",
+            "- JSON field names and enum values stay in English.",
         ]
     if lang.prose_rule:
-        bullets.append(lang.prose_rule)
+        lines.append(lang.prose_rule)
     if not for_code_agent:
-        bullets.append(
-            "Do not include a double-quote character (`\"`) in any value — these "
-            "are JSON strings. Where the language wants quotation marks, use the "
-            "language's own (「」, 《》, «», „“), which are safe."
-        )
-
-    return "\n".join([
-        "## Authoring language (overrides any language shown in examples)",
-        "",
-        opening,
-        "",
-        *(f"- {b}" for b in bullets),
-    ])
+        lines.append("- No double-quote character (`\"`) in a value. Where the language wants quotation "
+                     "marks, use its own (「」, 《》, «», „“).")
+    return "\n".join(["## Authoring language", "", *lines])

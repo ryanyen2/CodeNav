@@ -58,7 +58,7 @@ A block you do not list is unchanged. Never move text from one id to another.
    - Something new to say: add one block (usually one bullet) where it belongs.
 7. A new `title` is 3 to 6 words, sentence case, a noun phrase ("Index snapshot diff"). A new `description`, and every block you write, follows the guide below. Match the level of detail of the blocks around the one you edit.
 8. Say what the code does now. When a value moved into a settings file, read it from the shipped file and state it. "The limit is configurable" hides the fact a reader came for.
-9. A reason needs a source. The sources here are comments and docstrings in the chunk `source` you are shown. State a reason one of them gives. Otherwise state what the code does and stop.
+9. A reason needs a source. The sources here are comments and docstrings in the chunk `source` you are shown. State the reason one of them gives, without naming where it came from. Otherwise state what the code does and stop.
 
 ## Output
 

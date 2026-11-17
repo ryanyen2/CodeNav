@@ -13,7 +13,7 @@ Return a small set of features that says what this file is for.
    - Two classes that implement the same interface independently (two tokenizer backends) are two features.
 2. A class and its methods are one feature. Add a child feature only for a group of methods that is a separable concern.
 3. Every chunk listed must be bound by exactly one feature you return.
-   - `<file>::__module__` goes to the file's main feature, never to a feature of its own.
+   - `<file>::__module__` (imports, module setup) goes to the first feature you return, never to a feature of its own. Never describe imports.
    - A module-level constant goes to the feature that uses it most.
 4. Do not add a feature whose title paraphrases one in the list of existing titles below.
 
@@ -43,7 +43,7 @@ Three sources count, and nothing else:
 2. comments and docstrings in the chunks you are shown;
 3. the commit messages below, where one states a reason.
 
-- A source states a reason: write it after the fact it explains, as the source states it.
+- A source states a reason: write the reason itself after the fact it explains. The reader sees the code, not the source, so never name it.
 - No source states one: write what the code does and stop.
 - The code chose between two workable options and a source says which and why: that goes directly after the opening sentence.
 

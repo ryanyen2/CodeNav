@@ -2,9 +2,9 @@
 from codoc.calculus.derive import description, title
 from codoc.calculus.doc import fold_tree
 from codoc.index.graph import Graph
-from codoc.loops.bootstrap import bootstrap
+from codoc.loops.bootstrap import _ensure_file_coverage, bootstrap
 from codoc.workspace import Workspace
-from tests.helpers import ROWS, fake_file, fake_org
+from tests.helpers import ROWS, fake_file, fake_org, row
 
 
 def test_bootstrap_builds_a_tree_with_coverage_and_themes(tmp_path):
@@ -26,3 +26,34 @@ def test_bootstrap_builds_a_tree_with_coverage_and_themes(tmp_path):
     assert owner["store/db.py::_helper"] == owner["store/db.py::open"]
     # Every segment is the loop's.
     assert all(s.actor == "loop" for b in ws.store.ordered() for s in b.text().segs)
+
+
+def test_the_module_chunk_joins_the_files_first_feature(tmp_path):
+    """A node the model made for ``__module__`` alone is dropped and the chunk
+    goes to the first top-level node; a parent that owns only it is kept."""
+    f = "eval.py"
+    rows = [row(f, f"{f}::__module__"), row(f, f"{f}::run"), row(f, f"{f}::score")]
+    ops = [{"id": "n1", "kind": "add_node", "title": "Running", "bindings": [f"{f}::run"]},
+           {"id": "n2", "kind": "add_node", "parent_id": "n1", "title": "Scoring", "bindings": [f"{f}::score"]},
+           {"id": "n3", "kind": "add_node", "title": "Module imports", "bindings": [f"{f}::__module__"]}]
+    out = _ensure_file_coverage(ops, rows, f)
+    assert [o["title"] for o in out] == ["Running", "Scoring"]
+    assert out[0]["bindings"] == [f"{f}::run", f"{f}::__module__"]
+
+    parent = [{"id": "n1", "kind": "add_node", "title": "Optimizer", "bindings": [f"{f}::__module__"]},
+              {"id": "n2", "kind": "add_node", "parent_id": "n1", "title": "Steps", "bindings": [f"{f}::run", f"{f}::score"]}]
+    assert [o["bindings"] for o in _ensure_file_coverage(parent, rows, f)] == [
+        [f"{f}::__module__"], [f"{f}::run", f"{f}::score"]]
+
+
+def test_a_theme_titled_like_a_feature_is_dropped_with_its_moves(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+
+    def org(features, edges, **kw):
+        client = next(f["id"] for f in features if f["title"] == "HTTP client")
+        return [{"id": "t1", "kind": "add_node", "title": "http client", "description": "Same name."},
+                {"kind": "move_node", "feature_id": client, "parent_id": "t1"}]
+
+    bootstrap(ws, ROWS, Graph(), propose_file=fake_file, propose_org=org,
+              propose_the_brief=lambda *a, **k: {}, concurrency=1)
+    assert [title(ws.store, r.id) for r in fold_tree(ws.store.headings())] == ["HTTP client", "Store"]

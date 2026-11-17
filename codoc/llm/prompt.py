@@ -105,7 +105,7 @@ def titles_outline(all_titles: list[dict]) -> str:
         # so this line is the only place a reader (the tree-update LLM or an
         # agent reading codoc_context) learns the node exists and is waiting
         # for exactly this code rather than needing a fresh node.
-        mark = "  (planned — attach its code, don't duplicate)" if t.get("planned") else ""
+        mark = "  (planned: attach its code, do not add a second node)" if t.get("planned") else ""
         return f"{'  ' * depth}- [{t.get('id')}] {t.get('title', '')}{mark}"
 
     def _emit(parent: str | None, depth: int, seen: set[str]) -> None:

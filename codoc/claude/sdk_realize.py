@@ -37,7 +37,7 @@ _READ_TOOLS = frozenset({"Read"})
 # Tools that are pure orchestration noise in a compact readout.
 _QUIET_TOOLS = frozenset({"TodoWrite", "Task", "Glob", "Grep", "AskUserQuestion"})
 
-_DETAIL = "implementing (sdk) — codoc realize"
+_DETAIL = "implementing (sdk): codoc realize"
 
 # How often tool activity renews the realizing lease. Well under the lease
 # itself, so one long directive never lets it lapse mid-pass, and coarse enough
@@ -191,7 +191,7 @@ class RealizeMonitor:
     def summary(self) -> str:
         elapsed = int(time.monotonic() - self._started)
         if self.errored:
-            tail = f" — {self.result_text}" if self.result_text else ""
+            tail = f": {self.result_text}" if self.result_text else ""
             return f"  ✗ failed · {elapsed}s{tail}"
         return (f"  ✓ done · {len(self.writes)} file(s) written · "
                 f"{self.reflections} reflection(s) · {elapsed}s")
@@ -274,7 +274,7 @@ def run_sdk_realize(root_dir: str, codoc_dir: str | None = None, *,
         return 0
     if not sdk_available():
         printer("codoc realize · claude-agent-sdk not installed "
-                "(pip install 'codoc[sdk]') — falling back is the caller's call")
+                "(pip install 'codoc[sdk]'). The caller decides whether to fall back.")
         return 2
     return asyncio.run(_run(root_dir, codoc, permission_mode=permission_mode,
                             printer=printer))

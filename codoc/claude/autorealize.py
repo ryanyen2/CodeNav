@@ -70,7 +70,7 @@ def spawn_realize(root_dir: str, codoc_dir: str, *, engine: str = "auto") -> sub
             cwd=root_dir, env=env,
             stdin=subprocess.DEVNULL,
         )
-        detail = "implementing (sdk) — codoc watch --auto-realize"
+        detail = "implementing (sdk): codoc watch --auto-realize"
     else:
         claude = find_claude()
         if claude is None:
@@ -82,7 +82,7 @@ def spawn_realize(root_dir: str, codoc_dir: str, *, engine: str = "auto") -> sub
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
         )
-        detail = "implementing (headless) — codoc watch --auto-realize"
+        detail = "implementing (headless): codoc watch --auto-realize"
     try:
         write_realizing(codoc_dir, detail=detail, owner=owner)
     except Exception:  # noqa: BLE001 (status is advisory)

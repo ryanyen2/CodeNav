@@ -204,10 +204,10 @@ def write_status(codoc_dir: str | Path, store: Store, *, phases: dict[str, str] 
         state, pending = "realizing", len(q)
     elif q:
         state, pending = "queued", len(q)
-        detail = detail or f"{len(q)} change(s) ready to implement — run /codoc:sync or codoc realize"
+        detail = detail or f"{len(q)} change(s) ready to implement. Run /codoc:sync or codoc realize"
     elif edited:
         state, pending = "edited", edited
-        detail = detail or f"{edited} feature(s) with unsent edits — hand off to build"
+        detail = detail or f"{edited} feature(s) with unsent edits. Hand off to build"
     elif proposals:
         state, pending = "proposed", proposals
         detail = detail or f"{proposals} proposal(s) awaiting your verdict"

@@ -37,6 +37,7 @@ modules it passes.
 4. A feature that appears early in several paths is an entry point. Put its theme near the top.
 5. Package identity, version constants and build configuration go last.
 6. A feature that stands alone stays at the top level. Do not force it into a theme.
+7. A theme's title names what its features do together. It is never the title of a feature under it.
 
 ## Fields
 

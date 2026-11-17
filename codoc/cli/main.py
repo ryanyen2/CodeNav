@@ -39,7 +39,7 @@ def _require(root: str) -> Path:
     # appears with the first op, and a repository with no indexable file is
     # bootstrapped without writing one.
     if not cd.is_dir():
-        typer.echo(f"No codoc workspace at {cd} — run `codoc init` first.", err=True)
+        typer.echo(f"No codoc workspace at {cd}. Run `codoc init` first.", err=True)
         raise typer.Exit(1)
     return cd
 
@@ -73,7 +73,7 @@ def init(root: str = ROOT,
     cd = _codoc(root)
     populated = (cd / LOG_DIR).is_dir() and any((cd / LOG_DIR).glob("*.jsonl"))
     if populated and daemon_running(cd):
-        typer.echo("A codoc daemon is watching this repo — stop it before `codoc init`.", err=True)
+        typer.echo("A codoc daemon is watching this repo. Stop it before `codoc init`.", err=True)
         raise typer.Exit(1)
     if populated and not force:
         typer.echo("A codoc workspace already exists here. Re-run with --force to rebuild, or `codoc watch`.", err=True)
@@ -419,12 +419,12 @@ def realize(root: str = ROOT, engine: str = typer.Option("auto", "--engine", hel
     from codoc.claude.sdk_realize import resolve_engine, run_sdk_realize, sdk_available
     cd = _require(root)
     if not (cd / REALIZE).exists():
-        typer.echo("Nothing queued — edit the tree and hand off (⌘S in the editor, or `codoc handoff`).")
+        typer.echo("Nothing queued. Edit the tree and hand off (⌘S in the editor, or `codoc handoff`).")
         raise typer.Exit(0)
     engine = resolve_engine(engine)
     if engine == "sdk":
         if not sdk_available():
-            typer.echo("claude-agent-sdk is not installed — pip install 'codoc[sdk]' or --engine cli", err=True)
+            typer.echo("claude-agent-sdk is not installed. Run pip install 'codoc[sdk]' or --engine cli", err=True)
             raise typer.Exit(2)
         raise typer.Exit(run_sdk_realize(root, str(cd), permission_mode=permission_mode, printer=typer.echo))
     claude = find_claude()

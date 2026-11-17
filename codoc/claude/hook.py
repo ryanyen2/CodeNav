@@ -424,7 +424,7 @@ def _nudge_if_queue_grew(codoc_dir: str) -> None:
     data["realize_seen"] = n
     _write_activity(codoc_dir, data)
     msg = (
-        f"codoc: the realize queue grew — {n} change(s) now queued in "
+        f"codoc: the realize queue grew: {n} change(s) now queued in "
         ".codoc/realize.md (the user accepted or added tree edits while you "
         "work). Read the file and implement each item, then codoc_reflect with "
         "caused_by=<its d-id>; the citation marks it done. Never delete the "
@@ -465,7 +465,7 @@ def handle_user_prompt(payload: dict[str, Any], codoc_dir: str) -> None:
     count = f"{n} change(s)" if n else "changes"
     msg = (
         f"codoc: {count} from accepted tree edits are queued in .codoc/realize.md. "
-        "Run /codoc:sync to implement them — read the file, apply each directive "
+        "Run /codoc:sync to implement them: read the file, apply each directive "
         "(respecting its `Edit only:` scope and never touching .codoc/), and call "
         "codoc_reflect with caused_by=<the item's d-id> to bind the code. That "
         "citation marks the item done; never delete the queue files yourself."
