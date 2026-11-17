@@ -9,7 +9,7 @@ from codoc.calculus.derive import phase
 from codoc.calculus.doc import PARAGRAPH
 from codoc.calculus.export import export_markdown
 from codoc.calculus.ids import START
-from codoc.calculus.text import BOLD, LINK
+from codoc.calculus.text import BOLD, LINK, SUGGEST_DEL
 from codoc.daemon.daemon import Daemon
 from codoc.index.changes import ChangeSet
 from codoc.loops.realize import directive
@@ -17,7 +17,7 @@ from codoc.workspace import Workspace
 from codoc.workspace import log as L
 from codoc.workspace.clock import Clock, fmt
 from codoc.workspace.log import Submission
-from tests.helpers import H, T, seed, seed_loop, ws_paragraph
+from tests.helpers import H, T, refs, seed, seed_loop, ws_paragraph
 
 
 def test_session_log_is_written_validated_and_rebuilt(tmp_path):
@@ -418,3 +418,68 @@ def test_a_read_only_command_leaves_no_session_file_behind(tmp_path):
     for _ in range(3):
         w = Workspace(cd); w.close()
     assert len(L.list_sessions(cd)) == n, "a Workspace that wrote no op left a log file"
+
+
+def test_an_amend_ack_reports_a_refused_rewrite_even_when_another_landed(tmp_path):
+    """One rewrite lands on the trunk and the other is refused because an open
+    plan's words are in its block. The ack names the refusal."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed_loop(ws)
+    ws_paragraph(ws, "p2", "Logs each retry.", after="p1", actor="loop")
+    pid = ws.open_plan(actor="agent:claude-code", kind="edit", target="p1")
+    ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                "payload": {"after": list(ws.store.blocks["p1"].text().ref_at(5)), "text": " X"}}],
+              actor="agent:claude-code", plan=pid)
+    L.submit(cd, "mcp", [Submission(cid="a1", kind="amend", target={"fid": "h1"}, payload={
+        "fid": "h1", "rewrites": [{"bid": "p1", "new_md": "Retries twice."},
+                                  {"bid": "p2", "new_md": "Logs each retry once.", "base_text": "Logs each retry."}]})])
+    ws.drain_inbox()
+    ack = json.loads((L.inbox_dir(cd) / "mcp.ack.jsonl").read_text().splitlines()[-1])
+    assert ack["status"] == "trunk" and ack["conflict"] == "p1: open_plan", ack
+    ws.close()
+
+
+def test_a_suggesters_strike_covers_what_it_names_not_the_chars_it_lists(tmp_path):
+    """A one-character strike that lists every character of the paragraph in
+    `attrs.chars` strikes that one character when accepted."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    r = refs(ws, "p1")
+    every = ",".join(f"{op}:{k}" for op, k in r)
+    L.submit(cd, "hub-mallory", [Submission(cid="s1", kind=K.TEXT_MARK, target={"bid": "p1", "path": "text"}, payload={
+        "kind": SUGGEST_DEL, "attrs": {"chars": every}, "start": list(r[-1]), "end": list(r[-1]), "on": True})])
+    pid = ws.drain_inbox()[-1].plan
+    assert ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor=H)[0].conflict is None
+    assert T(ws.store, "p1") == "Retries once"
+    ws.close()
+
+
+def test_a_mark_naming_an_op_that_placed_no_mark_is_the_senders(tmp_path):
+    """A restore keeps the placer it names only when that op is a mark the
+    named actor placed at that clock. Naming the owner's insert does not let
+    the agent's bold read as the owner's."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    r = refs(ws, "p1")
+    owners = ws.store.by_id[r[0][0]]
+    L.submit(cd, "mcp", [Submission(cid="m1", kind=K.TEXT_MARK, target={"bid": "p1", "path": "text"}, payload={
+        "kind": BOLD, "start": list(r[0]), "end": list(r[6]), "on": True,
+        "actor": H, "op": owners.id, "at": owners.at})])
+    ws.drain_inbox()
+    assert [(m.kind, m.actor) for m in ws.store.blocks["p1"].text().marks] == [(BOLD, "agent:claude-code")]
+    ws.close()
+
+
+def test_a_machine_ingest_on_the_trunk_never_deletes_an_open_plans_words(tmp_path):
+    """A writer that read the live text and was shown it without the plan's
+    words would delete them on the trunk, so the write is refused."""
+    ws = Workspace(tmp_path / ".codoc"); seed_loop(ws)
+    pid = ws.open_plan(actor="agent:claude-code", kind="edit", target="p1")
+    anchor = list(ws.store.blocks["p1"].text().ref_at(len("Retries once") - 1))
+    ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                "payload": {"after": anchor, "text": " with backoff"}}], actor="agent:claude-code", plan=pid)
+    res, ops = ws.ingest("p1", "text", base_text=T(ws.store, "p1"), new_md="Retries once before giving up!",
+                         actor="loop")
+    assert res.refused == "open_plan" and ops == []
+    assert T(ws.store, "p1") == "Retries once with backoff before giving up."
+    ws.close()

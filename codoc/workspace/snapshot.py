@@ -142,7 +142,8 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
         # Every plan in a folded prefix is decided: an open one is work in
         # flight, so `settled_prefix` stopped before its first op.
         emit(K.PLAN_OPEN, {"pid": p.id}, {"kind": p.kind, "target": p.target, "note": p.note,
-                                          "ops": list(p.ops), "opened_by": p.opened_by}, actor=p.actor)
+                                          "ops": list(p.ops), "opened_by": p.opened_by,
+                                          **({"build": True} if p.build else {})}, actor=p.actor)
         # The person who answered, not the importer: after the fold the log
         # that said so is archived, and a verdict nobody signed is a verdict
         # the History card cannot explain.
@@ -154,7 +155,7 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
         if w.handoff:
             asked = store.by_id.get(w.handoffs[-1]) if w.handoffs else None
             payload = {"covers": w.handoff}
-            for k in ("asked", "base_sha", "delete_code"):
+            for k in ("asked", "delete_code"):
                 if asked is not None and asked.payload.get(k):
                     payload[k] = asked.payload[k]
             emit(K.FEATURE_HANDOFF, {"fid": fid}, payload,

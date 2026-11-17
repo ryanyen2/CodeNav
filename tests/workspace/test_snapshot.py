@@ -1,7 +1,7 @@
 """Snapshots: a fold keeps every view of the document, and work in flight
 stays in the log."""
 from codoc.calculus import ops as K
-from codoc.calculus.derive import phase
+from codoc.calculus.derive import accept_handoffs, phase
 from codoc.calculus.doc import HEADING, PARAGRAPH
 from codoc.calculus.ids import START
 from codoc.calculus.text import BOLD, SUGGEST_DEL
@@ -52,6 +52,22 @@ def test_snapshot_keeps_an_accepted_delete_plan(tmp_path):
     assert not ws2.store.blocks["h2"].live
     assert ws2.store.state_fingerprint() == fp
     assert not [p for p in ws2.problems], ws2.problems
+
+
+def test_a_plan_that_asks_for_a_build_still_does_after_a_fold(tmp_path):
+    """The fold archives the plan's opening op; accepting the plan again (after
+    undoing the verdict) must still hand its feature off."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    ws.submit([{"kind": K.PLAN_OPEN, "target": {"pid": "pb"},
+                "payload": {"kind": "edit", "target": "p1", "build": True}}], actor="agent:claude-code")
+    ins(ws, "p1", list(refs(ws, "p1")[-1]), " Proposed.", actor="agent:claude-code", plan="pb")
+    ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": "pb"}, "payload": {}}], actor=H)
+    ws.close()
+    ws = Workspace(cd); write_snapshot(cd, ws.store, ws.clock); ws.close()
+    ws2 = Workspace(cd, readonly=True)
+    assert ws2.store.plans["pb"].build
+    assert accept_handoffs(ws2.store, ws2.store.plans["pb"]) == ["h1"]
 
 
 def test_a_verdict_after_a_snapshot_still_acts_on_the_plans_archived_ops(tmp_path):

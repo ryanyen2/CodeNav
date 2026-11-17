@@ -336,3 +336,26 @@ def test_merged_link_keeps_the_existing_placer_even_when_it_also_displaces():
     apply_mark(m, s, "p1", ins, 4, 14, LINK, {"href": "https://u"}, actor="loop")
     links = [mk for mk in s.blocks["p1"].text().marks if mk.kind == LINK]
     assert [(mk.actor, mk.op) for mk in links] == [("human:a", human.id)]
+
+
+def test_a_deleted_child_features_words_were_not_removed_from_its_parent():
+    """Deleting a child feature kills its heading and its paragraph in one op.
+    The paragraph was the child's, so the parent's description lost nothing;
+    a paragraph of the parent's own that is deleted is still reported."""
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Top")
+    paragraph(m, s, "p1", "body one", after="h1")
+    heading(m, s, "c1", "Child", level=2, after="p1")
+    paragraph(m, s, "c1p", "Child words.", after="c1")
+    assert apply(s, m.op(K.BLOCK_DELETE, {"bid": "c1"}, {"ids": ["c1", "c1p"]})).conflict is None
+    assert s.removed_body("h1") == []
+    apply(s, m.op(K.BLOCK_DELETE, {"bid": "p1"}, {}))
+    assert [b.id for b in s.removed_body("h1")] == ["p1"]
+
+
+def test_a_handoff_records_no_commit_and_one_that_named_a_commit_still_applies():
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Top")
+    op = apply(s, m.op(K.FEATURE_HANDOFF, {"fid": "h1"}, {"base_sha": "abc123", "asked": "x"}))
+    assert op.conflict is None and "base_sha" not in op.payload
+    assert s.watermarks("h1").handoffs == [op.id]

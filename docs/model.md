@@ -282,16 +282,22 @@ Target `{bid, path}`; `path` defaults to `text`.
 
 | op | target | wire payload | canonical payload adds | inverse |
 |---|---|---|---|---|
-| `block.add` | `bid` | `kind`, `level?`, `after: BlockId \| START`, `content` | `level`, `rank` | `block.delete {ids: [bid]}` |
+| `block.add` | `bid` | `kind`, `level?`, `after: BlockId \| START` or `under: BlockId \| START`, `content` | `after`, `level`, `rank` | `block.delete {ids: [bid]}` |
 | `block.set` | `bid`, `path` | `value`; with `path = kind`, optional `level` | `prev`; for `kind` also `prev_level`, `level` | `block.set` to the previous value |
 | `block.split` | `bid`, `path` | `at: CharRef \| START`, `new: BlockId` | `new_first`, `rank`, `bid`, `path` | `block.merge {into: bid, bid: new}`, with `rejoin` for a heading |
 | `block.merge` | `into`, `bid`, `path` | none | `at` (the seam), `order`, `rank` of the dead block | `block.split {at, new: bid, rank, new_takes}` |
-| `block.move` | `bid` | `after: BlockId \| START`, `level_delta` | `range`, `prev: [[id, rank, level]]` | `block.move {restore: prev}` |
+| `block.move` | `bid` | `after: BlockId \| START` and `level_delta`, or `under: BlockId \| START` | `after`, `level_delta`, `range`, `prev: [[id, rank, level]]` | `block.move {restore: prev}` |
 | `block.delete` | `bid` | none, or `ids` | `ids`, `killed`, `detached` | `block.restore {ids: killed, by: this op, bindings: detached}` |
 | `block.restore` | | `ids`, `by?`, `bindings?` | `revived` | `block.delete {ids: revived}` |
 
 - **add.** Text fields start empty. `after` may name a dead block. `level` is clamped to
   1..6 for a heading or list item (1 when not given) and is 0 for any other kind.
+- **`under`** (add and move, headings only). The heading goes after the last live block
+  of the parent's range, one level deeper; `START` is the end of the document at level 1.
+  It is resolved when the op applies, against the tree as it is then, and the record
+  keeps the resolved `after` and level, so replay does not resolve it again. A machine
+  that writes several nodes in one reply names parents this way, so its edits land the
+  same compiled together or one by one. The editor sends `after`.
 - **set `kind`.** Only between heading and the prose kinds (`paragraph`, `bullet`,
   `numbered`), which share one inline `text` field. A source or plugin block keeps its
   kind for life. `bullet` to `numbered` and back keeps the level. Any other conversion
@@ -342,7 +348,7 @@ op's clock. `bind.attach` does not: a relocation is not drift.
 | `plan.accept` | `pid` | `subset: OpId[]?` | `accepted`, `rejected`, `deleted_blocks`, and everything it changed | `plan.reopen` |
 | `plan.reject` | `pid` | none | everything it changed | `plan.reopen` |
 | `plan.reopen` | `pid` | the verdict's record | `undid: {moved, sets}` | the verdict it undid |
-| `feature.handoff` | `fid` | `covers?`, `base_sha`, `asked`, `delete_code` | `covers` | `feature.handoff {restore: previous frontier, handoff: this op}` |
+| `feature.handoff` | `fid` | `covers?`, `asked`, `delete_code` | `covers` | `feature.handoff {restore: previous frontier, handoff: this op}` |
 | `feature.realized` | `fid` | `covers?`, `sha`, `files`, `summary` | `covers` | none |
 
 - A plan tag may ride on `text.insert`, `text.delete`, `text.restore`, `text.mark`,
@@ -377,7 +383,7 @@ Codes are stable identifiers. A conflicted op changes nothing.
 | `plan_not_open` | tagged ops, verdicts | The plan is missing or decided. |
 | `not_plannable` | tagged ops | This kind may not ride in a plan. |
 | `missing:<key>` | any op | A target or payload entry the handler needs is absent. |
-| `malformed` | any op | A value has the wrong type. |
+| `malformed` | any op | A value has the wrong type, or `under` places a block that is not a heading. |
 | `bad_anchor` | text ops, split | Not a character reference, or `START` or `END` where a character is needed. |
 | `unknown_anchor` | text ops, split | No field holds the character, or the range ends are reversed. |
 | `range_spans_blocks` | delete, mark | The two ends are in different fields. The client reads again and sends one op per block. |
@@ -397,7 +403,7 @@ Codes are stable identifiers. A conflicted op changes nothing.
 | `no_level` | set level | The kind has no level. |
 | `merge_heading` | merge | A heading would die, or prose would merge into a heading. |
 | `not_adjacent` | merge | The two blocks are not neighbours in the flow. |
-| `bad_target` | move | The anchor is inside the moved range. |
+| `bad_target` | move | The anchor, or the `under` parent, is inside the moved range. |
 | `bad_rank` | add, split, move | The bounds of a rank request are out of order. |
 | `no_feature` | attach, feature ops, delete plans | The target is not a heading. |
 | `not_bound` | detach, refresh | The feature does not own the symbol. |
@@ -560,7 +566,7 @@ rejected plan's words are dead.
 | `history_window(n)` | The timeline: the applied ops among the last `n` (200 as published). Per op: the `text` of each block it touched as it read right after the op, its recorded inverse, the blocks it took off or put on the page, and the ranks, kinds and levels it displaced; plus what was true entering the window. Computed by un-applying the window backwards on clones of the live fields, by character identity. |
 | `dead_cites(known)` | `cite` marks whose `(file, symbol)` is not in the index. |
 | `export` | `block_spec` of every live block in `rejected` mode, written with heading ids. |
-| `projection` | `{store, head, frontier, blocks, phases, plans, watermarks, bindings, claims}`. `store` names the store instance and changes on every rebuild; `head` is comparable only under one `store`. Each plan carries `handoff`: the features accepting it hands off (`accept_handoffs`: a coding agent's plan that is not a delete plan). A block entry is `{id, kind, level, rank, head, fields}`. A Text field is `{text, runs, spans, suggest_del}` in `live` mode, with unmerged runs and the document's own marks. `plans` is `open_plans()`. `claims` is `ink`, `ground` and `plan_claims` per feature. |
+| `projection` | `{store, head, frontier, blocks, phases, plans, watermarks, bindings, claims}`. `store` names the store instance and changes on every rebuild; `head` is comparable only under one `store`. Each plan carries `handoff`: the features accepting it hands off (`accept_handoffs`: a plan opened with `build`, which `codoc_propose` sets, that is not a delete plan). A block entry is `{id, kind, level, rank, head, fields}`. A Text field is `{text, runs, spans, suggest_del}` in `live` mode, with unmerged runs and the document's own marks. `plans` is `open_plans()`. `claims` is `ink`, `ground` and `plan_claims` per feature. |
 | `state_fingerprint` | Blocks with text and marks, bindings, plans, watermarks. Equal fingerprints mean the same document. |
 
 ### Phase

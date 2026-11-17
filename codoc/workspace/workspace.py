@@ -164,10 +164,15 @@ class Workspace:
 
     # ── ingest ─────────────────────────────────────────────────────────────
     def plan_ingest(self, bid: str, path: str, *, base_text: str, new_md: str, actor: str,
-                    trunk: bool = True) -> Ingest:
+                    trunk: bool = True, plan: str | None = None) -> Ingest:
         """The boundary diff, computed and not applied: what ``new_md`` would do
         to the field. ``trunk`` says the ops will land on the trunk, where a
-        machine may not drop a person's mark; under a plan the person decides."""
+        machine may not drop a person's mark; under a plan the person decides.
+
+        A field holding words that an open plan other than ``plan`` inserted
+        is refused (``open_plan``). A writer is shown the text without them
+        (the ``rejected`` read mode), so its diff would delete them. A plan's
+        marks leave the shown text as it is and do not count."""
         block = self.store.blocks.get(bid)
         if block is None:
             return Ingest(refused="no_block")
@@ -175,7 +180,10 @@ class Workspace:
             return Ingest(refused="dead_block")
         if not is_text_field(block.kind, path):
             return Ingest(refused="not_text")
-        return ingest(block.text(path), bid=bid, path=path, base_text=base_text, new_md=new_md, actor=actor,
+        text = block.text(path)
+        if any(s.live and s.plan != plan and s.plan in self.store.open_plans for s in text.segs):
+            return Ingest(refused="open_plan")
+        return ingest(text, bid=bid, path=path, base_text=base_text, new_md=new_md, actor=actor,
                       trunk=trunk, multiline=not is_one_line(block.kind), raw=is_source_field(block.kind, path))
 
     def commit_ingest(self, res: Ingest, *, actor: str, plan: str | None = None, batch: str | None = None,
@@ -211,13 +219,15 @@ class Workspace:
         refresh. Gating it would turn every large code change into a proposal
         to redraw the diagram, which is when the diagram most needs to follow
         the code."""
-        res = self.plan_ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, trunk=plan is None)
+        res = self.plan_ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, trunk=plan is None,
+                               plan=plan)
         opened = None
         if plan is None and not derived and (why := self.must_propose(bid, actor, res)):
             plan = opened = self._plan_for(actor, batch or bid, bid, why)
             if plan is not None:
                 batch = batch or plan
-                res = self.plan_ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, trunk=False)
+                res = self.plan_ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, trunk=False,
+                                       plan=plan)
         if res.refused:
             self._withdraw_if_empty(opened)
             return res, []
@@ -227,7 +237,8 @@ class Workspace:
         return res, ops
 
     def amend(self, fid: str, *, rewrites: list[tuple], bodies: list[dict] = (), strikes: list[str] = (),
-              actor: str, note: str = "", caused_by: str | None = None, structural: bool = False) -> "Amended":
+              actor: str, note: str = "", caused_by: str | None = None, structural: bool = False,
+              whole: bool = False) -> "Amended":
         """A machine's repair of one feature, decided once for all of it.
 
         ``rewrites`` are ``(bid, path, new_md, base_text | None)``: new text
@@ -236,19 +247,16 @@ class Workspace:
         blocks proposed for removal. The whole amend lands on the trunk only
         when it is all rewording, the feature has no pending intent, and every
         rewording passes ``must_propose``; otherwise it is ONE plan, so one
-        repair gets one verdict. A rewrite of a block that holds words an open
-        plan inserted is refused (``open_plan``): the writer was shown the text
-        without them, and its diff would delete them on the trunk."""
+        repair gets one verdict. A rewrite ``plan_ingest`` refuses is left
+        out and reported; with ``whole``, nothing lands when one is refused."""
         out = Amended()
         store = self.store
         held = fid in store.blocks and phase(store, fid) in HELD
         need_plan = held or structural or bool(strikes)
+        base = dict(store.frontier)
         computed: list[Ingest] = []
         for bid, path, new_md, base_text in rewrites:
             block = store.blocks.get(bid)
-            if block is not None and is_text_field(block.kind, path) and _holds_open_plan(store, block.text(path)):
-                out.refused.append((bid, "open_plan"))
-                continue
             if base_text is None:
                 base_text = block.text(path).live_text() if block is not None and is_text_field(block.kind, path) else ""
             ing = self.plan_ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, trunk=not need_plan)
@@ -260,14 +268,15 @@ class Workspace:
                 out.refused.append((bid, ing.refused))
             elif not ing.unchanged:
                 computed.append(ing)
-        if not (computed or bodies or strikes):
+        if not (computed or bodies or strikes) or (whole and out.refused):
             return out
         if need_plan:
             out.plan = self.open_plan(actor=actor, kind="edit", target=fid,
                                       note="the document has pending intent" if held else note or "a larger repair")
             out.ops.append(store.by_id[store.plans[out.plan].opened_by])
         for ing in computed:
-            out.ops += self.commit_ingest(ing, actor=actor, plan=out.plan, batch=out.plan, caused_by=caused_by)
+            out.ops += self.commit_ingest(ing, actor=actor, plan=out.plan, batch=out.plan, base=base,
+                                          caused_by=caused_by)
         tail = list(bodies) + (strike_bodies(store, list(strikes), out.plan) if out.plan else [])
         if tail:
             out.ops += self.submit(tail, actor=actor, plan=out.plan, batch=out.plan, caused_by=caused_by)
@@ -288,8 +297,12 @@ class Workspace:
         fid = self.store.feature_of(bid)
         if fid and phase(self.store, fid) in HELD:
             return "the document has pending intent"
-        gate = GATE_HUMAN if block_written_by(self.store, bid) == "human" else GATE_MACHINE
-        return "a larger repair" if res.deleted_fraction > gate else None
+        human = block_written_by(self.store, bid) == "human"
+        if actor_kind(actor) == "translator":
+            # A translation replaces every word by design, so the deleted
+            # fraction says nothing. Whose words they were decides.
+            return "a translation of a person's words" if human else None
+        return "a larger repair" if res.deleted_fraction > (GATE_HUMAN if human else GATE_MACHINE) else None
 
     # ── clients ────────────────────────────────────────────────────────────
     def drain_inbox(self, identity=L.actor_for) -> list[Op]:
@@ -311,26 +324,40 @@ class Workspace:
             actor = identity(client) if callable(identity) else identity.get(client)
             if actor is None:
                 continue
-            acked = self._acked.setdefault(client, {})
-            opened: set[str] = set()
-            for line in L.read_inbox(self.codoc_dir, client, self._inbox_offsets.get(client, 0)):
-                s = line.sub
-                if s is None:
+            lines = L.read_inbox(self.codoc_dir, client, self._inbox_offsets.get(client, 0))
+            fresh: dict[str, L.Submission] = {}
+            for line in lines:
+                if line.sub is None:
                     L.ack(self.codoc_dir, client, line.cid, error=line.error)
-                elif s.cid not in acked:
-                    before = set(self.store.plans)
-                    try:
-                        out.extend(self._drain_one(client, actor, s, acked))
-                    except Exception as e:  # noqa: BLE001 (the applier is total; so is the drain)
-                        L.ack(self.codoc_dir, client, s.cid, error=f"refused: {e!r}")
-                        acked[s.cid] = ""
-                    opened |= set(self.store.plans) - before
-                self._inbox_offsets[client] = line.end
-            # A plan opened for a submission that then did not land is a verdict
-            # the person would be asked to give on nothing.
-            for pid in opened:
-                self._withdraw_if_empty(pid)
+                elif line.sub.cid not in self._acked.get(client, {}):
+                    fresh.setdefault(line.sub.cid, line.sub)
+            for got in self.apply_submissions(client, actor, list(fresh.values()), on_applied=lambda s, got: L.ack(
+                    self.codoc_dir, client, s.cid, got.ops[0] if got.ops else None, error=got.conflict,
+                    status=got.status)):
+                out.extend(got.ops)
+            if lines:
+                self._inbox_offsets[client] = lines[-1].end
         L.write_offsets(self.codoc_dir, self._inbox_offsets)
+        return out
+
+    def apply_submissions(self, client: str, actor: str, subs: list[L.Submission],
+                          on_applied=None) -> list["Applied"]:
+        """Apply one client's submissions in order (``apply_submission``),
+        then take back every plan this workspace opened for them that nothing
+        landed under: the person would be asked for a verdict on nothing. A
+        plan the client opened itself (a ``plan.open`` submission) is its own,
+        and its ops may come in a later call. The daemon's drain and a
+        daemonless writer (``daemon.client``) both come through here.
+        ``on_applied(sub, applied)`` runs after each one, before the next: the
+        drain acks there, so a crash between two leaves the first acked."""
+        before = set(self.store.plans)
+        out = []
+        for s in subs:
+            out.append(got := self.apply_submission(client, actor, s))
+            if on_applied is not None:
+                on_applied(s, got)
+        for pid in (set(self.store.plans) - before) & set(self._opened_plans.values()):
+            self._withdraw_if_empty(pid)
         self._sync()
         return out
 
@@ -422,7 +449,23 @@ class Workspace:
             return None
         return self._plan_for(actor, batch, str(target.get("bid") or target.get("into") or ""), "suggested from the hub")
 
-    def _drain_one(self, client: str, actor: str, s: L.Submission, acked: dict[str, str]) -> list[Op]:
+    def apply_submission(self, client: str, actor: str, s: L.Submission) -> "Applied":
+        """Apply one client submission as ``actor``: what a client may assert,
+        how a suggester's edit becomes a plan, and what an amend or an ingest
+        answers are decided here and nowhere else. Total: a submission that
+        raises is refused with the error. The first op minted is remembered
+        under the client id, so a later ``["$cid", cid, k]`` anchor resolves."""
+        acked = self._acked.setdefault(client, {})
+        try:
+            got = self._apply_one(actor, s, acked)
+        except Exception as e:  # noqa: BLE001 (the applier is total; so is the drain)
+            got = Applied(conflict=f"refused: {e!r}")
+        if got.conflict is None and got.ops:
+            got.conflict = got.ops[0].conflict
+        acked[s.cid] = got.ops[0].id if got.ops else ""
+        return got
+
+    def _apply_one(self, actor: str, s: L.Submission, acked: dict[str, str]) -> "Applied":
         batch = s.batch or new_batch_id()
         if s.caused_by and actor_kind(actor) not in MACHINE_KINDS:
             # `caused_by` says "this op is what that hand-off produced" and the
@@ -446,28 +489,20 @@ class Workspace:
                                         for r in p.get("rewrites") or []],
                               bodies=p.get("bodies") or [], strikes=p.get("strikes") or [],
                               structural=bool(p.get("structural")))
-            refused = "; ".join(f"{b}: {why}" for b, why in done.refused) or None
-            L.ack(self.codoc_dir, client, s.cid, done.ops[0] if done.ops else None, error=refused,
-                  status=(f"plan:{done.plan}" if done.plan else "trunk") if done.ops else "unchanged")
-            acked[s.cid] = done.ops[0].id if done.ops else ""
-            return done.ops
+            return Applied(done.ops, "; ".join(f"{b}: {why}" for b, why in done.refused) or None,
+                           (f"plan:{done.plan}" if done.plan else "trunk") if done.ops else "unchanged")
         if s.kind == "ingest":
             # A whole-text write from another process: the boundary diff runs
             # here, in the applier. The ack names the first op.
             res, ops = self.ingest(s.target["bid"], s.target.get("path", "text"), base_text=s.payload["base_text"],
                                    new_md=s.payload["new_md"], actor=actor, plan=plan, caused_by=s.caused_by,
                                    batch=s.batch or None)
-            L.ack(self.codoc_dir, client, s.cid, ops[0] if ops else None, error=res.refused,
-                  status=None if ops or res.refused else "unchanged")
-            acked[s.cid] = ops[0].id if ops else ""
-            return ops
+            return Applied(ops, res.refused, None if ops or res.refused else "unchanged")
         op = self._apply(self._mint(s.kind, s.target, s.payload, actor=actor, batch=batch,
                                     plan=plan, base=s.base, caused_by=s.caused_by))
         if s.kind == K.TEXT_INSERT and isinstance(s.payload.get("text"), str):
             self._sent_text[s.cid] = s.payload["text"]
-        L.ack(self.codoc_dir, client, s.cid, op)
-        acked[s.cid] = op.id
-        return [op]
+        return Applied([op])
 
     # ── sessions ───────────────────────────────────────────────────────────
     def _sync(self) -> None:
@@ -497,25 +532,46 @@ class Amended:
     refused: list[tuple[str, str]] = field(default_factory=list)  # (bid, why)
 
 
-def _holds_open_plan(store: Store, text) -> bool:
-    """Whether the field holds words an open plan inserted. A machine is shown
-    the text without them (the ``rejected`` read mode), so a diff against the
-    live text would delete them. A plan's marks (a proposed deletion, a
-    proposed bold) leave the shown text as it is and do not count."""
-    return any(s.live and s.plan in store.open_plans for s in text.segs)
+@dataclass
+class Applied:
+    """What one client submission became: the ops it minted, why it was
+    refused in whole or in part (or the first op's conflict), and an outcome
+    that is not a refusal (``plan:<id>``, ``trunk``, ``unchanged``). The ack
+    carries all three."""
+    ops: list[Op] = field(default_factory=list)
+    conflict: str | None = None
+    status: str | None = None
 
 
 def client_payload(store: Store, kind: str, payload: dict) -> dict:
-    """``payload`` as a client may send it: snapshot-only fields removed, and a
-    mark restore's ``actor``/``op``/``at`` kept only when the log has that op by
-    that actor (an undo restoring a mark someone placed). Otherwise the mark is
-    the sender's own."""
+    """``payload`` as a client may send it.
+
+    - Snapshot-only fields are removed, from an amend's bodies too; a body
+      keeps only its kind, target and payload, since the amend decides the plan.
+    - A mark keeps a restore's ``actor``/``op``/``at`` only when ``op`` is a
+      ``text.mark`` op that actor recorded at that clock (an undo restoring a
+      mark someone placed). Otherwise the mark is the sender's own.
+    - A proposed deletion's ``chars`` never come from the client: the applier
+      records the characters its range names, and a restore takes them from
+      the op that placed it."""
     out = {k: v for k, v in payload.items() if k not in K.SNAPSHOT_ONLY.get(kind, ())}
-    if kind == K.TEXT_MARK and any(k in out for k in ("actor", "op", "at")):
-        placed = store.by_id.get(str(out.get("op") or ""))
-        if placed is None or placed.actor != out.get("actor"):
-            for k in ("actor", "op", "at"):
-                out.pop(k, None)
+    if kind == "amend":
+        out["bodies"] = [{"kind": b["kind"], "target": b.get("target") or {},
+                          "payload": client_payload(store, b["kind"], b.get("payload") or {})}
+                         for b in out.get("bodies") or []]
+    if kind != K.TEXT_MARK:
+        return out
+    placed = store.by_id.get(str(out.get("op") or ""))
+    restore = (placed is not None and placed.kind == K.TEXT_MARK
+               and (placed.actor, placed.at) == (out.get("actor"), out.get("at")))
+    if not restore:
+        for k in ("actor", "op", "at"):
+            out.pop(k, None)
+    if out.get("kind") == SUGGEST_DEL:
+        attrs = {k: v for k, v in (out.get("attrs") or {}).items() if k != "chars"}
+        if restore and (chars := (placed.payload.get("attrs") or {}).get("chars")):
+            attrs["chars"] = chars
+        out["attrs"] = attrs
     return out
 
 

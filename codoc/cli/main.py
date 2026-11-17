@@ -215,31 +215,29 @@ def handoff(feature: str, root: str = ROOT,
             delete_code: bool = typer.Option(False, "--delete-code", help="For a deleted feature: remove its code too.")):
     """Hand a feature's edits to the agent (what ⌘S does in the editor)."""
     from codoc.calculus import ops as K
-    from codoc.index.git import head_sha
     from codoc.daemon import client
     cd = _require(root)
     ws = client.read(cd)
     fid = _resolve_feature(ws.store, feature)
     _report(client.write(cd, client="cli", root_dir=root, bodies=[{
         "kind": K.FEATURE_HANDOFF, "target": {"fid": fid},
-        "payload": {"base_sha": head_sha(root), "asked": asked, "delete_code": delete_code}}]), "handed off")
+        "payload": {"asked": asked, "delete_code": delete_code}}]), "handed off")
 
 
 @app.command()
 def accept(plan: str, root: str = ROOT,
            build: bool = typer.Option(None, "--build/--no-build",
-                                      help="Hand off the plan's features (default: only for a coding agent's plan).")):
+                                      help="Hand off the plan's features (default: only for a plan opened with build, as codoc_propose does).")):
     """Accept a plan (the whole of it).
 
     By default it also hands off what the editor's Accept hands off
-    (`derive.accept_handoffs`): the features of a coding agent's plan, which
-    is a request to build. `--build` hands off any plan's features; `--no-build`
+    (`derive.accept_handoffs`): the features of a plan opened with `build`
+    (`codoc_propose`), which is a request to build. `--build` hands off any plan's features; `--no-build`
     takes the words without the work. A delete plan is never handed off from
     here: removing the code is `codoc handoff --delete-code`.
     """
     from codoc.calculus import ops as K
     from codoc.calculus.derive import accept_handoffs, plan_features
-    from codoc.index.git import head_sha
     from codoc.daemon import client
     cd = _require(root)
     ws = client.read(cd)
@@ -250,7 +248,7 @@ def accept(plan: str, root: str = ROOT,
         fids = accept_handoffs(ws.store, pl) if build is None else plan_features(ws.store, pl) if build else []
     for fid in fids:
         bodies.append({"kind": K.FEATURE_HANDOFF, "target": {"fid": fid},
-                       "payload": {"base_sha": head_sha(root), "asked": f"Build the plan {plan}."}})
+                       "payload": {"asked": f"Build the plan {plan}."}})
     _report(client.write(cd, client="cli", root_dir=root, bodies=bodies), "accepted")
 
 

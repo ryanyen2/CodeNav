@@ -107,6 +107,25 @@ def test_translate_skips_a_feature_with_an_open_plan(tmp_path):
     assert all(s.live for s in ws.store.blocks["p1"].text().segs if s.plan == pid)
 
 
+def test_a_translation_writes_nothing_when_a_block_holds_an_open_plans_words(tmp_path):
+    """The translator was shown the text without the plan's words. Its
+    translation of that block is refused, and so is the rest of the feature."""
+    from codoc.loops.translate import TranslateResult, _write
+    ws = Workspace(tmp_path / ".codoc")
+    seed_loop(ws)
+    pid = ws.open_plan(actor="agent:claude-code", kind="edit", target="p1")
+    t = ws.store.blocks["p1"].text()
+    ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                "payload": {"after": list(t.ref_at(len("Retries once") - 1)), "text": " with backoff"}}],
+              actor="agent:claude-code", plan=pid)
+    why = _write(ws, "h1", "Cliente", {"p1": "Reintenta una vez antes de rendirse."}, "translator:es",
+                 resolve("es"), TranslateResult())
+    assert why == "p1: open_plan"
+    assert title(ws.store, "h1") == "Client"
+    assert ws.store.blocks["p1"].text().live_text() == "Retries once with backoff before giving up."
+    ws.close()
+
+
 def test_translate_never_leaves_an_empty_open_plan(tmp_path):
     """A human-written feature whose translation is refused (a block came
     back as a different kind) must not be left with an open, empty plan the

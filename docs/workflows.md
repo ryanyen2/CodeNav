@@ -45,8 +45,8 @@ cites nothing.
 5. The agent's hooks keep the agent epoch open in `.codoc/activity.json` while a turn
    runs. The daemon holds the changed files until the epoch closes, then reflects them
    with `caused_by`.
-6. The daemon writes `feature.realized` as `loop` when that pass applied a binding op
-   citing the hand-off ([concurrency.md](concurrency.md#10-hand-off-and-realization)).
+6. The daemon writes `feature.realized` as `loop` once any pass since the hand-off has
+   applied a binding op citing it ([concurrency.md](concurrency.md#10-hand-off-and-realization)).
    When the build moved no bound symbol, the person runs `codoc done`.
 
 No op touches a source file (I7). A hand-off is the only gesture that turns words into a
@@ -78,7 +78,7 @@ One gesture is one batch, and a batch is the undo unit. Typing is flushed as one
 | Build it on a comment | editor | `feature.handoff` with the thread's words as `asked` | The host runs `codoc realize` in a terminal. |
 | Hand off (⌘S or the toolbar) | editor | `feature.handoff` per `edited` feature | Ink turns from unsent to sent. |
 | `codoc handoff <feature> [--asked …] [--delete-code]` | CLI | `feature.handoff` | |
-| Accept all, Reject all | editor | `plan.accept` or `plan.reject` per open plan; with Accept, `feature.handoff` for each feature a coding agent's plan touches (the projection's `plans[].handoff`) | Accepted words become ordinary text with the plan's author; an accepted agent plan is queued. |
+| Accept all, Reject all | editor | `plan.accept` or `plan.reject` per open plan; with Accept, `feature.handoff` for each feature a plan opened with `build` touches (the projection's `plans[].handoff`) | Accepted words become ordinary text with the plan's author; an accepted `codoc_propose` plan is queued. |
 | `codoc accept <plan>` | CLI | `plan.accept`, and `feature.handoff` per feature by the same rule as the editor; `--build` hands off any plan's features, `--no-build` none; never for a delete plan | As above. |
 | `codoc reject <plan>` | CLI | `plan.reject` | |
 | Undo, redo (⌘Z, ⇧⌘Z, ⌘Y) | editor | The recorded inverses of the viewer's newest batch, newest first, as batch `u-<batch>`; redo undoes that | The log keeps both. |
@@ -111,11 +111,14 @@ touched the feature.
 ### 3.3 The agent proposes first
 
 `/codoc:plan` has the agent read `codoc_context` or `codoc_tree` and call
-`codoc_propose` with tree edits. They become one plan: tagged ops that apply at once and
-show as gray text, struck gray for `suggest_del`. Whatever the person types inside a
-proposal is theirs and untagged. Accept or reject is a verdict
-([concurrency.md](concurrency.md#9-plans-and-verdicts)). The editor's Accept sends the
-verdict and, for a coding agent's plan, the hand-off; `codoc accept` does the same.
+`codoc_propose` with tree edits. The additions and amendments become one plan, and each
+removed feature becomes a delete plan of its own, so a deletion is accepted or rejected
+on its own. A plan is tagged ops that apply at once and show as gray text, struck gray
+for `suggest_del`. Whatever the person types inside a proposal is theirs and untagged.
+Accept or reject is a verdict ([concurrency.md](concurrency.md#9-plans-and-verdicts)).
+The editor's Accept sends the verdict and, for a plan `codoc_propose` opened, the
+hand-off; `codoc accept` does the same. Accepting a plan from `codoc_reflect` or the
+loop hands nothing off: it describes code that already exists.
 
 ### 3.4 Reviewing what happened
 

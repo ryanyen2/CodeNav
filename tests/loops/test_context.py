@@ -4,8 +4,7 @@ from tests.helpers import kind_block, seed
 
 
 def test_written_by_treats_a_loop_lifted_diagram_as_machine_prose(tmp_path):
-    """context.written_by feeds translate's plan-or-trunk choice and the
-    prompt's written_by. A feature whose paragraph the loop wrote and whose
+    """context.written_by feeds the prompt's written_by. A feature whose paragraph the loop wrote and whose
     diagram the loop lifted is machine-written; a person's comment thread on it
     (out of flow, never exported) must not turn the whole feature human."""
     from codoc.loops.context import block_written_by, written_by

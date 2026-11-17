@@ -2,13 +2,15 @@
 when no daemon owns the checkout.
 
 The MCP server, the CLI and the hub are separate processes. Only one process
-may apply (docs/concurrency.md, Processes), so a writer first asks whether a daemon is alive (the
-pidfile). If so it appends submissions to its inbox and the daemon drains them
-on the next batch; the caller gets client ids back and may poll the ack file.
-If not, this process is the applier: it opens the workspace once and keeps it
-for the life of the process, so a long-lived writer (the MCP server) writes one
-session log rather than one per call. A daemon that appears later takes over
-at the next call, and the held workspace is closed.
+may apply (docs/concurrency.md, Processes), so a writer takes the applier lock
+and asks whether a daemon is alive (the pidfile). If so it appends submissions
+to its inbox and the daemon drains them on the next batch; the caller gets
+client ids back and may poll the ack file. If not, this process is the
+applier: it opens the workspace once and keeps it for the life of the process,
+so a long-lived writer (the MCP server) writes one session log rather than one
+per call. A daemon that appears later takes over at the next call, and the
+held workspace is closed. Both ways a submission is applied by
+``Workspace.apply_submission``.
 
 Two daemonless writers are allowed (the MCP server holds its workspace while
 the person runs `codoc accept`), so ``applying()`` wraps apply-and-publish
@@ -29,13 +31,13 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from codoc.calculus.ids import new_batch_id
 from codoc.calculus.ingest import resolve_pending_refs
 from codoc.calculus.ops import TEXT_INSERT
 from codoc.daemon.pidfile import daemon_running
 from codoc.daemon.publish import publish
 from codoc.index.git import head_sha
 from codoc.workspace import Workspace
-from codoc.workspace.workspace import client_payload
 from codoc.workspace import log as L
 from codoc.workspace.layout import APPLIER_LOCK, locked
 from codoc.workspace.log import Submission
@@ -96,12 +98,21 @@ def _follow_head(codoc_dir: Path, ws: Workspace) -> bool:
     return True
 
 
+class DaemonRunning(RuntimeError):
+    """A daemon owns the checkout: submit to its inbox."""
+
+
 @contextmanager
 def applying(codoc_dir: Path):
     """The workspace, under the applier lock, caught up with anybody else's
     writes and with ``HEAD``. Yields inside the lock so apply and publish are
-    one turn."""
+    one turn. Raises ``DaemonRunning`` when a daemon owns the checkout, asked
+    under the lock: a daemon that started while this process waited for the
+    lock rebuilt without what this process would apply now, and never reads it."""
     with locked(codoc_dir / APPLIER_LOCK):
+        if daemon_running(codoc_dir):
+            release(codoc_dir)
+            raise DaemonRunning(str(codoc_dir))
         ws = _applier(codoc_dir)
         if not _follow_head(codoc_dir, ws):
             _catch_up(codoc_dir, ws)
@@ -125,31 +136,45 @@ atexit.register(release)
 def write(codoc_dir: str | Path, *, client: str, bodies: list[dict], root_dir: str | None = None,
           batch: str | None = None, plan: str | None = None, caused_by: str | None = None,
           wait_s: float = 3.0) -> list[dict]:
-    """Submit op bodies as ``client``. Returns one record per body:
-    ``{"cid", "op", "conflict"}`` with ``op``/``conflict`` filled when the
-    result is known (applied directly, or acked within ``wait_s``)."""
-    codoc_dir = Path(codoc_dir)
-    actor = _actor(client)
-    if not daemon_running(codoc_dir):
-        with applying(codoc_dir) as ws:
-            bodies = [{**b, "payload": client_payload(ws.store, b["kind"], b.get("payload", {}))} for b in bodies]
-            ops = ws.submit(bodies, actor=actor, batch=batch, plan=plan, caused_by=caused_by)
-            publish(codoc_dir, ws.store, root_dir=root_dir or str(codoc_dir.parent))
-        return [{"cid": None, "op": o.id, "conflict": o.conflict} for o in ops]
-    release(codoc_dir)
+    """Submit op bodies as ``client``, as one batch. Returns one record per
+    body: ``{"cid", "op", "conflict", "status"}`` with ``op``/``conflict``
+    filled when the result is known (applied here, or acked within ``wait_s``)."""
+    batch = batch or new_batch_id()
     subs: list[Submission] = []
     insert_cids: list[str] = []
     for b in bodies:
-        cid = f"{client}-{uuid.uuid4().hex[:12]}"
+        cid = _cid(client)
         payload = dict(b.get("payload", {}))
-        # The daemon resolves ["$cid", cid, k]; a batch-local ["$ins", i, k] becomes that.
+        # The applier resolves ["$cid", cid, k]; a batch-local ["$ins", i, k] becomes that.
         resolve_pending_refs(payload, insert_cids, as_ref=lambda c, k: ["$cid", c, k])
         if b["kind"] == TEXT_INSERT:
             insert_cids.append(cid)
         subs.append(Submission(cid=cid, kind=b["kind"], target=b.get("target", {}), payload=payload,
-                               batch=batch or "", plan=b.get("plan", plan), caused_by=b.get("caused_by", caused_by)))
-    L.submit(codoc_dir, client, subs)
-    return wait_for_acks(codoc_dir, client, [s.cid for s in subs], wait_s)
+                               batch=batch, plan=b.get("plan", plan), caused_by=b.get("caused_by", caused_by)))
+    return _send(Path(codoc_dir), client, subs, root_dir, wait_s)
+
+
+def _cid(client: str) -> str:
+    return f"{client}-{uuid.uuid4().hex[:12]}"
+
+
+def _send(codoc_dir: Path, client: str, subs: list[Submission], root_dir: str | None, wait_s: float) -> list[dict]:
+    """Apply ``subs`` as ``client``: here when no daemon owns the checkout
+    (``Workspace.apply_submissions``, what the daemon's drain runs), else
+    through its inbox, waiting up to ``wait_s`` for the acks. One ack-shaped
+    record per submission, ``{"cid", "op", "conflict", "status", "ops"}``;
+    through the inbox ``ops`` holds the acked first op only."""
+    actor = _actor(client)
+    try:
+        with applying(codoc_dir) as ws:
+            got = ws.apply_submissions(client, actor, subs)
+            publish(codoc_dir, ws.store, root_dir=root_dir or str(codoc_dir.parent))
+    except DaemonRunning:
+        L.submit(codoc_dir, client, subs)
+        return [{**a, "ops": [a["op"]] if a["op"] else []}
+                for a in wait_for_acks(codoc_dir, client, [s.cid for s in subs], wait_s)]
+    return [{"cid": s.cid, "op": a.ops[0].id if a.ops else None, "conflict": a.conflict, "status": a.status,
+             "ops": [o.id for o in a.ops]} for s, a in zip(subs, got)]
 
 
 def wait_for_acks(codoc_dir: Path, client: str, cids: list[str], wait_s: float) -> list[dict]:
@@ -192,24 +217,12 @@ def ingest(codoc_dir: str | Path, *, client: str, bid: str, path: str, base_text
            batch: str | None = None) -> dict:
     """A whole-text write from another process. When a daemon is alive the
     boundary diff still has to run in the applier, so the request is submitted
-    as an ``ingest`` submission the daemon expands; without one, run it here."""
-    codoc_dir = Path(codoc_dir)
-    actor = _actor(client)
-    if not daemon_running(codoc_dir):
-        with applying(codoc_dir) as ws:
-            res, ops = ws.ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, plan=plan,
-                                 caused_by=caused_by, batch=batch)
-            publish(codoc_dir, ws.store, root_dir=root_dir or str(codoc_dir.parent))
-        return {"refused": res.refused, "ops": [o.id for o in ops],
-                "status": None if ops or res.refused else "unchanged"}
-    release(codoc_dir)
-    sub = Submission(cid=f"{client}-{uuid.uuid4().hex[:12]}", kind="ingest", target={"bid": bid, "path": path},
+    as an ``ingest`` submission the applier expands."""
+    sub = Submission(cid=_cid(client), kind="ingest", target={"bid": bid, "path": path},
                      payload={"base_text": base_text, "new_md": new_md}, plan=plan, caused_by=caused_by,
                      batch=batch or "")
-    L.submit(codoc_dir, client, [sub])
-    ack = wait_for_acks(codoc_dir, client, [sub.cid], 3.0)[0]
-    return {"refused": ack.get("conflict"), "ops": [ack["op"]] if ack.get("op") else [],
-            "status": ack.get("status")}
+    a = _send(Path(codoc_dir), client, [sub], root_dir, 3.0)[0]
+    return {"refused": a["conflict"], "ops": a["ops"], "status": a["status"]}
 
 
 def amend(codoc_dir: str | Path, *, client: str, fid: str, rewrites: list[dict], bodies: list[dict] | None = None,
@@ -219,22 +232,8 @@ def amend(codoc_dir: str | Path, *, client: str, fid: str, rewrites: list[dict],
     (``Workspace.amend``). ``rewrites`` are ``{bid, path, new_md, base_text}``.
     Returns ``{"status", "refused", "ops"}``; ``status`` is ``plan:<id>``,
     ``trunk``, ``unchanged``, or None when no ack arrived within ``wait_s``."""
-    codoc_dir = Path(codoc_dir)
-    actor = _actor(client)
-    payload = {"fid": fid, "rewrites": rewrites, "bodies": bodies or [], "strikes": strikes or [],
-               "structural": structural, "note": note}
-    if not daemon_running(codoc_dir):
-        with applying(codoc_dir) as ws:
-            done = ws.amend(fid, actor=actor, note=note, caused_by=caused_by, structural=structural,
-                            rewrites=[(r["bid"], r.get("path", "text"), r["new_md"], r.get("base_text")) for r in rewrites],
-                            bodies=payload["bodies"], strikes=payload["strikes"])
-            publish(codoc_dir, ws.store, root_dir=root_dir or str(codoc_dir.parent))
-        status = (f"plan:{done.plan}" if done.plan else "trunk") if done.ops else "unchanged"
-        return {"status": status, "refused": [f"{b}: {why}" for b, why in done.refused], "ops": [o.id for o in done.ops]}
-    release(codoc_dir)
-    sub = Submission(cid=f"{client}-{uuid.uuid4().hex[:12]}", kind="amend", target={"fid": fid}, payload=payload,
-                     caused_by=caused_by)
-    L.submit(codoc_dir, client, [sub])
-    ack = wait_for_acks(codoc_dir, client, [sub.cid], wait_s)[0]
-    return {"status": ack.get("status"), "refused": [ack["conflict"]] if ack.get("conflict") else [],
-            "ops": [ack["op"]] if ack.get("op") else []}
+    sub = Submission(cid=_cid(client), kind="amend", target={"fid": fid}, caused_by=caused_by, payload={
+        "fid": fid, "rewrites": rewrites, "bodies": bodies or [], "strikes": strikes or [],
+        "structural": structural, "note": note})
+    a = _send(Path(codoc_dir), client, [sub], root_dir, wait_s)[0]
+    return {"status": a["status"], "refused": [a["conflict"]] if a["conflict"] else [], "ops": a["ops"]}

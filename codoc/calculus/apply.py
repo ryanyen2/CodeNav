@@ -752,10 +752,11 @@ def _h_plan_open(store: Store, op: Op, touched: set[str]):
     # now live in the archive; an ordinary plan.open sends neither.
     ops = [str(i) for i in op.payload.get("ops") or []]
     opened_by = op.payload.get("opened_by") or op.id
+    build = bool(op.payload.get("build"))
     store.plans[pid] = store.open_plans[pid] = Plan(
-        pid, op.actor, kind, target, op.payload.get("note", ""), "open", ops, opened_by)
+        pid, op.actor, kind, target, op.payload.get("note", ""), "open", ops, opened_by, build)
     canonical = {"kind": kind, "target": target, "note": op.payload.get("note", "")}
-    if op.payload.get("build"):
+    if build:
         canonical["build"] = True       # accepting it asks for the code (derive.accept_handoffs)
     if ops:
         canonical["ops"] = ops
@@ -1128,7 +1129,7 @@ def _h_feature_handoff(store: Store, op: Op, touched: set[str]):
     hid = op.payload.get("reinstate") or op.id
     if hid not in w.handoffs:
         w.handoffs.append(hid)
-    canonical = {"covers": covers, "base_sha": op.payload.get("base_sha", ""), "asked": op.payload.get("asked", ""),
+    canonical = {"covers": covers, "asked": op.payload.get("asked", ""),
                  "delete_code": bool(op.payload.get("delete_code", False))}
     if op.payload.get("reinstate"):
         canonical["reinstate"] = hid

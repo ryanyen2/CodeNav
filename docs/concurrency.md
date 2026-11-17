@@ -19,9 +19,13 @@ One process applies ops at a time. It is called the applier.
 
 - A daemon is alive when `.codoc/watch.pid` names a running process. A second daemon
   refuses to start.
-- A daemon builds its store, writes the pidfile, then takes the applier lock once and
-  rebuilds if any other session's log changed since it built. A daemonless writer that
-  applied in that window is not lost.
+- A daemon builds its store, writes the pidfile, then rebuilds the store once under the
+  applier lock. A daemonless writer that applied before that is in the logs it reads.
+  A writer that saw no daemon and got the lock after the pidfile was written checks for
+  a daemon again under the lock and submits through the inbox instead.
+- Every write from any process, applied directly or drained from an inbox, goes through
+  `Workspace.apply_submission`: what a client may assert, how a suggester's edit becomes
+  a plan, and what an amend or an ingest answers are decided there.
 - With a daemon alive, no other process applies. A writer appends to
   `.codoc/inbox/<client>.jsonl` and reads the answer from `.codoc/inbox/<client>.ack.jsonl`.
 - With no daemon, a writer is the applier for one call. It takes an exclusive lock on
@@ -378,9 +382,11 @@ everything they changed, and `plan.reopen` restores exactly that, subset include
 
 - **The applier never adds a hand-off to a verdict; the sender does.** The editor's
   Accept and `codoc accept` send `feature.handoff` in the same batch for the features
-  `derive.accept_handoffs` names: those a coding agent's plan touches, since that plan
-  was proposed before the code and is a request to build. A loop's, translator's or
-  suggester's plan is accepted without a hand-off. `codoc accept --build` hands off any
+  `derive.accept_handoffs` names: those a plan opened with `build` touches.
+  `codoc_propose` sets `build`, since its plan comes before the code and is a request to
+  build. A plan from `codoc_reflect`, the loop, a translator or a suggester describes
+  words or code that already exists and is accepted without a hand-off. The mark is on
+  the plan, so a snapshot keeps it. `codoc accept --build` hands off any
   plan's features, `--no-build` none. A delete plan is never handed off with its
   accept; removing code is `codoc handoff --delete-code`.
 - **Plans the applier opens.** A suggester's untagged edit, and a machine write the gate
@@ -455,9 +461,8 @@ Tracked: `config.json`, `tree.codoc`, and everything under `log/`. Everything el
   same by hand. The merged ops land by their character anchors, in the order of section 6.
 - **`tree.codoc`** is derived. A textual conflict in it does not reach the store, and the
   next publish rewrites the file from the log.
-- **Rebase and squash** keep the log files, since they are tree content. The commit ids
-  in `feature.handoff` (`base_sha`) and `feature.realized` (`sha`) may then name commits
-  that are gone.
+- **Rebase and squash** keep the log files, since they are tree content. The commit id
+  in `feature.realized` (`sha`) may then name a commit that is gone.
 - **A pull request** from someone else carries their session files. Run
   `codoc validate-logs` before merging it (section 7).
 - An uncommitted local session is the one thing by which two rebuilds of the same
@@ -515,7 +520,7 @@ store as the folded ops left it:
 | `bind.attach` | binding | the hashes | `import` |
 | `plan.open` | plan | `kind`, `target`, `note`, `ops`, `opened_by` | the plan's actor |
 | `plan.accept` or `plan.reject` | plan | | the actor who decided |
-| `feature.handoff` | feature with a hand-off | `covers`, and `asked`, `base_sha`, `delete_code` of the latest hand-off | that hand-off's actor |
+| `feature.handoff` | feature with a hand-off | `covers`, and `asked`, `delete_code` of the latest hand-off | that hand-off's actor |
 | `feature.realized` | feature with a realization | `covers` | `import` |
 
 A feature with a realization and no hand-off (the person undid the hand-off) gets a

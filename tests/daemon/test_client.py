@@ -115,3 +115,49 @@ client.write({str(cd)!r}, client="cli", bodies=[{{"kind": "text.insert", "target
     assert other.returncode == 0, other.stderr
     assert " B." in T(client.read(cd).store, "p1"), T(client.read(cd).store, "p1")
     client.release(cd)
+
+
+def test_an_amends_new_block_cannot_carry_words_attributed_to_someone_else(tmp_path):
+    """An amend's bodies are cleaned like any other submission: a `block.add`
+    carrying snapshot `texts` does not land the owner's words for the agent."""
+    from codoc.calculus.derive import attribution
+    from codoc.daemon import client
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    owners = ws.store.by_id[refs(ws, "p1")[0][0]]
+    ws.close()
+    forged = {"segs": [{"op": owners.id, "k0": 500, "chars": "Approved by the owner.", "actor": "human:local",
+                        "at": owners.at}], "marks": []}
+    client.amend(cd, client="mcp", fid="h1", rewrites=[], bodies=[
+        {"kind": K.BLOCK_ADD, "target": {"bid": "b-forged000001"},
+         "payload": {"kind": "paragraph", "after": "p1", "texts": {"text": forged}}}])
+    b = client.read(cd).store.blocks["b-forged000001"]
+    assert b.text().live_text() == "" and not attribution(b.text())
+    client.release(cd)
+
+
+def test_a_writer_that_waited_for_the_lock_while_a_daemon_started_uses_its_inbox(tmp_path, monkeypatch):
+    """A writer that saw no daemon and got the applier lock only after the
+    daemon's start-up rebuild would apply ops the daemon never reads. It asks
+    again under the lock and submits to the inbox."""
+    import os
+    from contextlib import contextmanager
+
+    from codoc.daemon import client
+    from codoc.workspace.layout import PIDFILE
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws); ws.close()
+    r = refs(Workspace(cd, readonly=True), "p1")
+    real = client.locked
+
+    @contextmanager
+    def a_daemon_starts_meanwhile(path):
+        (cd / PIDFILE).write_text(str(os.getppid()))      # a live process that is not this one
+        with real(path):
+            yield
+    monkeypatch.setattr(client, "locked", a_daemon_starts_meanwhile)
+    got = client.write(cd, client="cli", wait_s=0, bodies=[{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                                                           "payload": {"after": list(r[-1]), "text": " X."}}])
+    assert not got[0]["op"] and (L.inbox_dir(cd) / "cli.jsonl").exists()
+    assert T(Workspace(cd, readonly=True).store, "p1") == "Retries once."
+    client.release(cd)

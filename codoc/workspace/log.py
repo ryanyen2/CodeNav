@@ -337,13 +337,13 @@ def clients(codoc_dir: str | Path) -> list[str]:
 
 def ack(codoc_dir: str | Path, client: str, cid: str, op: Op | None = None, *, error: str | None = None,
         status: str | None = None) -> None:
-    """Tell the client what became of ``cid``: the op it minted (and its
-    conflict, if any), or the error that kept it from minting one. ``status``
-    is for an outcome that is not a refusal: a whole-text write that asked for
-    nothing mints no op and conflicts with nothing."""
+    """Tell the client what became of ``cid``: the first op it minted, and
+    ``error`` (what was refused, even when other ops landed) or else that op's
+    conflict. ``status`` is for an outcome that is not a refusal: a whole-text
+    write that asked for nothing mints no op and conflicts with nothing."""
     path = inbox_dir(codoc_dir) / f"{client}.ack.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
-    rec = {"cid": cid, "op": op.id if op else "", "conflict": op.conflict if op else error}
+    rec = {"cid": cid, "op": op.id if op else "", "conflict": error or (op.conflict if op else None)}
     if status:
         rec["status"] = status
     with path.open("a", encoding="utf-8") as fh:

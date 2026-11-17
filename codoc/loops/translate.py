@@ -13,13 +13,13 @@ Per feature:
    - every block came back, as the same kind of block;
    - the title does not collide with a sibling's;
    - the prose is in the target language.
-3. Compute every block's ``ingest`` with ``actor=translator:<lang>``.
-   ``ingest`` refuses a block whose translation drops a citation, link or bold
-   span the person placed.
-4. Write all of them, or none:
-   - on the trunk when machines wrote the feature;
-   - as one plan when a person wrote any of it, or the feature has pending
-     intent, so the person's words are never replaced without a look.
+3. Write every block through ``Workspace.amend`` as ``translator:<lang>``,
+   all of them or none (a block ``plan_ingest`` refuses, such as one holding
+   an open plan's words, stops the feature):
+   - on the trunk when machines wrote every block it rewrites;
+   - as one plan when a person wrote one of them, the feature has pending
+     intent, or the translation drops a citation, link or bold span the person
+     placed, so the person's words are never replaced without a look.
 
 A feature with an open plan is skipped, so a re-run never stacks a second
 translation. Features are picked by their detected language, so an
@@ -33,11 +33,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from codoc.calculus import block_md
-from codoc.calculus.derive import HELD, open_plans_on, phase, title
+from codoc.calculus.derive import open_plans_on, title
 from codoc.calculus.doc import PROSE, TABLE, parent_of, text_fields
 from codoc.doclang import DocLanguage, detect_prose_language, norm_key, prose_letters, workspace_doc_language
 from codoc.llm.passes import propose_translations
-from codoc.loops.context import description_blocks, written_by
+from codoc.loops.context import description_blocks
 from codoc.workspace import Workspace
 from codoc.workspace.layout import TRANSLATE, atomic_write
 
@@ -175,33 +175,18 @@ def _check(item: dict, new_title: str, new_blocks: dict[str, str], lang: DocLang
 
 def _write(ws: Workspace, fid: str, new_title: str, new_blocks: dict[str, str], actor: str, lang: DocLanguage,
            res: TranslateResult) -> str | None:
-    """Compute every ingest first, then write all of them or none. Returns
-    why nothing was written, or None.
-
-    The machine gate (``must_propose``) does not apply: a translation replaces
-    every word by design, so the deleted fraction says nothing. What decides
-    trunk or plan is whose words they were."""
-    store = ws.store
-    human = written_by(store, fid) == "human" or phase(store, fid) in HELD
-    targets = [(fid, "text", new_title)]
+    """Write the feature's translation as one amend, all of it or none
+    (trunk or plan is ``must_propose``'s call). Returns why nothing was
+    written, or None."""
+    rewrites = [(fid, "text", new_title, None)]
     for bid, md in new_blocks.items():
-        block = store.blocks.get(bid)
-        if block is None or block.kind not in PROSE_BLOCKS:
-            continue
-        path = text_fields(block.kind)[0]
-        spec = block_md.parse(md, headings=False)[0]
-        targets.append((bid, path, spec.text))
-    computed = []
-    for bid, path, new_md in targets:
-        block = store.blocks[bid]
-        r = ws.plan_ingest(bid, path, base_text=block.text(path).live_text(), new_md=new_md, actor=actor, trunk=not human)
-        if r.refused:
-            return r.refused if bid == fid else f"{bid}: {r.refused}"
-        computed.append(r)
-    base = dict(store.frontier)
-    plan = ws.open_plan(actor=actor, kind="edit", target=fid, note=f"translation to {lang.name}") if human else None
-    for r in computed:
-        ws.commit_ingest(r, actor=actor, plan=plan, batch=plan, base=base)
-    if plan:
+        block = ws.store.blocks.get(bid)
+        if block is not None and block.kind in PROSE_BLOCKS:
+            rewrites.append((bid, text_fields(block.kind)[0], block_md.parse(md, headings=False)[0].text, None))
+    done = ws.amend(fid, rewrites=rewrites, actor=actor, note=f"translation to {lang.name}", whole=True)
+    if done.refused:
+        bid, why = done.refused[0]
+        return why if bid == fid else f"{bid}: {why}"
+    if done.plan:
         res.planned += 1
     return None

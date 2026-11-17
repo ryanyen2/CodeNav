@@ -64,6 +64,10 @@ class Plan:
     status: str = "open"          # open | accepted | rejected
     ops: list[OpId] = field(default_factory=list)   # the plan's ops in apply order
     opened_by: OpId | None = None
+    # Accepting it asks for the code (``codoc_propose`` opens such a plan
+    # before the code is written). Kept here, not read from the opening op,
+    # so a fold that archives that op changes nothing.
+    build: bool = False
     # Who answered. Without it a fold re-emits the verdict as the importer and
     # the tree forgets who decided. The log says who only until it is archived,
     # and a fold archives it. WHEN is not kept: every op a fold
@@ -74,7 +78,7 @@ class Plan:
     def to_json(self) -> dict:
         return {"id": self.id, "actor": self.actor, "kind": self.kind, "target": self.target,
                 "note": self.note, "status": self.status, "ops": list(self.ops), "opened_by": self.opened_by,
-                "decided_by": self.decided_by}
+                "build": self.build, "decided_by": self.decided_by}
 
 
 @dataclass
@@ -245,16 +249,21 @@ class Store:
 
     def removed_body(self, fid: str) -> list[Block]:
         """The dead non-heading blocks that sit in a live heading's body: what
-        was deleted from its description, in document order."""
+        was deleted from its description, in document order. A block behind a
+        dead heading that died no later than that heading was the dead
+        heading's own (a deleted child feature's words), and is left out."""
         h = self.blocks[fid]
         if not h.live:
             return []
         out = []
+        heading_died = ""          # when the latest dead heading passed so far died
         for j in range(self._index_of(fid) + 1, len(self.order)):
             n = self.blocks[self.order[j][1]]
-            if n.kind == HEADING and n.live:
-                break
-            if not n.live and n.kind != HEADING:
+            if n.kind == HEADING:
+                if n.live:
+                    break
+                heading_died = max(heading_died, n.dead_at)
+            elif not n.live and (not heading_died or n.dead_at > heading_died):
                 out.append(n)
         return out
 

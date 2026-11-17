@@ -31,20 +31,17 @@ from codoc.calculus.ids import OpId, is_human
 from codoc.calculus.ops import Op, covered, in_frontier
 from codoc.calculus.store import Store, Watermarks
 from codoc.calculus.text import BOLD, LINK, Text
-from codoc.index.git import head_sha
 from codoc.llm.prompt import format_prompt, load_prompt
 from codoc.workspace import Workspace
 from codoc.workspace.layout import REALIZE, atomic_write
 
 
-def handoff(ws: Workspace, fid: str, *, actor: str, asked: str = "", root_dir: str | None = None,
-            delete_code: bool = False) -> Op:
+def handoff(ws: Workspace, fid: str, *, actor: str, asked: str = "", delete_code: bool = False) -> Op:
     """Hand a feature's edits to the agent. What it covers is not stated: the
     applier fills it with its own frontier, which is the only one that includes
     the ops arriving in the same batch as this one."""
-    sha = head_sha(root_dir) if root_dir else ""
     return ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": fid},
-                       "payload": {"base_sha": sha, "asked": asked, "delete_code": delete_code}}], actor=actor)[0]
+                       "payload": {"asked": asked, "delete_code": delete_code}}], actor=actor)[0]
 
 
 def queued(store: Store) -> list[str]:

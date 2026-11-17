@@ -82,18 +82,17 @@ def test_a_batch_with_no_paths_drains_what_queued_while_no_daemon_ran(tmp_path):
     assert "client op" not in d.process_batch([])          # drained once, from the saved offset
 
 
-def test_a_daemon_taking_over_reads_what_a_daemonless_writer_wrote_after_it_started(tmp_path):
+def test_a_starting_daemon_reads_what_a_daemonless_writer_wrote_after_it_built_its_store(tmp_path):
     """The daemon builds its store, then writes its pidfile. A write that
-    applied between the two is read when it takes over."""
+    applied between the two is read when it starts."""
     from codoc.daemon import client
     d, _ = make(tmp_path, [])
     last = list(d.ws.store.blocks["p1"].text().live_refs())[-1]
     client.write(d.codoc_dir, client="cli", bodies=[{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
                                                     "payload": {"after": list(last), "text": " Between."}}])
     client.release(d.codoc_dir)
-    assert d.take_over()
+    d.start()
     assert d.ws.store.blocks["p1"].text().live_text().endswith(" Between.")
-    assert not d.take_over()
 
 
 def test_a_daemonless_writer_starts_a_new_session_when_head_moves(tmp_path, monkeypatch):

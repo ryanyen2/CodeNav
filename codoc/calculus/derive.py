@@ -519,13 +519,8 @@ def accept_handoffs(store: Store, plan) -> list[str]:
     plan (the loop's, a translator's, a suggester's, or an agent's
     ``codoc_reflect`` of code it already wrote) is about words, and accepting
     it takes the words only. A delete plan never hands off: removing code is
-    its own decision (`codoc handoff --delete-code`).
-
-    The mark is read from the plan's opening op. A fold folds only decided
-    plans, so an open plan still has that op; a plan reopened by undoing a
-    verdict that was folded away has lost it and hands off nothing."""
-    opened = store.by_id.get(plan.opened_by or "")
-    if plan.kind == "delete" or opened is None or not opened.payload.get("build"):
+    its own decision (`codoc handoff --delete-code`)."""
+    if plan.kind == "delete" or not plan.build:
         return []
     return plan_features(store, plan)
 
