@@ -163,6 +163,8 @@ def _h_text_insert(store: Store, op: Op, touched: set[str]):
         if not block.live:
             raise Conflict("dead_block", block.id)
         text = block.text(path)
+    if "\n" in chars and is_one_line(block.kind):
+        raise Conflict("newline_in_line", block.kind)     # a line break in a heading or prose block is a new block
     seg = text.insert(after, chars, op=op.id, actor=op.actor, at=op.at, plan=op.plan)
     store.index_text(block.id, path, text)
     touched.add(block.id)

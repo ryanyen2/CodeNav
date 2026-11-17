@@ -7,9 +7,6 @@ file describes `vscode-codoc/src` as it is. The projection and the ops are defin
 [model.md](model.md); the inbox, acks and the holding rule in
 [concurrency.md](concurrency.md#13-the-editors-side).
 
-The editor edits headings and paragraphs. Editing of list items, tables and code blocks is
-being added.
-
 ## 1. Processes
 
 | part | where | does |
@@ -25,24 +22,30 @@ Code opens; the page never reads it.
 ## 2. Document model
 
 ```
-doc      := (heading | paragraph | kindBlock)+
-heading  := inline*            attrs: bid, head, level
-paragraph:= inline*            attrs: bid, head
+doc      := (heading | paragraph | bullet | numbered | source | kindBlock)+
+heading  := text*              attrs: bid, head, level
+paragraph:= text*              attrs: bid, head
+bullet   := text*              attrs: bid, head, level        a list item; level is the indent depth
+numbered := text*              attrs: bid, head, level        its number is drawn, not stored
+source   := text*              attrs: bid, head, kind (table | diagram | code), lang, derived
+                               raw text, newlines allowed, no marks
 kindBlock:= atom               attrs: bid, head, kind, fields; drawn read-only
-inline   := text | hardBreak
-marks    := bold | link{href} | cite{file, symbol} | comment{block} | suggest_del{plan} | plan{pid}
+marks    := bold | code | link{href} | cite{file, symbol} | comment{block} | suggest_del{plan} | plan{pid}
 ```
 
 - `bid` is the block id. `head` is the store position of the last op that touched the
   block, from the projection. Adoption compares it.
-- Every projected block that is not a heading, a paragraph or a comment is a `kindBlock`:
-  the kind's name, then one row per field with a value. This includes `bullet`,
-  `numbered`, `table`, `code` and `diagram`.
+- A heading, a paragraph and a list item are one line. There is no hard break: Enter and
+  Shift-Enter both start a new block, and the applier refuses a newline there.
+- A numbered item's number is computed when drawn: consecutive numbered items at the same
+  level count 1, 2, 3; a deeper item between them does not restart the count.
+- A `source` node edits the store's `source` field. Enter inside it types a newline.
+- Every other projected kind except `comment` is a `kindBlock`: the kind's name, then one
+  row per field with a value.
 - A comment block is not in the document. It is a card in the margin (section 7).
-- The person sets `bold`, `link` and `cite`, and the recorder sends them. The projection
-  sets `comment`, `suggest_del` and `plan`; the recorder never sends them. `plan` and
-  `suggest_del` are not inclusive, so typing at their edge is the person's own text.
-- The store's `code` mark has no editor mark yet and is not drawn.
+- The person sets `bold`, `code`, `link` and `cite`, and the recorder sends them. The
+  projection sets `comment`, `suggest_del` and `plan`; the recorder never sends them. Every
+  mark except `bold` is non-inclusive, so typing at its end is outside it.
 - A citation is a mark over ordinary text, so its label is editable and attributed.
 - Attribution and plan membership are not in the document. They are read from the
   projection's runs and drawn as decorations.
@@ -76,17 +79,27 @@ The gestures (`commands.ts`, bound in `keymap.ts`):
 
 | key or command | ops |
 |---|---|
-| Enter | `block.split` at the caret. A heading's tail becomes a paragraph. The half with live text keeps the id. |
-| Enter over a selection inside one block | The delete as recorded text, then the split: two dispatches. |
+| Enter, Shift-Enter in a heading, paragraph or item | `block.split` at the caret. A heading's tail becomes a paragraph; an item's tail is an item at the same level. |
+| Enter in an empty list item | `block.set(kind = paragraph)`. |
+| Enter in a source block | `text.insert` of a newline on `source`. |
+| Mod-Enter | `block.add` of a paragraph after the block. The way out of a code block at the end of the page. |
 | `#`..`######` and a space at a block's start | `text.delete` of the hashes, `block.set(kind = heading, level)`. |
-| `/` menu: Heading 1..3, Paragraph | `text.delete` of the typed `/query`, `block.set(kind)`. |
-| Backspace at a paragraph's start, Delete at its end, next to a paragraph | `block.merge`. |
-| Backspace or Delete at a heading boundary | None. The caret moves across. |
-| Backspace, Delete or Enter over a selection across blocks | `text.delete` per block, `block.delete` per block wholly inside, `block.merge` of the two ends. Refused when it touches a heading or a block with no shadow. |
-| Tab, Shift-Tab on a heading | `block.set(level)`. |
+| `- `, `* `, `1. ` at a paragraph's start | `text.delete` of the marker, `block.set(kind = bullet or numbered, level = 1)`. |
+| ```` ``` ````, ```` ```lang ````, ```` ```mermaid ```` or a `\|` row, then Enter, in an otherwise empty paragraph | `block.delete` of the paragraph, `block.add` of a code block (with `lang`), a diagram or a table (with that row). |
+| `/` menu | Heading 1-3, Paragraph, Bullet list, Numbered list, Table, Code block, Diagram: `text.delete` of the typed `/query` and `block.set(kind)` or a new block. In a heading, also Delete feature. |
+| Backspace at a list item's start | `block.set(kind = paragraph)`. |
+| Backspace at a paragraph's start, Delete at its end, next to a paragraph or item | `block.merge`. When the other block is empty, `block.delete` of it instead, so the block with words keeps its id and kind. |
+| Backspace or Delete in an empty paragraph next to a heading, source or plugin block | `block.delete` of the paragraph. |
+| Typing, Backspace, Delete, Enter or cut over a selection across blocks | `text.delete` at each end, `block.delete` per block wholly inside, `block.merge` of the two ends when both are heading or prose. Refused with a notice when it crosses a heading that is not wholly selected, or would remove every block or every feature. |
+| Tab, Shift-Tab on a list item | `block.set(level ± 1)`. |
+| Tab, Shift-Tab on a heading | `block.move` of the heading after the block before it, `level_delta ± 1`: the subtree moves with it. |
+| Tab in a paragraph | Nothing; focus stays in the editor. |
+| Mod-B, Mod-E | `text.mark` bold or code, on or off, one per block the selection covers. |
+| Mod-K | An inline field for the URL. Enter sends `text.mark` link; an empty field turns the link off. An address with no scheme gets `https://`. |
+| Paste (`paste.ts`) | The selection is deleted first. Plain text with structure (a block that is not a paragraph, or an inline mark) is read as Markdown (`calc/markdown.ts`): the first heading or prose piece joins the caret's block, every further piece is `block.add`, `text.insert`, `text.mark`. Other text splits into one block per line. Ids in pasted Markdown are ignored; a pasted `codoc:<kind>` fence becomes a code block. |
+| Composition (an IME) | Nothing while composing; one `text.insert` of the composed text when it ends. |
 | Drop a drag handle (`drag.ts`) | `block.move`, `level_delta` 0. A heading moves with its range. |
-| Paste of several blocks (`pasteBlocks`) | The first block's text joins the caret's block; `block.add` and `text.insert` per further block. Text is normalised to NFC. |
-| `deleteFeature(fid)` on the editor handle | `block.delete` of the heading, `block.set(level)` per descendant heading, one level up. Refused when it would empty the document. No control on the page calls it. |
+| `deleteFeature(fid)`, Delete feature in the `/` menu | `block.delete` of the heading, `block.set(level)` per descendant heading, one level up. Refused when it would empty the document. |
 
 Two plugins in `guards.ts` keep the page and the shadows in step:
 
@@ -94,9 +107,6 @@ Two plugins in `guards.ts` keep the page and the shadows in step:
   top-level block unless it is tagged `RECORDED`. The page applies a transaction first and
   records what it took, so a refused gesture leaves no ops.
 - `nfcGuard` composes text that a transaction inserted in decomposed form.
-
-No key toggles `bold` or `link`. Marks reach the page in pasted text and through the `@`
-picker.
 
 **Batches.** Ops wait 350 ms after the last one and leave together as one batch. A verdict,
 a hand-off, an undo and an adoption flush the queue first. The batch is the undo unit.
@@ -181,6 +191,7 @@ the window. It never writes to the live editor.
 | Build now | Asks the host to run `codoc realize`. Shown when a feature is `queued` or `planned`. |
 | ⌘F, ⌘⌥F or ⌘H | Find; Find and Replace (`find.ts`). Matches stay inside a block; a replacement is ordinary typing. |
 | `/` | The block menu (section 4). |
+| Mod-B, Mod-E, Mod-K | Bold, code, link (section 4). |
 | `@` | The citation picker: up to 8 bound symbols from the projection's bindings, filtered by the typed query. A pick replaces `@query` with the symbol's name under a `cite` mark. |
 | Click on a citation | Opens the code. |
 
@@ -203,16 +214,19 @@ src/web/calc/               pure, no DOM
   adopt.ts                  projection block -> node; the adoption plan
   claims.ts                 paints from runs, plans, claims, phases
   window.ts                 history.json; nextUndo, textAt, shapeAt, wordDiff
+  markdown.ts               block and inline Markdown -> specs and spans; the same cases as
+                            codoc/calculus/block_md.py and inline_md.py
 src/web/editor/             ProseMirror (TipTap schema)
-  schema.ts, keymap.ts, commands.ts, guards.ts, outbox.ts, adoption.ts,
+  schema.ts, keymap.ts, commands.ts, paste.ts, guards.ts, outbox.ts, adoption.ts,
   decorations.ts, drag.ts, find.ts, menus.ts, comments.ts, timeline.ts,
   editor.ts (mountEditor), app.ts (the page)
 ```
 
 ## Not built
 
-- Editing list items, tables, code blocks and other kind blocks (being added).
-- A key or button for bold and links, and drawing the `code` mark.
-- A control for deleting a feature.
+- Editing plugin kind blocks (image, url, pdf, screenshot) in place. An agent writes them
+  through `codoc_write_block`.
+- A context menu; Delete feature is in the `/` menu only.
+- Pasting HTML lists beyond a basic `li` rule.
 - A viewer-local read cursor that clears `ground` once seen.
 - The `/codoc:ask` walkthrough inside the editor.

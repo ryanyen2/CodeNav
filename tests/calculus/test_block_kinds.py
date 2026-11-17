@@ -46,6 +46,16 @@ def test_source_blocks_do_not_convert_split_or_merge():
     assert apply(s, m.op(K.BLOCK_SET, {"bid": "p", "path": "kind"}, {"value": HEADING})).conflict is None
 
 
+def test_a_newline_is_content_in_a_source_block_and_refused_in_a_line():
+    m, s = Mint(), Store()
+    ins = paragraph(m, s, "p", "one", after=START)
+    code = block(m, s, "c", CODE_BLOCK, "a = 1", after="p", path="source")
+    refused = apply(s, m.op(K.TEXT_INSERT, {"bid": "p", "path": "text"}, {"after": [ins.id, 2], "text": "\ntwo"}))
+    assert refused.conflict == "newline_in_line" and s.blocks["p"].text().live_text() == "one"
+    kept = apply(s, m.op(K.TEXT_INSERT, {"bid": "c", "path": "source"}, {"after": [code.id, 4], "text": "\nb = 2"}))
+    assert kept.conflict is None and s.blocks["c"].text("source").live_text() == "a = 1\nb = 2"
+
+
 def test_widening_a_mark_keeps_its_placer_and_takes_the_new_clock():
     m, s = Mint(), Store()
     ins = paragraph(m, s, "p", "one two three", after=START)

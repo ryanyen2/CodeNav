@@ -393,6 +393,7 @@ Codes are stable identifiers. A conflicted op changes nothing.
 | `reserved_path`, `text_field` | set | `path` is `id`, `rank` or `dead`; or it is a Text field. |
 | `kind_incompatible` | set kind, merge | One of the two kinds is not a heading or a prose kind. |
 | `not_splittable` | split | The block is a source or plugin kind. |
+| `newline_in_line` | insert | A newline into a heading or prose block. A line break there is `block.split`. |
 | `no_level` | set level | The kind has no level. |
 | `merge_heading` | merge | A heading would die, or prose would merge into a heading. |
 | `not_adjacent` | merge | The two blocks are not neighbours in the flow. |
@@ -638,9 +639,9 @@ A publish from a cold cache and one from a warm cache write the same bytes.
 
 1. A verdict has no undo case for a plan-tagged `text.delete` or `text.restore`. A subset
    accept that leaves one out leaves its effect in place.
-2. The applier checks less than `ingest` and the kind schemas do: `text.insert` accepts a
-   newline in a heading or prose field (the editor's hard break sends one), and any
-   block kind or plan kind is accepted.
+2. The applier accepts any block kind and any plan kind. An unknown block kind is stored
+   with opaque content, so a newer client's kind survives an older store. Is that
+   the intended forward-compatibility rule?
 3. Undoing a `block.set` on a field that did not exist leaves it `null`.
 4. The timeline reports one Text field per block (`text`, `source`, or a plugin kind's
    first field). A change to an image's `caption` is un-applied and not reported.
