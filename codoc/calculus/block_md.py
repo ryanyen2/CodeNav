@@ -51,10 +51,15 @@ class BlockSpec:
 
 # ── parse ────────────────────────────────────────────────────────────────────
 
-def parse(md: str, *, headings: bool = True) -> list[BlockSpec]:
+def parse(md: str, *, headings: bool = True, absolute: bool = False) -> list[BlockSpec]:
     """The blocks ``md`` describes, in order. With ``headings=False`` a
     ``# line`` is a paragraph without its hashes: a description cannot hold a
-    heading, because a heading is a feature."""
+    heading, because a heading is a feature.
+
+    An item's level is relative: one deeper than the open item it is indented
+    past. With ``absolute`` it is read from its own indent instead: level 1
+    flush left, one more per started four columns. That is how ``render_one``
+    shows a block alone, so a level written back from it is absolute."""
     out: list[BlockSpec] = []
     lines = md.replace("\r\n", "\n").split("\n")
     para: list[str] = []
@@ -104,7 +109,8 @@ def parse(md: str, *, headings: bool = True) -> list[BlockSpec]:
                     and not _ITEM.match(lines[i]) and not lines[i].strip().startswith(("|", "```")):
                 text += " " + lines[i].strip()
                 i += 1
-            out.append(BlockSpec(NUMBERED if item.group(2) else BULLET, min(len(indents), MAX_LEVEL), text))
+            level = 1 + -(-width // 4) if absolute else len(indents)
+            out.append(BlockSpec(NUMBERED if item.group(2) else BULLET, min(level, MAX_LEVEL), text))
             continue
         if h := _HEADING.match(stripped):
             flush()

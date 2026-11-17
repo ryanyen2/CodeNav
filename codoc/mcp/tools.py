@@ -13,11 +13,13 @@ written and the error names it.
 |---|---|---|
 | ``reflect`` | ``attach``, ``detach`` on an existing feature | on the trunk |
 | ``reflect`` | ``amend`` | ``Workspace.amend``: all of it on the trunk when it only rewords and passes the machine gate, else one plan |
-| ``reflect`` | ``add_node``, ``move_node``, ``retire_node`` | as ``propose`` writes them |
+| ``reflect`` | ``add_node``, ``move_node``, ``retire_node`` | as ``propose`` writes them, but accepting them builds nothing |
 | ``propose`` | all | one plan for everything but removals; each ``retire_node`` is its own delete plan |
 
-`codoc accept` hands off every feature the plan touches with the verdict; the
-editor's Accept sends the verdict alone.
+A ``propose`` plan is opened with ``build: true``: it comes before the code,
+so accepting it (in the editor or with ``codoc accept``) also hands off the
+features it touches (``derive.accept_handoffs``). A ``reflect`` plan describes
+code already written, and accepting it takes the words only.
 """
 from __future__ import annotations
 
@@ -38,7 +40,7 @@ from codoc.llm.prompt import titles_outline
 from codoc.loops.context import description_blocks, select_context, written_by
 from codoc.calculus.block_md import BlockSpec
 from codoc.calculus.ingest import block_bodies, strike_bodies
-from codoc.loops.edits import Change, Compiler
+from codoc.loops.edits import PLAN_KIND, Change, Compiler, delete_open
 from codoc.loops.realize import queued
 from codoc.mcp.walkthrough import AskStep, build_walkthrough, clear_walkthrough, read_walkthrough, write_walkthrough
 from codoc.workspace.layout import GRAPH_CACHE
@@ -227,7 +229,7 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "", caused_by: 
         out["amended"].append({"feature_id": c.target, **got})
     if planned:
         out["planned"] = _write_plans(codoc_dir, ws.store, planned, note=rationale, caused_by=caused_by,
-                                      root_dir=root_dir)
+                                      root_dir=root_dir, build=False)
     return out
 
 
@@ -240,20 +242,30 @@ def propose(codoc_dir: str, *, ops: list[dict], note: str = "", caused_by: str |
         return _err(err)
     if not changes:
         return _err("no ops")
-    return _write_plans(codoc_dir, ws.store, changes, note=note, caused_by=caused_by, root_dir=root_dir)
+    return _write_plans(codoc_dir, ws.store, changes, note=note, caused_by=caused_by, root_dir=root_dir,
+                        build=True)
 
 
 def _write_plans(codoc_dir: str, store, changes: list[Change], *, note: str, caused_by: str | None,
-                 root_dir: str | None) -> dict:
+                 root_dir: str | None, build: bool) -> dict:
     """Each removal as its own delete plan (accepting one deletes that
-    feature), everything else as one plan. Returns the first plan's id and
-    every id."""
-    removals = [c for c in changes if c.kind == "retire_node"]
+    feature), everything else as one plan. A feature already proposed for
+    deletion, by an open plan or earlier in this call, is not proposed again.
+    ``build`` says accepting the plan asks for the code: true for a proposal
+    made before the code, false for a reflection of code already written.
+    Returns the first plan's id and every id."""
+    removals: dict[str, Change] = {}
+    for c in changes:
+        if c.kind == "retire_node" and c.target not in removals and not delete_open(store, c.target):
+            removals[c.target] = c
     rest = [c for c in changes if c.kind != "retire_node"]
-    results = [_write_plan(codoc_dir, store, [c], note=c.note or note, caused_by=caused_by, root_dir=root_dir)
-               for c in removals]
+    results = [_write_plan(codoc_dir, store, [c], note=c.note or note, caused_by=caused_by, root_dir=root_dir,
+                           build=False) for c in removals.values()]
     if rest:
-        results.insert(0, _write_plan(codoc_dir, store, rest, note=note, caused_by=caused_by, root_dir=root_dir))
+        results.insert(0, _write_plan(codoc_dir, store, rest, note=note, caused_by=caused_by, root_dir=root_dir,
+                                      build=build))
+    if not results:
+        return _err("every feature named is already proposed for removal")
     failed = next((r for r in results if not r.get("ok")), None)
     if failed:
         return failed
@@ -261,19 +273,17 @@ def _write_plans(codoc_dir: str, store, changes: list[Change], *, note: str, cau
             "ops": sum(r["ops"] for r in results), "note": results[0]["note"]}
 
 
-_PLAN_KIND = {"add_node": "add", "move_node": "move", "retire_node": "delete"}
-
-
 def _write_plan(codoc_dir: str, store, changes: list[Change], *, note: str, caused_by: str | None,
-                root_dir: str | None) -> dict:
+                root_dir: str | None, build: bool) -> dict:
     """Open one plan and write every change under it: each change's bodies as
     one batch, then its rewrites as ingests, then its strikes."""
-    kinds = {_PLAN_KIND.get(c.kind, "edit") for c in changes}
+    kinds = {PLAN_KIND.get(c.kind, "edit") for c in changes}
     kind = kinds.pop() if len(kinds) == 1 else "edit"      # a delete plan holds exactly one removal
     target = changes[0].target if len(changes) == 1 and kind != "add" else None
     pid = new_plan_id()
+    payload = {"kind": kind, "target": target, "note": note, **({"build": True} if build else {})}
     opened = client.write(codoc_dir, client=AGENT, bodies=[
-        {"kind": K.PLAN_OPEN, "target": {"pid": pid}, "payload": {"kind": kind, "target": target, "note": note}}],
+        {"kind": K.PLAN_OPEN, "target": {"pid": pid}, "payload": payload}],
         batch=pid, caused_by=caused_by, root_dir=root_dir)
     if opened and opened[0].get("conflict"):
         return _err(f"plan.open refused: {opened[0]['conflict']}")
@@ -292,8 +302,9 @@ def _write_plan(codoc_dir: str, store, changes: list[Change], *, note: str, caus
             written += len(client.write(codoc_dir, client=AGENT, bodies=strikes, plan=pid, batch=pid,
                                         caused_by=caused_by, root_dir=root_dir))
     return {"ok": True, "plan_id": pid, "ops": written,
-            "note": "The person accepts or rejects this plan in the editor. Accepting it queues the work for you "
-                    "(except a removal, which the person hands off separately)."}
+            "note": "The person accepts or rejects this plan in the editor. "
+                    + ("Accepting it queues the work for you." if build and kind != "delete" else
+                       "Accepting it takes the words only; nothing is queued.")}
 
 
 def write_block(codoc_dir: str, *, content: dict, bid: str | None = None, kind: str | None = None,

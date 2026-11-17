@@ -15,7 +15,7 @@ from codoc.calculus.block_md import BlockSpec
 from codoc.calculus.doc import (
     HEADING, PROSE, SOURCE, Block, TreeNode, fold_tree, in_flow, is_exported, is_source_field, text_fields,
 )
-from codoc.calculus.ids import OpId, actor_kind, is_human
+from codoc.calculus.ids import OpId, is_human
 from codoc.calculus.inline_md import Span, render
 from codoc.calculus.ops import Op, covered, in_frontier
 from codoc.calculus.store import Store
@@ -514,12 +514,18 @@ def plan_features(store: Store, plan) -> list[str]:
 def accept_handoffs(store: Store, plan) -> list[str]:
     """The features that accepting ``plan`` hands off, in the same batch.
 
-    A coding agent's plan is a request to build (it was proposed before the
-    code), so accepting it queues the work. A loop's or a translator's plan
-    describes code that already exists, and a suggester's is a proposal about
-    words; accepting those takes the words only. A delete plan never hands off:
-    removing code is its own decision (`codoc handoff --delete-code`)."""
-    if plan.kind == "delete" or actor_kind(plan.actor) != "agent":
+    A plan opened with ``build`` asks for code: ``codoc_propose`` opens one
+    before the code is written, so accepting it queues the work. Any other
+    plan (the loop's, a translator's, a suggester's, or an agent's
+    ``codoc_reflect`` of code it already wrote) is about words, and accepting
+    it takes the words only. A delete plan never hands off: removing code is
+    its own decision (`codoc handoff --delete-code`).
+
+    The mark is read from the plan's opening op. A fold folds only decided
+    plans, so an open plan still has that op; a plan reopened by undoing a
+    verdict that was folded away has lost it and hands off nothing."""
+    opened = store.by_id.get(plan.opened_by or "")
+    if plan.kind == "delete" or opened is None or not opened.payload.get("build"):
         return []
     return plan_features(store, plan)
 

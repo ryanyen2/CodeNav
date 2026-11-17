@@ -43,7 +43,7 @@ from codoc.index.changes import ChangeSet, ChunkRef
 from codoc.index.graph import Graph
 from codoc.loops.context import impacted_features, owner_of, select_context
 from codoc.calculus.ingest import strike_bodies
-from codoc.loops.edits import Change, Compiler, title_from_file
+from codoc.loops.edits import PLAN_KIND, Change, Compiler, delete_open, title_from_file
 from codoc.workspace import Workspace
 
 MAX_ADDED_PER_CALL = 25
@@ -326,9 +326,6 @@ def _batches(items: list, size: int) -> list[list]:
 
 # ── landing a compiled edit ──────────────────────────────────────────────────
 
-_PLAN_KIND = {"add_node": "add", "move_node": "move", "retire_node": "delete"}
-
-
 def _land(p: _Pass, change: Change) -> bool:
     """Write one compiled edit (see the table in the module docstring).
     Returns whether anything was written."""
@@ -348,17 +345,13 @@ def _land(p: _Pass, change: Change) -> bool:
         if done.plan:
             p.res.plans.append(done.plan)
         return bool(done.ops)
-    if change.kind == "retire_node" and _delete_open(p.store, fid):
+    if change.kind == "retire_node" and delete_open(p.store, fid):
         return False          # already proposed for deletion in this pass or an earlier one
-    pid = p.open_plan(kind=_PLAN_KIND[change.kind], target=fid, note=change.note)
+    pid = p.open_plan(kind=PLAN_KIND[change.kind], target=fid, note=change.note)
     if change.kind == "add_node":
         p.plan_of[fid] = pid
     p.submit(change.bodies + strike_bodies(p.store, change.strikes, pid), plan=pid, batch=pid, caused_by=cause)
     return True
-
-
-def _delete_open(store: Store, fid: str) -> bool:
-    return any(pl.kind == "delete" and pl.target == fid for pl in store.open_plans.values())
 
 
 def _delete_plan(p: _Pass, fid: str, note: str) -> str:

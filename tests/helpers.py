@@ -198,6 +198,14 @@ def ws_paragraph(ws: Workspace, bid: str, text: str, after=START, actor=H) -> Op
                      actor=actor)[1]
 
 
+def kind_block(ws: Workspace, kind: str, content: dict, *, after: str, actor=H) -> str:
+    """Add a kind block and its text in one batch, as ``codoc_write_block``
+    does; returns its id."""
+    bodies, (bid,) = block_bodies([block_md.BlockSpec(kind, content=content)], after=after)
+    assert all(o.conflict is None for o in ws.submit(bodies, actor=actor))
+    return bid
+
+
 def ins(ws, bid, after, text, actor=H, plan=None):
     return ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": bid, "path": "text"},
                        "payload": {"after": after, "text": text}}], actor=actor, plan=plan)[0]

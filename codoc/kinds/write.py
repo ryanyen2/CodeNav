@@ -6,9 +6,10 @@ for non-Text fields and ``ingest`` for Text fields, with the caller's actor and
 plan. No other module emits ops against a kind block, so every word in one is
 attributed by ``ingest``.
 
-``plan_write`` is pure (content → what to submit); ``write_block`` and
-``add_block`` run it against a workspace. A second process (the MCP server)
-runs ``plan_write`` against a read-only replay and submits through the inbox.
+``plan_write`` is pure (content → what to submit); ``write_block`` runs it
+against a workspace. A second process (the MCP server) runs ``plan_write``
+against a read-only replay and submits through the inbox. A new kind block is
+``ingest.block_bodies``: its add and its text in one batch.
 """
 from __future__ import annotations
 
@@ -16,10 +17,9 @@ from dataclasses import dataclass, field
 
 from codoc.calculus import ops as K
 from codoc.calculus.doc import Block
-from codoc.calculus.ids import new_block_id
 from codoc.calculus.ops import Op
 from codoc.calculus.text import Text
-from codoc.kinds import Kind, get
+from codoc.kinds import get
 from codoc.workspace import Workspace
 
 
@@ -53,20 +53,6 @@ def plan_write(block: Block | None, content: dict) -> WritePlan:
     return out
 
 
-def add_body(kind_name: str, content: dict, *, after: str, bid: str | None = None) -> tuple[str, dict | None, str | None]:
-    """``(bid, block.add body, refusal)`` for a new kind block; Text fields are
-    written afterwards through ``plan_write``."""
-    kind: Kind | None = get(kind_name)
-    bid = bid or new_block_id()
-    if kind is None:
-        return bid, None, f"unknown kind {kind_name!r}"
-    err = kind.validate(content)
-    if err:
-        return bid, None, err
-    plain = {k: v for k, v in content.items() if k not in kind.text_fields}
-    return bid, {"kind": K.BLOCK_ADD, "target": {"bid": bid}, "payload": {"kind": kind_name, "after": after, "content": plain}}, None
-
-
 @dataclass
 class Written:
     bid: str
@@ -93,24 +79,4 @@ def write_block(ws: Workspace, bid: str, content: dict, *, actor: str, plan: str
         if res.refused:
             out.refused.append((f, res.refused))
         out.ops.extend(ops)
-    return out
-
-
-def add_block(ws: Workspace, kind_name: str, content: dict, *, after: str, actor: str, plan: str | None = None,
-              caused_by: str | None = None, batch: str | None = None, bid: str | None = None) -> Written:
-    bid, body, err = add_body(kind_name, content, after=after, bid=bid)
-    out = Written(bid)
-    if err or body is None:
-        out.refused.append(("", err or "no body"))
-        return out
-    add = ws.submit([body], actor=actor, plan=plan, caused_by=caused_by, batch=batch)
-    out.ops.extend(add)
-    if add[0].conflict:
-        out.refused.append(("", add[0].conflict))
-        return out
-    texts = {k: v for k, v in content.items() if k in get(kind_name).text_fields and v}
-    if texts:
-        more = write_block(ws, bid, texts, actor=actor, plan=plan, caused_by=caused_by, batch=batch)
-        out.ops.extend(more.ops)
-        out.refused.extend(more.refused)
     return out

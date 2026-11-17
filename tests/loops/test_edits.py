@@ -9,7 +9,7 @@ from codoc.calculus.ingest import ingest, resolve_pending_refs
 from codoc.calculus.store import Store
 from codoc.calculus.ingest import strike_bodies
 from codoc.loops.edits import Change, Compiler, validate
-from tests.helpers import Mint
+from tests.helpers import Mint, import_markdown
 
 
 def submit(store: Store, m: Mint, bodies: list[dict], actor="loop", plan=None) -> None:
@@ -112,6 +112,39 @@ def test_list_levels_in_an_amend_are_read_from_the_indentation_shown():
         {"id": nested, "text": "    - nested"}, {"text": "    - sibling"}, {"id": top, "text": "    - top, now nested"}]})
     land(s, m, amend)
     assert kinds(s, ch.target) == [(BULLET, 2), (BULLET, 2), (BULLET, 2)]
+
+
+def test_moves_and_adds_land_the_same_compiled_together_or_one_by_one():
+    """A node is placed under its parent when its op applies, so a move
+    earlier in the reply cannot leave a later add with a stale place or level."""
+    tree = "# E {#b-00000000000e}\n\nE.\n\n# F {#b-00000000000f}\n\nF.\n\n# X {#b-0000000000aa}\n\nX.\n"
+    cases = [
+        ([{"kind": "move_node", "feature_id": "b-00000000000f", "parent_id": "b-00000000000e"},
+          {"kind": "add_node", "parent_id": "b-00000000000f", "title": "G", "description": "g."}],
+         [("E", 1), ("F", 2), ("G", 3), ("X", 1)]),
+        ([{"kind": "move_node", "feature_id": "b-0000000000aa", "parent_id": "b-00000000000e"},
+          {"kind": "add_node", "title": "A", "description": "a."}],
+         [("E", 1), ("X", 2), ("F", 1), ("A", 1)]),
+    ]
+    for edits, want in cases:
+        for together in (True, False):
+            s, m = Store(), Mint()
+            submit(s, m, import_markdown(tree), actor="import")
+            c = Compiler(s)
+            if together:                    # the MCP path: compile the reply, then write it
+                for ch in [c.compile(e) for e in edits]:
+                    land(s, m, ch)
+            else:                           # the loop's path: write each edit as it compiles
+                for e in edits:
+                    land(s, m, c.compile(e))
+            assert [(title(s, h.id), h.level) for h in s.headings()] == want, (edits, together)
+
+
+def test_a_dash_line_inside_a_code_block_is_not_an_item():
+    s, m, fid, (_para, b1, _b2, _table) = _seeded()
+    land(s, m, Compiler(s).compile({"kind": "amend", "feature_id": fid, "blocks": [
+        {"id": b1, "text": "- Writes in place."}, {"text": "```\n    - not an item\n```\n- Flushes on close."}]}))
+    assert kinds(s, fid)[1:4] == [(BULLET, 1), ("code", 0), (BULLET, 1)]
 
 
 def test_moves_under_a_new_theme_keep_their_order():

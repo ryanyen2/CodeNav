@@ -22,18 +22,24 @@ pass and the MCP tools each apply a ``Change`` through their own writer.
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass, field
 
 from codoc.calculus import block_md
 from codoc.calculus import ops as K
 from codoc.calculus.block_md import BlockSpec
-from codoc.calculus.doc import HEADING, ITEMS, MAX_LEVEL, PROSE, SOURCE
+from codoc.calculus.doc import HEADING, ITEMS, PROSE, SOURCE
 from codoc.calculus.ids import START
 from codoc.calculus.ingest import block_bodies, concat_bodies
 from codoc.calculus.store import Store
 
 KINDS = ("attach", "detach", "add_node", "amend", "move_node", "retire_node")
+# The plan an edit opens when it lands as a proposal; any other edit is an `edit` plan.
+PLAN_KIND = {"add_node": "add", "move_node": "move", "retire_node": "delete"}
+
+
+def delete_open(store: Store, fid: str) -> bool:
+    """Whether ``fid`` is already proposed for deletion by an open plan."""
+    return any(pl.kind == "delete" and pl.target == fid for pl in store.open_plans.values())
 
 
 @dataclass
@@ -111,24 +117,6 @@ def symbol(binding) -> tuple[str, str] | None:
     return binding.split("::", 1)[0], binding
 
 
-_ITEM_LINE = re.compile(r"^([ \t]*)(?:[-+*]|\d{1,9}\.) +")
-
-
-def absolute_levels(md: str, specs: list[BlockSpec]) -> list[BlockSpec]:
-    """``specs`` with each list item's level read from its own indentation:
-    level 1 flush left, one more per started four columns. A block is shown
-    to the model on its own with that indentation (``block_md.render_one``),
-    so the level it writes back is absolute, not relative to the block before."""
-    indents = [len(m.group(1).expandtabs(4)) for line in md.split("\n") if (m := _ITEM_LINE.match(line))]
-    out, i = [], 0
-    for s in specs:
-        if s.kind in ITEMS and i < len(indents):
-            s = BlockSpec(s.kind, min(MAX_LEVEL, 1 + -(-indents[i] // 4)), s.text, s.content, s.id)
-            i += 1
-        out.append(s)
-    return out
-
-
 def one_line(md: str) -> str:
     return " ".join((md or "").split())
 
@@ -146,6 +134,11 @@ class Compiler:
     has minted, so a later edit can name one as its parent whether or not the
     caller has applied the earlier change yet.
 
+    A new or moved node names its parent (``under``) and the applier places it
+    as that parent's last child when the op applies. So the changes of one
+    reply land the same whether the caller applies each before compiling the
+    next or compiles them all first.
+
     ``hashes`` maps ``(file, symbol)`` to ``(fingerprint, types_hash)`` for the
     chunks the caller knows; a binding outside it is attached without hashes.
     ``bindable``, when given, is the set of ``(file, symbol)`` an edit may bind;
@@ -156,8 +149,7 @@ class Compiler:
         self.hashes = hashes or {}
         self.bindable = bindable
         self.minted: dict[str, str] = {}                 # temporary id -> heading id
-        self._own: dict[str, tuple[str, int]] = {}       # minted heading id -> (its last own block, its level)
-        self._next: dict[str, tuple[str, int]] = {}      # anchor -> (last block of the node placed after it, that node's level)
+        self.added: set[str] = set()                     # heading ids minted here
 
     # ── entry ──────────────────────────────────────────────────────────────
     def compile(self, raw: dict) -> Change:
@@ -196,18 +188,19 @@ class Compiler:
                                               "payload": {"file": f, "symbol": s}} for f, s in owned])
 
     def _add_node(self, raw: dict) -> Change:
-        after, level = self._place(raw.get("parent_id"))
-        specs = [BlockSpec(HEADING, level, one_line(raw["title"]))]
+        specs = [BlockSpec(HEADING, 1, one_line(raw["title"]))]
         specs += [s for s in block_md.parse(raw.get("description") or "", headings=False)
                   if s.kind in PROSE or s.kind in SOURCE]
-        bodies, ids = block_bodies(specs, after=after)
+        bodies, ids = block_bodies(specs, after=START)
         fid = ids[0]
+        # The heading goes under its parent; its description follows it.
+        bodies[0] = {"kind": K.BLOCK_ADD, "target": {"bid": fid},
+                     "payload": {"kind": HEADING, "under": self._feature(raw.get("parent_id")) or START}}
         binds = self._binds(raw.get("bindings"))
         bodies += [self._bind(fid, f, s) for f, s in binds]
         if raw.get("id"):
             self.minted[raw["id"]] = fid
-        self._own[fid] = (ids[-1], level)
-        self._link(after, ids[-1], level)
+        self.added.add(fid)
         return Change("add_node", fid, bodies=bodies, bound=binds, structural=True)
 
     def _amend(self, raw: dict) -> Change:
@@ -221,7 +214,7 @@ class Compiler:
         last = fid
         for entry in raw.get("blocks") or []:
             bid, text = entry.get("id"), entry.get("text") or ""
-            specs = absolute_levels(text, block_md.parse(text, headings=False))
+            specs = block_md.parse(text, headings=False, absolute=True)
             if bid is not None:
                 block = body.get(bid)
                 if block is None:
@@ -248,14 +241,11 @@ class Compiler:
         fid = self._feature(raw["feature_id"])
         if fid is None or fid not in self.store.blocks:
             return Change("move_node", refused=f"unknown feature {raw['feature_id']!r}")
-        after, level = self._place(raw.get("parent_id"))
-        moved = self.store.feature_range(fid)
-        if after in {b.id for b in moved}:
+        parent = self._feature(raw.get("parent_id"))
+        if parent in self.store.dominated_ids(fid):
             return Change("move_node", fid, refused="a feature cannot move under itself")
-        self._link(after, moved[-1].id, level)
-        delta = level - self.store.blocks[fid].level
         return Change("move_node", fid, structural=True, bodies=[
-            {"kind": K.BLOCK_MOVE, "target": {"bid": fid}, "payload": {"after": after, "level_delta": delta}}])
+            {"kind": K.BLOCK_MOVE, "target": {"bid": fid}, "payload": {"under": parent or START}}])
 
     def _retire_node(self, raw: dict) -> Change:
         fid = self._feature(raw["feature_id"])
@@ -269,44 +259,10 @@ class Compiler:
         no live heading (a node minted here counts as live)."""
         if ref in self.minted:
             return self.minted[ref]
-        if ref in self._own:
+        if ref in self.added:
             return ref
         b = self.store.blocks.get(ref) if ref else None
         return ref if b is not None and b.live and b.kind == HEADING else None
-
-    def _place(self, parent_ref: str | None) -> tuple[str, int]:
-        """Where a child of ``parent_ref`` goes: ``(after, level)``. After the
-        last block under the parent, one level deeper; with no parent, at the
-        end of the document at level 1.
-
-        The store may not hold what this compiler placed earlier (a caller may
-        submit a whole reply at once), so the anchor is read from the store and
-        then walked along ``_next`` to the end of what was placed after it."""
-        parent = self._feature(parent_ref)
-        if parent in self._own:
-            after, level = self._own[parent][0], self._own[parent][1] + 1
-        elif parent is not None:
-            after, level = self.store.feature_range(parent)[-1].id, self.store.blocks[parent].level + 1
-        else:
-            live = self.store.ordered()
-            after, level = (live[-1].id if live else START), 1
-        # Walk past the nodes placed after the anchor that are deeper than the
-        # parent: they are inside its subtree. A node at the parent's level or
-        # shallower is a sibling of it or above, and the child goes before it.
-        seen = {after}
-        while after in self._next and self._next[after][1] >= level and self._next[after][0] not in seen:
-            after = self._next[after][0]
-            seen.add(after)
-        return after, level
-
-    def _link(self, after: str, last: str, level: int) -> None:
-        """Record a node placed right after ``after``, ending at ``last``.
-        Whatever this compiler placed after ``after`` before now follows the
-        new node, so the chain stays in document order."""
-        old = self._next.get(after)
-        self._next[after] = (last, level)
-        if old is not None and old[0] != last:
-            self._next[last] = old
 
     def _binds(self, raw_binds) -> list[tuple[str, str]]:
         out: list[tuple[str, str]] = []

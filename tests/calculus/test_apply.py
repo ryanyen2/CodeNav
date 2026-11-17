@@ -85,6 +85,27 @@ def test_every_op_inverts_and_replays(tmp_path):
     assert replay(s).state_fingerprint() == s.state_fingerprint()
 
 
+def test_under_places_a_heading_as_its_parents_last_child_and_records_where():
+    """`under` is resolved when the op applies and the record keeps the
+    `after` and level it resolved to, so replay places the block the same."""
+    m, s = Mint(), Store()
+    heading(m, s, "e", "E")
+    paragraph(m, s, "pe", "E body.", after="e")
+    heading(m, s, "e1", "E1", level=2, after="pe")
+    heading(m, s, "f", "F", after="e1")
+    add = apply(s, m.op(K.BLOCK_ADD, {"bid": "e2"}, {"kind": HEADING, "under": "e"}))
+    assert add.conflict is None and "under" not in add.payload
+    assert (add.payload["after"], add.payload["level"]) == ("e1", 2)
+    mv = apply(s, m.op(K.BLOCK_MOVE, {"bid": "f"}, {"under": "e1"}))
+    assert mv.conflict is None and (mv.payload["after"], mv.payload["level_delta"]) == ("e1", 2)
+    top = apply(s, m.op(K.BLOCK_ADD, {"bid": "g"}, {"kind": HEADING, "under": START}))
+    assert (top.payload["after"], top.payload["level"]) == ("e2", 1)
+    assert [(h.id, h.level) for h in s.headings()] == [("e", 1), ("e1", 2), ("f", 3), ("e2", 2), ("g", 1)]
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+    assert apply(s, m.op(K.BLOCK_MOVE, {"bid": "e"}, {"under": "f"})).conflict == "bad_target"
+    assert apply(s, m.op(K.BLOCK_ADD, {"bid": "p"}, {"kind": PARAGRAPH, "under": "e"})).conflict == "malformed"
+
+
 def test_conflicts_are_recorded_and_state_untouched():
     m, s = Mint(), Store()
     heading(m, s, "h1", "Top")

@@ -5,7 +5,7 @@ tools promise — "small repairs land, rewrites and repairs on a feature with
 pending intent become a plan" — has to be what the tree does.
 """
 from codoc.calculus import ops as K
-from codoc.calculus.derive import markdown, phase
+from codoc.calculus.derive import accept_handoffs, markdown, phase
 from codoc.calculus.doc import PARAGRAPH
 from codoc.calculus.ids import START
 from codoc.calculus.text import BOLD
@@ -152,3 +152,37 @@ def test_the_tools_do_not_offer_a_proposal_nobody_can_answer(tmp_path):
     ws.close()
     assert tools.read_status(str(cd))["proposals"] == 1
     client.release(cd)
+
+
+def test_accepting_a_proposal_builds_but_accepting_a_reflection_does_not(tmp_path):
+    """A `codoc_propose` plan comes before the code, so accepting it hands off
+    the feature it adds. A `codoc_reflect` plan describes code the agent
+    already wrote, so accepting it takes the words and queues nothing."""
+    cd, ws = workspace(tmp_path)
+    ws.close()
+    try:
+        refl = tools.reflect(str(cd), ops=[{"kind": "add_node", "title": "Backoff", "description": "Waits."}],
+                             root_dir=str(tmp_path))
+        prop = tools.propose(str(cd), ops=[{"kind": "add_node", "title": "Jitter", "description": "Spreads."}],
+                             root_dir=str(tmp_path))
+        st = client.read(cd).store
+        assert accept_handoffs(st, st.plans[refl["planned"]["plan_id"]]) == []
+        jitter = next(h.id for h in st.headings() if h.text().live_text() == "Jitter")
+        assert accept_handoffs(st, st.plans[prop["plan_id"]]) == [jitter]
+    finally:
+        client.release(cd)
+
+
+def test_a_feature_is_proposed_for_removal_once(tmp_path):
+    """Two `retire_node` of one feature in one call open one delete plan, and
+    a later call adds none while that plan is open."""
+    cd, ws = workspace(tmp_path)
+    ws.close()
+    try:
+        retire = {"kind": "retire_node", "feature_id": "h1"}
+        assert tools.propose(str(cd), ops=[retire, retire], root_dir=str(tmp_path))["ok"]
+        assert not tools.propose(str(cd), ops=[retire], root_dir=str(tmp_path))["ok"]
+        st = client.read(cd).store
+        assert [p.target for p in st.plans.values() if p.kind == "delete" and p.status == "open"] == ["h1"]
+    finally:
+        client.release(cd)

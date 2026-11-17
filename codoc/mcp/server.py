@@ -74,7 +74,8 @@ def codoc_reflect(ops: list[dict], rationale: str = "", caused_by: str | None = 
     (a paragraph, a `- ` item, a `1. ` step, a table) and a block you do not list is
     unchanged (lands on the trunk when it only rewords a little and nobody has
     pending edits there, else as one plan); or `add_node` / `move_node` /
-    `retire_node` (always a plan). Pass the directive id from realize.md as
+    `retire_node` (always a plan; accepting it takes the words, since the code is
+    already written). Pass the directive id from realize.md as
     `caused_by` so the change is attributed to the request and closes it."""
     cd, err = _need_dir()
     return err or tools.reflect(cd, ops=ops, rationale=rationale, caused_by=caused_by, root_dir=_root(cd))
@@ -87,8 +88,9 @@ def codoc_propose(ops: list[dict], note: str = "", caused_by: str | None = None)
     (`description` is Markdown), `{"kind": "amend", "feature_id", "title"?, "blocks":
     [{"id", "text"} | {"id", "delete": true} | {"text"}]}` (a block you do not list is
     unchanged), `{"kind": "move_node", "feature_id", "parent_id"}`,
-    `{"kind": "retire_node", "feature_id"}`. Each removal is its own plan. Accepting
-    a plan of yours queues the work for you; accepting a removal does not delete code."""
+    `{"kind": "retire_node", "feature_id"}`. Each removal is its own plan, and a
+    feature already proposed for removal is not proposed again. Accepting a plan
+    from here queues the work for you; accepting a removal does not delete code."""
     cd, err = _need_dir()
     return err or tools.propose(cd, ops=ops, note=note, caused_by=caused_by, root_dir=_root(cd))
 

@@ -360,13 +360,33 @@ def _after(store: Store, after) -> str | None:
     return after
 
 
+def _under(store: Store, under, moving: list[str]) -> tuple[str, int]:
+    """Where a heading placed ``under`` a parent goes, as ``(after, level)``:
+    after the last live block of the parent's range, one level deeper.
+    ``START`` is the document: after its last live block, at level 1. The
+    blocks ``moving`` are left out of the range they are leaving."""
+    if under == START:
+        last = next((i for _, i in reversed(store.order) if store.blocks[i].live and i not in moving), START)
+        return last, 1
+    parent = _live_feature(store, str(under))
+    if parent.id in moving:
+        raise Conflict("bad_target", parent.id)
+    return [i for i in store.dominated_ids(parent.id) if i not in moving][-1], clamp_level(parent.level + 1)
+
+
 def _h_block_add(store: Store, op: Op, touched: set[str]):
     bid = op.target["bid"]
     if bid in store.blocks:
         raise Conflict("duplicate_block", bid)
     kind = op.payload["kind"]
-    level = level_for(kind, op.payload.get("level"))
-    after = op.payload.get("after", START)
+    if "under" in op.payload:
+        # Resolved here, against the tree as it is now; the record keeps the
+        # place it resolved to, so replay does not resolve it again.
+        if kind != HEADING:
+            raise Conflict("malformed", "under places a heading")
+        after, level = _under(store, op.payload["under"], [])
+    else:
+        after, level = op.payload.get("after", START), level_for(kind, op.payload.get("level"))
     anchor = _after(store, after)
     content = empty_content(kind, op.payload.get("content"))
     for f, tj in (op.payload.get("texts") or {}).items():
@@ -542,12 +562,17 @@ def _h_block_move(store: Store, op: Op, touched: set[str]):
             touched.add(i)
         return {"restore": [list(x) for x in rows]}, [body(K.BLOCK_MOVE, dict(op.target), {"restore": prev})]
     bid = op.target["bid"]
-    after = op.payload.get("after", START)
-    delta = int(op.payload.get("level_delta", 0))
     b = store.blocks.get(bid)
     if b is None or not b.live:
         raise Conflict("no_block", bid)
     ids = store.dominated_ids(bid)
+    if "under" in op.payload:
+        if b.kind != HEADING:
+            raise Conflict("malformed", "under places a heading")
+        after, level = _under(store, op.payload["under"], ids)
+        delta = level - b.level
+    else:
+        after, delta = op.payload.get("after", START), int(op.payload.get("level_delta", 0))
     anchor = _after(store, after)
     if anchor in ids:
         raise Conflict("bad_target", str(after))
@@ -730,6 +755,8 @@ def _h_plan_open(store: Store, op: Op, touched: set[str]):
     store.plans[pid] = store.open_plans[pid] = Plan(
         pid, op.actor, kind, target, op.payload.get("note", ""), "open", ops, opened_by)
     canonical = {"kind": kind, "target": target, "note": op.payload.get("note", "")}
+    if op.payload.get("build"):
+        canonical["build"] = True       # accepting it asks for the code (derive.accept_handoffs)
     if ops:
         canonical["ops"] = ops
     if op.payload.get("opened_by"):
