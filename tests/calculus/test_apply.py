@@ -369,6 +369,20 @@ def test_a_removed_paragraph_stays_with_its_feature_when_a_heading_lands_in_fron
     assert [b.id for b in replay(s).removed_body("h1")] == ["p2"]
 
 
+def test_undoing_a_merge_brings_the_block_back_with_its_own_kind_and_level():
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Top")
+    for bid, kind, level, words, after in (("i1", "bullet", 2, "item one", "h1"), ("i2", "numbered", 1, "item two", "i1")):
+        apply(s, m.op(K.BLOCK_ADD, {"bid": bid}, {"kind": kind, "level": level, "after": after}))
+        apply(s, m.op(K.TEXT_INSERT, {"bid": bid, "path": "text"}, {"after": START, "text": words}))
+    merge = apply(s, m.op(K.BLOCK_MERGE, {"into": "i1", "bid": "i2", "path": "text"}, {}))
+    assert merge.conflict is None and not s.blocks["i2"].live
+    assert all(o.conflict is None for o in invert(s, m, merge))
+    i2 = s.blocks["i2"]
+    assert (i2.live, i2.kind, i2.level, i2.text().live_text()) == (True, "numbered", 1, "item two")
+    assert (i2.dead_actor, i2.dead_at, i2.dead_in) == ("", "", "")
+
+
 def test_a_handoff_records_no_commit_and_one_that_named_a_commit_still_applies():
     m, s = Mint(), Store()
     heading(m, s, "h1", "Top")

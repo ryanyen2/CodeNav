@@ -488,7 +488,9 @@ def _h_block_split(store: Store, op: Op, touched: set[str]):
     new_level = b.level if new_kind in ITEMS else 0      # a list item splits into two at the same depth
     rank = op.payload.get("rank") or (store.rank_before(b.id) if new_first else store.rank_after(b.id))
     if existing is not None:
-        existing.dead, existing.kind, existing.level = None, new_kind, new_level
+        # A merge's inverse: the merged block comes back as it was, with its
+        # own kind and level (a numbered item merged into a bullet stays numbered).
+        existing.revive()
         existing.content[path] = new_text
         store.set_rank(new, rank)
         nb = existing
