@@ -368,18 +368,19 @@ op's clock. `bind.attach` does not: a relocation is not drift.
 | op | target | wire payload | canonical payload adds | inverse |
 |---|---|---|---|---|
 | `plan.open` | `pid` | `kind` (default `edit`), `target`, `note`, `build?` (honoured from an agent only) | | none |
-| `plan.accept` | `pid` | `subset: OpId[]?` | `accepted`, `rejected`, `deleted_blocks`, and everything it changed | `plan.reopen` |
-| `plan.reject` | `pid` | none | everything it changed | `plan.reopen` |
-| `plan.reopen` | `pid` | the verdict's record | `undid: {moved, sets}` | the verdict it undid |
+| `plan.accept` | `pid` | `subset: OpId[]?`; a replay or a redo also sends `steps`, `accepted`, `rejected` | `accepted`, `rejected`, `steps` | `plan.reopen` |
+| `plan.reject` | `pid` | none; a replay or a redo sends `steps`, `rejected` | `rejected`, `steps` | `plan.reopen` |
+| `plan.reopen` | `pid` | `from`, `by` (the verdict), its `steps`, `accepted`, `rejected`, `subset` | `steps`, the ones it undid | the verdict, carrying those `steps` |
 | `feature.handoff` | `fid` | `covers?`, `asked`, `delete_code` | `covers` | `feature.handoff {restore: previous frontier, handoff: this op}` |
 | `feature.realized` | `fid` | `covers?`, `sha`, `files`, `summary` | `covers` | none |
 
 - A plan tag may ride on `text.insert`, `text.delete`, `text.restore`, `text.mark`,
   `block.add`, `block.set`, `block.split`, `block.move` and `bind.attach`. A plan never
   carries `block.delete` or `block.merge`: a plan to delete a feature has `kind = delete`.
-- What a verdict does to each tagged op is in
+- What a verdict does to each tagged op, and the steps it records, are in
   [concurrency.md](concurrency.md#9-plans-and-verdicts). `plan.reopen` is sent only as
-  the inverse of a verdict.
+  the inverse of a verdict. A step of a verdict or a reopen that does not resolve (an
+  unknown block or character, a malformed step) conflicts before anything changes.
 - `feature.handoff` needs a heading, live or dead, and sets `handoff` to
   `union(handoff, covers)`. `covers` defaults to the store's frontier at apply, which
   includes the ops earlier in the same batch. Its restore form sets `handoff` back and

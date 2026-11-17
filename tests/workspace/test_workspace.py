@@ -521,6 +521,37 @@ def test_a_proposal_is_decided_whole_by_the_applier(tmp_path):
     ws.close()
 
 
+def test_an_old_undo_after_a_verdict_removed_the_mark_is_the_senders_bold(tmp_path):
+    """The loop's bold, removed and restored by H, is then removed by a plan
+    another person accepts. H sending the old undo again bolds the words as H."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws); ws.close()
+    write_roles(cd, {"human:other": "owner"})
+    ws = Workspace(cd)
+    r = refs(ws, "p1")
+
+    def bold(on: bool) -> list:
+        return [{"kind": K.TEXT_MARK, "target": {"bid": "p1", "path": "text"},
+                 "payload": {"kind": BOLD, "start": list(r[0]), "end": list(r[6]), "on": on}}]
+
+    ws.submit(bold(True), actor="loop")
+    removal = ws.submit(bold(False), actor=H)[0]
+    undo = removal.inverse[0]
+
+    def send_undo(cid: str) -> None:
+        ws.apply_submissions("ide", H, [Submission(cid=cid, kind=undo["kind"], target=undo["target"],
+                                                   payload=undo["payload"])])
+
+    send_undo("u1")
+    pid = ws.open_plan(actor="agent:claude-code", kind="edit", target="h1")
+    ws.submit(bold(False), actor="agent:claude-code", plan=pid)
+    assert ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor="human:other")[0].conflict is None
+    assert not [m for m in ws.store.blocks["p1"].text().marks if m.kind == BOLD]
+    send_undo("u2")
+    assert [(m.kind, m.actor) for m in ws.store.blocks["p1"].text().marks if m.kind == BOLD] == [(BOLD, H)]
+    ws.close()
+
+
 def test_only_a_coding_agents_plan_asks_for_a_build(tmp_path):
     cd = tmp_path / ".codoc"
     ws = Workspace(cd); seed(ws); ws.close()

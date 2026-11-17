@@ -640,15 +640,21 @@ def _recorded_restore(store: Store, actor: str, target: dict, payload: dict) -> 
     from the recorded inverse of one of ``actor``'s own mark ops on that field,
     or None. Walking back from the newest op: the sender's own ops are passed
     (an undo flushes several of them together), and the walk stops with None
-    at another actor's op that removed or added a mark of this placer (by its
-    op id): someone else changed this mark since, so an old undo restores
-    nothing in the placer's name."""
+    at another actor's mark op or verdict that removed or added a mark of this
+    placer (by its op id): someone else changed this mark since, so an old undo
+    restores nothing in the placer's name."""
     def key(p: dict) -> str:
         return json.dumps({**p, "attrs": {k: v for k, v in (p.get("attrs") or {}).items() if k != "chars"}},
                           sort_keys=True)
     field, placer, want = (target.get("bid"), target.get("path", "text")), payload.get("op"), key(payload)
     for o in reversed(store.ops):
-        if o.kind != K.TEXT_MARK or o.conflict or (o.target.get("bid"), o.target.get("path", "text")) != field:
+        if o.conflict:
+            continue
+        if o.kind in K.VERDICTS and o.actor != actor and any(
+                st.get("do") == "mark" and (st.get("bid"), st.get("path")) == field
+                and (st.get("mark") or {}).get("op") == placer for st in o.payload.get("steps") or []):
+            return None         # a verdict added or removed this placer's mark since
+        if o.kind != K.TEXT_MARK or (o.target.get("bid"), o.target.get("path", "text")) != field:
             continue
         if o.actor == actor:
             got = next((b["payload"] for b in o.inverse

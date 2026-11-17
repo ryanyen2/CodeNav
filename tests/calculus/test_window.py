@@ -106,6 +106,20 @@ def test_window_equals_prefix_replay_under_every_kind_fuzzed():
             elif r < 0.3 and len(live) > 2:
                 i, j = sorted(rng.sample(range(len(live)), 2))
                 op = apply(s, m.op(K.TEXT_DELETE, {"bid": pb, "path": "text"}, {"from": list(live[i]), "to": list(live[j])}))
+            elif r < 0.26 and plans:
+                # A plan taking back some of its own words, or giving back some it took.
+                pid = rng.choice(plans)
+                segs = [g for b in s.ordered() for g in b.text().segs if g.plan == pid]
+                own = [g for g in segs if g.live]
+                back = [g for g in segs if not g.live and getattr(s.by_id.get(g.dead), "plan", None) == pid]
+                if own and rng.random() < 0.6:
+                    g = rng.choice(own)
+                    op = apply(s, m.op(K.TEXT_DELETE, {"bid": pb, "path": "text"}, {"segments": [[g.op, g.k0, len(g.chars)]]},
+                                       actor="loop", plan=pid))
+                elif back:
+                    g = rng.choice(back)
+                    op = apply(s, m.op(K.TEXT_RESTORE, {"bid": pb, "path": "text"},
+                                       {"segments": [[g.op, g.k0, len(g.chars)]], "by": g.dead}, actor="loop", plan=pid))
             elif r < 0.38 and plans and len(live) > 2:
                 i, j = sorted(rng.sample(range(len(live)), 2))
                 op = apply(s, m.op(K.TEXT_MARK, {"bid": pb, "path": "text"},
@@ -117,7 +131,10 @@ def test_window_equals_prefix_replay_under_every_kind_fuzzed():
                 plans.append(pid)
             elif r < 0.55 and plans:
                 pid = plans.pop(rng.randrange(len(plans)))
-                op = apply(s, m.op(K.PLAN_ACCEPT if rng.random() < 0.5 else K.PLAN_REJECT, {"pid": pid}, {}))
+                ops = s.plans[pid].ops
+                subset = {"subset": rng.sample(ops, len(ops) // 2)} if ops and rng.random() < 0.5 else {}
+                op = apply(s, m.op(K.PLAN_ACCEPT, {"pid": pid}, subset) if rng.random() < 0.5
+                           else m.op(K.PLAN_REJECT, {"pid": pid}, {}))
             elif r < 0.65 and len(live) > 1:
                 op = apply(s, m.op(K.BLOCK_SPLIT, {"bid": pb, "path": "text"},
                                    {"new": f"s{step}", "at": list(rng.choice(live))}))
@@ -137,6 +154,23 @@ def test_window_equals_prefix_replay_under_every_kind_fuzzed():
                 undoable.append(op)
         check_window(s)
         check_window(s, limit=rng.randint(3, 25))
+
+
+def test_the_window_shows_the_words_a_verdict_gave_back():
+    """Accepting only a plan's insert gives back the words its own delete took;
+    the window reads that from the verdict's steps, and the reopen's."""
+    m, s, ag = Mint(), Store(), Mint("a", "agent:x")
+    heading(m, s, "h1", "Feat")
+    paragraph(m, s, "p1", "Base.", after="h1")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit", "target": "h1"}))
+    a = apply(s, ag.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"},
+                       {"after": list(s.blocks["p1"].text().last_live_ref()), "text": " Foo"}, plan="P"))
+    apply(s, ag.op(K.TEXT_DELETE, {"bid": "p1", "path": "text"}, {"segments": [[a.id, 0, 4]]}, plan="P"))
+    v = apply(s, m.op(K.PLAN_ACCEPT, {"pid": "P"}, {"subset": [a.id]}))
+    invert(s, m, v)
+    w = check_window(s, limit=2)
+    assert [e["blocks"]["p1"]["text"] for e in w["ops"]] == ["Base. Foo", "Base."]
+    assert w["before"]["p1"] == {"text": "Base."}
 
 
 def test_the_window_carries_the_order_a_verdict_undid():

@@ -169,7 +169,7 @@ def test_delete_plan_strikes_then_accept_deletes():
                      {"kind": SUGGEST_DEL, "attrs": {"plan": "pd"}, "start": ttl.ref_at(0), "end": ttl.ref_at(2), "on": True}, plan="pd"))
     assert [b.id for b in s.ordered()] == ["h1", "p1", "h2"]   # nothing deleted yet
     acc = apply(s, m.op(K.PLAN_ACCEPT, {"pid": "pd"}, {}))
-    assert acc.payload["deleted_blocks"] == ["h1", "p1"]
+    assert [st["bid"] for st in acc.payload["steps"] if st["do"] == "kill_block"] == ["h1", "p1"]
     assert [b.id for b in s.ordered()] == ["h2"]
     invert(s, m, acc)
     assert [b.id for b in s.ordered()] == ["h1", "p1", "h2"]
@@ -303,24 +303,39 @@ def test_reopen_never_binds_code_to_a_dead_heading(tmp_path):
     assert not owners or ws.store.blocks["h1"].live, (re.conflict, [b.to_json() for b in owners])
 
 
-def test_a_reopen_naming_an_unknown_block_in_marks_back_is_a_conflict_not_a_crash():
-    """`apply` is total: a reopen naming an unknown block under `marks_back`
-    is a recorded conflict, not an exception that would stop a rebuild."""
+@pytest.mark.parametrize("step", [
+    {"do": "mark", "bid": "no-such-block", "path": "text", "on": True,
+     "mark": {"kind": BOLD, "attrs": {}, "start": ["s:1", 0], "end": ["s:1", 0]}},
+    {"do": "mark", "bid": "p1", "path": "text", "on": True, "mark": {"kind": BOLD}},
+    {"do": "set", "bid": "no-such-block", "from": {}, "to": {"x": 1}},
+    {"do": "set", "bid": "p1", "from": {"rank": "a"}, "to": {}},
+    {"do": "set", "bid": "p1", "from": {"text": ""}, "to": {}},
+    {"do": "kill", "segments": [["ghost:1", 0, 1]]},
+    {"do": "detach", "fid": "h1", "bindings": [{"file": "f"}]},
+    {"do": "bind", "file": "f", "symbol": "s", "to": {"x": 1}},
+    {"do": "unheard-of"},
+    {"segments": []},
+])
+def test_a_reopen_whose_step_does_not_resolve_is_a_conflict_not_a_crash(step):
+    """`apply` is total: a reopen naming an unknown block, anchor or step
+    is a recorded conflict, not an exception that would stop a rebuild, and
+    nothing before the bad step has been undone."""
     m, s = Mint(), Store()
     heading(m, s, "h1", "Client")
-    paragraph(m, s, "p1", "Retries once.", after="h1")
+    ins = paragraph(m, s, "p1", "Retries once.", after="h1")
     apply(s, m.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit", "target": "p1"}))
     rej = apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {}))
     assert rej.conflict is None
-    bad = m.op(K.PLAN_REOPEN, {"pid": "P"}, {"from": "accepted", "by": rej.id,
-                                             "applied": [{"bid": "no-such-block", "path": "text",
-                                                          "mark": {"kind": BOLD, "attrs": {}, "start": ["s:1", 0], "end": ["s:1", 0]}}]})
+    before = copy.deepcopy(s.state_fingerprint())
+    # Undone first (a reopen undoes newest first), and it would kill "Ret".
+    good = {"do": "revive", "bid": "p1", "path": "text", "segments": [[ins.id, 0, 3]], "by": "x:9", "actor": "human:z", "at": "1"}
+    bad = m.op(K.PLAN_REOPEN, {"pid": "P"}, {"from": "accepted", "by": rej.id, "steps": [step, good]})
     try:
         out = apply(s, bad)
     except Exception as e:  # noqa: BLE001
         pytest.fail(f"apply raised {e!r} instead of recording a conflict")
     assert out.conflict is not None
-    assert s.plans["P"].status == "rejected"
+    assert s.plans["P"].status == "rejected" and s.state_fingerprint() == before
 
 
 def test_merged_link_keeps_the_existing_placer_even_when_it_also_displaces():

@@ -24,12 +24,12 @@ what was true entering it and what each op changed:
   deletion, and a merged-away one as an empty phantom, because their text is
   still in the store.
 - ``ranks``: per block, the rank it held ENTERING the window, folded back from
-  each op that displaced one: a move, or a verdict that undid one, including a
-  ``plan.reopen``, which applies the verdict's own record and so reports what
-  it displaced separately (``undid``). Each ENTRY's ``ranks`` is the same kind
-  of row for that op alone, read forward like its ``blocks``: what the page
-  looked like once it had applied. What never moved keeps today's rank, which
-  is what it had; a reader folds the two together.
+  each op that displaced one: a move, or a verdict's ``set`` step, read from
+  the side the op left (a reopen undid its steps, so that is their ``to``).
+  Each ENTRY's ``ranks`` is the same kind of row for that op alone, read
+  forward like its ``blocks``: what the page looked like once it had applied.
+  What never moved keeps today's rank, which is what it had; a reader folds the
+  two together.
 
 Each entry carries ``batch_first``: where its batch began, so an undo can tell
 a batch it holds whole from one that reaches back past the window.
@@ -102,10 +102,11 @@ def history_window(store: Store, limit: int = 200) -> dict:
             return [(i, f) for i in p.get(key, []) for f in _fields(store, i)]
         if o.kind in VERDICTS:
             out: list[tuple[str, str]] = []
-            for e in _verdict_entries(p):
-                for h in holders(e.get("path", "text"), _segs(e["segments"]), e.get("bid")):
-                    if h not in out:
-                        out.append(h)
+            for st in p.get("steps") or []:
+                if st["do"] in ("kill", "revive"):
+                    for h in holders(st.get("path", "text"), _segs(st["segments"]), st.get("bid")):
+                        if h not in out:
+                            out.append(h)
             return out
         return []
 
@@ -153,13 +154,11 @@ def history_window(store: Store, limit: int = 200) -> dict:
                 tail = into.split(START if at == END else at)
                 dead.segs, dead.marks = tail.segs, tail.marks
         elif o.kind in VERDICTS:
-            # An accept tombstones the words it struck and the ops it did not take;
-            # a reject tombstones the whole proposal; a reopen brings them back.
-            revive = o.kind != K.PLAN_REOPEN
-            for e in _verdict_entries(p):
-                segs = _segs(e["segments"])
-                for text in _each(clone, holders(e.get("path", "text"), segs, e.get("bid"))):
-                    text.revive(segs) if revive else text.kill(segs, by="view")
+            for st, undo in _unapplied(o):
+                if st["do"] in ("kill", "revive"):
+                    segs = _segs(st["segments"])
+                    for text in _each(clone, holders(st.get("path", "text"), segs, st.get("bid"))):
+                        text.revive(segs) if (st["do"] == "kill") == undo else text.kill(segs, by="view")
 
     entries: list[dict] = []
     born: set[str] = set()
@@ -223,19 +222,31 @@ def _liveness(o: Op) -> tuple[list[str], list[str]]:
         return [str(o.target.get("bid"))], []
     if o.kind == K.BLOCK_SPLIT and p.get("new_takes"):
         return [], [str(p.get("new"))]              # a merge's inverse brings the dead block back
-    struck = [str(i) for i in list(p.get("deleted_blocks", [])) + list(p.get("blocks", []))]
-    if o.kind in (K.PLAN_ACCEPT, K.PLAN_REJECT):
-        return struck, []
-    if o.kind == K.PLAN_REOPEN:
-        return [], struck
+    if o.kind in VERDICTS:
+        blocks = [str(st["bid"]) for st in p.get("steps") or [] if st["do"] == "kill_block"]
+        return ([], blocks) if o.kind == K.PLAN_REOPEN else (blocks, [])
     return [], []
 
 
-def _displaced(o: Op) -> dict:
-    """What a verdict's rows record. A reject or accept records what it
-    DISPLACED; a reopen re-applies that same record, so its own rows are what
-    it SET and the thing a reader of the page before it needs is in ``undid``."""
-    return (o.payload.get("undid") or {}) if o.kind == K.PLAN_REOPEN else o.payload
+def _unapplied(o: Op) -> list[tuple[dict, bool]]:
+    """A verdict's steps in the order un-applying it meets them, each with
+    whether that is undoing it. A verdict did its steps, so un-applying it
+    undoes them newest first; a reopen undid them, so un-applying it does them
+    again, oldest first."""
+    steps = o.payload.get("steps") or []
+    return [(st, True) for st in reversed(steps)] if o.kind != K.PLAN_REOPEN else [(st, False) for st in steps]
+
+
+def _set_rows(o: Op, keys: tuple[str, ...]) -> list[tuple[str, dict]]:
+    """(block, its ``keys`` before ``o``) for each ``set`` step of a verdict,
+    in the order un-applying the op meets them, so folding them in turn leaves
+    what the block had before the op."""
+    out = []
+    for st, undo in _unapplied(o):
+        was = st.get("from" if undo else "to") or {}
+        if st["do"] == "set" and (row := {k: was[k] for k in keys if k in was}):
+            out.append((str(st["bid"]), row))
+    return out
 
 
 def _shape_rows(o: Op) -> list[tuple[str, dict]]:
@@ -247,27 +258,20 @@ def _shape_rows(o: Op) -> list[tuple[str, dict]]:
     if o.kind == K.BLOCK_SET and o.target.get("path") == "level":
         return [(str(o.target["bid"]), {"level": int(p.get("prev") or 0)})]
     if o.kind in VERDICTS:
-        out: list[tuple[str, dict]] = []
-        for e in _displaced(o).get("sets", []):
-            if e.get("path") == "kind":
-                out.append((str(e["bid"]), {"kind": str(e["value"]), "level": int(e.get("level") or 0)}))
-            elif e.get("path") == "level":
-                out.append((str(e["bid"]), {"level": int(e["value"] or 0)}))
-        return out
+        return _set_rows(o, ("kind", "level"))
     return []
 
 
 def _rank_rows(o: Op) -> list[tuple[str, str]]:
     """(block, the rank it held before ``o``). A move records what it
     displaced as ``prev`` (or, when it is itself a restore, in its inverse); a
-    verdict that undoes a planned move records the same thing as ``moved``,
-    and a page before it is in the order it undid."""
+    verdict records it in its ``set`` steps."""
+    if o.kind in VERDICTS:
+        return [(b, str(row["rank"])) for b, row in _set_rows(o, ("rank",))]
     if o.kind == K.BLOCK_MOVE:
         rows = o.payload.get("prev")
         if rows is None and o.inverse:
             rows = (o.inverse[0].get("payload") or {}).get("restore")
-    elif o.kind in VERDICTS:
-        rows = _displaced(o).get("moved")
     else:
         return []
     return [(str(r[0]), str(r[1])) for r in (rows or [])]
@@ -293,8 +297,3 @@ def _each(clone, keys):
         if text is not None:
             yield text
 
-
-def _verdict_entries(payload: dict) -> list[dict]:
-    """The records a verdict (or its inverse) made that moved text: segments it
-    tombstoned when it struck or undid, or revived when it reopened."""
-    return [e for e in payload.get("killed", []) + payload.get("struck", []) if e.get("segments")]

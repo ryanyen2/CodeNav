@@ -4,6 +4,8 @@ equals replaying the prefix."""
 import copy
 import random
 
+import pytest
+
 from codoc.calculus import ops as K
 from codoc.calculus.apply import apply
 from codoc.calculus.doc import HEADING, PARAGRAPH
@@ -180,6 +182,15 @@ def test_reject_undoes_split_and_set_and_respects_later_human_move():
     apply(s2, m2.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "b"}))
     apply(s2, m2.op(K.PLAN_REJECT, {"pid": "pm"}, {}))
     assert [x.id for x in s2.ordered()] == ["h1", "b", "a", "c"]
+    # The plan moves one block twice: undoing the second is not "someone moved it since" for the first.
+    m3, s3 = Mint(), Store()
+    heading(m3, s3, "h1", "Top")
+    paragraph(m3, s3, "a", "a", after="h1"); paragraph(m3, s3, "b", "b", after="a"); paragraph(m3, s3, "c", "c", after="b")
+    apply(s3, ag.op(K.PLAN_OPEN, {"pid": "pm"}, {"kind": "move"}))
+    apply(s3, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "b"}, plan="pm"))
+    apply(s3, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "c"}, plan="pm"))
+    apply(s3, m3.op(K.PLAN_REJECT, {"pid": "pm"}, {}))
+    assert [x.id for x in s3.ordered()] == ["h1", "a", "b", "c"]
 
 
 # ── refusals ───────────────────────────────────────────────────
@@ -216,9 +227,78 @@ def test_replay_with_policy_keeps_forged_writes_out():
     assert replay(s).state_fingerprint() == s.state_fingerprint()
 
 
-# ── the two fuzz properties ──────────────────────────────────────────
+# ── the fuzz properties ──────────────────────────────────────────────
 
-def random_op(rng: random.Random, m: Mint, s: Store, step: int) -> Op:
+AGENT = "agent:x"
+VERDICT_KINDS = (K.PLAN_ACCEPT, K.PLAN_REJECT, K.PLAN_REOPEN)
+
+
+def plan_op(rng: random.Random, m: Mint, s: Store, step: int, undos: bool) -> Op:
+    """Plan work: open a plan, insert words under it, take some back and give
+    some back, propose a cut or a kind, level or field change, and decide it.
+    With ``undos``, also reopen a verdict or redo one through the inverses
+    recorded on the log."""
+    if undos and rng.random() < 0.15:
+        last = {o.target["pid"]: o for o in s.ops if o.kind in VERDICT_KINDS and o.conflict is None}
+        if last:
+            (inv,) = rng.choice(list(last.values())).inverse
+            return m.op(inv["kind"], inv["target"], inv["payload"])
+    if not s.open_plans:
+        return m.op(K.PLAN_OPEN, {"pid": f"P{step}"}, {"kind": "edit", "target": "h1"}, actor=AGENT)
+    pid = rng.choice(sorted(s.open_plans))
+    blocks = s.ordered()
+    r = rng.random()
+    if r < 0.30:
+        b = rng.choice(blocks)
+        live = list(b.text().live_refs())
+        after = list(rng.choice(live)) if live else START
+        return m.op(K.TEXT_INSERT, {"bid": b.id, "path": "text"}, {"after": after, "text": rng.choice(["ab", " cde", "f"])},
+                    actor=AGENT, plan=pid)
+    if r < 0.45:
+        own = [(b, g) for b in blocks for g in b.text().segs if g.plan == pid and g.live]
+        if own:
+            b, g = rng.choice(own)
+            k = rng.randrange(len(g.chars))
+            return m.op(K.TEXT_DELETE, {"bid": b.id, "path": "text"},
+                        {"segments": [[g.op, g.k0 + k, rng.randint(1, len(g.chars) - k)]]}, actor=AGENT, plan=pid)
+    if r < 0.55:
+        back = [(b, g) for b in blocks for g in b.text().segs if g.plan == pid and not g.live
+                and (d := s.by_id.get(g.dead)) is not None and d.plan == pid and d.kind == K.TEXT_DELETE]
+        if back:
+            b, g = rng.choice(back)
+            return m.op(K.TEXT_RESTORE, {"bid": b.id, "path": "text"},
+                        {"segments": [[g.op, g.k0, len(g.chars)]], "by": g.dead}, actor=AGENT, plan=pid)
+    if r < 0.70:
+        prose = [b for b in blocks if b.kind in (PARAGRAPH, "bullet", "numbered")]
+        b = rng.choice(prose or blocks)
+        q = rng.random()
+        if q < 0.4 and prose:
+            payload, path = {"value": rng.choice([x for x in (PARAGRAPH, "bullet", "numbered") if x != b.kind])}, "kind"
+        elif q < 0.6 and b.kind != PARAGRAPH:
+            payload, path = {"value": rng.randint(1, 4)}, "level"
+        else:
+            payload, path = ({"unset": True} if rng.random() < 0.4 else {"value": rng.randint(0, 9)}), "note"
+        return m.op(K.BLOCK_SET, {"bid": b.id, "path": path}, payload, actor=AGENT, plan=pid)
+    if r < 0.78 and undos:
+        # A cut proposal. Left out where ordinary ops are undone: a mark's
+        # inverse names its exact range, which a split since has cut in two.
+        b = rng.choice(blocks)
+        live = list(b.text().live_refs())
+        if len(live) > 1:
+            a, z = sorted(rng.sample(range(len(live)), 2))
+            return m.op(K.TEXT_MARK, {"bid": b.id, "path": "text"},
+                        {"kind": SUGGEST_DEL, "attrs": {}, "start": list(live[a]), "end": list(live[z]), "on": True},
+                        actor=AGENT, plan=pid)
+    if rng.random() < 0.4:
+        return m.op(K.PLAN_REJECT, {"pid": pid}, {})
+    ops = s.plans[pid].ops
+    payload = {"subset": rng.sample(ops, rng.randint(0, len(ops)))} if ops and rng.random() < 0.5 else {}
+    return m.op(K.PLAN_ACCEPT, {"pid": pid}, payload)
+
+
+def random_op(rng: random.Random, m: Mint, s: Store, step: int, plans: bool = False, undos: bool = False) -> Op:
+    if plans and rng.random() < 0.35:
+        return plan_op(rng, m, s, step, undos)
     blocks = s.ordered()
     b = rng.choice(blocks)
     t = b.text()
@@ -268,7 +348,7 @@ def random_op(rng: random.Random, m: Mint, s: Store, step: int) -> Op:
     return m.op(K.BIND_ATTACH, {"fid": rng.choice(heads).id}, {"file": "f.py", "symbol": rng.choice(["a", "b", "c"])})
 
 
-def soup(seed: int, steps: int) -> Store:
+def soup(seed: int, steps: int, plans: bool = False) -> Store:
     rng = random.Random(seed)
     m, s = Mint(), Store()
     heading(m, s, "h1", "Root")
@@ -276,12 +356,15 @@ def soup(seed: int, steps: int) -> Store:
     for step in range(steps):
         if not s.ordered():
             break
-        apply(s, random_op(rng, m, s, step))
+        apply(s, random_op(rng, m, s, step, plans=plans))
     return s
 
 
-def test_unapply_suffix_equals_prefix_replay():
-    s = soup(3, 220)
+@pytest.mark.parametrize("seed,plans", [(3, False), (3, True), (8, True), (13, True)])
+def test_unapply_suffix_equals_prefix_replay(seed, plans):
+    s = soup(seed, 220, plans)
+    if plans:
+        assert sum(o.kind in (K.PLAN_ACCEPT, K.PLAN_REJECT) and o.conflict is None for o in s.ops) > 3
     log = [Op.from_json(copy.deepcopy(o.to_json())) for o in s.ops]
     for k in (len(log) // 4, len(log) // 2, len(log) - 3):
         probe = replay(s)
@@ -308,7 +391,8 @@ def live_view(store: Store):
         t = b.text()
         spans = sorted((sp.kind, tuple(sorted(sp.attrs.items())), sp.start, sp.end) for sp in live_spans(t)
                        if sp.kind != SUGGEST_DEL)
-        out.append((b.id, b.kind, b.level, t.live_text(), spans))
+        fields = {k: v for k, v in b.content.items() if k not in b.layout.text}
+        out.append((b.id, b.kind, b.level, t.live_text(), spans, fields))
     return out
 
 
@@ -317,11 +401,16 @@ def test_conflict_never_moves_the_state_fuzz():
     m, s = Mint(), Store()
     heading(m, s, "h1", "Root")
     p = paragraph(m, s, "p1", "seed text", after="h1")
-    for step in range(300):
-        op = random_op(rng, m, s, step)
+    for step in range(400):
+        if not s.ordered():
+            break
+        op = random_op(rng, m, s, step, plans=True, undos=True)
         if rng.random() < 0.3:
             keys = [k for k in ("after", "from", "to", "start", "end", "at") if k in op.payload]
-            if keys and rng.random() < 0.7:
+            if op.kind in VERDICT_KINDS and "steps" in op.payload:
+                # A recorded step that no longer resolves, after ones that would.
+                op.payload["steps"] = [*op.payload["steps"], {"do": "kill", "segments": [["ghost:1", 0, 1]]}]
+            elif keys and rng.random() < 0.7:
                 op.payload[rng.choice(keys)] = ["ghost:1", 0]
             elif op.kind == K.TEXT_DELETE and rng.random() < 0.5:
                 op.payload = {"segments": [[p.id, 0, 2], ["ghost:1", 0, 1]]}
@@ -333,3 +422,35 @@ def test_conflict_never_moves_the_state_fuzz():
             assert s.state_fingerprint() == before, (op.kind, done.conflict)
             assert done.inverse == []
     assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+def test_a_verdict_then_its_reopen_is_the_document_before_it_fuzzed():
+    """Undoing a verdict straight after it gives back the exact state before
+    it, tombstones included, and redoing it gives a reader what the verdict
+    did. The plans insert, take back and give back their own words and change
+    kinds, levels and fields: the cases whose order a record by category lost."""
+    for seed in range(6):
+        rng = random.Random(seed)
+        m, s = Mint(), Store()
+        heading(m, s, "h1", "Root")
+        paragraph(m, s, "p1", "seed text here", after="h1")
+        checked = 0
+        for step in range(200):
+            if not s.ordered():
+                break
+            op = random_op(rng, m, s, step, plans=True, undos=True)
+            before = copy.deepcopy(s.state_fingerprint()) if op.kind in VERDICT_KINDS else None
+            done = apply(s, op)
+            if before is None or done.conflict is not None:
+                continue
+            probe, undo = replay(s), Mint("u", "human:a")
+            (back,) = invert(probe, undo, done)
+            assert back.conflict is None, (seed, step, back.conflict)
+            if done.kind != K.PLAN_REOPEN:
+                # A redo kills as itself, so only a verdict's reopen restores the tombstones too.
+                assert probe.state_fingerprint() == before, (seed, step, done.kind)
+            (again,) = invert(probe, undo, back)
+            assert again.conflict is None and live_view(probe) == live_view(s), (seed, step, done.kind)
+            checked += 1
+        assert checked > 5, seed
+        assert replay(s).state_fingerprint() == s.state_fingerprint()
