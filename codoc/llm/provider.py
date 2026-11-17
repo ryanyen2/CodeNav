@@ -378,7 +378,7 @@ def _complete_anthropic(prompt: str, config: LLMConfig, parts: list[str]) -> str
         import anthropic
     except ImportError as exc:
         raise ImportError(
-            "anthropic package is required for provider='anthropic'. Run: pip install anthropic"
+            "provider='anthropic' needs the anthropic package. Run: pip install 'codoc[anthropic]'"
         ) from exc
 
     kwargs: dict = {"timeout": _LLM_TIMEOUT_S, "max_retries": _LLM_RETRIES}

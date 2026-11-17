@@ -88,14 +88,17 @@ def test_every_op_inverts_and_replays(tmp_path):
 def test_conflicts_are_recorded_and_state_untouched():
     m, s = Mint(), Store()
     heading(m, s, "h1", "Top")
+    before = s.state_fingerprint()
     bad = apply(s, m.op(K.TEXT_INSERT, {"bid": "h1", "path": "text"}, {"after": ["nope:1", 0], "text": "x"}))
     assert bad.conflict is not None
     dup = apply(s, m.op(K.BLOCK_ADD, {"bid": "h1"}, {"kind": PARAGRAPH, "after": START}))
     assert dup.conflict == "duplicate_block"
+    assert s.state_fingerprint() == before and [o.conflict for o in s.ops[-2:]] == [bad.conflict, "duplicate_block"]
     paragraph(m, s, "p1", "x", after="h1")
+    before = s.state_fingerprint()
     mh = apply(s, m.op(K.BLOCK_MERGE, {"into": "p1", "bid": "h1"}, {}))
     assert mh.conflict == "merge_heading"
-    assert s.blocks["h1"].live
+    assert s.state_fingerprint() == before and s.blocks["h1"].live
     assert replay(s).state_fingerprint() == s.state_fingerprint()
     assert len(replay(s).ops) == len(s.ops)
 

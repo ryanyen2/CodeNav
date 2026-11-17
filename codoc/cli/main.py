@@ -46,8 +46,9 @@ def _require(root: str) -> Path:
 
 def _write_gitignore(cd: Path) -> None:
     (cd / ".gitignore").write_text(
-        "# codoc: the log is the truth and travels with the repo; caches and channels do not.\n"
-        "*\n!.gitignore\n!config.json\n!tree.codoc\n!log/\n!log/**\n", encoding="utf-8")
+        "# codoc: the log, the config, the export and the media blocks reference travel with\n"
+        "# the repo; caches, channels and local state do not.\n"
+        "*\n!.gitignore\n!config.json\n!tree.codoc\n!log/\n!log/**\n!media/\n!media/**\n", encoding="utf-8")
 
 
 @app.callback()
@@ -405,7 +406,8 @@ def snapshot(root: str = ROOT):
         path = write_snapshot(cd, ws.store, ws.clock)
     client.release(cd)
     if path is None:
-        typer.echo("Nothing to fold: every feature has work in flight.")
+        typer.echo("Nothing to fold: the oldest op belongs to a feature with an open plan. "
+                   "Accept or reject it, then snapshot again.")
         return
     typer.echo(f"✓ {path.name}")
 

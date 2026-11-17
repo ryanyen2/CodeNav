@@ -35,6 +35,9 @@ from codoc.daemon.publish import publish
 from codoc.workspace import Workspace
 
 EXT = Path(__file__).resolve().parents[2] / "vscode-codoc"
+# Conflicts a correct op can meet when another actor changed the blocks between
+# the ones it names (docs/model.md, "Conflict codes").
+CONCURRENT_REFUSALS = frozenset({"not_adjacent", "range_spans_blocks"})
 needs_node = pytest.mark.skipif(not (EXT / "node_modules" / "vitest").exists(),
                                 reason="the extension's node_modules is not installed")
 
@@ -166,7 +169,11 @@ def test_two_actors_and_a_plan_arriving_mid_edit_merge_to_the_stores_page(tmp_pa
         w, acks = _drain(cd2, wd, rec["subs"])
         publish(wd, w.store, root_dir=str(tmp_path))
         want[rec["seed"]] = _page(w.store)
-        bad = [(a["cid"], a["conflict"]) for a in acks if a.get("conflict")]
+        # A merge or a cross-block delete computed against the page can meet a
+        # block Bob inserted that the page has not seen; the applier records
+        # that as a conflict (I5). Any other refusal is an op the editor got wrong.
+        bad = [(a["cid"], a["conflict"]) for a in acks
+               if a.get("conflict") and a["conflict"] not in CONCURRENT_REFUSALS]
         if bad:
             refused.append(f"seed {rec['seed']} ({' → '.join(rec['log'])}): {bad}")
         p3 = json.loads((wd / "projection.json").read_text())

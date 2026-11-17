@@ -56,7 +56,7 @@ Code extension ([docs/editor.md](docs/editor.md)).
 | `projection.json`, `history.json`, `status.json`, `realize.md` | ignored | Derived. |
 | `activity.json`, `ask.json`, `watch.pid`, `applier.lock`, `serve.lock` | ignored | Local state. |
 | `cache/`, `cocoindex.db`, `lancedb/` | ignored | The code graph and the chunk index. |
-| `media/` | ignored | Files that image, screenshot and pdf blocks reference. |
+| `media/` | tracked | Files that image, screenshot and pdf blocks reference. |
 
 ## Rules
 
