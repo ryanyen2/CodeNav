@@ -18,7 +18,7 @@ import re
 import time
 from pathlib import Path
 
-from codoc.kinds import Kind, LiftContext, LowerContext, register
+from codoc.kinds.kind import Kind, LiftContext, LowerContext, register
 from codoc.workspace.layout import CODOC_DIR, MEDIA_DIR
 
 EXCERPT_MAX = 2000
