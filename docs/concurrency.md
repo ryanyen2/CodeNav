@@ -275,13 +275,22 @@ where the write lands:
 | The trunk refuses it because it would drop a mark a person placed. | A plan. |
 | The write changes nothing. | Nothing. |
 | The feature's phase is `edited`, `queued` or `planned`. | A plan. The document wins. |
-| `deleted_fraction` is above 0.15 and a person last wrote the block. | A plan. |
+| `deleted_fraction` is above 0.15 and a person wrote any live word of the block. | A plan. |
 | `deleted_fraction` is above 0.5. | A plan. |
 | Otherwise. | Trunk. |
 
 The plan is opened as the machine's own `edit` plan on that block, or reused (section 9).
-A caller that computes a repair of several blocks asks the same question per block and
-opens one plan for the whole repair, so one repair gets one verdict.
+
+A repair of several blocks (an `amend`: rewordings, new blocks, removals, kind changes)
+gets one decision for all of it (`Workspace.amend`, reached by the loop directly and by
+an agent through the `amend` submission):
+
+| condition, first match | outcome |
+|---|---|
+| A rewritten block holds words an open plan inserted. | That block is refused (`open_plan`); answer the plan first. |
+| The amend adds, removes or re-kinds a block, or the feature is `edited`, `queued` or `planned`. | One plan for the whole amend. |
+| Any rewording meets a plan row of the table above. | One plan for the whole amend. |
+| Otherwise. | Every part on the trunk. |
 
 ## 8. Conflicts
 

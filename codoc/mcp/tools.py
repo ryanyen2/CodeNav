@@ -12,9 +12,9 @@ written and the error names it.
 | tool | edit | lands |
 |---|---|---|
 | ``reflect`` | ``attach``, ``detach`` on an existing feature | on the trunk |
-| ``reflect`` | ``amend`` that only rewords blocks | through ``ingest``: on the trunk when small, else as a plan (the machine gate) |
-| ``reflect`` | anything else | as one plan, as ``propose`` would |
-| ``propose`` | all | as one plan the person accepts or rejects |
+| ``reflect`` | ``amend`` | ``Workspace.amend``: all of it on the trunk when it only rewords and passes the machine gate, else one plan |
+| ``reflect`` | ``add_node``, ``move_node``, ``retire_node`` | as ``propose`` writes them |
+| ``propose`` | all | one plan for everything but removals; each ``retire_node`` is its own delete plan |
 
 `codoc accept` hands off every feature the plan touches with the verdict; the
 editor's Accept sends the verdict alone.
@@ -28,7 +28,7 @@ from codoc.calculus.derive import (
     attribution, dead_cites, description, history as feature_history, open_plans, phase, title,
 )
 from codoc.calculus.doc import HEADING, fold_tree, text_fields
-from codoc.calculus.ids import new_batch_id, new_plan_id
+from codoc.calculus.ids import new_plan_id
 from codoc.daemon import client
 from codoc.daemon.publish import read_status as published_status
 from codoc.daemon.publish import realizing_is_fresh, write_realizing
@@ -36,7 +36,8 @@ from codoc.doclang import detect_prose_language, workspace_doc_language
 from codoc.index.graph import Graph
 from codoc.llm.prompt import titles_outline
 from codoc.loops.context import description_blocks, select_context, written_by
-from codoc.loops.edits import Change, Compiler, strike_bodies
+from codoc.calculus.ingest import strike_bodies
+from codoc.loops.edits import Change, Compiler
 from codoc.loops.realize import queued
 from codoc.mcp.walkthrough import AskStep, build_walkthrough, clear_walkthrough, read_walkthrough, write_walkthrough
 from codoc.workspace.layout import GRAPH_CACHE
@@ -210,21 +211,22 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "", caused_by: 
         return _err(err)
     minted = {c.target for c in changes if c.kind == "add_node"}
     trunk = [c for c in changes if c.kind in ("attach", "detach") and c.target not in minted]
-    rewords = [c for c in changes if c.kind == "amend" and not c.structural and not c.strikes]
-    planned = [c for c in changes if c not in trunk and c not in rewords]
-    out: dict = {"ok": True, "applied": [], "ingested": [], "planned": None}
+    amends = [c for c in changes if c.kind == "amend" and c.target not in minted]
+    planned = [c for c in changes if c not in trunk and c not in amends]
+    out: dict = {"ok": True, "applied": [], "amended": [], "planned": None}
     bodies = [b for c in trunk for b in c.bodies]
     if bodies:
         out["applied"] = client.write(codoc_dir, client=AGENT, bodies=bodies, caused_by=caused_by, root_dir=root_dir)
-    for c in rewords:
-        batch = new_batch_id()        # one amend, one batch: if the gate makes it a plan, it is one plan
-        for r in c.rewrites:
-            base = ws.store.blocks[r.bid].text(r.path).live_text()
-            got = client.ingest(codoc_dir, client=AGENT, bid=r.bid, path=r.path, base_text=base, new_md=r.new_md,
-                                caused_by=caused_by, root_dir=root_dir, batch=batch)
-            out["ingested"].append({"bid": r.bid, "path": r.path, **got})
+    for c in amends:
+        rewrites = [{"bid": r.bid, "path": r.path, "new_md": r.new_md,
+                     "base_text": ws.store.blocks[r.bid].text(r.path).live_text()} for r in c.rewrites]
+        got = client.amend(codoc_dir, client=AGENT, fid=c.target, rewrites=rewrites, bodies=c.bodies,
+                           strikes=c.strikes, structural=c.structural, note=c.note or rationale,
+                           caused_by=caused_by, root_dir=root_dir)
+        out["amended"].append({"feature_id": c.target, **got})
     if planned:
-        out["planned"] = _write_plan(codoc_dir, ws.store, planned, note=rationale, caused_by=caused_by, root_dir=root_dir)
+        out["planned"] = _write_plans(codoc_dir, ws.store, planned, note=rationale, caused_by=caused_by,
+                                      root_dir=root_dir)
     return out
 
 
@@ -237,7 +239,25 @@ def propose(codoc_dir: str, *, ops: list[dict], note: str = "", caused_by: str |
         return _err(err)
     if not changes:
         return _err("no ops")
-    return _write_plan(codoc_dir, ws.store, changes, note=note, caused_by=caused_by, root_dir=root_dir)
+    return _write_plans(codoc_dir, ws.store, changes, note=note, caused_by=caused_by, root_dir=root_dir)
+
+
+def _write_plans(codoc_dir: str, store, changes: list[Change], *, note: str, caused_by: str | None,
+                 root_dir: str | None) -> dict:
+    """Each removal as its own delete plan (accepting one deletes that
+    feature), everything else as one plan. Returns the first plan's id and
+    every id."""
+    removals = [c for c in changes if c.kind == "retire_node"]
+    rest = [c for c in changes if c.kind != "retire_node"]
+    results = [_write_plan(codoc_dir, store, [c], note=c.note or note, caused_by=caused_by, root_dir=root_dir)
+               for c in removals]
+    if rest:
+        results.insert(0, _write_plan(codoc_dir, store, rest, note=note, caused_by=caused_by, root_dir=root_dir))
+    failed = next((r for r in results if not r.get("ok")), None)
+    if failed:
+        return failed
+    return {"ok": True, "plan_id": results[0]["plan_id"], "plan_ids": [r["plan_id"] for r in results],
+            "ops": sum(r["ops"] for r in results), "note": results[0]["note"]}
 
 
 _PLAN_KIND = {"add_node": "add", "move_node": "move", "retire_node": "delete"}
@@ -248,7 +268,7 @@ def _write_plan(codoc_dir: str, store, changes: list[Change], *, note: str, caus
     """Open one plan and write every change under it: each change's bodies as
     one batch, then its rewrites as ingests, then its strikes."""
     kinds = {_PLAN_KIND.get(c.kind, "edit") for c in changes}
-    kind = kinds.pop() if len(kinds) == 1 else "edit"
+    kind = kinds.pop() if len(kinds) == 1 else "edit"      # a delete plan holds exactly one removal
     target = changes[0].target if len(changes) == 1 and kind != "add" else None
     pid = new_plan_id()
     opened = client.write(codoc_dir, client=AGENT, bodies=[
@@ -271,7 +291,8 @@ def _write_plan(codoc_dir: str, store, changes: list[Change], *, note: str, caus
             written += len(client.write(codoc_dir, client=AGENT, bodies=strikes, plan=pid, batch=pid,
                                         caused_by=caused_by, root_dir=root_dir))
     return {"ok": True, "plan_id": pid, "ops": written,
-            "note": "The person accepts or rejects this plan in the editor; accepting hands the feature off to you."}
+            "note": "The person accepts or rejects this plan in the editor. Accepting it queues the work for you "
+                    "(except a removal, which the person hands off separately)."}
 
 
 def write_block(codoc_dir: str, *, content: dict, bid: str | None = None, kind: str | None = None,

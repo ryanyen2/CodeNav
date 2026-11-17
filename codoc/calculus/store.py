@@ -26,6 +26,7 @@ mutation that changes them:
 from __future__ import annotations
 
 import bisect
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -95,6 +96,10 @@ Policy = Callable[["Store", Op], str | None]   # (store, op) → denial reason, 
 
 class Store:
     def __init__(self, policy: Policy | None = None) -> None:
+        # Names this store instance. A rebuild makes a new store, and positions
+        # (`pos`, `block_head`) restart with it, so a reader comparing positions
+        # must compare them only under the same id.
+        self.id = uuid.uuid4().hex[:12]
         self.blocks: dict[str, Block] = {}
         self.order: list[tuple[str, str]] = []
         self.bindings: dict[tuple[str, str], Binding] = {}

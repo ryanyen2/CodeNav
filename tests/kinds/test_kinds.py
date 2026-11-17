@@ -156,7 +156,7 @@ def test_a_feature_carrying_media_survives_every_whole_feature_pass(tmp_path):
     from codoc.calculus.derive import description
     from codoc.doclang import resolve
     from codoc.loops.context import block_written_by, written_by
-    from codoc.loops.edits import strike_bodies
+    from codoc.calculus.ingest import strike_bodies
     from codoc.loops.translate import translate_tree
     from codoc.mcp import tools
 

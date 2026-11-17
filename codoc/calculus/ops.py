@@ -71,6 +71,15 @@ PLAN_KINDS = frozenset({PLAN_OPEN, PLAN_ACCEPT, PLAN_REJECT, PLAN_REOPEN})
 
 STRUCTURAL = frozenset({BLOCK_ADD, BLOCK_SPLIT, BLOCK_MERGE, BLOCK_MOVE, BLOCK_DELETE, BLOCK_RESTORE})
 
+# Payload fields only a snapshot writes: a plan's archived ops, text with its
+# original authors, a block's death, its detached bindings and its watermarks.
+# The applier honours them so a fold can rebuild state; from any other writer
+# they would let one actor claim another's words or ops.
+SNAPSHOT_ONLY = {
+    BLOCK_ADD: ("texts", "dead", "detached", "bound_once", "code_at", "realized_at"),
+    PLAN_OPEN: ("ops", "opened_by"),
+}
+
 
 class OpBody(TypedDict):
     """An op without identity, provenance or tag: what an inverse records and

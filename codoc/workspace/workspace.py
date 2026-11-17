@@ -15,7 +15,7 @@ its bodies before submitting.
 """
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from codoc.calculus import ops as K
@@ -23,10 +23,10 @@ from codoc.calculus.apply import apply, replay_recorded
 from codoc.calculus.derive import GATE_HUMAN, GATE_MACHINE, HELD, block_written_by, phase
 from codoc.calculus.doc import is_one_line, is_source_field, is_text_field
 from codoc.calculus.ids import MACHINE_KINDS, actor_kind, new_batch_id, new_plan_id, new_session_id, op_id
-from codoc.calculus.ingest import Ingest, as_plan_bodies, ingest, resolve_pending_refs
+from codoc.calculus.ingest import Ingest, as_plan_bodies, ingest, resolve_pending_refs, strike_bodies
 from codoc.calculus.ops import Op, frontier_union
 from codoc.calculus.store import Store
-from codoc.calculus.text import SUGGEST_DEL, nfc
+from codoc.calculus.text import SUGGEST_DEL, AnchorError, nfc
 from codoc.workspace import log as L
 from codoc.workspace.clock import Clock
 from codoc.workspace.roles import SUGGEST, Roles, deleted_ops, is_comment_op, own_plan_words
@@ -226,6 +226,53 @@ class Workspace:
             self._withdraw_if_empty(opened)
         return res, ops
 
+    def amend(self, fid: str, *, rewrites: list[tuple], bodies: list[dict] = (), strikes: list[str] = (),
+              actor: str, note: str = "", caused_by: str | None = None, structural: bool = False) -> "Amended":
+        """A machine's repair of one feature, decided once for all of it.
+
+        ``rewrites`` are ``(bid, path, new_md, base_text | None)``: new text
+        for existing fields (``base_text`` is what the writer read; None means
+        the current text). ``bodies`` add or re-kind blocks; ``strikes`` are
+        blocks proposed for removal. The whole amend lands on the trunk only
+        when it is all rewording, the feature has no pending intent, and every
+        rewording passes ``must_propose``; otherwise it is ONE plan, so one
+        repair gets one verdict. A rewrite of a block that holds words an open
+        plan inserted is refused (``open_plan``): the writer was shown the text
+        without them, and its diff would delete them on the trunk."""
+        out = Amended()
+        store = self.store
+        held = fid in store.blocks and phase(store, fid) in HELD
+        need_plan = held or structural or bool(strikes)
+        computed: list[Ingest] = []
+        for bid, path, new_md, base_text in rewrites:
+            block = store.blocks.get(bid)
+            if block is not None and is_text_field(block.kind, path) and _holds_open_plan(store, block.text(path)):
+                out.refused.append((bid, "open_plan"))
+                continue
+            if base_text is None:
+                base_text = block.text(path).live_text() if block is not None and is_text_field(block.kind, path) else ""
+            ing = self.plan_ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, trunk=not need_plan)
+            if self.must_propose(bid, actor, ing):
+                need_plan = True
+                if ing.refused:
+                    ing = self.plan_ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, trunk=False)
+            if ing.refused:
+                out.refused.append((bid, ing.refused))
+            elif not ing.unchanged:
+                computed.append(ing)
+        if not (computed or bodies or strikes):
+            return out
+        if need_plan:
+            out.plan = self.open_plan(actor=actor, kind="edit", target=fid,
+                                      note="the document has pending intent" if held else note or "a larger repair")
+            out.ops.append(store.by_id[store.plans[out.plan].opened_by])
+        for ing in computed:
+            out.ops += self.commit_ingest(ing, actor=actor, plan=out.plan, batch=out.plan, caused_by=caused_by)
+        tail = list(bodies) + (strike_bodies(store, list(strikes), out.plan) if out.plan else [])
+        if tail:
+            out.ops += self.submit(tail, actor=actor, plan=out.plan, batch=out.plan, caused_by=caused_by)
+        return out
+
     def must_propose(self, bid: str, actor: str, res: Ingest) -> str | None:
         """Why this machine write may not land on the trunk, or None.
 
@@ -298,23 +345,43 @@ class Workspace:
 
     def _as_proposal(self, actor: str, s: L.Submission) -> L.Submission:
         """A suggester's Backspace, as a proposal. A plan proposes and never
-        kills, so a range ``text.delete`` from a contributor is the
-        plan's ``suggest_del`` over the same range — which is what
-        ``as_plan_bodies`` already does for their ingest — unless the range
-        holds nothing but words their own open plan put there, which is theirs
-        to take back and not a proposal to strike a proposal. A ``segments``
-        delete is an undo of something, and the policy judges it by the same
-        rule."""
+        kills, so a contributor's ``text.delete`` becomes the plan's
+        ``suggest_del`` over the characters it names, unless they are all
+        words the contributor's own open plan put there, which are theirs to
+        take back. A ``segments`` delete names its characters exactly, and the
+        proposal records exactly those (``chars``), so a word another actor
+        typed between them is not struck."""
         if s.kind != K.TEXT_DELETE or s.plan or self.roles.role(actor) != SUGGEST:
-            return s
-        if "from" not in s.payload or "to" not in s.payload:
             return s
         if own_plan_words(self.store, actor, deleted_ops(self.store, s.target, s.payload)):
             return s        # their own proposed words: a real delete, not a proposal to strike a proposal
-        return L.Submission(cid=s.cid, kind=K.TEXT_MARK, target=dict(s.target),
-                            payload={"kind": SUGGEST_DEL, "attrs": {}, "start": s.payload["from"],
-                                     "end": s.payload["to"], "on": True},
+        if "segments" in s.payload:
+            payload = self._strike_segments(s.target, s.payload["segments"])
+        elif "from" in s.payload and "to" in s.payload:
+            payload = {"kind": SUGGEST_DEL, "attrs": {}, "start": s.payload["from"], "end": s.payload["to"], "on": True}
+        else:
+            return s
+        if payload is None:
+            return s        # names nothing live here: the applier reports why
+        return L.Submission(cid=s.cid, kind=K.TEXT_MARK, target=dict(s.target), payload=payload,
                             batch=s.batch, plan=s.plan, base=s.base, caused_by=s.caused_by)
+
+    def _strike_segments(self, target: dict, segments) -> dict | None:
+        """A ``suggest_del`` payload over exactly the live characters ``segments``
+        names: from the first to the last in sequence order, with ``chars``
+        listing them, so accepting kills those and nothing between them."""
+        try:
+            chars = [(str(op), int(k0) + i) for op, k0, n in segments for i in range(int(n))]
+            block, path = self.store.locate_char(chars[0], (str(target.get("bid") or ""), str(target.get("path") or "text")))
+        except (AnchorError, IndexError, TypeError, ValueError):
+            return None
+        text = block.text(path)
+        live = [c for c in chars if text.holds(c) and text.segs[text.locate(c)[0]].live]
+        if not live:
+            return None
+        live.sort(key=text.locate)
+        return {"kind": SUGGEST_DEL, "attrs": {"chars": ",".join(f"{op}:{k}" for op, k in live)},
+                "start": list(live[0]), "end": list(live[-1]), "on": True}
 
     def _plan_for(self, actor: str, batch: str, bid: str, note: str) -> str | None:
         """The plan this actor's writes ride in, opened on demand. One per edit,
@@ -362,6 +429,7 @@ class Workspace:
             # provenance card and `settle` read it. A person's client does not
             # get to assert it about itself.
             s = replace(s, caused_by=None)
+        s = replace(s, payload=client_payload(self.store, s.kind, s.payload))
         if s.kind != "ingest":
             # Resolve first: `_as_proposal` asks which plan minted the
             # characters a range names, and a `$cid` ref answers nothing. The
@@ -371,6 +439,18 @@ class Workspace:
         s = self._as_proposal(actor, s)
         plan = s.plan or self._suggester_plan(actor, s.kind if s.kind != "ingest" else K.TEXT_INSERT,
                                               s.target, s.payload, batch)
+        if s.kind == "amend":
+            p = s.payload
+            done = self.amend(str(p.get("fid") or ""), actor=actor, note=str(p.get("note") or ""), caused_by=s.caused_by,
+                              rewrites=[(r["bid"], r.get("path", "text"), r["new_md"], r.get("base_text"))
+                                        for r in p.get("rewrites") or []],
+                              bodies=p.get("bodies") or [], strikes=p.get("strikes") or [],
+                              structural=bool(p.get("structural")))
+            refused = "; ".join(f"{b}: {why}" for b, why in done.refused) or None
+            L.ack(self.codoc_dir, client, s.cid, done.ops[0] if done.ops else None, error=refused,
+                  status=(f"plan:{done.plan}" if done.plan else "trunk") if done.ops else "unchanged")
+            acked[s.cid] = done.ops[0].id if done.ops else ""
+            return done.ops
         if s.kind == "ingest":
             # A whole-text write from another process: the boundary diff runs
             # here, in the applier. The ack names the first op.
@@ -408,6 +488,35 @@ class Workspace:
     def close(self) -> None:
         if self.writer is not None:
             self.writer.close()
+
+
+@dataclass
+class Amended:
+    plan: str | None = None                                       # the plan it opened, when it did
+    ops: list[Op] = field(default_factory=list)
+    refused: list[tuple[str, str]] = field(default_factory=list)  # (bid, why)
+
+
+def _holds_open_plan(store: Store, text) -> bool:
+    """Whether the field holds words an open plan inserted. A machine is shown
+    the text without them (the ``rejected`` read mode), so a diff against the
+    live text would delete them. A plan's marks (a proposed deletion, a
+    proposed bold) leave the shown text as it is and do not count."""
+    return any(s.live and s.plan in store.open_plans for s in text.segs)
+
+
+def client_payload(store: Store, kind: str, payload: dict) -> dict:
+    """``payload`` as a client may send it: snapshot-only fields removed, and a
+    mark restore's ``actor``/``op``/``at`` kept only when the log has that op by
+    that actor (an undo restoring a mark someone placed). Otherwise the mark is
+    the sender's own."""
+    out = {k: v for k, v in payload.items() if k not in K.SNAPSHOT_ONLY.get(kind, ())}
+    if kind == K.TEXT_MARK and any(k in out for k in ("actor", "op", "at")):
+        placed = store.by_id.get(str(out.get("op") or ""))
+        if placed is None or placed.actor != out.get("actor"):
+            for k in ("actor", "op", "at"):
+                out.pop(k, None)
+    return out
 
 
 def _resolve_provisional(payload: dict, minted: dict[str, str], sent: dict[str, str] | None = None) -> dict:

@@ -27,8 +27,8 @@ def owner_of(store: Store, symbol: str) -> str | None:
 
 
 def written_by(store: Store, fid: str) -> str:
-    """``human`` when a person last wrote any block of the feature's prose,
-    else the newest machine actor. Feeds the prompt's ``written_by`` and
+    """``human`` when a person wrote any word of the feature's prose, else the
+    newest machine actor. Feeds the prompt's ``written_by`` and
     translate's plan-or-trunk choice; the amend gate itself is per block. A
     block out of the reading flow (a margin comment) is a request about the
     prose, not the prose: a person's note on a loop-written feature does not

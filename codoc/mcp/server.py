@@ -68,11 +68,12 @@ def codoc_history(feature_id: str, limit: int = 20) -> dict:
 @mcp.tool
 def codoc_reflect(ops: list[dict], rationale: str = "", caused_by: str | None = None) -> dict:
     """Reflect what you just did to the code into the tree. Each op is one of:
-    `{"kind": "attach"|"detach", "feature_id", "binds": ["file.py::symbol", …]}`
-    (bindings; land immediately), `{"kind": "amend", "feature_id", "title"?,
-    "blocks": [{"id": "<block id from codoc_context>", "text": "…"}, {"text": "new paragraph"}]}`
-    (a block-keyed prose repair: small repairs land, rewrites and repairs on a
-    feature with pending intent become a plan), or `add_node` / `move_node` /
+    `{"kind": "attach"|"detach", "feature_id", "bindings": ["file.py::symbol", …]}`
+    (lands at once); `{"kind": "amend", "feature_id", "title"?, "blocks": [{"id", "text"}
+    | {"id", "delete": true} | {"text"}]}`, where `text` is one block as Markdown
+    (a paragraph, a `- ` item, a `1. ` step, a table) and a block you do not list is
+    unchanged (lands on the trunk when it only rewords a little and nobody has
+    pending edits there, else as one plan); or `add_node` / `move_node` /
     `retire_node` (always a plan). Pass the directive id from realize.md as
     `caused_by` so the change is attributed to the request and closes it."""
     cd, err = _need_dir()
@@ -82,11 +83,12 @@ def codoc_reflect(ops: list[dict], rationale: str = "", caused_by: str | None = 
 @mcp.tool
 def codoc_propose(ops: list[dict], note: str = "", caused_by: str | None = None) -> dict:
     """Propose a plan the person accepts or rejects in the editor. Ops:
-    `{"kind": "add_node", "id": "n1", "parent_id"?, "title", "description", "binds"?}`,
-    `{"kind": "amend", "feature_id", "title"?, "blocks": [{"id", "text"} | {"id", "delete": true} | {"text"}]}`
-    (a paragraph you do not mention is unchanged), `{"kind": "move_node",
-    "feature_id", "parent_id"}`, `{"kind": "retire_node", "feature_id"}`.
-    Accepting a plan hands the feature off to you: a plan is a request to build."""
+    `{"kind": "add_node", "id": "n1", "parent_id"?, "title", "description", "bindings"?}`
+    (`description` is Markdown), `{"kind": "amend", "feature_id", "title"?, "blocks":
+    [{"id", "text"} | {"id", "delete": true} | {"text"}]}` (a block you do not list is
+    unchanged), `{"kind": "move_node", "feature_id", "parent_id"}`,
+    `{"kind": "retire_node", "feature_id"}`. Each removal is its own plan. Accepting
+    a plan of yours queues the work for you; accepting a removal does not delete code."""
     cd, err = _need_dir()
     return err or tools.propose(cd, ops=ops, note=note, caused_by=caused_by, root_dir=_root(cd))
 

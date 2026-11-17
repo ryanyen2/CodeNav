@@ -7,7 +7,8 @@ from codoc.calculus.derive import description, title
 from codoc.calculus.doc import BULLET, NUMBERED, PARAGRAPH, TABLE
 from codoc.calculus.ingest import ingest, resolve_pending_refs
 from codoc.calculus.store import Store
-from codoc.loops.edits import Change, Compiler, strike_bodies, validate
+from codoc.calculus.ingest import strike_bodies
+from codoc.loops.edits import Change, Compiler, validate
 from tests.helpers import Mint
 
 

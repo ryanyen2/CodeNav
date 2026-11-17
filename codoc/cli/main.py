@@ -225,42 +225,32 @@ def handoff(feature: str, root: str = ROOT,
         "payload": {"base_sha": head_sha(root), "asked": asked, "delete_code": delete_code}}]), "handed off")
 
 
-def _plan_features(store, plan) -> list[str]:
-    """Every feature this plan is a request about: the one it names, and the
-    one each of its ops belongs to. A plan that adds several headings names
-    none of them, so a hand-off of its target alone queues nothing."""
-    out: list[str] = []
-    for bid in [plan.target] + [(store.by_id[i].target.get("bid") or store.by_id[i].target.get("fid"))
-                                for i in plan.ops if i in store.by_id]:
-        fid = store.feature_of(bid) if bid else None
-        if fid and fid not in out:
-            out.append(fid)
-    return out
-
-
 @app.command()
 def accept(plan: str, root: str = ROOT,
-           build: bool = typer.Option(True, "--build/--no-build", help="Hand the feature off in the same batch.")):
-    """Accept a plan (the whole of it), and hand its feature off.
+           build: bool = typer.Option(None, "--build/--no-build",
+                                      help="Hand off the plan's features (default: only for a coding agent's plan).")):
+    """Accept a plan (the whole of it).
 
-    A plan is a request to build, so this command sends `feature.handoff` for
-    every feature the plan touches in the same batch as the verdict; the
-    applier never adds one. The editor's Accept sends the verdict alone. `--no-build` takes the
-    words without the work. A `kind=delete` plan is never handed off from here: removing the
-    code is its own decision, and `codoc handoff --delete-code` is where a
-    person makes it.
+    By default it also hands off what the editor's Accept hands off
+    (`derive.accept_handoffs`): the features of a coding agent's plan, which
+    is a request to build. `--build` hands off any plan's features; `--no-build`
+    takes the words without the work. A delete plan is never handed off from
+    here: removing the code is `codoc handoff --delete-code`.
     """
     from codoc.calculus import ops as K
+    from codoc.calculus.derive import accept_handoffs, plan_features
     from codoc.index.git import head_sha
     from codoc.daemon import client
     cd = _require(root)
     ws = client.read(cd)
     pl = ws.store.plans.get(plan)
     bodies = [{"kind": K.PLAN_ACCEPT, "target": {"pid": plan}, "payload": {}}]
-    if build and pl is not None and pl.kind != "delete":
-        for fid in _plan_features(ws.store, pl):
-            bodies.append({"kind": K.FEATURE_HANDOFF, "target": {"fid": fid},
-                           "payload": {"base_sha": head_sha(root), "asked": f"Build the plan {plan}."}})
+    fids: list[str] = []
+    if pl is not None and pl.kind != "delete":
+        fids = accept_handoffs(ws.store, pl) if build is None else plan_features(ws.store, pl) if build else []
+    for fid in fids:
+        bodies.append({"kind": K.FEATURE_HANDOFF, "target": {"fid": fid},
+                       "payload": {"base_sha": head_sha(root), "asked": f"Build the plan {plan}."}})
     _report(client.write(cd, client="cli", root_dir=root, bodies=bodies), "accepted")
 
 

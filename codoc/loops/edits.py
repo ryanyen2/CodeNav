@@ -27,11 +27,10 @@ from dataclasses import dataclass, field
 from codoc.calculus import block_md
 from codoc.calculus import ops as K
 from codoc.calculus.block_md import BlockSpec
-from codoc.calculus.doc import HEADING, ITEMS, PROSE, SOURCE, text_fields
+from codoc.calculus.doc import HEADING, ITEMS, PROSE, SOURCE
 from codoc.calculus.ids import START
 from codoc.calculus.ingest import block_bodies, concat_bodies
 from codoc.calculus.store import Store
-from codoc.calculus.text import SUGGEST_DEL
 
 KINDS = ("attach", "detach", "add_node", "amend", "move_node", "retire_node")
 
@@ -121,21 +120,6 @@ def title_from_file(file: str) -> str:
     stem = os.path.splitext(os.path.basename(file))[0]
     words = stem.replace("-", " ").replace("_", " ").strip()
     return (words[:1].upper() + words[1:]) if words else file
-
-
-def strike_bodies(store: Store, bids: list[str], pid: str) -> list[dict]:
-    """Propose, under plan ``pid``, removing every word of these blocks: one
-    ``suggest_del`` mark over each non-empty Text field."""
-    bodies = []
-    for bid in bids:
-        b = store.blocks[bid]
-        for f in text_fields(b.kind):
-            t = b.text(f)
-            if t.live_len():
-                bodies.append({"kind": K.TEXT_MARK, "target": {"bid": bid, "path": f},
-                               "payload": {"kind": SUGGEST_DEL, "attrs": {"plan": pid}, "on": True,
-                                           "start": list(t.ref_at(0)), "end": list(t.last_live_ref())}})
-    return bodies
 
 
 class Compiler:

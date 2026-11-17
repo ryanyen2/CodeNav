@@ -42,7 +42,8 @@ from codoc.calculus.store import Store
 from codoc.index.changes import ChangeSet, ChunkRef
 from codoc.index.graph import Graph
 from codoc.loops.context import impacted_features, owner_of, select_context
-from codoc.loops.edits import Change, Compiler, strike_bodies, title_from_file
+from codoc.calculus.ingest import strike_bodies
+from codoc.loops.edits import Change, Compiler, title_from_file
 from codoc.workspace import Workspace
 
 MAX_ADDED_PER_CALL = 25
@@ -332,19 +333,32 @@ def _land(p: _Pass, change: Change) -> bool:
     """Write one compiled edit (see the table in the module docstring).
     Returns whether anything was written."""
     fid, cause = change.target, p.cause(change.target)
-    if change.kind == "attach":
+    if change.kind in ("attach", "detach"):
         plan = p.plan_of.get(fid)
         ops = p.submit(change.bodies, plan=plan, batch=plan, caused_by=cause)
         landed = sum(1 for o in ops if o.conflict is None)
-        p.res.auto["attach"] += landed
+        p.res.auto[change.kind] += landed
         return landed > 0
     if change.kind == "amend":
-        return _amend(p, change)
+        done = p.ws.amend(fid, rewrites=[(r.bid, r.path, r.new_md, None) for r in change.rewrites],
+                          bodies=change.bodies, strikes=change.strikes, actor=LOOP, note=change.note,
+                          caused_by=cause, structural=change.structural)
+        p.res.ops.extend(done.ops)
+        p.res.refused.extend(done.refused)
+        if done.plan:
+            p.res.plans.append(done.plan)
+        return bool(done.ops)
+    if change.kind == "retire_node" and _delete_open(p.store, fid):
+        return False          # already proposed for deletion in this pass or an earlier one
     pid = p.open_plan(kind=_PLAN_KIND[change.kind], target=fid, note=change.note)
     if change.kind == "add_node":
         p.plan_of[fid] = pid
     p.submit(change.bodies + strike_bodies(p.store, change.strikes, pid), plan=pid, batch=pid, caused_by=cause)
     return True
+
+
+def _delete_open(store: Store, fid: str) -> bool:
+    return any(pl.kind == "delete" and pl.target == fid for pl in store.open_plans.values())
 
 
 def _delete_plan(p: _Pass, fid: str, note: str) -> str:
@@ -353,38 +367,3 @@ def _delete_plan(p: _Pass, fid: str, note: str) -> str:
     if bodies:
         p.submit(bodies, plan=pid, batch=pid)
     return pid
-
-
-def _amend(p: _Pass, change: Change) -> bool:
-    """Land an amend on the trunk when every rewrite is small and nothing else
-    changes, else as one plan. Each rewrite is computed as a trunk write
-    first: a rewrite the trunk refuses (it would drop a mark a person placed)
-    or that the gate demotes (``Workspace.must_propose``) turns the whole
-    amend into a plan, where nothing is refused and the person decides."""
-    store, fid = p.store, change.target
-    held = phase(store, fid) in HELD
-    need_plan = held or change.structural
-    ingests: list[Ingest] = []
-    for r in change.rewrites:
-        base = store.blocks[r.bid].text(r.path).live_text()
-        ing = p.ws.plan_ingest(r.bid, r.path, base_text=base, new_md=r.new_md, actor=LOOP, trunk=not need_plan)
-        if p.ws.must_propose(r.bid, LOOP, ing):
-            need_plan = True
-            if ing.refused:
-                ing = p.ws.plan_ingest(r.bid, r.path, base_text=base, new_md=r.new_md, actor=LOOP, trunk=False)
-        if ing.refused:
-            p.res.refused.append((r.bid, ing.refused))
-        elif not ing.unchanged:
-            ingests.append(ing)
-    if not (ingests or change.bodies or change.strikes):
-        return False
-    plan = p.open_plan(kind="edit", target=fid,
-                       note="the document has pending intent" if held else change.note or "a larger repair") \
-        if need_plan else None
-    cause = p.cause(fid)
-    for ing in ingests:
-        p.commit(ing, plan=plan, batch=plan, caused_by=cause)
-    bodies = change.bodies + (strike_bodies(store, change.strikes, plan) if plan else [])
-    if bodies:
-        p.submit(bodies, plan=plan, batch=plan, caused_by=cause)
-    return True

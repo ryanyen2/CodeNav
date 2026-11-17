@@ -288,6 +288,21 @@ def concat_bodies(first: list[dict], more: list[dict]) -> list[dict]:
     return out
 
 
+def strike_bodies(store, bids: list[str], pid: str) -> list[dict]:
+    """Propose, under plan ``pid``, removing every word of these blocks: one
+    ``suggest_del`` mark over each non-empty Text field."""
+    bodies = []
+    for bid in bids:
+        b = store.blocks[bid]
+        for f in text_fields(b.kind):
+            t = b.text(f)
+            if t.live_len():
+                bodies.append({"kind": K.TEXT_MARK, "target": {"bid": bid, "path": f},
+                               "payload": {"kind": "suggest_del", "attrs": {"plan": pid}, "on": True,
+                                           "start": list(t.ref_at(0)), "end": list(t.last_live_ref())}})
+    return bodies
+
+
 def as_plan_bodies(bodies: list[dict], plan: str) -> list[dict]:
     """A plan proposes; it never kills. Every ``text.delete`` an ingest produced
     becomes a ``suggest_del`` mark tagged with the plan, so the words stay live

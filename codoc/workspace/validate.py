@@ -8,10 +8,12 @@ somebody already wrote. So a log file is a capability: edit the recorded
 accept the plan. `codoc validate-logs` runs these checks over the session
 files a merge would add or change, against the tracked role table.
 
-Three refusals, and nothing else:
+Four refusals, and nothing else:
 
 - an op recorded as a **success** whose `(actor, kind)` the table would refuse,
   which is the forged verdict;
+- an op in a session file carrying a field only a snapshot writes
+  (`ops.SNAPSHOT_ONLY`), which would let it claim another actor's words;
 - a **snapshot** file, which claims a whole state rather than a sequence of ops
   and can only honestly be written by the workspace folding its own log;
 - a stamp **far ahead of wall time**, which would drag every clock that
@@ -71,6 +73,8 @@ def validate_logs(paths, *, roles: Roles, store: Store | None = None, now_ms: in
         for i, op in enumerate(f.ops, start=2):        # line 1 is the header
             if op.conflict is None and (why := roles.policy(view, op)):
                 out.append(Finding(str(p), i, f"recorded as applied, but the roles table refuses it: {why}"))
+            if forged := [k for k in K.SNAPSHOT_ONLY.get(op.kind, ()) if k in op.payload]:
+                out.append(Finding(str(p), i, f"{op.kind} carries {', '.join(forged)}, which only a snapshot writes"))
             ahead = _ms(op.at) - now_ms
             if ahead > skew_ms:
                 out.append(Finding(str(p), i, f"stamped {ahead // 3_600_000}h ahead of this clock"))

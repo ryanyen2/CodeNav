@@ -15,7 +15,7 @@ from codoc.calculus.block_md import BlockSpec
 from codoc.calculus.doc import (
     HEADING, PROSE, SOURCE, Block, TreeNode, fold_tree, in_flow, is_exported, is_source_field, text_fields,
 )
-from codoc.calculus.ids import OpId, is_human
+from codoc.calculus.ids import OpId, actor_kind, is_human
 from codoc.calculus.inline_md import Span, render
 from codoc.calculus.ops import Op, covered, in_frontier
 from codoc.calculus.store import Store
@@ -165,21 +165,23 @@ def attribution(text: Text, merge: bool = True) -> list[Run]:
 
 
 def block_written_by(store: Store, bid: str) -> str:
-    """Who last wrote this block: the actor of the newest live segment across
-    its Text fields (a paragraph has one, a diagram has its source and its
-    caption), an open plan's words excluded (a pending proposal is nobody's
-    prose yet). ``human`` for any person, else the actor, else ``""``."""
+    """``human`` when any live character of the block was written by a person,
+    else the actor of the newest live segment, else ``""``. An open plan's
+    words are left out: a pending proposal is nobody's prose yet.
+
+    Any person's word makes the block a person's, so a machine appending a
+    clause to it does not loosen the gate on rewriting the rest."""
     b = store.blocks[bid]
     newest = ("", "")
     for f in text_fields(b.kind):
         for s in b.text(f).segs:
-            if not s.live or s.at <= newest[0]:
+            if not s.live or s.plan in store.open_plans:
                 continue
-            if s.plan in store.open_plans:
-                continue
-            newest = (s.at, s.actor)
-    actor = newest[1]
-    return "human" if is_human(actor) else actor
+            if is_human(s.actor):
+                return "human"
+            if s.at > newest[0]:
+                newest = (s.at, s.actor)
+    return newest[1]
 
 
 # ── the three channels ───────────────────────────────────────────────────────
@@ -477,9 +479,34 @@ def projection(store: Store, realizing: set[str] = frozenset(), phases: dict[str
         blocks.append(entry(store, b))
     watermarks = {fid: {"handoff": w.handoff, "realized": w.realized}
                   for fid, w in store.watermarks_by_fid.items() if (w.handoff or w.realized) and fid in phases}
-    return {"head": store.pos, "frontier": dict(store.frontier), "blocks": blocks, "phases": phases,
-            "plans": [p.to_json() for p in open_plans(store)],
+    return {"store": store.id, "head": store.pos, "frontier": dict(store.frontier), "blocks": blocks,
+            "phases": phases, "plans": [{**p.to_json(), "handoff": accept_handoffs(store, p)} for p in open_plans(store)],
             "watermarks": watermarks}
+
+
+def plan_features(store: Store, plan) -> list[str]:
+    """Every live feature a plan is about: the one it names, and the one each
+    of its ops lands in. A plan that adds several headings names none of them."""
+    out: list[str] = []
+    for bid in [plan.target] + [(store.by_id[i].target.get("bid") or store.by_id[i].target.get("fid"))
+                                for i in plan.ops if i in store.by_id]:
+        fid = store.feature_of(bid) if bid and bid in store.blocks else None
+        if fid and fid not in out:
+            out.append(fid)
+    return out
+
+
+def accept_handoffs(store: Store, plan) -> list[str]:
+    """The features that accepting ``plan`` hands off, in the same batch.
+
+    A coding agent's plan is a request to build (it was proposed before the
+    code), so accepting it queues the work. A loop's or a translator's plan
+    describes code that already exists, and a suggester's is a proposal about
+    words; accepting those takes the words only. A delete plan never hands off:
+    removing code is its own decision (`codoc handoff --delete-code`)."""
+    if plan.kind == "delete" or actor_kind(plan.actor) != "agent":
+        return []
+    return plan_features(store, plan)
 
 
 def open_plans(store: Store) -> list:

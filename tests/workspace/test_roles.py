@@ -145,6 +145,25 @@ def test_a_suggesters_backspace_becomes_a_suggest_del_under_their_plan(tmp_path)
     ws.close()
 
 
+def test_a_suggesters_segments_delete_strikes_only_the_characters_it_names(tmp_path):
+    """The editor sends the exact characters it deleted. As a proposal, the
+    strike covers those and not a word the owner typed between them since."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)                          # "Retries once."
+    r = refs(ws, "p1")
+    seen = r[0][0]
+    L.submit(cd, "hub-alice", [sub("d1", K.TEXT_DELETE, {"bid": "p1", "path": "text"},
+                                    {"segments": [[seen, r[0][1], 8]]})])           # "Retries "
+    ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                "payload": {"after": list(r[3]), "text": "ALWAYS"}}], actor=H)     # inside the range, unseen by alice
+    ops = ws.drain_inbox()
+    mark = next(o for o in ops if o.kind == K.TEXT_MARK)
+    assert mark.conflict is None and mark.plan
+    ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": mark.plan}, "payload": {}}], actor=H)
+    assert T(ws.store, "p1") == "ALWAYSonce."
+    ws.close()
+
+
 def test_a_contributor_backspacing_over_their_own_proposal_removes_it(tmp_path):
     """A suggester's range delete over only their own proposed words removes
     them: typing ' More.' and backspacing over it leaves nothing to accept. A
@@ -289,3 +308,40 @@ def test_a_contributors_typo_corrected_within_one_flush_is_not_struck_as_a_propo
     assert T(ws.store, "p1") == "Retries once."
     assert not ws.store.blocks["p1"].text().proposals(kind=SUGGEST_DEL)
     ws.close()
+
+
+def test_a_client_cannot_send_fields_only_a_snapshot_writes(tmp_path):
+    """A hub client claims the owner's insert as a plan op, adds a block whose
+    text is pre-attributed to the owner, and restores a bold the owner never
+    placed. None of it holds once the owner rejects the open plans."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    owner = next(o for o in ws.store.ops if o.kind == K.TEXT_INSERT and o.target["bid"] == "p1")
+    forged = {"segs": [{"op": owner.id, "k0": 100, "chars": "Also drops the table.", "actor": H,
+                        "at": "00000000000000000001-00000000000000000000-x"}], "marks": []}
+    L.submit(cd, "hub-mallory", [
+        sub("c1", K.PLAN_OPEN, {"pid": "p-forged000001"}, {"kind": "edit", "target": "p1", "ops": [owner.id]}),
+        sub("c2", K.BLOCK_ADD, {"bid": "b-forged000002"},
+            {"kind": PARAGRAPH, "after": "p1", "texts": {"text": forged}}),
+        sub("c3", K.TEXT_MARK, {"bid": "p1", "path": "text"},
+            {"kind": "bold", "start": [owner.id, 0], "end": [owner.id, 6], "on": True, "actor": H}),
+    ])
+    ws.drain_inbox()
+    assert ws.store.plans["p-forged000001"].ops == []
+    assert ws.store.blocks["b-forged000002"].text().live_text() == ""
+    for pid in list(ws.store.open_plans):
+        ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": pid}, "payload": {}}], actor=H)
+    assert T(ws.store, "p1") == "Retries once."
+    assert ws.store.blocks["p1"].text().marks == []
+    ws.close()
+
+
+def test_validate_logs_flags_a_snapshot_only_field_in_a_session_file(tmp_path):
+    from codoc.workspace.validate import validate_logs
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    ws.submit([{"kind": K.PLAN_OPEN, "target": {"pid": "p-x"}, "payload": {"kind": "edit", "ops": ["s-other:1"]}}],
+              actor=H)
+    ws.close()
+    found = validate_logs(L.list_sessions(cd), roles=Roles({}))
+    assert any("plan.open carries ops" in f.reason for f in found), [str(f) for f in found]

@@ -35,6 +35,7 @@ from codoc.daemon.pidfile import daemon_running
 from codoc.daemon.publish import publish
 from codoc.index.git import head_sha
 from codoc.workspace import Workspace
+from codoc.workspace.workspace import client_payload
 from codoc.workspace import log as L
 from codoc.workspace.layout import APPLIER_LOCK, locked
 from codoc.workspace.log import Submission
@@ -131,6 +132,7 @@ def write(codoc_dir: str | Path, *, client: str, bodies: list[dict], root_dir: s
     actor = _actor(client)
     if not daemon_running(codoc_dir):
         with applying(codoc_dir) as ws:
+            bodies = [{**b, "payload": client_payload(ws.store, b["kind"], b.get("payload", {}))} for b in bodies]
             ops = ws.submit(bodies, actor=actor, batch=batch, plan=plan, caused_by=caused_by)
             publish(codoc_dir, ws.store, root_dir=root_dir or str(codoc_dir.parent))
         return [{"cid": None, "op": o.id, "conflict": o.conflict} for o in ops]
@@ -208,3 +210,31 @@ def ingest(codoc_dir: str | Path, *, client: str, bid: str, path: str, base_text
     ack = wait_for_acks(codoc_dir, client, [sub.cid], 3.0)[0]
     return {"refused": ack.get("conflict"), "ops": [ack["op"]] if ack.get("op") else [],
             "status": ack.get("status")}
+
+
+def amend(codoc_dir: str | Path, *, client: str, fid: str, rewrites: list[dict], bodies: list[dict] | None = None,
+          strikes: list[str] | None = None, structural: bool = False, note: str = "", caused_by: str | None = None,
+          root_dir: str | None = None, wait_s: float = 10.0) -> dict:
+    """A machine's repair of one feature, decided once in the applier
+    (``Workspace.amend``). ``rewrites`` are ``{bid, path, new_md, base_text}``.
+    Returns ``{"status", "refused", "ops"}``; ``status`` is ``plan:<id>``,
+    ``trunk``, ``unchanged``, or None when no ack arrived within ``wait_s``."""
+    codoc_dir = Path(codoc_dir)
+    actor = _actor(client)
+    payload = {"fid": fid, "rewrites": rewrites, "bodies": bodies or [], "strikes": strikes or [],
+               "structural": structural, "note": note}
+    if not daemon_running(codoc_dir):
+        with applying(codoc_dir) as ws:
+            done = ws.amend(fid, actor=actor, note=note, caused_by=caused_by, structural=structural,
+                            rewrites=[(r["bid"], r.get("path", "text"), r["new_md"], r.get("base_text")) for r in rewrites],
+                            bodies=payload["bodies"], strikes=payload["strikes"])
+            publish(codoc_dir, ws.store, root_dir=root_dir or str(codoc_dir.parent))
+        status = (f"plan:{done.plan}" if done.plan else "trunk") if done.ops else "unchanged"
+        return {"status": status, "refused": [f"{b}: {why}" for b, why in done.refused], "ops": [o.id for o in done.ops]}
+    release(codoc_dir)
+    sub = Submission(cid=f"{client}-{uuid.uuid4().hex[:12]}", kind="amend", target={"fid": fid}, payload=payload,
+                     caused_by=caused_by)
+    L.submit(codoc_dir, client, [sub])
+    ack = wait_for_acks(codoc_dir, client, [sub.cid], wait_s)[0]
+    return {"status": ack.get("status"), "refused": [ack["conflict"]] if ack.get("conflict") else [],
+            "ops": [ack["op"]] if ack.get("op") else []}
