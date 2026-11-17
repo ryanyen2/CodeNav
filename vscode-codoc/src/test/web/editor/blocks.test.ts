@@ -630,6 +630,15 @@ describe('text over a selection across blocks lands inside it', () => {
         expect(shadowFaults(m)).toEqual([]);
     });
 
+    it('Enter over whole list items splits into two items of that kind and level', () => {
+        const m = mount([block('h', 'heading', 'T'), block('b1', 'bullet', 'one', 2), block('b2', 'bullet', 'two', 2), block('u', 'heading', 'U')]);
+        select(m.view, posIn(m.view, 'b1', 0), posIn(m.view, 'b2', 3));
+        key(m.view, 'Enter', 13);
+        expect(shape(m.view.state.doc)).toEqual(['heading:1', 'bullet:2', 'bullet:2', 'heading:1']);
+        expect(sent(m).map(o => o.kind)).toEqual(['text.delete', 'text.delete', 'block.merge', 'block.split']);
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
     it('Enter over whole paragraphs after a code block, or over a whole feature, splits inside the selection', () => {
         const m = mount([block('h', 'heading', 'H'), block('k', 'code', 'x = 1', 0), block('p1', 'paragraph', 'one'),
                          block('p2', 'paragraph', 'two'), block('u', 'heading', 'U')]);

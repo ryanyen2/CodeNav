@@ -58,6 +58,7 @@ export function gestureKeys(env: Env, openLink: () => boolean): Plugin[] {
     };
 
     const enter: Command = (state, _dispatch, view) => {
+        const selected = !state.selection.empty;
         if (cutAcross(state, view!, true) === 'refused') return true;
         state = view!.state;
         if (SOURCE.has(caretKind(state) ?? '')) { view!.dispatch(state.tr.insertText('\n')); return true; }
@@ -68,6 +69,9 @@ export function gestureKeys(env: Env, openLink: () => boolean): Plugin[] {
             view!.dispatch(state.tr.deleteSelection());
             state = view!.state;
         }
+        // Enter over a selection splits where the selection was. The empty item
+        // and marker rules are for Enter at a caret.
+        if (selected) return run(view!, splitBlock(state, env)) || true;
         const item = ITEMS.has(caretKind(state) ?? '') && state.selection.$from.parent.content.size === 0;
         return run(view!, item ? setKind(state, env, 'paragraph') : sourceFromMarker(state, env) ?? splitBlock(state, env)) || true;
     };
