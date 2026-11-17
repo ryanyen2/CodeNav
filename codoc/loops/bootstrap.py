@@ -160,23 +160,35 @@ def _land_file(ws: Workspace, res: BootstrapResult, ops: list[dict], frows: list
 
 
 def _land_org(ws: Workspace, res: BootstrapResult, ops: list[dict], batch: str) -> None:
-    """Theme nodes first, then the moves that put features under them. A theme
-    titled like an existing feature is refused with its moves
-    (``bootstrap_org.txt`` rule 7), so those features stay at the top."""
+    """The top level in the order the reply gives it.
+
+    - An ``add_node`` puts a theme at the end of the document.
+    - A ``move_node`` puts a feature under its theme or, with no ``parent_id``,
+      at the end. A move to a theme the reply adds later waits for it.
+    - A theme titled like an existing feature is refused (``bootstrap_org.txt``
+      rule 7), and the moves to it with it, so those features stay where they are.
+    """
     compiler = Compiler(ws.store)
     taken = {title(ws.store, h.id).strip().casefold() for h in ws.store.headings()}
-    refused: set[str] = set()
-    for o in sorted((o for o in ops if o.get("kind") in ("add_node", "move_node")),
-                    key=lambda o: o["kind"] != "add_node"):
-        if o["kind"] == "add_node":
+    themes = {o.get("id") for o in ops if o.get("kind") == "add_node" and o.get("id")}
+    added: set[str] = set()
+    waiting: dict[str, list[dict]] = {}
+    for o in ops:
+        if o.get("kind") == "add_node":
             if (o.get("title") or "").strip().casefold() in taken:
                 res.refused.append(("add_node", "a theme titled like a feature"))
-                refused.add(o.get("id") or "")
                 continue
-            o = {**o, "parent_id": None, "bindings": []}       # themes sit at the top and own no code
-        elif o.get("parent_id") and o["parent_id"] in refused:
-            continue
-        _land(ws, res, compiler, o, batch)
+            # A theme sits at the top and owns no code.
+            if _land(ws, res, compiler, {**o, "parent_id": None, "bindings": []}, batch) and o.get("id"):
+                added.add(o["id"])
+                for move in waiting.pop(o["id"], []):
+                    _land(ws, res, compiler, move, batch)
+        elif o.get("kind") == "move_node":
+            parent = o.get("parent_id")
+            if parent in themes and parent not in added:
+                waiting.setdefault(parent, []).append(o)
+                continue
+            _land(ws, res, compiler, o, batch)
 
 
 # ── context helpers ──────────────────────────────────────────────────────────

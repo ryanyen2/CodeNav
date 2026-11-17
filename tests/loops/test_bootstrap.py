@@ -46,6 +46,24 @@ def test_the_module_chunk_joins_the_files_first_feature(tmp_path):
         [f"{f}::__module__"], [f"{f}::run", f"{f}::score"]]
 
 
+def test_the_top_level_follows_the_order_of_the_reply(tmp_path):
+    """A standalone feature is placed by a move with no parent; a move that
+    names a theme added later waits for it."""
+    ws = Workspace(tmp_path / ".codoc")
+
+    def org(features, edges, **kw):
+        ids = {f["title"]: f["id"] for f in features}
+        return [{"kind": "move_node", "feature_id": ids["HTTP client"], "parent_id": "t1"},
+                {"kind": "move_node", "feature_id": ids["Store"]},
+                {"id": "t1", "kind": "add_node", "title": "Networking", "description": "On the wire."}]
+
+    bootstrap(ws, ROWS, Graph(), propose_file=fake_file, propose_org=org,
+              propose_the_brief=lambda *a, **k: {}, concurrency=1)
+    roots = fold_tree(ws.store.headings())
+    assert [title(ws.store, r.id) for r in roots] == ["Store", "Networking"]
+    assert [title(ws.store, c.id) for c in roots[1].children] == ["HTTP client"]
+
+
 def test_a_theme_titled_like_a_feature_is_dropped_with_its_moves(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
 
