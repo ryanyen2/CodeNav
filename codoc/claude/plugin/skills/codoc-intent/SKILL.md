@@ -49,9 +49,10 @@ targets and anything in backticks stay exactly as they are in the code.
 |---|---|
 | `{"id": "b-…", "text": "…"}` | that block now reads `text`; keep its marker unless you mean to change what kind of block it is |
 | `{"id": "b-…", "delete": true}` | proposes removing that block |
-| `{"text": "…"}` | new blocks after the previous entry (after the title when first); indent a bullet four spaces to nest it under the bullet before it |
+| `{"text": "…"}` | new blocks after the previous entry (after the title when first) |
 
-A block you do not list is unchanged.
+A block you do not list is unchanged. A list item's indentation is its level, as
+`codoc_context` shows it: flush left is level 1, four spaces level 2, eight level 3.
 
 ## After you change code: `codoc_reflect(ops, rationale, caused_by)`
 

@@ -314,21 +314,24 @@ def translate(root: str = ROOT, to: str = typer.Option("", "--to"), dry_run: boo
               limit: int = typer.Option(0, "--limit")):
     """Rewrite the tree's prose into the authoring language, block by block; human-written nodes become plans."""
     from codoc.doclang import resolve
+    from codoc.daemon import client
     from codoc.daemon.pidfile import daemon_running
     from codoc.daemon.publish import publish
     from codoc.loops.translate import translate_tree
-    from codoc.workspace import Workspace
     cd = _require(root)
     if daemon_running(cd):
         typer.echo("Stop the daemon before translating (it is the applier).", err=True)
         raise typer.Exit(1)
-    ws = Workspace(cd)
+    # Under the applier lock for the whole run, so a daemonless writer (the MCP
+    # server) waits instead of applying into a store this run does not see.
     try:
-        res = translate_tree(ws, cd, language=resolve(to) if to else None, dry_run=dry_run, limit=limit, printer=typer.echo)
-        if not dry_run:
-            publish(cd, ws.store, root_dir=root)
+        with client.applying(cd) as ws:
+            res = translate_tree(ws, cd, language=resolve(to) if to else None, dry_run=dry_run, limit=limit,
+                                 printer=typer.echo)
+            if not dry_run:
+                publish(cd, ws.store, root_dir=root)
     finally:
-        ws.close()
+        client.release(cd)
     typer.echo(f"✓ {res.summary()}")
     for s in res.skipped[:10]:
         typer.echo(f"  skipped {s.feature_id} {s.title!r}: {s.reason}")
@@ -337,22 +340,27 @@ def translate(root: str = ROOT, to: str = typer.Option("", "--to"), dry_run: boo
 @app.command()
 def rebuild(root: str = ROOT):
     """Replay the logs into the cache and re-publish the derived files."""
+    from codoc.daemon import client
+    from codoc.daemon.pidfile import daemon_running
     from codoc.daemon.publish import publish
-    from codoc.workspace import Workspace
-    cd = _require(root)
     from codoc.workspace.validate import refused_verdicts
-    ws = Workspace(cd)
+    cd = _require(root)
+    if daemon_running(cd):
+        typer.echo("A daemon is watching; it rebuilds when HEAD moves. Stop it to rebuild by hand.", err=True)
+        raise typer.Exit(1)
     try:
-        publish(cd, ws.store, root_dir=root)
-        typer.echo(f"✓ {len(ws.store.headings())} features from {len(ws.store.ops)} ops")
-        for p in ws.problems:
-            typer.echo(f"  ⚠ {p.path}:{p.line}: {p.reason}")
-        # A signal, not a gate: a recorded answer stands whatever the table says
-        # today, so a count here means a log carries work this table would refuse.
-        for actor, n in sorted(refused_verdicts(ws.store, ws.roles).items()):
-            typer.echo(f"  ⚠ {n} applied op(s) by {actor} the roles table would refuse today")
+        with client.applying(cd) as ws:
+            ws.rebuild()
+            publish(cd, ws.store, root_dir=root)
+            typer.echo(f"✓ {len(ws.store.headings())} features from {len(ws.store.ops)} ops")
+            for p in ws.problems:
+                typer.echo(f"  ⚠ {p.path}:{p.line}: {p.reason}")
+            # A signal, not a gate: a recorded answer stands whatever the table says
+            # today, so a count here means a log carries work this table would refuse.
+            for actor, n in sorted(refused_verdicts(ws.store, ws.roles).items()):
+                typer.echo(f"  ⚠ {n} applied op(s) by {actor} the roles table would refuse today")
     finally:
-        ws.close()
+        client.release(cd)
 
 
 @app.command("validate-logs")

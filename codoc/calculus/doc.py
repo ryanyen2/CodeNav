@@ -108,9 +108,21 @@ class Block:
     # the removal directive names the symbols to delete, and an undo re-attaches them.
     detached: list = field(default_factory=list)
 
+    # Who removed the block and when, kept on the block as a segment keeps its
+    # killer: a person deleting a paragraph is pending intent, and the
+    # directive says so after the op that did it has been folded away.
+    dead_actor: str = ""
+    dead_at: str = ""
+
     @property
     def live(self) -> bool:
         return self.dead is None
+
+    def kill(self, op: OpId, actor: str = "", at: str = "") -> None:
+        self.dead, self.dead_actor, self.dead_at = op, actor, at
+
+    def revive(self) -> None:
+        self.dead, self.dead_actor, self.dead_at = None, "", ""
 
     def text(self, path: str = "text") -> Text:
         t = self.content.get(path)
@@ -123,6 +135,8 @@ class Block:
         d = {"id": self.id, "kind": self.kind, "rank": self.rank, "level": self.level, "content": content}
         if self.dead:
             d["dead"] = self.dead
+            if self.dead_actor:
+                d["dead_actor"], d["dead_at"] = self.dead_actor, self.dead_at
         if self.detached:
             d["detached"] = [dict(e) for e in self.detached]
         return d
@@ -134,7 +148,7 @@ class Block:
         for k, v in (d.get("content") or {}).items():
             content[k] = Text.from_json(v) if k in text_fields(kind) else v
         return cls(d["id"], kind, d["rank"], int(d.get("level") or 0), content, d.get("dead"),
-                   [dict(e) for e in (d.get("detached") or [])])
+                   [dict(e) for e in (d.get("detached") or [])], d.get("dead_actor", ""), d.get("dead_at", ""))
 
 
 def empty_content(kind: str, content: dict | None = None) -> dict:

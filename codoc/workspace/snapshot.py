@@ -115,6 +115,8 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
                    "content": content, "texts": texts}
         if not b.live:
             payload["dead"] = b.dead      # the killer keeps its name, so an undo still matches
+            if b.dead_actor:
+                payload["dead_actor"], payload["dead_at"] = b.dead_actor, b.dead_at
         if b.detached:
             # What this dead heading owned: the phantom's settle asks whether
             # the agent removed exactly these, and the undo re-attaches them.

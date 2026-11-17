@@ -36,7 +36,8 @@ from codoc.doclang import detect_prose_language, workspace_doc_language
 from codoc.index.graph import Graph
 from codoc.llm.prompt import titles_outline
 from codoc.loops.context import description_blocks, select_context, written_by
-from codoc.calculus.ingest import strike_bodies
+from codoc.calculus.block_md import BlockSpec
+from codoc.calculus.ingest import block_bodies, strike_bodies
 from codoc.loops.edits import Change, Compiler
 from codoc.loops.realize import queued
 from codoc.mcp.walkthrough import AskStep, build_walkthrough, clear_walkthrough, read_walkthrough, write_walkthrough
@@ -303,25 +304,27 @@ def write_block(codoc_dir: str, *, content: dict, bid: str | None = None, kind: 
     Text fields go through ``ingest``, all as the agent, all under ``plan``
     when the agent is proposing rather than reflecting."""
     from codoc.kinds import get, kinds
-    from codoc.kinds.write import add_body, plan_write
+    from codoc.kinds.write import plan_write
     ws, _ = _open(codoc_dir)
     store = ws.store
     if not isinstance(content, dict):
         return _err("content must be an object")
     if bid is None:
-        if not kind or get(kind) is None:
-            return _err(f"unknown kind {kind!r}; known: {sorted(k.name for k in kinds())}")
+        # A new block and its text are one batch: nothing waits for the add
+        # to be applied before the words are written.
+        k = get(kind) if kind else None
+        if k is None:
+            return _err(f"unknown kind {kind!r}; known: {sorted(x.name for x in kinds())}")
         if feature_id not in store.blocks or not store.blocks[feature_id].live:
             return _err(f"unknown feature_id {feature_id!r}")
-        after = store.feature_body(feature_id)[-1].id
-        bid, body, err = add_body(kind, content, after=after)
-        if err:
+        if err := k.validate(content):
             return _err(err)
-        added = client.write(codoc_dir, client=AGENT, bodies=[body], plan=plan, caused_by=caused_by, root_dir=root_dir)
-        if added[0].get("conflict"):
-            return _err(f"block.add refused: {added[0]['conflict']}")
-        texts = {k: v for k, v in content.items() if k in get(kind).text_fields and v}
-        p = plan_write(_fresh_block(codoc_dir, bid), texts) if texts else None
+        bodies, (bid,) = block_bodies([BlockSpec(kind, content=content)], after=store.feature_body(feature_id)[-1].id)
+        added = client.write(codoc_dir, client=AGENT, bodies=bodies, plan=plan, caused_by=caused_by, root_dir=root_dir)
+        refused = [a["conflict"] for a in added if a.get("conflict")]
+        if refused:
+            return _err(f"block.add refused: {refused[0]}")
+        return {"ok": True, "bid": bid, "applied": added, "ingested": []}
     else:
         current = store.blocks.get(bid)
         if current is None:
@@ -330,19 +333,12 @@ def write_block(codoc_dir: str, *, content: dict, bid: str | None = None, kind: 
         if p.refused:
             return _err(p.refused)
     results: dict = {"ok": True, "bid": bid, "applied": [], "ingested": []}
-    if p is None:
-        return results
     if p.sets:
         results["applied"] = client.write(codoc_dir, client=AGENT, bodies=p.sets, plan=plan, caused_by=caused_by, root_dir=root_dir)
     for f, base, new_md in p.ingests:
         results["ingested"].append({"field": f, **client.ingest(codoc_dir, client=AGENT, bid=bid, path=f, base_text=base,
                                                                  new_md=new_md, plan=plan, caused_by=caused_by, root_dir=root_dir)})
     return results
-
-
-def _fresh_block(codoc_dir: str, bid: str):
-    """The block as the applier now has it (after a just-acked add)."""
-    return client.read(codoc_dir).store.blocks.get(bid)
 
 
 def realize_progress(codoc_dir: str, *, done: int, total: int, current: str = "") -> dict:

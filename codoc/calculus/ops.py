@@ -76,7 +76,7 @@ STRUCTURAL = frozenset({BLOCK_ADD, BLOCK_SPLIT, BLOCK_MERGE, BLOCK_MOVE, BLOCK_D
 # The applier honours them so a fold can rebuild state; from any other writer
 # they would let one actor claim another's words or ops.
 SNAPSHOT_ONLY = {
-    BLOCK_ADD: ("texts", "dead", "detached", "bound_once", "code_at", "realized_at"),
+    BLOCK_ADD: ("texts", "dead", "dead_actor", "dead_at", "detached", "bound_once", "code_at", "realized_at"),
     PLAN_OPEN: ("ops", "opened_by"),
 }
 

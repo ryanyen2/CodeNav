@@ -342,7 +342,22 @@ def unsent_removal(store: Store, fid: str) -> bool:
                 if sg.dead and is_human(sg.dead_actor) and not in_frontier(sg.dead, w.handoff) \
                         and not in_frontier(sg.dead, w.realized):
                     return True
-    return False
+    return any(not in_frontier(b.dead, w.handoff) and not in_frontier(b.dead, w.realized)
+               for b in removed_blocks(store, fid))
+
+
+def removed_blocks(store: Store, fid: str) -> list[Block]:
+    """Blocks of the feature's description a person deleted whole, that held
+    words of the document (not only an open plan's). Deleting a block is a
+    change to what the feature says, like deleting its words one by one.
+    Changing a block's kind, level or place is layout and is not listed."""
+    out = []
+    for b in store.removed_body(fid):
+        if not (in_flow(b.kind) and is_human(b.dead_actor)):
+            continue
+        if any(s.live and s.plan not in store.open_plans for f in text_fields(b.kind) for s in b.text(f).segs):
+            out.append(b)
+    return out
 
 
 def phase(store: Store, fid: str, realizing: set[str] = frozenset()) -> str:

@@ -379,8 +379,8 @@ def _h_block_add(store: Store, op: Op, touched: set[str]):
     if op.payload.get("bound_once"):
         store.bound_once.add(bid)        # a snapshot restoring a feature that once had code
     block = Block(bid, kind, rank, level, content)
-    if op.payload.get("dead"):
-        block.dead = op.payload["dead"]      # a snapshot restoring a block with its killer
+    if op.payload.get("dead"):               # a snapshot restoring a block with its killer
+        block.kill(op.payload["dead"], op.payload.get("dead_actor", ""), op.payload.get("dead_at", ""))
     if op.payload.get("detached"):
         block.detached = [dict(e) for e in op.payload["detached"]]
     if op.payload.get("code_at") or op.payload.get("realized_at"):
@@ -515,7 +515,7 @@ def _h_block_merge(store: Store, op: Op, touched: set[str]):
         b.content[path] = Text()
     else:
         seam = ta.merge(tb)
-    b.dead = op.id
+    b.kill(op.id, op.actor, op.at)
     store.index_text(into, path, a.text(path))
     store.prune_index(bid, path, b.text(path), was)
     touched.update({into, bid})
@@ -611,7 +611,7 @@ def _h_block_delete(store: Store, op: Op, touched: set[str]):
     for i in ids:
         b = store.blocks[i]
         if b.live:
-            b.dead = op.id
+            b.kill(op.id, op.actor, op.at)
             killed.append(i)
         touched.add(i)
     detached = _detach_dead(store, [i for i in killed if store.blocks[i].kind == HEADING], touched)
@@ -629,7 +629,7 @@ def _h_block_restore(store: Store, op: Op, touched: set[str]):
     for i in ids:
         b = store.blocks[i]
         if not b.live and (by is None or b.dead == by):
-            b.dead = None
+            b.revive()
             revived.append(i)
         touched.add(i)
     alive = set(revived)
@@ -797,7 +797,7 @@ def _undo_plan_op(store: Store, o: Op, by: OpId, touched: set[str], record: dict
         bid = o.target["bid"] if o.kind == K.BLOCK_ADD else o.payload["new"]
         b = store.blocks.get(bid)
         if b is not None and b.live and all(b.content[f].live_len() == 0 for f in text_fields(b.kind)):
-            b.dead = by
+            b.kill(by)
             record.setdefault("blocks", []).append(bid)
             touched.add(bid)
     elif o.kind == K.BLOCK_SET:
@@ -936,7 +936,7 @@ def _h_plan_accept(store: Store, op: Op, touched: set[str]):
     # already gone: the verdict agrees with them rather than conflicting.
     if plan.kind == "delete" and plan.target and store.blocks[plan.target].live:
         for i in store.body_ids(plan.target):
-            store.blocks[i].dead = op.id
+            store.blocks[i].kill(op.id, op.actor, op.at)
             deleted.append(i)
             touched.add(i)
         record["detached"] = _detach_dead(store, [plan.target], touched)
@@ -1020,7 +1020,7 @@ def _h_plan_reopen(store: Store, op: Op, touched: set[str]):
     for i in p.get("blocks", []) + p.get("deleted_blocks", []):
         b = store.blocks[i]
         if b.dead == by:
-            b.dead = None
+            b.revive()
         touched.add(i)
     _reattach(store, p.get("detached", []), touched)
     # A reopen re-applies the verdict's own record, so its `moved` and `sets`

@@ -25,7 +25,7 @@ from pathlib import Path
 
 from codoc import kinds as registry
 from codoc.calculus import ops as K
-from codoc.calculus.derive import description, ink, live_spans, prose_blocks, text_string, title
+from codoc.calculus.derive import description, ink, live_spans, prose_blocks, removed_blocks, text_string, title
 from codoc.calculus.doc import in_flow, text_fields
 from codoc.calculus.ids import OpId, is_human
 from codoc.calculus.ops import Op, covered, in_frontier
@@ -84,15 +84,18 @@ def write_queue(codoc_dir: str | Path, store: Store, root_dir: str = ".", doc_la
 
 def settle(ws: Workspace, res, *, sha: str = "", files: list[str] | None = None, summary: str = "") -> list[Op]:
     """Record ``feature.realized`` for each feature whose latest hand-off the
-    reflect pass ``res`` cited and whose bindings one of its ops touched — or,
-    for a phantom, whose code the pass saw go."""
+    reflect pass ``res`` cited, when a binding op since that hand-off cites it
+    (the agent's own ``codoc_reflect`` attach or this pass's) — or, for a
+    phantom, when the pass saw its code go."""
     out = []
+    store = ws.store
     for fid, did in res.caused.items():
-        w = ws.store.watermarks_by_fid.get(fid)
+        w = store.watermarks_by_fid.get(fid)
         if not w or not w.handoffs or w.handoffs[-1] != did:
             continue
-        if not (any(o.caused_by == did and o.kind.startswith("bind.") and o.conflict is None for o in res.ops)
-                or _phantom_done(ws.store, fid, did, res.removed)):
+        since = store.ops[store.position.get(did, 0):]
+        if not (any(o.caused_by == did and o.kind.startswith("bind.") and o.conflict is None for o in since)
+                or _phantom_done(store, fid, did, res.removed)):
             continue
         out.extend(ws.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": fid},
                                "payload": {"covers": dict(w.handoff), "sha": sha, "files": files or [],
@@ -242,6 +245,10 @@ def _human_changes(store: Store, fid: str, w: Watermarks) -> list[str]:
                 if s.dead and is_human(s.dead_actor) and not in_frontier(s.dead, w.realized) \
                         and in_frontier(s.dead, w.handoff):
                     out.append(f"removed: \"{s.chars}\"")
+    for b in removed_blocks(store, fid):
+        if in_frontier(b.dead, w.handoff) and not in_frontier(b.dead, w.realized):
+            words = " ".join(b.text(f).live_text() for f in text_fields(b.kind)).strip()
+            out.append(f"removed: \"{words}\"")
     return out
 
 

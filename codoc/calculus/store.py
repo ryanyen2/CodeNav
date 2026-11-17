@@ -243,6 +243,21 @@ class Store:
             out.append(n.id)
         return out
 
+    def removed_body(self, fid: str) -> list[Block]:
+        """The dead non-heading blocks that sit in a live heading's body: what
+        was deleted from its description, in document order."""
+        h = self.blocks[fid]
+        if not h.live:
+            return []
+        out = []
+        for j in range(self._index_of(fid) + 1, len(self.order)):
+            n = self.blocks[self.order[j][1]]
+            if n.kind == HEADING and n.live:
+                break
+            if not n.live and n.kind != HEADING:
+                out.append(n)
+        return out
+
     def feature_range(self, fid: str) -> list[Block]:
         h = self.blocks[fid]
         return [self.blocks[i] for i in self.dominated_ids(fid)] if h.live else [h]

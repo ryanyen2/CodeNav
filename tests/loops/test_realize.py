@@ -48,6 +48,49 @@ def test_handoff_queues_directive_and_reflect_under_it_realizes(tmp_path):
     assert queued(ws.store) == [] and write_queue(tmp_path / ".codoc", ws.store) is None
 
 
+def test_an_agent_that_attaches_its_new_code_with_caused_by_closes_the_request(tmp_path):
+    """realize.txt tells the agent to attach the symbols it wrote with the
+    item's id as caused_by. The epoch-close pass then has nothing of its own to
+    write, and the request still settles."""
+    ws = Workspace(tmp_path / ".codoc")
+    seed_loop(ws)
+    t = ws.store.blocks["p1"].text()
+    ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                "payload": {"after": list(t.last_live_ref()), "text": " Logs each retry."}}], actor=H)
+    ho = handoff(ws, "h1", actor=H)
+    ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"},
+                "payload": {"file": "c.py", "symbol": "c.py::log_retry"}}], actor="agent:claude-code", caused_by=ho.id)
+    r = reflect(ws, ChangeSet(), Graph(), propose=lambda *a, **k: [], under_epoch=True)
+    assert not r.ops and settle(ws, r)
+    assert phase(ws.store, "h1") == "synced"
+
+
+def test_deleting_a_paragraph_is_pending_intent_and_reaches_the_directive(tmp_path):
+    """A person deleting a whole paragraph changes what the feature says, as
+    deleting its words would. The feature reads edited, the hand-off carries a
+    removed: line, and both survive a snapshot fold."""
+    from codoc.calculus.ids import START
+    from codoc.workspace.snapshot import write_snapshot
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed_loop(ws)
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "p2"}, "payload": {"kind": "paragraph", "after": "p1"}},
+               {"kind": K.TEXT_INSERT, "target": {"bid": "p2", "path": "text"},
+                "payload": {"after": START, "text": "Caches the session per host."}}], actor="loop")
+    assert phase(ws.store, "h1") != "edited"
+    ws.submit([{"kind": K.BLOCK_DELETE, "target": {"bid": "p2"}, "payload": {"ids": ["p2"]}}], actor=H)
+    assert phase(ws.store, "h1") == "edited"
+    handoff(ws, "h1", actor=H)
+    assert 'removed: "Caches the session per host."' in directive(ws.store, "h1")
+    ws.close()
+    ws = Workspace(cd)
+    write_snapshot(cd, ws.store, ws.clock)
+    ws.close()
+    ws = Workspace(cd)
+    assert 'removed: "Caches the session per host."' in directive(ws.store, "h1")
+    ws.close()
+
+
 def test_withdraw_restores_the_previous_frontier(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
     seed_loop(ws)

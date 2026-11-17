@@ -85,6 +85,35 @@ def test_a_reply_can_nest_under_a_node_it_just_created_without_applying_first():
     assert description(s, changes[1].target) == "- a\n- b"
 
 
+def test_a_child_compiled_after_a_sibling_lands_before_that_sibling():
+    """[A, B, A1 under A, C], all compiled before any is applied (the MCP
+    path), lands as A, A1, B, C."""
+    s, m = Store(), Mint()
+    c = Compiler(s)
+    changes = [c.compile(r) for r in (
+        {"kind": "add_node", "id": "a", "title": "A", "description": "a."},
+        {"kind": "add_node", "title": "B", "description": "b."},
+        {"kind": "add_node", "parent_id": "a", "title": "A1", "description": "a1."},
+        {"kind": "add_node", "title": "C", "description": "c."})]
+    for ch in changes:
+        land(s, m, ch)
+    assert [(title(s, h.id), h.level) for h in s.headings()] == [("A", 1), ("A1", 2), ("B", 1), ("C", 1)]
+
+
+def test_list_levels_in_an_amend_are_read_from_the_indentation_shown():
+    """A block is shown with its absolute indentation. Writing a new item with
+    the same indentation as a level-2 item makes a level-2 sibling; changing an
+    existing item's indentation changes its level."""
+    s, m = Store(), Mint()
+    ch = Compiler(s).compile({"kind": "add_node", "title": "Retry", "description": "- top\n    - nested"})
+    land(s, m, ch)
+    top, nested = [b.id for b in s.feature_body(ch.target)[1:]]
+    amend = Compiler(s).compile({"kind": "amend", "feature_id": ch.target, "blocks": [
+        {"id": nested, "text": "    - nested"}, {"text": "    - sibling"}, {"id": top, "text": "    - top, now nested"}]})
+    land(s, m, amend)
+    assert kinds(s, ch.target) == [(BULLET, 2), (BULLET, 2), (BULLET, 2)]
+
+
 def test_moves_under_a_new_theme_keep_their_order():
     """The organize pass adds a theme, then moves features under it in the
     order it lists them."""

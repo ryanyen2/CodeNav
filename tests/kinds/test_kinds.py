@@ -136,7 +136,8 @@ def test_mcp_write_block_adds_and_edits_as_the_agent(tmp_path):
     seed_loop(ws)
     ws.close()
     r = tools.write_block(str(cd), kind="diagram", feature_id="h1", content={"source": "flowchart TB\n  a[Start] --> b"})
-    assert r["ok"] and r["ingested"] and all(i["refused"] is None for i in r["ingested"])
+    # the block and its text are one batch
+    assert r["ok"] and [a["conflict"] for a in r["applied"]] == [None, None]
     st = Workspace(cd, readonly=True).store
     blk = st.blocks[r["bid"]]
     # a source field is raw: brackets and asterisks are text, not markup

@@ -29,7 +29,11 @@ or snippet. You change a description block by block:
 |---|---|
 | `{"id": "b-…", "text": "…"}` | that block now reads `text`. Keep its marker (`- `, `1. `) unless you mean to change what kind of block it is. |
 | `{"id": "b-…", "delete": true}` | proposes removing that block |
-| `{"text": "…"}` (no `id`) | new blocks, inserted after the previous entry, or after the title when it is first. `text` may hold several blocks. Indent a new bullet four spaces to nest it under the bullet before it. |
+| `{"text": "…"}` (no `id`) | new blocks, inserted after the previous entry, or after the title when it is first. `text` may hold several blocks. |
+
+A list item's indentation is its level, as the blocks are shown: flush left is
+level 1, four spaces level 2, eight spaces level 3. Keep an item's indentation
+unless you mean to move it in or out.
 
 A block you do not list is unchanged. Never move text from one id to another.
 

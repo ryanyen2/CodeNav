@@ -22,12 +22,13 @@ pass and the MCP tools each apply a ``Change`` through their own writer.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 
 from codoc.calculus import block_md
 from codoc.calculus import ops as K
 from codoc.calculus.block_md import BlockSpec
-from codoc.calculus.doc import HEADING, ITEMS, PROSE, SOURCE
+from codoc.calculus.doc import HEADING, ITEMS, MAX_LEVEL, PROSE, SOURCE
 from codoc.calculus.ids import START
 from codoc.calculus.ingest import block_bodies, concat_bodies
 from codoc.calculus.store import Store
@@ -110,6 +111,24 @@ def symbol(binding) -> tuple[str, str] | None:
     return binding.split("::", 1)[0], binding
 
 
+_ITEM_LINE = re.compile(r"^([ \t]*)(?:[-+*]|\d{1,9}\.) +")
+
+
+def absolute_levels(md: str, specs: list[BlockSpec]) -> list[BlockSpec]:
+    """``specs`` with each list item's level read from its own indentation:
+    level 1 flush left, one more per started four columns. A block is shown
+    to the model on its own with that indentation (``block_md.render_one``),
+    so the level it writes back is absolute, not relative to the block before."""
+    indents = [len(m.group(1).expandtabs(4)) for line in md.split("\n") if (m := _ITEM_LINE.match(line))]
+    out, i = [], 0
+    for s in specs:
+        if s.kind in ITEMS and i < len(indents):
+            s = BlockSpec(s.kind, min(MAX_LEVEL, 1 + -(-indents[i] // 4)), s.text, s.content, s.id)
+            i += 1
+        out.append(s)
+    return out
+
+
 def one_line(md: str) -> str:
     return " ".join((md or "").split())
 
@@ -188,7 +207,7 @@ class Compiler:
         if raw.get("id"):
             self.minted[raw["id"]] = fid
         self._own[fid] = (ids[-1], level)
-        self._next[after] = (ids[-1], level)
+        self._link(after, ids[-1], level)
         return Change("add_node", fid, bodies=bodies, bound=binds, structural=True)
 
     def _amend(self, raw: dict) -> Change:
@@ -199,10 +218,10 @@ class Compiler:
         if (raw.get("title") or "").strip():
             change.rewrites.append(Rewrite(fid, "text", one_line(raw["title"])))
         body = {b.id: b for b in self.store.feature_body(fid)[1:] if b.kind in PROSE or b.kind in SOURCE}
-        last, last_level = fid, 0
+        last = fid
         for entry in raw.get("blocks") or []:
             bid, text = entry.get("id"), entry.get("text") or ""
-            specs = block_md.parse(text, headings=False)
+            specs = absolute_levels(text, block_md.parse(text, headings=False))
             if bid is not None:
                 block = body.get(bid)
                 if block is None:
@@ -216,16 +235,13 @@ class Compiler:
                         change.refused = f"{bid}: {err}"
                         return change
                     specs = specs[1:]   # anything after the first block is new, placed after it
-                last, last_level = bid, block.level if block.kind in ITEMS else 0
-            elif text[:1] in (" ", "\t") and last_level:
-                # An indented first item nests under the item before it.
-                specs = [BlockSpec(s.kind, s.level + last_level, s.text, s.content) if s.kind in ITEMS else s for s in specs]
+                last = bid
             specs = [s for s in specs if s.kind in PROSE or s.kind in SOURCE]
             if specs:
                 bodies, ids = block_bodies(specs, after=last)
                 change.bodies = concat_bodies(change.bodies, bodies)
                 change.structural = True
-                last, last_level = ids[-1], specs[-1].level if specs[-1].kind in ITEMS else 0
+                last = ids[-1]
         return change
 
     def _move_node(self, raw: dict) -> Change:
@@ -236,7 +252,7 @@ class Compiler:
         moved = self.store.feature_range(fid)
         if after in {b.id for b in moved}:
             return Change("move_node", fid, refused="a feature cannot move under itself")
-        self._next[after] = (moved[-1].id, level)      # the next child of the same parent goes after this one
+        self._link(after, moved[-1].id, level)
         delta = level - self.store.blocks[fid].level
         return Change("move_node", fid, structural=True, bodies=[
             {"kind": K.BLOCK_MOVE, "target": {"bid": fid}, "payload": {"after": after, "level_delta": delta}}])
@@ -283,6 +299,15 @@ class Compiler:
             seen.add(after)
         return after, level
 
+    def _link(self, after: str, last: str, level: int) -> None:
+        """Record a node placed right after ``after``, ending at ``last``.
+        Whatever this compiler placed after ``after`` before now follows the
+        new node, so the chain stays in document order."""
+        old = self._next.get(after)
+        self._next[after] = (last, level)
+        if old is not None and old[0] != last:
+            self._next[last] = old
+
     def _binds(self, raw_binds) -> list[tuple[str, str]]:
         out: list[tuple[str, str]] = []
         for b in raw_binds or []:
@@ -308,8 +333,13 @@ class Compiler:
         if spec.kind not in PROSE:
             return f"a {block.kind} cannot become a {spec.kind}"
         if spec.kind != block.kind:
+            payload = {"value": spec.kind, **({"level": spec.level} if spec.kind in ITEMS else {})}
             change.bodies = concat_bodies(change.bodies, [
-                {"kind": K.BLOCK_SET, "target": {"bid": block.id, "path": "kind"}, "payload": {"value": spec.kind}}])
+                {"kind": K.BLOCK_SET, "target": {"bid": block.id, "path": "kind"}, "payload": payload}])
+            change.structural = True
+        elif spec.kind in ITEMS and spec.level != block.level:
+            change.bodies = concat_bodies(change.bodies, [
+                {"kind": K.BLOCK_SET, "target": {"bid": block.id, "path": "level"}, "payload": {"value": spec.level}}])
             change.structural = True
         change.rewrites.append(Rewrite(block.id, "text", spec.text))
         return None

@@ -31,7 +31,7 @@ from codoc.index.graph import Graph
 from codoc.loops import realize as R
 from codoc.workspace import Roles, Workspace
 from codoc.workspace import log as L
-from codoc.workspace.layout import ACTIVITY, CODOC_DIR, GRAPH_CACHE, atomic_write
+from codoc.workspace.layout import ACTIVITY, APPLIER_LOCK, CODOC_DIR, GRAPH_CACHE, atomic_write, locked
 
 CODE_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".rb", ".cpp", ".c", ".h"}
 SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", ".pytest_cache", ".mypy_cache", CODOC_DIR}
@@ -68,6 +68,7 @@ class Daemon:
         self._propose = propose
         self.identity = L.actor_for          # inbox file name → actor (log.CLIENT_IDENTITY, hub-<login>)
         self.publisher = Publisher(self.codoc_dir, str(self.root))
+        self._logs_at_start = _log_sizes(self.codoc_dir, self.ws.session)
 
     # ── routing ────────────────────────────────────────────────────────────
     def classify(self, paths: list[str]) -> tuple[set[str], bool]:
@@ -165,6 +166,21 @@ class Daemon:
         return f"reflect: {res.summary()}" + (f" · {lifted} block(s) lifted" if lifted else "")
 
     # ── lifecycle ──────────────────────────────────────────────────────────
+    def take_over(self) -> bool:
+        """Become the only applier. Call once the pidfile is written: from then
+        on every writer submits to the inbox. A writer that applied without a
+        daemon between this store's build and the pidfile wrote a log this
+        store has not read, so wait for its lock and rebuild if any log but
+        this session's changed. Returns whether it rebuilt."""
+        with locked(self.codoc_dir / APPLIER_LOCK):
+            now = _log_sizes(self.codoc_dir, self.ws.session)
+            if now == self._logs_at_start:
+                return False
+            self.ws.rebuild()
+            self.publisher.invalidate()
+            self._logs_at_start = now
+            return True
+
     def run(self, *, debounce_ms: int = DEBOUNCE_MS) -> None:  # pragma: no cover - blocking loop
         import atexit
         import watchfiles
@@ -174,6 +190,7 @@ class Daemon:
         write_pidfile(self.codoc_dir)
         atexit.register(clear_pidfile, self.codoc_dir)
         atexit.register(self.ws.close)
+        self.take_over()
         self.process_batch([])   # absorb anything that queued while we were down
         self.say(f"codoc watching {self.root} (session {self.ws.session})")
         for changes in watchfiles.watch(str(self.root), debounce=debounce_ms, watch_filter=_filter(self.codoc_dir)):
@@ -188,6 +205,12 @@ class Daemon:
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+def _log_sizes(codoc_dir: Path, own_session: str) -> dict[str, int]:
+    """Every session log's size but this applier's own."""
+    return {p.name: p.stat().st_size for p in L.log_dir(codoc_dir).glob("*.jsonl")
+            if p.name != f"{own_session}.jsonl"}
+
 
 def _node_name() -> str:
     import socket
