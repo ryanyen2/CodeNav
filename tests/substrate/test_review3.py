@@ -224,7 +224,8 @@ def test_translate_skips_a_feature_with_an_open_plan(tmp_path):
     pid = ws.open_plan(actor="loop", kind="edit", target="h1")
     t = ws.store.blocks["p1"].text()
     ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": list(t.last_live_ref()), "text": " Maybe."}}], actor="loop", plan=pid)
-    propose = lambda payload, lang, **kw: {p["id"]: ("客户端", "放弃前重试一次。") for p in payload}
+    propose = lambda payload, lang, **kw: {p["id"]: ("客户端", {b["id"]: "放弃前重试一次。" for b in p["blocks"]})
+                                          for p in payload}
     res = translate_tree(ws, tmp_path / ".codoc", language=resolve("zh-Hans"), propose=propose)
     assert res.translated == 0
     assert all(s.live for s in ws.store.blocks["p1"].text().segs if s.plan == pid)

@@ -159,7 +159,7 @@ def test_a_feature_carrying_media_survives_every_whole_feature_pass(tmp_path):
     from codoc.calculus.derive import description, plan_claims
     from codoc.doclang import resolve
     from codoc.loops.context import block_written_by, written_by
-    from codoc.loops.reflect import _strike
+    from codoc.loops.edits import strike_bodies
     from codoc.loops.translate import translate_tree
     from codoc.mcp import tools
 
@@ -178,9 +178,10 @@ def test_a_feature_carrying_media_survives_every_whole_feature_pass(tmp_path):
     blame = tools.read_history(str(tmp_path / ".codoc"), "h1")["attribution"]
     assert f"{d.bid}.source" in blame and f"{c.bid}.body" in blame and "p1" in blame
     ws = Workspace(tmp_path / ".codoc")
-    struck = _strike(ws.store, [b.id for b in ws.store.feature_body("h1")], "p-1")
+    struck = strike_bodies(ws.store, [b.id for b in ws.store.feature_body("h1")], "p-1")
     assert sorted(b["target"]["path"] for b in struck) == ["body", "source", "text", "text"]
-    propose = lambda payload, lang, **kw: {p["id"]: ("客户端", "放弃前重试一次。") for p in payload}
+    propose = lambda payload, lang, **kw: {p["id"]: ("客户端", {b["id"]: "放弃前重试一次。" for b in p["blocks"]})
+                                          for p in payload}
     res = translate_tree(ws, tmp_path / ".codoc", language=resolve("zh-Hans"), propose=propose)
     assert res.translated == 1 and ws.store.blocks[c.bid].text("body").live_text() == "Twice?"
     assert ws.store.blocks[d.bid].text("source").live_text().startswith("flowchart")

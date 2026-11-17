@@ -1,76 +1,47 @@
-You are re-expressing the **codoc feature tree** of the codebase "{repo_name}" in
-**{language}**, for a developer who reads this tree to find code and to understand why
-it is the way it is.
+You are rewriting the codoc feature tree of the codebase "{repo_name}" in
+{language}, for a developer who reads the tree to find code and to learn why it
+is the way it is.
 
-Each item below is one feature: a named unit of human intent that binds to code. The
-prose is documentation somebody wrote about their own system. Write what THEY would have
-written if {language} had been their working language — the same claims, the same level
-of detail, nothing improved, reorganized, or added.
-
-Fidelity is to the FACTS, not to the syntax. A paragraph that shadows the source's clause
-order and sentence boundaries fails this task even when every word in it is accurate: it
-reads as translationese, and a reader who can hear that stops trusting the tree.
+- Each item is one feature: a `title` and its description as `blocks`.
+- A block is `{"id", "text"}`. `text` is that block as Markdown: a paragraph, a `- ` bullet, a `1. ` step, or a whole table.
+- Write what the author would have written had {language} been their working language. Same facts, same level of detail, nothing added, dropped or reorganized.
 
 ## What to translate
 
-- `title` → a natural {language} title of the same scope. {title_rule}
-- `description` → the same paragraph in {language}: same claims, same level of detail,
-  no claim dropped and none added. The SENTENCES are yours — split, merge, and reorder
-  clauses into whatever shape natural {language} prose uses to state these facts.
+| field | rule |
+|---|---|
+| `title` | a natural {language} title of the same scope. {title_rule} |
+| each block's `text` | the same block in {language}. Keep its marker (`- `, `1. `, leading spaces) and, in a table, the same rows and columns. The wording inside is yours: use the word order natural {language} uses, not the source's. |
 
-## What must survive EXACTLY
+Return every block you were given, under the same `id`. Do not merge, split,
+add or drop blocks.
 
-These are addresses and author signals, not prose. Copy each one through
-character-for-character; a changed one silently breaks something.
+## What must survive exactly
 
-1. **Inline citations** — `[label](codoc:path/to/file.py#symbol)`. The part after
-   `codoc:` names a real code binding: never translate, reorder, or re-case it.
-   Every citation in the original must appear in your translation. You MAY
-   translate the visible `label` when it is prose, but leave it alone when it is a
-   symbol name like `compute_changeset()`.
-2. **External links** — `[label](https://…)`. Keep the URL exactly; these are pages
-   an agent is instructed to read.
-3. **Bolded spans** — `**like this**`. Bold is not emphasis here, it is a priority
-   signal the author set: it rides into the implementation queue as a `Focus:` line.
-   Keep the SAME NUMBER of bolded spans, marking the translated words that carry the
-   same meaning. Never add bold the author did not write.
-4. **Identifiers and code** — function, class, type, file, and module names, and
-   anything inside backticks. Technical terms and library names stay in the form
-   readers of this code actually use, which is usually the original English:
-   {language} prose carrying English API names is correct and expected, so do not
-   invent local translations for them.
+| thing | rule |
+|---|---|
+| code citations `[label](codoc:path/file.py#symbol)` | Copy the part after `codoc:` character for character. Every citation in the original appears in the translation. Translate the label only when it is ordinary words, not a symbol name. |
+| web links `[label](https://…)` | Keep the URL exactly. |
+| bold `**like this**` | Bold marks what an agent must get right. Keep the same number of bolded spans, on the words that carry the same meaning. Never add bold. |
+| anything in backticks, and identifiers | Function, class, file and setting names stay as they are. Library and API terms stay in the form readers of this code use, usually English. |
 
 ## Register
 
-This is working documentation, not formal writing. Write the way a competent engineer
-explains their own system to a colleague in {language} — plain, direct, spoken in rhythm,
-unhedged. If a sentence would sound stiff read aloud to a teammate, restate it.
-
-Do not add "presumably", "appears to", or any other hedge that was not there. Do not add
-a translator's note. Do not append anything explaining that this was translated.
+Working notes between engineers: plain, direct, unhedged. Do not add a hedge
+that was not there. Do not add a translator's note.
 {prose_rule}
-
-## Rules
-
-- Do not include a double-quote character (`"`) in any value — these are JSON string
-  values, and a bare `"` makes the whole response unparseable. Where the language
-  wants quotation marks, use its own (「」, 《》, «», „“), which are safe.
-- Never emit a `⟨…⟩` token, and never emit a line starting with `> ` — both are
-  reserved channels that would corrupt the tree.
-- Return one object per input feature, keyed by the SAME `id` you were given. If a
-  feature is already written in {language}, return it unchanged rather than
-  paraphrasing it.
-
-{{include:style}}
 
 ## Output
 
-Return ONLY this, inside solution tags:
+JSON inside solution tags, nothing else. Every value is a JSON string: a line
+break is `\n`, and it contains no double-quote character. Where {language}
+wants quotation marks, use its own (「」, 《》, «»).
+
+If a feature is already in {language}, return it unchanged.
 
 <solution>
 {"features": [
-  {"id": "f-1a2b3c4d", "title": "…", "description": "…"},
-  {"id": "f-5e6f7a8b", "title": "…", "description": "…"}
+  {"id": "b-1a2b3c4d5e6f", "title": "…", "blocks": [{"id": "b-91ac00000001", "text": "…"}, {"id": "b-91ac00000002", "text": "- …"}]}
 ]}
 </solution>
 <<<CACHE_BREAK>>>

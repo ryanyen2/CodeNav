@@ -396,13 +396,14 @@ def test_model_may_not_attach_a_symbol_the_index_removed_and_bad_shapes_are_refu
     seed(ws)
     ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "h2"}, "payload": {"kind": HEADING, "level": 1, "after": "p1"}},
                {"kind": K.TEXT_INSERT, "target": {"bid": "h2", "path": "text"}, "payload": {"after": START, "text": "Other"}}], actor="loop")
-    propose = lambda c, s, t, **kw: [{"kind": "attach", "feature_id": "h2", "bindings": [["c.py", "c.py::send"]]},
+    propose = lambda c, s, t, **kw: [{"kind": "attach", "feature_id": "h2", "bindings": ["c.py::send"]},
                                      {"kind": "amend", "feature_id": "h1", "blocks": "not a list"},
                                      {"kind": "add_node"}, "junk"]
     cs = ChangeSet(removed=[chunk("c.py", "c.py::send", "f1", "t1")], added=[chunk("n.py", "n.py::x", "fz", "tz")])
     r = reflect(ws, cs, Graph(), propose=propose, allow_delete=False)
     assert ("c.py", "c.py::send") not in ws.store.bindings
-    assert [k for k, _ in r.refused] == ["amend", "add_node", "junk"]
+    assert r.refused == [("attach", "no bindable symbol"), ("amend", "amend.blocks must be a list of objects"),
+                         ("add_node", "add_node.title must be a non-empty string"), ("", "not an object")]
     assert len(r.plans) == 1                                               # the coverage net still placed n.py::x
 
 

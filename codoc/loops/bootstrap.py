@@ -1,15 +1,18 @@
 """First run: build the tree from the code.
 
-Three LLM passes: a brief from the project's own
-prose, one call per source file proposing that file's features, and one
-organizing pass grouping top-level features under themes. Their answers become
-ops with ``actor=loop`` on the trunk: a first tree is not a suggestion, there
-is nothing for it to be a suggestion against. The whole run is one batch, and
-it is the one batch a person cannot undo (spec §3.1).
+Three LLM passes:
 
-Every file's chunks end up bound: what the model did not place folds into the
-file's largest new node, and a file the model said nothing about gets one node
-named after it with no prose, a gap a person can see and fill.
+1. a brief from the project's own prose (README, package metadata, file openings);
+2. one call per source file, returning that file's features as ``add_node`` edits;
+3. one organizing call that adds theme nodes and moves top-level features under them.
+
+The edits are compiled by ``loops.edits`` and land on the trunk with
+``actor=loop``: a first tree has nothing to be a suggestion against. The whole
+run is one batch, and a person cannot undo it.
+
+Every chunk ends up bound. What the model did not place goes to the file's
+largest new node; a file the model returned nothing for gets one node named
+after the file, with no description.
 """
 from __future__ import annotations
 
@@ -17,16 +20,15 @@ import os
 from collections import Counter
 from dataclasses import dataclass, field
 
-from codoc.calculus import ops as K
 from codoc.calculus.derive import LOOP, description, title
-from codoc.calculus.doc import HEADING, PARAGRAPH
-from codoc.calculus.ids import START, new_batch_id, new_block_id
+from codoc.calculus.ids import new_batch_id
 from codoc.doclang import char_budget
 from codoc.index.flows import flow_lines
 from codoc.index.git import commit_rationales
 from codoc.index.graph import Graph
 from codoc.llm.passes import propose_brief, propose_file_features_raw, propose_organization_raw
 from codoc.loops.context import owner_of
+from codoc.loops.edits import Compiler, symbol, title_from_file
 from codoc.workspace import Workspace
 
 SOURCE_CAP = 1200
@@ -43,7 +45,7 @@ class BootstrapResult:
     features: int = 0
     calls: int = 0
     skipped: list[str] = field(default_factory=list)
-    refused: list[tuple[str, str]] = field(default_factory=list)   # (bid, why) a title or paragraph did not land
+    refused: list[tuple[str, str]] = field(default_factory=list)   # (edit kind, why) an edit that did not land
 
     def summary(self) -> str:
         base = f"{self.chunks} chunks → {self.features} features ({self.calls} LLM calls)"
@@ -108,8 +110,7 @@ def bootstrap(ws: Workspace, rows: list, graph: Graph, *, repo_name: str = "code
                 say(f"  · [{idx}/{len(files)}] {file}")
             res.calls += 1
             ops = _ensure_file_coverage(ops, frows, file)
-            minted = _apply_add_ops(ws, res, ops, frows, batch)
-            titles.extend(minted)
+            titles.extend(_land_file(ws, res, ops, frows, batch))
     if failures and len(failures) == len(files):
         raise RuntimeError(f"every bootstrap call failed ({len(files)}/{len(files)}); last error: {failures[-1][1]}")
     if failures:
@@ -125,7 +126,7 @@ def bootstrap(ws: Workspace, rows: list, graph: Graph, *, repo_name: str = "code
             ops = propose_org(feats, _feature_coupling(ws.store, graph), repo_name=repo_name, config=config,
                               brief=brief, flows=flow_lines(graph, exported), doc_language=doc_language)
             res.calls += 1
-            _apply_org_ops(ws, res, ops, batch)
+            _land_org(ws, res, ops, batch)
         except Exception as exc:  # noqa: BLE001 — a flat tree is still usable
             say(f"  ⚠ organization pass failed ({exc}); the tree stays flat")
     elif organize and len(top) > ORG_FEATURE_CAP:
@@ -134,93 +135,37 @@ def bootstrap(ws: Workspace, rows: list, graph: Graph, *, repo_name: str = "code
     return res
 
 
-# ── applying the model's ops ─────────────────────────────────────────────────
+# ── landing the model's edits ────────────────────────────────────────────────
 
-def _one_line(md: str) -> str:
-    """A heading and a paragraph are each one line: a model title carrying a
-    newline, or a hand-wrapped paragraph, is refused ``multi_paragraph`` and
-    the tree would keep a block with no words in it at all."""
-    return " ".join((md or "").split())
-
-
-def _add_feature(ws: Workspace, res: BootstrapResult, *, title_md: str, description_md: str, after: str,
-                 level: int, batch: str, binds: list[tuple[str, str]], fps: dict, ths: dict) -> str:
-    fid = new_block_id()
-    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": fid}, "payload": {"kind": HEADING, "level": level, "after": after}}],
-              actor=LOOP, batch=batch)
-    got, _ = ws.ingest(fid, "text", base_text="", new_md=_one_line(title_md) or "Untitled", actor=LOOP, batch=batch)
-    if got.refused:
-        res.refused.append((fid, f"title: {got.refused}"))
-    last = fid
-    for para in [_one_line(p) for p in (description_md or "").split("\n\n") if p.strip()]:
-        bid = new_block_id()
-        ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": bid}, "payload": {"kind": PARAGRAPH, "after": last}}],
-                  actor=LOOP, batch=batch)
-        got, _ = ws.ingest(bid, "text", base_text="", new_md=para, actor=LOOP, batch=batch)
-        if got.refused:
-            res.refused.append((bid, got.refused))
-        last = bid
-    if binds:
-        ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": fid},
-                    "payload": {"file": f, "symbol": s, "fingerprint": fps.get((f, s), ""), "types_hash": ths.get((f, s), "")}}
-                   for f, s in binds], actor=LOOP, batch=batch)
-    return fid
+def _land(ws: Workspace, res: BootstrapResult, compiler: Compiler, raw: dict, batch: str) -> str | None:
+    """Compile one edit and apply it on the trunk. Returns the feature it made
+    or moved, or None when it was refused."""
+    change = compiler.compile(raw)
+    if change.refused is None:
+        conflicts = [o.conflict for o in ws.submit(change.bodies, actor=LOOP, batch=batch) if o.conflict]
+        change.refused = conflicts[0] if conflicts else None
+    if change.refused:
+        res.refused.append((change.kind, change.refused))
+        return None
+    return change.target
 
 
-def _last_block(ws: Workspace) -> str:
-    live = ws.store.ordered()
-    return live[-1].id if live else START
+def _land_file(ws: Workspace, res: BootstrapResult, ops: list[dict], frows: list, batch: str) -> list[str]:
+    """One file's ``add_node`` edits. Returns the titles added."""
+    hashes = {(r.file, r.symbol_path): (r.tokens_hash, r.types_hash) for r in frows}
+    compiler = Compiler(ws.store, hashes=hashes, bindable=set(hashes))
+    return [o["title"].strip() for o in ops
+            if o.get("kind") == "add_node" and _land(ws, res, compiler, o, batch)]
 
 
-def _apply_add_ops(ws: Workspace, res: BootstrapResult, ops: list[dict], frows: list, batch: str) -> list[str]:
-    """Apply one file's ``add_node`` ops. Temporary ids (``n1``) resolve to the
-    minted heading; a child lands right after its parent's body one level deeper;
-    an unknown parent means top level. Returns the titles minted."""
-    fps = {(r.file, r.symbol_path): r.tokens_hash for r in frows}
-    ths = {(r.file, r.symbol_path): r.types_hash for r in frows}
-    local: dict[str, str] = {}
-    minted: list[str] = []
-    for o in ops:
-        if o.get("kind") != "add_node" or not (o.get("title") or "").strip():
-            continue
-        parent = local.get(o.get("parent_id") or "") or (o.get("parent_id") if o.get("parent_id") in ws.store.blocks else None)
-        if parent:
-            rng = ws.store.feature_range(parent)
-            after, level = rng[-1].id, ws.store.blocks[parent].level + 1
-        else:
-            after, level = _last_block(ws), 1
-        binds = [(str(b[0]), str(b[1])) for b in o.get("bindings", []) if isinstance(b, (list, tuple)) and len(b) == 2]
-        fid = _add_feature(ws, res, title_md=o["title"], description_md=o.get("description", ""), after=after,
-                           level=level, batch=batch, binds=binds, fps=fps, ths=ths)
-        if o.get("id"):
-            local[str(o["id"])] = fid
-        minted.append(o["title"].strip())
-    return minted
-
-
-def _apply_org_ops(ws: Workspace, res: BootstrapResult, ops: list[dict], batch: str) -> None:
-    """Theme headings (``add_node`` with temporary ids) then ``move_node`` of
-    existing features under them: one ``block.move`` per feature, deeper by one."""
-    local: dict[str, str] = {}
-    for o in ops:
-        if o.get("kind") == "add_node" and (o.get("title") or "").strip():
-            fid = _add_feature(ws, res, title_md=o["title"], description_md=o.get("description", ""),
-                               after=_last_block(ws), level=1, batch=batch, binds=[], fps={}, ths={})
-            if o.get("id"):
-                local[str(o["id"])] = fid
-    for o in ops:
-        if o.get("kind") != "move_node":
-            continue
-        fid = o.get("feature_id")
-        parent = local.get(o.get("parent_id") or "") or o.get("parent_id")
-        if fid not in ws.store.blocks or parent not in ws.store.blocks or fid == parent:
-            continue
-        rng = ws.store.feature_range(parent)
-        if fid in {b.id for b in rng}:
-            continue
-        delta = (ws.store.blocks[parent].level + 1) - ws.store.blocks[fid].level
-        ws.submit([{"kind": K.BLOCK_MOVE, "target": {"bid": fid}, "payload": {"after": rng[-1].id, "level_delta": delta}}],
-                  actor=LOOP, batch=batch)
+def _land_org(ws: Workspace, res: BootstrapResult, ops: list[dict], batch: str) -> None:
+    """Theme nodes first, then the moves that put features under them."""
+    compiler = Compiler(ws.store)
+    for o in sorted((o for o in ops if o.get("kind") in ("add_node", "move_node")),
+                    key=lambda o: o["kind"] != "add_node"):
+        if o["kind"] == "add_node":
+            o = {**o, "parent_id": None, "bindings": []}       # themes sit at the top and own no code
+        _land(ws, res, compiler, o, batch)
 
 
 # ── context helpers ──────────────────────────────────────────────────────────
@@ -245,29 +190,28 @@ def _file_edges(frows: list, graph: Graph) -> list[dict]:
 
 
 def _ensure_file_coverage(ops: list[dict], frows: list, file: str) -> list[dict]:
+    """Every chunk of the file bound by exactly one node: bindings outside the
+    file or bound twice are dropped, and what no node bound goes to the node
+    with the most bindings (or to a new node named after the file)."""
     keys = {(r.file, r.symbol_path) for r in frows}
+    seen: set[tuple[str, str]] = set()
     for o in ops:
-        binds = [tuple(b) for b in o.get("bindings", []) if isinstance(b, (list, tuple)) and len(b) == 2]
-        o["bindings"] = [list(b) for b in binds if b in keys]
-    covered = {tuple(b) for o in ops for b in o.get("bindings", [])}
-    uncovered = sorted(keys - covered)
+        kept = []
+        for b in o.get("bindings") or []:
+            key = symbol(b)
+            if key in keys and key not in seen:
+                seen.add(key)
+                kept.append(key[1])
+        o["bindings"] = kept
+    uncovered = [s for _, s in sorted(keys - seen)]
     if not uncovered:
         return ops
     adds = [o for o in ops if o.get("kind") == "add_node" and (o.get("title") or "").strip()]
     if adds:
-        primary = max(adds, key=lambda o: len(o.get("bindings", [])))
-        primary["bindings"] = list(primary.get("bindings", [])) + [list(b) for b in uncovered]
+        max(adds, key=lambda o: len(o["bindings"]))["bindings"].extend(uncovered)
         return ops
     return list(ops) + [{"kind": "add_node", "title": title_from_file(file), "description": "",
-                         "bindings": [list(b) for b in uncovered], "rationale": "coverage: no nodes for this file"}]
-
-
-def title_from_file(file: str) -> str:
-    """A file's name as a feature title: the reflect pass proposes one for a
-    file the tree has never named, the same way bootstrap did."""
-    stem = os.path.splitext(os.path.basename(file))[0]
-    words = stem.replace("-", " ").replace("_", " ").strip()
-    return (words[:1].upper() + words[1:]) if words else file
+                         "bindings": uncovered, "rationale": "no node for this file"}]
 
 
 def _feature_coupling(store, graph: Graph) -> list[str]:

@@ -1,18 +1,29 @@
-"""Migrate an existing tree into another authoring language (``codoc translate``).
+"""Rewrite an existing tree in another authoring language (``codoc translate``).
 
-Switching ``doc_language`` changes what codoc originates from then on; it never
-touches prose already on the page. This is the author-invoked conversion.
+Setting ``doc_language`` changes the language codoc writes in from then on. It
+never touches prose already in the tree; this is the conversion the author asks
+for.
 
-On the calculus it is ``ingest`` per block with ``actor=translator:<lang>``:
-the translation of a machine-written block lands on the trunk (the author
-asked for exactly this rewrite), the translation of a human-written block opens
-a plan so the author's own words are never replaced without a look. ``ingest``
-already refuses a block whose translation would drop a citation, link or focus
-span (spec §4, rule 5), so this module adds only the two checks ``ingest``
-does not make: did the prose actually change script, and does the title collide
-with a sibling's. Blocks with an open translator plan are skipped, so a re-run
-never stacks a second translation. Selection is by detected language, so an
-interrupted run is safe to re-run.
+Per feature:
+
+1. Send the title and the description blocks a person reads as prose
+   (paragraphs, list items, tables; not diagrams or code) to the model, keyed by
+   block id.
+2. Check the answer:
+   - every block came back, as the same kind of block;
+   - the title does not collide with a sibling's;
+   - the prose is in the target language.
+3. Compute every block's ``ingest`` with ``actor=translator:<lang>``.
+   ``ingest`` refuses a block whose translation drops a citation, link or bold
+   span the person placed.
+4. Write all of them, or none:
+   - on the trunk when machines wrote the feature;
+   - as one plan when a person wrote any of it, or the feature has pending
+     intent, so the person's words are never replaced without a look.
+
+A feature with an open plan is skipped, so a re-run never stacks a second
+translation. Features are picked by their detected language, so an
+interrupted run can be run again.
 """
 from __future__ import annotations
 
@@ -21,16 +32,17 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from codoc.llm.passes import propose_translations
-from codoc.calculus.derive import HELD, markdown, phase
-from codoc.calculus.doc import PARAGRAPH
+from codoc.calculus import block_md
+from codoc.calculus.derive import HELD, open_plans_on, phase, title
+from codoc.calculus.doc import PROSE, TABLE, parent_of, text_fields
 from codoc.doclang import DocLanguage, detect_prose_language, norm_key, prose_letters, workspace_doc_language
-from codoc.loops.context import written_by
+from codoc.llm.passes import propose_translations
+from codoc.loops.context import description_blocks, written_by
 from codoc.workspace import Workspace
 from codoc.workspace.layout import TRANSLATE, atomic_write
 
 BATCH = 12
-LEASE_S = 300
+PROSE_BLOCKS = PROSE | {TABLE}
 
 
 @dataclass
@@ -59,25 +71,14 @@ class TranslateResult:
         return ", ".join(parts)
 
 
-def _feature_text(ws: Workspace, fid: str) -> tuple[str, list[tuple[str, str]]]:
-    body = ws.store.feature_body(fid)
-    t = markdown(body[0].text(), "rejected", ws.store)
-    paras = [(b.id, markdown(b.text(), "rejected", ws.store)) for b in body[1:] if b.kind == PARAGRAPH]
-    return t, paras
+def _item(ws: Workspace, fid: str) -> dict:
+    """What the model is sent for one feature."""
+    return {"id": fid, "title": title(ws.store, fid, "rejected"),
+            "blocks": description_blocks(ws.store, fid, PROSE_BLOCKS)}
 
 
-def _needs(ws: Workspace, fid: str, lang: DocLanguage) -> bool:
-    t, paras = _feature_text(ws, fid)
-    text = t + "\n" + "\n".join(p for _, p in paras)
-    return detect_prose_language(text, lang).code != lang.code
-
-
-def _has_open_plan(ws: Workspace, fid: str) -> bool:
-    """A feature with any open plan waits: the live text holds words the
-    person has not accepted, and translating around them would tombstone
-    them as the translator's own edit."""
-    from codoc.calculus.derive import open_plans_on
-    return bool(open_plans_on(ws.store, fid))
+def _prose(item: dict) -> str:
+    return "\n".join([item["title"], *(b["text"] for b in item["blocks"])])
 
 
 def translate_tree(ws: Workspace, codoc_dir: str | Path, *, language: DocLanguage | None = None, dry_run: bool = False,
@@ -87,29 +88,30 @@ def translate_tree(ws: Workspace, codoc_dir: str | Path, *, language: DocLanguag
     lang = language or workspace_doc_language(codoc_dir)
     actor = f"translator:{lang.code}"
     res = TranslateResult()
-    heads = ws.store.headings()
+    store = ws.store
+    heads = store.headings()
     res.considered = len(heads)
-    wanted = [h.id for h in heads if _needs(ws, h.id, lang)]
-    pending = [fid for fid in wanted if not _has_open_plan(ws, fid)]
+    items = {h.id: _item(ws, h.id) for h in heads}
+    wanted = [fid for fid, it in items.items() if detect_prose_language(_prose(it), lang).code != lang.code]
     res.already = len(heads) - len(wanted)
+    pending = []
     for fid in wanted:
-        if fid in pending:
-            continue
-        res.skipped.append(Skipped(fid, markdown(ws.store.blocks[fid].text(), "rejected", ws.store),
-                                   "a plan is open on it; translating would tombstone its words"))
+        if open_plans_on(store, fid):
+            res.skipped.append(Skipped(fid, items[fid]["title"], "a plan is open on it"))
+        else:
+            pending.append(fid)
     if limit > 0:
         pending = pending[:limit]
     taken: dict[str | None, set[str]] = {}
-    from codoc.calculus.doc import parent_of
     for i, h in enumerate(heads):
-        taken.setdefault(parent_of(heads, i), set()).add(norm_key(markdown(h.text(), "rejected", ws.store)))
+        taken.setdefault(parent_of(heads, i), set()).add(norm_key(items[h.id]["title"]))
     remaining = list(pending)
 
     def progress(running: bool) -> None:
         if dry_run:
             return
         atomic_write(Path(codoc_dir) / TRANSLATE, json.dumps({
-            "version": 2, "running": running, "target": lang.code, "target_name": lang.name,
+            "running": running, "target": lang.code, "target_name": lang.name,
             "total": len(pending), "translated": res.translated, "planned": res.planned,
             "skipped": [s.__dict__ for s in res.skipped], "pending": remaining, "at": time.time()}))
 
@@ -117,66 +119,26 @@ def translate_tree(ws: Workspace, codoc_dir: str | Path, *, language: DocLanguag
     try:
         for start in range(0, len(pending), BATCH):
             batch = pending[start:start + BATCH]
-            payload = []
-            paras_by_fid: dict[str, list[tuple[str, str]]] = {}
-            for fid in batch:
-                t, paras = _feature_text(ws, fid)
-                paras_by_fid[fid] = paras
-                payload.append({"id": fid, "title": t, "description": "\n\n".join(p for _, p in paras)})
             try:
-                got = propose(payload, lang, repo_name=repo_name, config=config)
+                got = propose([items[f] for f in batch], lang, repo_name=repo_name, config=config)
                 res.calls += 1
             except Exception as exc:  # noqa: BLE001 — one bad batch must not sink the run
-                for fid in batch:
-                    res.skipped.append(Skipped(fid, next(p["title"] for p in payload if p["id"] == fid),
-                                               f"batch failed: {exc}"))
                 got = {}
+                for fid in batch:
+                    res.skipped.append(Skipped(fid, items[fid]["title"], f"batch failed: {exc}"))
             for fid in batch:
-                t_old = next(p["title"] for p in payload if p["id"] == fid)
-                pair = got.get(fid)
-                if pair is None:
-                    res.skipped.append(Skipped(fid, t_old, "no translation returned"))
+                if fid not in got:
+                    if not any(s.feature_id == fid for s in res.skipped):
+                        res.skipped.append(Skipped(fid, items[fid]["title"], "no translation returned"))
                     continue
-                new_title, new_desc = pair
-                reason = _check(ws, fid, t_old, payload, new_title, new_desc, lang, taken, heads)
+                new_title, new_blocks = got[fid]
+                reason = _check(items[fid], new_title, new_blocks, lang, taken.setdefault(_parent(heads, fid), set()))
+                if reason is None and not dry_run:
+                    reason = _write(ws, fid, new_title, new_blocks, actor, lang, res)
                 if reason:
-                    res.skipped.append(Skipped(fid, t_old, reason))
-                    continue
-                if dry_run:
+                    res.skipped.append(Skipped(fid, items[fid]["title"], reason))
+                else:
                     res.translated += 1
-                    continue
-                new_paras = [p.strip() for p in new_desc.split("\n\n") if p.strip()]
-                old_paras = paras_by_fid[fid]
-                if len(new_paras) != len(old_paras):
-                    res.skipped.append(Skipped(fid, t_old, "paragraph count changed"))
-                    continue
-                # Every refusal is known before the plan exists. A plan opened
-                # and then abandoned is a verdict the editor offers on nothing,
-                # and a translator has no authority to withdraw one.
-                # Not `must_propose`: a translation replaces every word by
-                # design, so the fraction says nothing, and the question is
-                # whose words they were. The one clause it shares with the
-                # gate is 01 §4 rule 8 — while a feature has pending intent the
-                # document wins, whoever wrote it.
-                human = written_by(ws.store, fid) == "human" or phase(ws.store, fid) in HELD
-                base = dict(ws.store.frontier)
-                computed, refused = [], None
-                for bid, new_md in [(fid, new_title)] + [(b, md) for (b, _o), md in zip(old_paras, new_paras)]:
-                    r = ws.plan_ingest(bid, "text", base_text=ws.store.blocks[bid].text().live_text(),
-                                       new_md=new_md, actor=actor, trunk=not human)
-                    if r.refused:
-                        refused = r.refused if bid == fid else f"{bid}: {r.refused}"
-                        break
-                    computed.append(r)
-                if refused:
-                    res.skipped.append(Skipped(fid, t_old, refused))
-                    continue
-                plan = ws.open_plan(actor=actor, kind="edit", target=fid, note=f"translation to {lang.name}") if human else None
-                for r in computed:
-                    ws.commit_ingest(r, actor=actor, plan=plan, batch=plan, base=base)
-                res.translated += 1
-                if plan:
-                    res.planned += 1
             remaining = [f for f in remaining if f not in batch]
             progress(True)
             say(f"  · translated {res.translated}/{len(pending)}")
@@ -185,19 +147,61 @@ def translate_tree(ws: Workspace, codoc_dir: str | Path, *, language: DocLanguag
     return res
 
 
-def _check(ws, fid, old_title, payload, new_title, new_desc, lang, taken, heads) -> str | None:
+def _parent(heads, fid: str) -> str | None:
+    return parent_of(heads, next(i for i, h in enumerate(heads) if h.id == fid))
+
+
+def _check(item: dict, new_title: str, new_blocks: dict[str, str], lang: DocLanguage, siblings: set[str]) -> str | None:
+    """Why this translation cannot be written, or None. Records the new title
+    among the siblings when it passes."""
     if not new_title.strip():
         return "empty title"
-    old_desc = next(p["description"] for p in payload if p["id"] == fid)
-    if old_desc.strip() and not new_desc.strip():
-        return "empty description"
-    from codoc.calculus.doc import parent_of
-    idx = next(i for i, h in enumerate(heads) if h.id == fid)
-    parent = parent_of(heads, idx)
+    for b in item["blocks"]:
+        if not (new_blocks.get(b["id"]) or "").strip():
+            return f"block {b['id']} came back empty or missing"
+        old, new = block_md.parse(b["text"], headings=False), block_md.parse(new_blocks[b["id"]], headings=False)
+        if len(new) != 1 or new[0].kind != old[0].kind:
+            return f"block {b['id']} came back as a different kind of block"
     key = norm_key(new_title)
-    if key in taken.get(parent, set()) and key != norm_key(old_title):
+    if key in siblings and key != norm_key(item["title"]):
         return f"the translated title collides with a sibling's ({new_title!r})"
-    if prose_letters(old_desc) >= 12 and detect_prose_language(new_desc, lang).code != lang.code:
-        return f"came back in {detect_prose_language(new_desc, lang).name}, not {lang.name}"
-    taken.setdefault(parent, set()).add(key)
+    old_prose = "\n".join(b["text"] for b in item["blocks"])
+    new_prose = "\n".join(new_blocks[b["id"]] for b in item["blocks"])
+    if prose_letters(old_prose) >= 12 and (got := detect_prose_language(new_prose, lang)).code != lang.code:
+        return f"came back in {got.name}, not {lang.name}"
+    siblings.add(key)
+    return None
+
+
+def _write(ws: Workspace, fid: str, new_title: str, new_blocks: dict[str, str], actor: str, lang: DocLanguage,
+           res: TranslateResult) -> str | None:
+    """Compute every ingest first, then write all of them or none. Returns
+    why nothing was written, or None.
+
+    The machine gate (``must_propose``) does not apply: a translation replaces
+    every word by design, so the deleted fraction says nothing. What decides
+    trunk or plan is whose words they were."""
+    store = ws.store
+    human = written_by(store, fid) == "human" or phase(store, fid) in HELD
+    targets = [(fid, "text", new_title)]
+    for bid, md in new_blocks.items():
+        block = store.blocks.get(bid)
+        if block is None or block.kind not in PROSE_BLOCKS:
+            continue
+        path = text_fields(block.kind)[0]
+        spec = block_md.parse(md, headings=False)[0]
+        targets.append((bid, path, spec.text))
+    computed = []
+    for bid, path, new_md in targets:
+        block = store.blocks[bid]
+        r = ws.plan_ingest(bid, path, base_text=block.text(path).live_text(), new_md=new_md, actor=actor, trunk=not human)
+        if r.refused:
+            return r.refused if bid == fid else f"{bid}: {r.refused}"
+        computed.append(r)
+    base = dict(store.frontier)
+    plan = ws.open_plan(actor=actor, kind="edit", target=fid, note=f"translation to {lang.name}") if human else None
+    for r in computed:
+        ws.commit_ingest(r, actor=actor, plan=plan, batch=plan, base=base)
+    if plan:
+        res.planned += 1
     return None

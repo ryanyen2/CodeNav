@@ -74,19 +74,12 @@ def test_translate_ingests_per_block_and_plans_human_prose(tmp_path):
     zh = resolve("zh-Hans")
 
     def fake(features, language, **kw):
-        out = {}
-        for f in features:
-            paras = f["description"].split("\n\n")
-            zh_paras = []
-            for p in paras:
-                if "once" in p:
-                    zh_paras.append("超时后重试 **once**。")
-                elif "send" in p.lower():
-                    zh_paras.append("发送路径。")
-                else:
-                    zh_paras.append("发送请求。")
-            out[f["id"]] = ("HTTP 客户端" if f["title"] == "HTTP client" else "发送", "\n\n".join(zh_paras))
-        return out
+        def zh_text(text):
+            if "once" in text:
+                return "超时后重试 **once**。"
+            return "发送路径。" if "send" in text.lower() else "发送请求。"
+        return {f["id"]: ("HTTP 客户端" if f["title"] == "HTTP client" else "发送",
+                          {b["id"]: zh_text(b["text"]) for b in f["blocks"]}) for f in features}
 
     res = translate_tree(ws, tmp_path / ".codoc", language=zh, propose=fake)
     assert res.translated == 2 and res.planned == 1 and not res.skipped, res.skipped
@@ -115,7 +108,7 @@ def test_translating_a_queued_feature_is_a_plan_even_when_the_loop_wrote_it(tmp_
               actor="human:local")                       # queued, and every word of it is the loop's
 
     def fake(features, language, **kw):
-        return {f["id"]: ("译", "\n\n".join("译文。" for _ in f["description"].split("\n\n"))) for f in features}
+        return {f["id"]: ("译", {b["id"]: "译文。" for b in f["blocks"]}) for f in features}
 
     res = translate_tree(ws, tmp_path / ".codoc", language=resolve("zh-Hans"), propose=fake)
     assert res.translated == 2 and res.planned == 1, res           # only the queued one waits
@@ -185,7 +178,8 @@ def test_translate_says_when_it_skipped_a_feature_for_an_open_plan(tmp_path):
     ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
                 "payload": {"after": list(t.last_live_ref()), "text": " Maybe."}}], actor="loop", plan=pid)
     res = translate_tree(ws, tmp_path / ".codoc", language=resolve("zh-Hans"),
-                         propose=lambda payload, lang, **kw: {p["id"]: ("客户端", "重试一次。") for p in payload})
+                         propose=lambda payload, lang, **kw: {p["id"]: ("客户端", {b["id"]: "重试一次。" for b in p["blocks"]})
+                                                              for p in payload})
     assert res.translated == 0 and res.already == 0
     assert [s.feature_id for s in res.skipped] == ["h1"] and "plan is open" in res.skipped[0].reason
     assert "1 skipped" in res.summary()

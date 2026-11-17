@@ -49,7 +49,7 @@ from codoc.calculus import ops as K
 from codoc.calculus.block_md import BlockSpec
 from codoc.calculus.doc import is_source_field, text_fields
 from codoc.calculus.ids import REWRITERS, START, CharRef, actor_kind, is_human, new_block_id
-from codoc.calculus.inline_md import Span, parse
+from codoc.calculus.inline_md import parse
 from codoc.calculus.text import BOLD, CITE, CODE, GROWS_AFTER, LINK, Mark, Text, nfc
 
 VISIBLE_MARKS = frozenset({BOLD, CODE, LINK, CITE})     # the kinds Markdown can express

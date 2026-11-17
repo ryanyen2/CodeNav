@@ -203,12 +203,12 @@ def propose_translations(
     *,
     repo_name: str = "codebase",
     config: LLMConfig | None = None,
-) -> dict[str, tuple[str, str]]:
-    """Translate a batch of ``{id, title, description}`` dicts into ``language``.
+) -> dict[str, tuple[str, dict[str, str]]]:
+    """Translate a batch of ``{id, title, blocks: [{id, text}]}`` into ``language``.
 
-    Returns ``{feature_id: (title, description)}`` for every item the model returned
-    usably, omitting the rest. Omission is not an error: the caller reports
-    untranslated nodes and leaves them in their original language.
+    Returns ``{feature_id: (title, {block_id: text})}`` for every item the
+    model returned usably, omitting the rest. Omission is not an error: the
+    caller reports untranslated nodes and leaves them in their original language.
 
     Batched because a translator benefits from seeing sibling nodes: consistent
     terminology is most of what makes a translated tree read as one document.
@@ -230,15 +230,13 @@ def propose_translations(
         features=json.dumps(features, indent=2, ensure_ascii=False),
     )
     rows = raw.get("features", []) if isinstance(raw, dict) else raw
-    out: dict[str, tuple[str, str]] = {}
+    out: dict[str, tuple[str, dict[str, str]]] = {}
     for row in rows if isinstance(rows, list) else []:
-        if not isinstance(row, dict):
-            continue
-        fid = str(row.get("id") or "").strip()
-        title = row.get("title")
-        description = row.get("description")
-        if not fid or not isinstance(title, str) or not isinstance(description, str):
+        fid = str(row.get("id") or "").strip() if isinstance(row, dict) else ""
+        title, blocks = (row.get("title"), row.get("blocks") or []) if fid else (None, None)
+        if not fid or not isinstance(title, str) or not isinstance(blocks, list):
             _log.warning("codoc translate: dropping malformed row %r", row)
             continue
-        out[fid] = (title.strip(), description.strip())
+        out[fid] = (title.strip(), {str(b["id"]): b["text"] for b in blocks
+                                    if isinstance(b, dict) and isinstance(b.get("text"), str) and b.get("id")})
     return out

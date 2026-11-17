@@ -5,14 +5,18 @@ go through ``daemon.client`` (the daemon's inbox when a daemon owns the
 checkout, the applier otherwise) and are stamped ``actor=agent:<id>`` by the
 receiving side, never by the agent.
 
-Two writes:
+Two writes take tree edits (``loops.edits``). Every edit is compiled against
+the current tree before anything is written; if one is refused, nothing is
+written and the error names it.
 
-- ``reflect``: what the agent just did to the code, as bindings (trunk) and
-  block-keyed prose repairs (through ``ingest`` under the machine gate). Safe
-  ops land; anything that would rewrite a person's words becomes a plan.
-- ``propose``: a plan. New nodes, amendments and moves the person will accept
-  or reject in the editor; accepting a plan hands the feature off, so a plan is
-  by definition a request to build.
+| tool | edit | lands |
+|---|---|---|
+| ``reflect`` | ``attach``, ``detach`` on an existing feature | on the trunk |
+| ``reflect`` | ``amend`` that only rewords blocks | through ``ingest``: on the trunk when small, else as a plan (the machine gate) |
+| ``reflect`` | anything else | as one plan, as ``propose`` would |
+| ``propose`` | all | as one plan the person accepts or rejects |
+
+Accepting a plan hands the feature off: a plan is a request to build.
 """
 from __future__ import annotations
 
@@ -20,18 +24,18 @@ from pathlib import Path
 
 from codoc.calculus import ops as K
 from codoc.calculus.derive import (
-    attribution, dead_cites, description, history as feature_history, markdown, open_plans, phase, title,
+    attribution, dead_cites, description, history as feature_history, open_plans, phase, title,
 )
-from codoc.calculus.doc import HEADING, PARAGRAPH, fold_tree, text_fields
-from codoc.calculus.ids import START, new_batch_id, new_block_id, new_plan_id
-from codoc.calculus.text import SUGGEST_DEL
+from codoc.calculus.doc import HEADING, fold_tree, text_fields
+from codoc.calculus.ids import new_batch_id, new_plan_id
 from codoc.daemon import client
 from codoc.daemon.publish import read_status as published_status
 from codoc.daemon.publish import realizing_is_fresh, write_realizing
 from codoc.doclang import detect_prose_language, workspace_doc_language
 from codoc.index.graph import Graph
 from codoc.llm.prompt import titles_outline
-from codoc.loops.context import select_context, written_by
+from codoc.loops.context import description_blocks, select_context, written_by
+from codoc.loops.edits import Change, Compiler, strike_bodies
 from codoc.loops.realize import queued
 from codoc.mcp.walkthrough import AskStep, build_walkthrough, clear_walkthrough, read_walkthrough, write_walkthrough
 from codoc.workspace.layout import GRAPH_CACHE
@@ -105,9 +109,8 @@ def read_tree(codoc_dir: str, *, root_id: str | None = None, depth: int = 0, inc
     def walk(nodes, level, parent):
         for n in nodes:
             binds = by_feature.get(n.id, [])
-            blocks = [{"id": b.id, "text": markdown(b.text(), "rejected", store)}
-                      for b in store.feature_body(n.id)[1:] if b.kind == PARAGRAPH]
-            out.append({"id": n.id, "title": title(store, n.id, "rejected"), "blocks": blocks, "parent_id": parent,
+            out.append({"id": n.id, "title": title(store, n.id, "rejected"), "blocks": description_blocks(store, n.id),
+                        "parent_id": parent,
                         "phase": phase(store, n.id), "binding_count": len(binds),
                         "files": sorted({b.file for b in binds}), "written_by": written_by(store, n.id),
                         **({"bindings": sorted(b.symbol for b in binds)} if include_bindings else {}),
@@ -185,165 +188,88 @@ def read_history(codoc_dir: str, feature_id: str, limit: int = 20) -> dict:
 
 # ── writes ───────────────────────────────────────────────────────────────────
 
-def _bind_body(kind: str, fid: str, bind: str) -> dict | None:
-    file, _, sym = str(bind).partition("::")
-    if not sym:
-        return None
-    return {"kind": kind, "target": {"fid": fid}, "payload": {"file": file, "symbol": f"{file}::{sym}"}}
+def _compile(store, ops: list[dict]) -> tuple[list[Change], str | None]:
+    """Every edit compiled in order, or the first refusal as an error."""
+    compiler = Compiler(store)
+    changes = []
+    for i, raw in enumerate(ops or []):
+        change = compiler.compile(raw)
+        if change.refused:
+            return [], f"ops[{i}] ({change.kind}): {change.refused}"
+        changes.append(change)
+    return changes, None
 
 
 def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "", caused_by: str | None = None,
             root_dir: str | None = None) -> dict:
-    """What the agent did, as bindings and block-keyed prose repairs. Bindings
-    land on the trunk. Prose enters through the daemon's ``ingest`` under the
-    machine gate: a small repair lands, a rewrite or a repair on a feature with
-    pending intent becomes a plan."""
+    """What the agent did to the code, as tree edits (see the module table)."""
     ws, _ = _open(codoc_dir)
-    store = ws.store
-    bodies: list[dict] = []
-    ingests: list[dict] = []
-    plans: list[dict] = []
-    kinds = {"attach": K.BIND_ATTACH, "detach": K.BIND_DETACH, "refresh": K.BIND_REFRESH}
-    for raw in ops or []:
-        kind = raw.get("kind")
-        fid = raw.get("feature_id")
-        if kind in kinds:
-            if fid not in store.blocks or store.blocks[fid].kind != HEADING or not store.blocks[fid].live:
-                return _err(f"unknown feature_id {fid!r}")
-            for b in raw.get("binds", []):
-                body = _bind_body(kinds[kind], fid, b)
-                if body is None:
-                    return _err(f"bad bind {b!r}: use 'file.py::symbol'")
-                bodies.append(body)
-        elif kind == "amend":
-            if fid not in store.blocks:
-                return _err(f"unknown feature_id {fid!r}")
-            # One amend is one batch, so if the gate turns it into a proposal
-            # it is ONE proposal over every block it repairs (01 §4 rule 8) —
-            # `_plan_for` keys on the batch and falls back to the block id.
-            batch = new_batch_id()
-            if raw.get("title"):
-                ingests.append({"bid": fid, "path": "text", "new_md": raw["title"], "batch": batch})
-            for entry in raw.get("blocks", []):
-                if entry.get("id") in store.blocks:
-                    ingests.append({"bid": entry["id"], "path": "text", "new_md": entry.get("text", ""), "batch": batch})
-                elif entry.get("text"):
-                    plans.append({"kind": "add_paragraph", "feature_id": fid, "text": entry["text"]})
-        elif kind in ("add_node", "move_node", "retire_node"):
-            plans.append(raw)
-        else:
-            return _err(f"unknown op kind {kind!r}")
-    results: dict = {"ok": True, "applied": [], "ingested": [], "planned": None}
+    changes, err = _compile(ws.store, ops)
+    if err:
+        return _err(err)
+    minted = {c.target for c in changes if c.kind == "add_node"}
+    trunk = [c for c in changes if c.kind in ("attach", "detach") and c.target not in minted]
+    rewords = [c for c in changes if c.kind == "amend" and not c.structural and not c.strikes]
+    planned = [c for c in changes if c not in trunk and c not in rewords]
+    out: dict = {"ok": True, "applied": [], "ingested": [], "planned": None}
+    bodies = [b for c in trunk for b in c.bodies]
     if bodies:
-        results["applied"] = client.write(codoc_dir, client=AGENT, bodies=bodies, caused_by=caused_by, root_dir=root_dir)
-    for ing in ingests:
-        t = store.blocks[ing["bid"]].text().live_text()
-        results["ingested"].append({**ing, **client.ingest(codoc_dir, client=AGENT, bid=ing["bid"], path=ing["path"],
-                                                           base_text=t, new_md=ing["new_md"], caused_by=caused_by,
-                                                           root_dir=root_dir, batch=ing["batch"])})
-    if plans:
-        results["planned"] = propose(codoc_dir, ops=plans, note=rationale, caused_by=caused_by, root_dir=root_dir)
-    return results
+        out["applied"] = client.write(codoc_dir, client=AGENT, bodies=bodies, caused_by=caused_by, root_dir=root_dir)
+    for c in rewords:
+        batch = new_batch_id()        # one amend, one batch: if the gate makes it a plan, it is one plan
+        for r in c.rewrites:
+            base = ws.store.blocks[r.bid].text(r.path).live_text()
+            got = client.ingest(codoc_dir, client=AGENT, bid=r.bid, path=r.path, base_text=base, new_md=r.new_md,
+                                caused_by=caused_by, root_dir=root_dir, batch=batch)
+            out["ingested"].append({"bid": r.bid, "path": r.path, **got})
+    if planned:
+        out["planned"] = _write_plan(codoc_dir, ws.store, planned, note=rationale, caused_by=caused_by, root_dir=root_dir)
+    return out
 
 
 def propose(codoc_dir: str, *, ops: list[dict], note: str = "", caused_by: str | None = None,
             root_dir: str | None = None) -> dict:
-    """A plan: new nodes, amendments (block-keyed), moves, deletions. Applied as
-    gray, tagged text the person accepts or rejects in the editor."""
+    """A plan of tree edits, drawn in place for the person to accept or reject."""
     ws, _ = _open(codoc_dir)
-    store = ws.store
+    changes, err = _compile(ws.store, ops)
+    if err:
+        return _err(err)
+    if not changes:
+        return _err("no ops")
+    return _write_plan(codoc_dir, ws.store, changes, note=note, caused_by=caused_by, root_dir=root_dir)
+
+
+_PLAN_KIND = {"add_node": "add", "move_node": "move", "retire_node": "delete"}
+
+
+def _write_plan(codoc_dir: str, store, changes: list[Change], *, note: str, caused_by: str | None,
+                root_dir: str | None) -> dict:
+    """Open one plan and write every change under it: each change's bodies as
+    one batch, then its rewrites as ingests, then its strikes."""
+    kinds = {_PLAN_KIND.get(c.kind, "edit") for c in changes}
+    kind = kinds.pop() if len(kinds) == 1 else "edit"
+    target = changes[0].target if len(changes) == 1 and kind != "add" else None
     pid = new_plan_id()
-    kinds = {o.get("kind") for o in ops}
-    pkind = ("delete" if kinds == {"retire_node"} else "add" if kinds <= {"add_node"}
-             else "move" if kinds == {"move_node"} else "edit")
-    target = ops[0].get("feature_id") if len(ops) == 1 and pkind != "add" else None
-    bodies: list[dict] = [{"kind": K.PLAN_OPEN, "target": {"pid": pid}, "payload": {"kind": pkind, "target": target, "note": note}}]
-    ingests: list[dict] = []
-    local: dict[str, str] = {}
-    live = store.ordered()
-    last = live[-1].id if live else START
-
-    def place(parent_ref):
-        parent = local.get(parent_ref or "") or (parent_ref if parent_ref in store.blocks else None)
-        if parent:
-            rng = store.feature_range(parent)
-            return rng[-1].id, store.blocks[parent].level + 1
-        return last, 1
-
-    def strike(b) -> None:
-        for f in text_fields(b.kind):
-            t = b.text(f)
-            if t.live_len():
-                bodies.append({"kind": K.TEXT_MARK, "target": {"bid": b.id, "path": f},
-                               "payload": {"kind": SUGGEST_DEL, "attrs": {}, "start": list(t.ref_at(0)),
-                                           "end": list(t.last_live_ref()), "on": True}, "plan": pid})
-
-    for raw in ops:
-        kind = raw.get("kind")
-        fid = raw.get("feature_id")
-        if kind == "add_node":
-            after, level = place(raw.get("parent_id"))
-            nid = new_block_id()
-            local[str(raw.get("id") or nid)] = nid
-            bodies.append({"kind": K.BLOCK_ADD, "target": {"bid": nid}, "payload": {"kind": HEADING, "level": level, "after": after}, "plan": pid})
-            ingests.append({"bid": nid, "new_md": (raw.get("title") or "Untitled").strip(), "base": ""})
-            prev = nid
-            for para in [p.strip() for p in (raw.get("description") or "").split("\n\n") if p.strip()]:
-                bid = new_block_id()
-                bodies.append({"kind": K.BLOCK_ADD, "target": {"bid": bid}, "payload": {"kind": PARAGRAPH, "after": prev}, "plan": pid})
-                ingests.append({"bid": bid, "new_md": para, "base": ""})
-                prev = bid
-            for b in raw.get("binds", []):
-                body = _bind_body(K.BIND_ATTACH, nid, b)
-                if body:
-                    bodies.append(body)
-            last = prev
-        elif kind == "amend":
-            if fid not in store.blocks:
-                return _err(f"unknown feature_id {fid!r}")
-            if raw.get("title"):
-                ingests.append({"bid": fid, "new_md": raw["title"], "base": None})
-            # The amend contract (prompts/tree_update.txt): a listed id is
-            # repaired, `delete: true` strikes it, no id adds a paragraph after
-            # the previous entry, and a paragraph not mentioned is unchanged.
-            prev = fid
-            for entry in raw.get("blocks", []):
-                bid = entry.get("id")
-                if bid in store.blocks:
-                    if entry.get("delete"):
-                        strike(store.blocks[bid])
-                    else:
-                        ingests.append({"bid": bid, "new_md": entry.get("text", ""), "base": None})
-                    prev = bid
-                elif entry.get("text"):
-                    nb = new_block_id()
-                    bodies.append({"kind": K.BLOCK_ADD, "target": {"bid": nb}, "payload": {"kind": PARAGRAPH, "after": prev}, "plan": pid})
-                    ingests.append({"bid": nb, "new_md": entry["text"], "base": ""})
-                    prev = nb
-        elif kind == "move_node":
-            if fid not in store.blocks:
-                return _err(f"unknown feature_id {fid!r}")
-            after, level = place(raw.get("parent_id"))
-            bodies.append({"kind": K.BLOCK_MOVE, "target": {"bid": fid},
-                           "payload": {"after": after, "level_delta": level - store.blocks[fid].level}, "plan": pid})
-        elif kind == "retire_node":
-            if fid not in store.blocks:
-                return _err(f"unknown feature_id {fid!r}")
-            for b in store.feature_body(fid):
-                strike(b)
-        elif kind == "add_paragraph":
-            nb = new_block_id()
-            bodies.append({"kind": K.BLOCK_ADD, "target": {"bid": nb},
-                           "payload": {"kind": PARAGRAPH, "after": store.feature_body(fid)[-1].id}, "plan": pid})
-            ingests.append({"bid": nb, "new_md": raw.get("text", ""), "base": ""})
-        else:
-            return _err(f"unknown op kind {kind!r}")
-    written = client.write(codoc_dir, client=AGENT, bodies=bodies, batch=pid, caused_by=caused_by, root_dir=root_dir)
-    for ing in ingests:
-        base = ing["base"] if ing["base"] is not None else store.blocks[ing["bid"]].text().live_text()
-        client.ingest(codoc_dir, client=AGENT, bid=ing["bid"], path="text", base_text=base, new_md=ing["new_md"],
-                      plan=pid, caused_by=caused_by, root_dir=root_dir)
-    return {"ok": True, "plan_id": pid, "ops": len(written),
+    opened = client.write(codoc_dir, client=AGENT, bodies=[
+        {"kind": K.PLAN_OPEN, "target": {"pid": pid}, "payload": {"kind": kind, "target": target, "note": note}}],
+        batch=pid, caused_by=caused_by, root_dir=root_dir)
+    if opened and opened[0].get("conflict"):
+        return _err(f"plan.open refused: {opened[0]['conflict']}")
+    written = 0
+    for c in changes:
+        if c.bodies:
+            written += len(client.write(codoc_dir, client=AGENT, bodies=c.bodies, plan=pid, batch=pid,
+                                        caused_by=caused_by, root_dir=root_dir))
+        for r in c.rewrites:
+            base = store.blocks[r.bid].text(r.path).live_text()
+            client.ingest(codoc_dir, client=AGENT, bid=r.bid, path=r.path, base_text=base, new_md=r.new_md,
+                          plan=pid, caused_by=caused_by, root_dir=root_dir)
+            written += 1
+        strikes = strike_bodies(store, c.strikes, pid)
+        if strikes:
+            written += len(client.write(codoc_dir, client=AGENT, bodies=strikes, plan=pid, batch=pid,
+                                        caused_by=caused_by, root_dir=root_dir))
+    return {"ok": True, "plan_id": pid, "ops": written,
             "note": "The person accepts or rejects this plan in the editor; accepting hands the feature off to you."}
 
 

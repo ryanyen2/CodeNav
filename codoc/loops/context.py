@@ -7,13 +7,13 @@ scope, so a fresh chunk that fulfils an accepted plan is attached to it rather
 than duplicated beside it.
 
 Every feature entry is block-keyed: its description is a list of
-``{id, text}`` paragraphs, which is what lets the model's amend name the
-paragraph it changes (spec §4, rule 2).
+``{id, text}`` blocks, so an amend names the block it changes.
 """
 from __future__ import annotations
 
-from codoc.calculus.derive import block_written_by, markdown, phase
-from codoc.calculus.doc import PARAGRAPH, in_flow, parent_of
+from codoc.calculus import block_md
+from codoc.calculus.derive import block_spec, block_written_by, markdown, phase
+from codoc.calculus.doc import PROSE, SOURCE, in_flow, parent_of
 from codoc.calculus.store import Store
 from codoc.index.graph import Graph
 
@@ -39,6 +39,17 @@ def written_by(store: Store, fid: str) -> str:
     return next((a for a in reversed(authors) if a), "")
 
 
+def description_blocks(store: Store, fid: str, kinds: frozenset = PROSE | SOURCE) -> list[dict]:
+    """The feature's description as ``[{id, text}]``, one entry per block, in
+    the ``rejected`` read mode. ``text`` is that block alone as Markdown
+    (``block_md.render_one``), which is what an amend names and rewrites."""
+    out = []
+    for b in store.feature_body(fid)[1:]:
+        if b.kind in kinds and (spec := block_spec(store, b, "rejected")) is not None:
+            out.append({"id": b.id, "text": block_md.render_one(spec)})
+    return out
+
+
 def feature_entry(store: Store, fid: str, *, full: bool = True) -> dict:
     headings = store.headings()
     idx = next(i for i, h in enumerate(headings) if h.id == fid)
@@ -48,8 +59,7 @@ def feature_entry(store: Store, fid: str, *, full: bool = True) -> dict:
         "parent_id": parent_of(headings, idx),
     }
     if full:
-        entry["blocks"] = [{"id": b.id, "text": markdown(b.text(), "rejected", store)}
-                           for b in store.feature_body(fid)[1:] if b.kind == PARAGRAPH]
+        entry["blocks"] = description_blocks(store, fid)
         entry["bindings"] = sorted(b.symbol for b in store.bindings.values() if b.feature == fid)
         wb = written_by(store, fid)
         if wb:

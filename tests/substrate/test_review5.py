@@ -259,10 +259,9 @@ def test_a_read_only_command_leaves_no_session_file_behind(tmp_path):
 
 
 def test_translate_never_leaves_an_empty_open_plan(tmp_path):
-    """A human-written feature whose translation is refused (paragraph count
-    changed / stale) must not be left with an open, empty plan the editor
-    offers for a verdict."""
-    from codoc.doclang import DocLanguage
+    """A human-written feature whose translation is refused (a block came
+    back as a different kind) must not be left with an open, empty plan the
+    editor offers for a verdict."""
     from codoc.loops.translate import translate_tree
     cd = tmp_path / ".codoc"
     ws = Workspace(cd); seed(ws)     # human-written
@@ -270,11 +269,11 @@ def test_translate_never_leaves_an_empty_open_plan(tmp_path):
     lang = resolve("zh-Hans")
 
     def propose(payload, lang, **kw):
-        # two paragraphs where the feature has one → "paragraph count changed"
-        return {p["id"]: ("客户端", "重试一次。\n\n然后放弃。") for p in payload}
+        # a bullet where the feature has a paragraph
+        return {p["id"]: ("客户端", {b["id"]: "- 重试一次。" for b in p["blocks"]}) for p in payload}
 
     res = translate_tree(ws, cd, language=lang, propose=propose)
-    assert res.skipped and "paragraph count" in res.skipped[0].reason
+    assert res.skipped and "different kind" in res.skipped[0].reason
     open_ = [p for p in ws.store.plans.values() if p.status == "open"]
     assert not open_, [(p.id, p.ops) for p in open_]
     ws.close()
@@ -365,15 +364,16 @@ def test_amend_lands_one_plan_when_the_second_block_flips_the_gate(tmp_path):
     """reflect §3: 'one amend is one plan'. Block 1 is a small repair (trunk-
     sized), block 2 rewrites a person's paragraph past the gate: both must ride
     under ONE plan, and nothing lands on the trunk."""
-    from codoc.loops.reflect import _Pass, ReflectResult, _amend
+    from codoc.loops.edits import Compiler
+    from codoc.loops.reflect import _Pass, ReflectResult, _land
     ws = Workspace(tmp_path / ".codoc"); seed(ws)
     ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "p2"}, "payload": {"kind": PARAGRAPH, "after": "p1"}},
                {"kind": K.TEXT_INSERT, "target": {"bid": "p2", "path": "text"}, "payload": {"after": START, "text": "Then it gives up for good."}}], actor=H)
     res = ReflectResult()
     p = _Pass(ws, res, {})
-    _amend(p, {"kind": "amend", "feature_id": "h1", "blocks": [
+    _land(p, Compiler(ws.store).compile({"kind": "amend", "feature_id": "h1", "blocks": [
         {"id": "p1", "text": "Retries twice."},
-        {"id": "p2", "text": "Completely different words here now."}]})
+        {"id": "p2", "text": "Completely different words here now."}]}))
     plans = [pl for pl in ws.store.plans.values() if pl.status == "open"]
     assert len(plans) == 1, [pl.id for pl in plans]
     assert all(o.plan == plans[0].id for o in res.ops if o.kind.startswith("text.")), [(o.kind, o.plan) for o in res.ops]
