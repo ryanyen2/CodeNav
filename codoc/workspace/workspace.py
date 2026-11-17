@@ -297,6 +297,11 @@ class Workspace:
         accepting it is the deletion. ``out.plan`` is None when no plan stands."""
         out = Amended()
         pid = pid or new_plan_id()
+        # What can fail on a malformed submission fails here, before anything
+        # lands: a proposal is decided whole, and a plan half written would stay.
+        if any(not isinstance(md, str) or not (base is None or isinstance(base, str)) for _, _, md, base in rewrites):
+            raise TypeError("a rewrite's new_md and base_text are strings")
+        struck = strike_bodies(self.store, list(strikes), pid) if strikes else []
         opened = self.submit([{"kind": K.PLAN_OPEN, "target": {"pid": pid}, "payload": {
             "kind": kind, "target": target, "note": note, **({"build": True} if build else {})}}],
             actor=actor, batch=pid, caused_by=caused_by)[0]
@@ -316,9 +321,8 @@ class Workspace:
                 if res.refused:
                     out.refused.append((bid, res.refused))
                 landed += ops
-            if strikes:
-                landed += self.submit(strike_bodies(self.store, list(strikes), pid), actor=actor, plan=pid,
-                                      batch=pid, caused_by=caused_by)
+            if struck:
+                landed += self.submit(struck, actor=actor, plan=pid, batch=pid, caused_by=caused_by)
         finally:
             # Whatever stopped it, a plan nothing landed under is taken back;
             # a delete plan stays, since accepting it is the deletion.

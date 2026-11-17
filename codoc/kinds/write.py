@@ -39,9 +39,15 @@ def plan_write(block: Block | None, content: dict) -> WritePlan:
         return WritePlan(refused="dead_block")
     kind = get(block.kind)
     if kind is None:
-        return WritePlan(refused=f"unknown kind {block.kind!r}")
-    err = kind.validate(content, partial=True)
-    if err:
+        # No code for this kind here: the block's layout says which fields are
+        # Text, and those may be written; the others have no schema to check.
+        other = sorted(k for k in content if k not in block.layout.text)
+        if other:
+            return WritePlan(refused=f"no schema for {block.kind!r} here; only its Text fields can be written, "
+                                     f"not {', '.join(other)}")
+        if not all(isinstance(v, str) for v in content.values()):
+            return WritePlan(refused="a Text field is written as a Markdown string")
+    elif err := kind.validate(content, partial=True):
         return WritePlan(refused=err)
     out = WritePlan()
     for k, v in content.items():

@@ -82,6 +82,12 @@ BUILTIN: dict[str, Layout] = {
 _REGISTERED: dict[str, Layout] = {}
 
 
+def layout_entry(kind: str, layout: Layout) -> dict:
+    """``{"layout": ...}`` for a block of a non-builtin kind, else nothing: a
+    builtin kind's layout is the calculus's and is never sent or stored."""
+    return {} if kind in BUILTIN else {"layout": layout.to_json()}
+
+
 def register_kind(kind: str, layout: Layout) -> None:
     """Declare the layout a writer gives a new block of a plugin kind. A
     builtin kind's layout is fixed and is not changed."""
@@ -159,9 +165,8 @@ class Block:
 
     def to_json(self) -> dict:
         content = {k: (v.to_json() if isinstance(v, Text) else v) for k, v in self.content.items()}
-        d = {"id": self.id, "kind": self.kind, "rank": self.rank, "level": self.level, "content": content}
-        if self.kind not in BUILTIN:
-            d["layout"] = self.layout.to_json()
+        d = {"id": self.id, "kind": self.kind, "rank": self.rank, "level": self.level, "content": content,
+             **layout_entry(self.kind, self.layout)}
         if self.dead:
             d["dead"] = self.dead
             if self.dead_actor:
@@ -171,14 +176,6 @@ class Block:
         if self.detached:
             d["detached"] = [dict(e) for e in self.detached]
         return d
-
-    @classmethod
-    def from_json(cls, d: dict) -> "Block":
-        layout = BUILTIN.get(d["kind"]) or (Layout.from_json(d["layout"]) if "layout" in d else OPAQUE)
-        content = {k: Text.from_json(v) if k in layout.text else v for k, v in (d.get("content") or {}).items()}
-        return cls(d["id"], d["kind"], d["rank"], int(d.get("level") or 0), content, d.get("dead"),
-                   [dict(e) for e in (d.get("detached") or [])], d.get("dead_actor", ""), d.get("dead_at", ""),
-                   d.get("dead_in", ""), layout)
 
 
 def empty_content(layout: Layout, content: dict | None = None) -> dict:

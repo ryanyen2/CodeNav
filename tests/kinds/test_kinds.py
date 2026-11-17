@@ -149,6 +149,20 @@ def test_mcp_write_block_adds_and_edits_as_the_agent(tmp_path):
     assert "unknown kind" in tools.write_block(str(cd), kind="gif", feature_id="h1", content={})["error"]
 
 
+def test_a_block_whose_kind_has_no_code_here_takes_writes_to_its_text_fields(tmp_path):
+    """The block's recorded layout says which fields are Text, so they can be
+    written; other fields have no schema here and are refused."""
+    ws = Workspace(tmp_path / ".codoc"); seed_loop(ws)
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "w"},
+                "payload": {"kind": "widget", "after": "p1", "layout": {"text": ["caption"]}, "content": {"url": "u"}}}],
+              actor="loop")
+    ok = write_block(ws, "w", {"caption": "A plot"}, actor="agent:claude-code")
+    assert ok.ok and ws.store.blocks["w"].text("caption").live_text() == "A plot"
+    refused = write_block(ws, "w", {"url": "v"}, actor="agent:claude-code")
+    assert refused.refused and ws.store.blocks["w"].content["url"] == "u"
+    ws.close()
+
+
 def test_a_feature_carrying_media_survives_every_whole_feature_pass(tmp_path):
     """A block whose Text fields are not called `text` (a diagram, a comment)
     is in the body like any other: the author gate, the blame read, a delete

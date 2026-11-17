@@ -35,7 +35,7 @@ from pathlib import Path
 from codoc.calculus import ops as K
 from codoc.calculus.apply import replay_recorded
 from codoc.calculus.derive import reads_its_ops
-from codoc.calculus.doc import BUILTIN
+from codoc.calculus.doc import layout_entry
 from codoc.calculus.ids import START
 from codoc.calculus.ops import Op, frontier_union
 from codoc.calculus.store import Store
@@ -112,9 +112,7 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
         texts = {f: b.text(f).to_json() for f in b.layout.text}
         content = {k: v for k, v in b.content.items() if k not in b.layout.text}
         payload = {"kind": b.kind, "level": b.level, "after": prev, "rank": b.rank,
-                   "content": content, "texts": texts}
-        if b.kind not in BUILTIN:
-            payload["layout"] = b.layout.to_json()
+                   "content": content, "texts": texts, **layout_entry(b.kind, b.layout)}
         if not b.live:
             payload["dead"] = b.dead      # the killer keeps its name, so an undo still matches
             if b.dead_actor:

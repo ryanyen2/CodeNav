@@ -47,7 +47,7 @@ from difflib import SequenceMatcher
 
 from codoc.calculus import ops as K
 from codoc.calculus.block_md import BlockSpec
-from codoc.calculus.doc import BUILTIN, LAYOUT_KEY, Layout, is_source_field, layout_of
+from codoc.calculus.doc import BUILTIN, LAYOUT_KEY, Layout, is_source_field, layout_entry, layout_of
 from codoc.calculus.ids import REWRITERS, START, CharRef, actor_kind, is_human, new_block_id
 from codoc.calculus.inline_md import parse
 from codoc.calculus.text import BOLD, CITE, CODE, GROWS_AFTER, LINK, Mark, Text, nfc
@@ -246,9 +246,8 @@ def block_bodies(specs: list[BlockSpec], *, after: str, keep_ids: bool = False) 
         bid = spec.id if keep_ids and spec.id else new_block_id()
         layout = _spec_layout(spec)
         fields = layout.text
-        payload: dict = {"kind": spec.kind, "after": after}
-        if spec.kind not in BUILTIN:
-            payload["layout"] = layout.to_json()     # the fields below are split by it, so the block is too
+        # The fields below are split by the layout, so the block records it too.
+        payload: dict = {"kind": spec.kind, "after": after, **layout_entry(spec.kind, layout)}
         if spec.level:
             payload["level"] = spec.level
         plain = {k: v for k, v in spec.content.items() if k not in fields and k != LAYOUT_KEY}

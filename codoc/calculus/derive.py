@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from codoc.calculus import block_md
 from codoc.calculus.block_md import BlockSpec
 from codoc.calculus.doc import (
-    BUILTIN, HEADING, LAYOUT_KEY, PROSE, SOURCE, Block, TreeNode, fold_tree, is_source_field,
+    HEADING, LAYOUT_KEY, PROSE, SOURCE, Block, TreeNode, fold_tree, is_source_field, layout_entry,
 )
 from codoc.calculus.ids import OpId, is_human
 from codoc.calculus.inline_md import Span, render
@@ -476,9 +476,7 @@ def block_entry(store: Store, b: Block) -> dict:
     plan proposes is drawn over them from ``plan_claims`` (``marked`` /
     ``unmarked``), and the words it inserted are in ``runs``, as before."""
     entry = {"id": b.id, "kind": b.kind, "level": b.level, "rank": b.rank, "head": store.block_head.get(b.id, 0),
-             "fields": {}}
-    if b.kind not in BUILTIN:
-        entry["layout"] = b.layout.to_json()     # so an editor without the kind can still draw it
+             "fields": {}, **layout_entry(b.kind, b.layout)}     # an editor without the kind can still draw it
     for f in b.layout.text:
         t = b.text(f)
         entry["fields"][f] = {

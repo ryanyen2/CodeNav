@@ -281,13 +281,9 @@ def _live_view(store: Store):
 
 
 def _live_view_from(fp):
-    from codoc.calculus.doc import Block
-    out = []
-    for bj in fp["blocks"]:
-        b = Block.from_json(bj)
-        if b.live:
-            out.append((b.id, b.kind, b.level, b.text().live_text()))
-    return out
+    from codoc.calculus.text import Text
+    return [(bj["id"], bj["kind"], bj["level"], Text.from_json(bj["content"]["text"]).live_text())
+            for bj in fp["blocks"] if not bj.get("dead")]
 
 
 def test_reopen_never_binds_code_to_a_dead_heading(tmp_path):

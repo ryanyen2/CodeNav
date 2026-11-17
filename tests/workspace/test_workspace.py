@@ -512,6 +512,12 @@ def test_a_proposal_is_decided_whole_by_the_applier(tmp_path):
     assert same.status == "unchanged" and "p-same" not in ws.store.open_plans
     changed = propose("p-new", "Retries twice.")
     assert changed.status == "plan:p-new" and ws.store.open_plans["p-new"].ops
+    # A malformed part fails before anything lands, so no half-written plan stays.
+    bad = ws.apply_submissions("mcp", "agent:claude-code", [Submission(
+        cid="p-bad", kind="propose", target={"pid": "p-bad"}, payload={
+            "kind": "edit", "target": "h1", "note": "", "rewrites": [], "strikes": ["nope"],
+            "bodies": [{"kind": K.BLOCK_ADD, "target": {"bid": "nb"}, "payload": {"kind": "paragraph", "after": "p1"}}]})])[0]
+    assert bad.conflict and "p-bad" not in ws.store.plans and "nb" not in ws.store.blocks
     ws.close()
 
 
