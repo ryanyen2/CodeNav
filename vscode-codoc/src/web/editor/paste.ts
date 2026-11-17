@@ -1,12 +1,14 @@
 /**
  * paste.ts — what a paste brings, as pieces for `pasteBlocks` (commands.ts).
  *
- * Plain text that reads as Markdown with some structure (a heading, a list
- * item, a table, a fence, or an inline mark) becomes those blocks and marks,
- * read by the port of the store's own reader (calc/markdown.ts). Anything
- * else, and anything copied from this editor, is taken from the slice
- * ProseMirror parsed from the clipboard: its blocks, with their kinds, levels
- * and marks. Every text is NFC, as the applier records it.
+ * Into prose: plain text that reads as Markdown with some structure (a
+ * heading, a list item, a table, a fence, or an inline mark) becomes those
+ * blocks and marks, read by the port of the store's own reader
+ * (calc/markdown.ts). Anything else, and anything copied from this editor, is
+ * taken from the slice ProseMirror parsed from the clipboard: its blocks, with
+ * their kinds, levels and marks. Every text is NFC, as the applier records it.
+ * Into a table, a diagram or a code block the clipboard's plain text goes in
+ * as it is (editor.ts).
  */
 import type { Node as PMNode, Slice } from '@tiptap/pm/model';
 
@@ -27,8 +29,10 @@ export function clipboardPieces(slice: Slice, plain: string, html: string): Piec
     return blocks ? piecesFromSlice(slice) : null;
 }
 
+/** Markdown as pieces. A line of prose stays a block of its own: a paste keeps
+ *  the line breaks it brought, even where Markdown would join two lines. */
 export function piecesFromMarkdown(md: string): Piece[] {
-    return parseBlocks(nfc(md)).map((b): Piece => {
+    return parseBlocks(nfc(md), true, false).map((b): Piece => {
         if (isOneLine(b.kind)) return { kind: b.kind, level: b.level, ...parseInline(b.text), content: {} };
         if (b.kind === 'code') return { kind: 'code', level: 0, text: b.text, spans: [], content: typeof b.content.lang === 'string' ? { lang: b.content.lang } : {} };
         if (SOURCE.has(b.kind)) return { kind: b.kind, level: 0, text: b.text, spans: [], content: {} };

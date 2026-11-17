@@ -37,7 +37,7 @@ describe('Recorder', () => {
         const got = rec.record(tr.steps, tr.docs);
         expect(got.unhandled).toEqual([]);
         expect(got.ops.map(o => o.kind)).toEqual(['text.delete', 'text.insert']);
-        expect(got.ops[0].payload).toEqual({ from: ['s:2', 6], to: ['s:2', 10] });
+        expect(got.ops[0].payload).toEqual({ segments: [['s:2', 6, 5]] });
         expect(got.ops[1].payload).toEqual({ after: ['s:2', 5], text: 'there' });
         expect(shadows.get('p')!.text()).toBe('hello there');
         expect(shadows.get('p')!.ref(6)).toEqual(['$cid', 'c0', 0]);
@@ -46,6 +46,23 @@ describe('Recorder', () => {
         tr = state.tr.insertText('!', pStart + 11);
         const got2 = rec.record(tr.steps, tr.docs);
         expect(got2.ops[0].payload).toEqual({ after: ['$cid', 'c0', 4], text: '!' });
+    });
+
+    it('deletes by segments: exactly the characters on the page, the unacked ones by client id', () => {
+        // "ab" by s:1 then "cd" by s:2: the store may hold another actor's
+        // words between them that this page has not seen. A range from "b" to
+        // "c" would kill those too.
+        const p = proj([block('p', 'paragraph', 'abcd', [['s:1', 0, 2], ['s:2', 2, 4]])]);
+        (p.blocks[0].fields.text as { runs: Array<{ k0: number }> }).runs[1].k0 = 0;
+        const { doc, shadows } = docFrom(schema, p);
+        let state = EditorState.create({ schema, doc });
+        const rec = new Recorder(shadows, cid);
+        let tr = state.tr.insertText('XY', 5);                         // "abcdXY", XY unacked
+        const c = rec.record(tr.steps, tr.docs).cids[0];
+        state = state.apply(tr);
+        tr = state.tr.delete(2, 6);                                     // "a|bcdX|Y"
+        expect(rec.record(tr.steps, tr.docs).ops).toEqual([{ kind: 'text.delete', target: { bid: 'p', path: 'text' },
+            payload: { segments: [['s:1', 1, 1], ['s:2', 0, 2], ['$cid', c, 0, 1]] } }]);
     });
 
     it('counts scalars, not UTF-16 units, and records marks on inserted text', () => {
@@ -84,7 +101,7 @@ describe('Recorder', () => {
         const after = tr.doc.child(0);
         const r = reconcile(after, shadows.get('a')!, cid);
         expect(r.ops.map(o => o.kind)).toEqual(['text.delete', 'text.insert']);
-        expect(r.ops[0].payload).toEqual({ from: ['s:1', 2], to: ['s:1', 2] });
+        expect(r.ops[0].payload).toEqual({ segments: [['s:1', 2, 1]] });
         expect(r.ops[1].payload).toEqual({ after: ['s:1', 1], text: 'wo' });
     });
 });

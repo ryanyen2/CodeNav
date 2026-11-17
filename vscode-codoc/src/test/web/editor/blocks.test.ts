@@ -28,6 +28,15 @@ describe('block kinds on the page', () => {
         expect(shadowFaults(m)).toEqual([]);
     });
 
+    it('numbers items after a level jump as the export writes them', () => {
+        const m = mount([block('h', 'heading', 'T'), block('a', 'numbered', 'a', 1), block('b', 'numbered', 'b', 3),
+                         block('c', 'numbered', 'c', 2), block('d', 'numbered', 'd', 4), block('e', 'bullet', 'e', 1),
+                         block('f', 'numbered', 'f', 2)]);
+        const numbers = Array.from(m.container.querySelectorAll('[data-item="numbered"]')).map(e => e.getAttribute('data-n'));
+        // block_md.render: "1. a", "    1. b", "    2. c", "        1. d", "- e", "    1. f"
+        expect(numbers).toEqual(['1.', '1.', '2.', '1.', '1.']);
+    });
+
     it('typing in a source block records text ops on its `source` field, and Enter types a newline', () => {
         const m = mount([block('h', 'heading', 'T'), block('c', 'code', 'ab', 0)]);
         select(m.view, posIn(m.view, 'c', 2));
@@ -80,11 +89,16 @@ describe('list gestures', () => {
         expect(shadowFaults(m)).toEqual([]);
     });
 
-    it('Backspace at the start of an item makes it a paragraph', () => {
-        const m = mount([block('h', 'heading', 'T'), block('b', 'numbered', 'item', 3)]);
+    it('Backspace at the start of an item steps it out a level, and at level 1 makes it a paragraph', () => {
+        const m = mount([block('h', 'heading', 'T'), block('b', 'numbered', 'item', 2)]);
         select(m.view, posIn(m.view, 'b', 0));
         key(m.view, 'Backspace', 8);
-        expect(sent(m)).toEqual([{ kind: 'block.set', target: { bid: 'b', path: 'kind' }, payload: { value: 'paragraph' } }]);
+        expect(shape(m.view.state.doc)).toEqual(['heading:1', 'numbered:1']);
+        key(m.view, 'Backspace', 8);
+        expect(sent(m)).toEqual([
+            { kind: 'block.set', target: { bid: 'b', path: 'level' }, payload: { value: 1 } },
+            { kind: 'block.set', target: { bid: 'b', path: 'kind' }, payload: { value: 'paragraph' } },
+        ]);
         expect(shape(m.view.state.doc)).toEqual(['heading:1', 'paragraph']);
     });
 
@@ -147,6 +161,30 @@ describe('removing an empty paragraph next to a heading', () => {
     });
 });
 
+describe('Backspace and Delete in an empty heading', () => {
+    it('delete it when it has no body and owns no code', () => {
+        const m = mount([block('a', 'heading', 'A'), block('p', 'paragraph', 'x'), block('e', 'heading', ''), block('b', 'heading', 'B')]);
+        select(m.view, posIn(m.view, 'e', 0));
+        key(m.view, 'Backspace', 8);
+        expect(sent(m)).toEqual([{ kind: 'block.delete', target: { bid: 'e' }, payload: {} }]);
+        expect(ids(m.view.state.doc)).toEqual(['heading:a', 'paragraph:p', 'heading:b']);
+        expect(m.view.state.selection.from).toBe(posIn(m.view, 'p', 1));
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it('do nothing but say how when it has a body or bound code', () => {
+        const m = mount([block('a', 'heading', 'A'), block('e', 'heading', ''), block('p', 'paragraph', 'x'), block('f', 'heading', '')],
+                        { bindings: { by_feature: { f: [{ file: 'a.py', symbol: 'a.py::f' }] }, by_file: {} } });
+        select(m.view, posIn(m.view, 'e', 0));
+        key(m.view, 'Backspace', 8);
+        select(m.view, posIn(m.view, 'f', 0));
+        key(m.view, 'Delete', 46);
+        expect(sent(m)).toEqual([]);
+        expect(m.conflicts).toEqual(['Delete feature from the / menu', 'Delete feature from the / menu']);
+        expect(m.view.state.selection.from).toBe(posIn(m.view, 'f', 0));
+    });
+});
+
 describe('source blocks from a marker', () => {
     it('``` then Enter replaces the paragraph with a code block after the block before it', () => {
         const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', '```python')]);
@@ -170,18 +208,29 @@ describe('source blocks from a marker', () => {
         expect(sent(m)[1].payload).toEqual({ kind: 'diagram', after: 'h', content: {} });
     });
 
-    it('a `|` row then Enter makes a table holding that row', () => {
-        const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', '| a | b |')]);
-        select(m.view, posIn(m.view, 'p', 9));
+    it('a `|` row typed here then Enter makes a table holding that row', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', '')]);
+        select(m.view, posIn(m.view, 'p', 0));
+        typeText(m.view, '| a | b |');
         key(m.view, 'Enter', 13);
         const nb = bidAt(m, 1);
-        expect(sent(m)).toEqual([
+        expect(sent(m).slice(1)).toEqual([
             { kind: 'block.delete', target: { bid: 'p' }, payload: {} },
             { kind: 'block.add', target: { bid: nb }, payload: { kind: 'table', after: 'h', content: {} } },
             { kind: 'text.insert', target: { bid: nb, path: 'source' }, payload: { after: 'START', text: '| a | b |' } },
         ]);
         expect(texts(m.view.state.doc)).toEqual(['T', '| a | b |']);
         expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it('Enter after prose that starts with a bar, or a row the page did not type, splits as usual', () => {
+        for (const text of ['|x| is the absolute value', '| a |', '| a | b |']) {
+            const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', text)]);
+            select(m.view, posIn(m.view, 'p', text.length));
+            key(m.view, 'Enter', 13);
+            expect(sent(m).map(o => o.kind)).toEqual(['block.split']);
+            expect(shape(m.view.state.doc)).toEqual(['heading:1', 'paragraph', 'paragraph']);
+        }
     });
 
     it('Mod-Enter in a source block adds a paragraph after it; Backspace in an empty one deletes it', () => {
@@ -277,6 +326,26 @@ describe('a paste of Markdown', () => {
         expect(shadowFaults(m)).toEqual([]);
     });
 
+    it('keeps each line a block when one line has an inline mark', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', '')]);
+        select(m.view, posIn(m.view, 'p', 0));
+        pasteText(m, 'first line\n**second** line');
+        expect(shape(m.view.state.doc)).toEqual(['heading:1', 'paragraph', 'paragraph']);
+        expect(texts(m.view.state.doc)).toEqual(['T', 'first line', 'second line']);
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it('into a code block is the clipboard\'s text as it is: one insert on `source`, newlines kept', () => {
+        const m = mount([block('h', 'heading', 'T'), block('c', 'code', 'x = 1', 0, 1, { lang: 'py' })]);
+        const one = m.shadows.get('c')!.refs[4];
+        select(m.view, posIn(m.view, 'c', 5));
+        const code = '\ndef f(x):\n    # square it\n\n    return x ** 2\n- not a list';
+        expect(pasteText(m, code)).toBe(true);
+        expect(texts(m.view.state.doc)[1]).toBe(`x = 1${code}`);
+        expect(sent(m)).toEqual([{ kind: 'text.insert', target: { bid: 'c', path: 'source' }, payload: { after: one, text: code } }]);
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
     it('plain lines without Markdown are one paragraph each', () => {
         const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', '')]);
         select(m.view, posIn(m.view, 'p', 0));
@@ -295,8 +364,8 @@ describe('a selection across blocks', () => {
         typeText(m.view, 'X');
         expect(texts(m.view.state.doc)).toEqual(['T', 'one X four']);
         expect(sent(m)).toEqual([
-            { kind: 'text.delete', target: { bid: 'p1', path: 'text' }, payload: { from: r1[4], to: r1[6] } },
-            { kind: 'text.delete', target: { bid: 'p3', path: 'text' }, payload: { from: r3[0], to: r3[4] } },
+            { kind: 'text.delete', target: { bid: 'p1', path: 'text' }, payload: { segments: [[r1[4][0], 4, 3]] } },
+            { kind: 'text.delete', target: { bid: 'p3', path: 'text' }, payload: { segments: [[r3[0][0], 0, 5]] } },
             { kind: 'block.delete', target: { bid: 'p2' }, payload: { ids: ['p2'] } },
             { kind: 'block.merge', target: { into: 'p1', bid: 'p3', path: 'text' }, payload: {} },
             { kind: 'text.insert', target: { bid: 'p1', path: 'text' }, payload: { after: r1[3], text: 'X' } },

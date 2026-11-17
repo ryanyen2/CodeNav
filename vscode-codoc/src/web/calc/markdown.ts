@@ -33,8 +33,9 @@ const spec = (kind: string, level = 0, text = '', content: Record<string, unknow
     ({ kind, level, text, content, id });
 
 /** The blocks `md` describes, in order. With `headings` false a `# line` is a
- *  paragraph without its hashes. */
-export function parseBlocks(md: string, headings = true): BlockSpec[] {
+ *  paragraph without its hashes. With `joinLines` false each paragraph line is
+ *  a paragraph of its own, as a paste wants; the store's reader joins them. */
+export function parseBlocks(md: string, headings = true, joinLines = true): BlockSpec[] {
     const out: BlockSpec[] = [];
     const lines = md.replace(/\r\n/g, '\n').split('\n');
     const para: string[] = [];
@@ -43,9 +44,10 @@ export function parseBlocks(md: string, headings = true): BlockSpec[] {
 
     const flush = () => {
         if (!para.length) return;
-        const text = para.length === 1 ? para[0].trim() : para.map(l => l.trim()).join(' ');
+        const texts = !joinLines ? para.map(l => l.trim())
+            : [para.length === 1 ? para[0].trim() : para.map(l => l.trim()).join(' ')];
         para.length = 0;
-        if (text) out.push(spec('paragraph', 0, text));
+        for (const text of texts) if (text) out.push(spec('paragraph', 0, text));
     };
 
     while (i < lines.length) {

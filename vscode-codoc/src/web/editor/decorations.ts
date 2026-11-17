@@ -44,20 +44,25 @@ export function unitOffset(block: PMNode, scalar: number): number {
 }
 
 /**
- * Each numbered item's number, as `data-n` on its node. A numbered item counts
- * among the numbered items at its level; the count restarts after a shallower
- * item, a bullet at the same level, or a block that is not an item, and a
- * deeper item in between does not restart it (docs/model.md, "The Markdown
- * form"). Rebuilt on every change to the document: one pass over the top level.
+ * Each numbered item's number, as `data-n` on its node: the number the export
+ * writes (`block_md.render`). Markdown nests a list one level at a time, so an
+ * item is counted at `min(level, level of the item before it + 1)`, and at 1
+ * after a block that is not an item. A numbered item counts among the numbered
+ * items at that level; the count restarts after a shallower item, a bullet at
+ * the same level, or a block that is not an item, and a deeper item in between
+ * does not restart it (docs/model.md, "The Markdown form"). Rebuilt on every
+ * change to the document: one pass over the top level.
  */
 export function listNumbers(): Plugin<DecorationSet> {
     const build = (doc: PMNode): DecorationSet => {
         const decos: Decoration[] = [];
         const counters = new Map<number, number>();
+        let prev = 0;
         doc.forEach((node, pos) => {
             const name = node.type.name;
-            if (name !== 'bullet' && name !== 'numbered') { counters.clear(); return; }
-            const level = node.attrs.level as number;
+            if (name !== 'bullet' && name !== 'numbered') { counters.clear(); prev = 0; return; }
+            const level = Math.min(node.attrs.level as number, prev + 1);
+            prev = level;
             for (const l of [...counters.keys()]) if (l > level) counters.delete(l);
             if (name === 'bullet') { counters.delete(level); return; }
             const n = (counters.get(level) ?? 0) + 1;

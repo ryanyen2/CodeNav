@@ -4,9 +4,11 @@
  * Given the document a transaction started from, its steps, and the shadows
  * of the blocks it touches, produce the ops the calculus needs and advance the
  * shadows. Exact for every step that stays inside one textblock: a
- * `ReplaceStep` is a delete of the identities under its range and an insert
- * after the identity before it. `AddMarkStep`/`RemoveMarkStep` are one
- * `text.mark` per textblock the step covers.
+ * `ReplaceStep` is a delete of the identities under its range (as segments,
+ * never a range, so a word another actor inserted there and the page has not
+ * seen survives) and an insert after the identity before it.
+ * `AddMarkStep`/`RemoveMarkStep` are one `text.mark` per textblock the step
+ * covers.
  *
  * Anything else (a replace whose range or slice crosses a block boundary, or a
  * step kind this module does not name) is returned as `unhandled`, and the
@@ -26,7 +28,7 @@ import type { Node as PMNode, Slice } from '@tiptap/pm/model';
 import { AddMarkStep, RemoveMarkStep, ReplaceStep, type Step } from '@tiptap/pm/transform';
 
 import { kindOf, nfc, pathOf, scalars, type Anchor, type CharRef, type OpBody } from './projection';
-import { Shadow } from './shadow';
+import { Shadow, segmentsOf } from './shadow';
 
 export interface Recorded {
     ops: OpBody[];
@@ -42,6 +44,10 @@ export const SENT_MARKS: ReadonlySet<string> = new Set(['bold', 'code', 'link', 
 /** The op target for a block node: its id and its Text field. */
 export const targetOf = (block: PMNode): { bid: string; path: string } =>
     ({ bid: block.attrs.bid as string, path: pathOf(kindOf(block)) });
+
+/** A `text.delete` of exactly these characters, by identity. */
+export const deleteOf = (target: { bid: string; path: string }, refs: readonly CharRef[]): OpBody =>
+    ({ kind: 'text.delete', target, payload: { segments: segmentsOf(refs) } });
 
 export class Recorder {
     constructor(private readonly shadows: Map<string, Shadow>, private readonly nextCid: () => string) {}
@@ -77,12 +83,7 @@ export class Recorder {
         const fromOff = scalarOffset(block, $from.parentOffset);
         const toOff = scalarOffset(block, $to.parentOffset);
         const target = targetOf(block);
-        if (toOff > fromOff) {
-            const from = shadow.ref(fromOff);
-            const to = shadow.ref(toOff - 1);
-            out.ops.push({ kind: 'text.delete', target, payload: { from, to } });
-            shadow.delete(fromOff, toOff);
-        }
+        if (toOff > fromOff) out.ops.push(deleteOf(target, shadow.delete(fromOff, toOff)));
         const text = sliceText(step.slice);
         if (text) {
             const cid = this.nextCid();
@@ -180,10 +181,7 @@ export function reconcile(block: PMNode, shadow: Shadow, nextCid: () => string):
     const cids: string[] = [];
     const target = targetOf(block);
     const delTo = was.length - s;
-    if (delTo > p) {
-        ops.push({ kind: 'text.delete', target, payload: { from: shadow.ref(p), to: shadow.ref(delTo - 1) } });
-        shadow.delete(p, delTo);
-    }
+    if (delTo > p) ops.push(deleteOf(target, shadow.delete(p, delTo)));
     const inserted = now.slice(p, now.length - s).join('');
     if (inserted) {
         const cid = nextCid();

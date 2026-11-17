@@ -11,6 +11,29 @@
  */
 import { type Anchor, type CharRef, START, isProvisional, nfc, refEq, scalars } from './projection';
 
+/** A run of consecutive characters one op minted: `[op, k0, len]`, or
+ *  `['$cid', cid, k0, len]` for this client's unacked insert. */
+export type Segment = [op: string, k0: number, len: number] | ['$cid', cid: string, k0: number, len: number];
+
+/** Character identities as the segment list a `text.delete` names. A delete
+ *  by segments kills exactly these characters, never a word another actor put
+ *  between them that the page has not seen. */
+export function segmentsOf(refs: readonly CharRef[]): Segment[] {
+    const out: Segment[] = [];
+    for (const r of refs) {
+        const last = out[out.length - 1];
+        if (isProvisional(r)) {
+            if (last?.length === 4 && last[1] === r[1] && last[2] + last[3] === r[2]) last[3]++;
+            else out.push(['$cid', r[1], r[2], 1]);
+        } else if (last?.length === 3 && last[0] === r[0] && last[1] + last[2] === r[1]) {
+            last[2]++;
+        } else {
+            out.push([r[0], r[1], 1]);
+        }
+    }
+    return out;
+}
+
 export class Shadow {
     /** Parallel arrays: character i has identity refs[i]. */
     chars: string[];

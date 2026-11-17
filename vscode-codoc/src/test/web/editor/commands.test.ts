@@ -106,6 +106,6 @@ describe('structural commands', () => {
         expect(g.tr.doc.child(0).textContent).toBe('abc');
         expect(g.tr.doc.child(0).type.name).toBe('heading');
         expect(shadows.get('p')!.text()).toBe('abc');
-        expect(g.ops[0].payload.to).toEqual(['s:p', 1]);
+        expect(g.ops[0].payload).toEqual({ segments: [['s:p', 0, 2]] });
     });
 });

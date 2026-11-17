@@ -79,7 +79,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
     const schema = codocSchema();
     const { doc, shadows } = docFrom(schema, proj);
     const shown: Shown = { projection: proj, realizing: new Set(), history: false };
-    const env: Env = { shadows, nextBid: newBid, nextCid: newCid, refuse: why => host.onConflict?.('', why) };
+    const env: Env = { shadows, nextBid: newBid, nextCid: newCid, refuse: why => host.onConflict?.('', why), projection: () => shown.projection };
     const paints = new Paints(shown);
     const outbox = new Outbox(shadows, subs => host.submit(subs), bid => paints.mark(bid));
     /** Record what a finished IME composition left on the page. */
@@ -137,8 +137,16 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         },
         handlePaste(_v, event, slice) {
             settle();
-            const pieces = clipboardPieces(slice, event.clipboardData?.getData('text/plain') ?? '',
-                                           event.clipboardData?.getData('text/html') ?? '');
+            const plain = (event.clipboardData?.getData('text/plain') ?? '').replace(/\r\n?/g, '\n');
+            const { $from, $to } = view.state.selection;
+            if ($from.parent.type.spec.code && $from.sameParent($to)) {
+                // A table, a diagram or a code block takes the text as it is,
+                // newlines and indentation included: typed text the recorder reads.
+                const text = plain || slice.content.textBetween(0, slice.content.size, '\n');
+                if (text) view.dispatch(view.state.tr.insertText(text));
+                return true;
+            }
+            const pieces = clipboardPieces(slice, plain, event.clipboardData?.getData('text/html') ?? '');
             if (!pieces) return false;                  // inline words only: the recorder reads them
             const g = pasteBlocks(view.state, env, pieces);
             if (g) view.dispatch(g.tr);
@@ -178,8 +186,8 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             for (const [bid, conflict] of refused) host.onConflict?.(bid, conflict);
             // Adopt the projection in hand again, always. A block this ack
             // released is re-read exactly when the projection already contains
-            // its op, and a refused block is re-read regardless.
-            adopt(shown.projection, shown.realizing, new Set(refused.keys()));
+            // its op, and a refused block once none of its ops is in flight.
+            adopt(shown.projection, shown.realizing);
         },
         flush: () => { settle(); outbox.flush(); },
         setHistory(on) {

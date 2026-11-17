@@ -12,6 +12,12 @@
  * block arrived, left or moved, the whole document is rebuilt in the
  * projection's order and the transaction is tagged `REPLACED`. Either way the
  * caret is put back after the character it sat after, found by identity.
+ *
+ * A block whose op the daemon refused is re-read once nothing of it is in
+ * flight (`Outbox.reloadable`). A projection of a different `store` comes from
+ * a daemon that rebuilt its store: every hold is dropped and every block is
+ * re-read, because positions and frontiers of the old store say nothing about
+ * the new one.
  */
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { TextSelection, type Transaction } from '@tiptap/pm/state';
@@ -25,9 +31,7 @@ import { RECORDED, REPLACED } from './commands';
 import { REPAINT, unitOffset, type Paints, type Shown } from './decorations';
 import type { Outbox } from './outbox';
 
-/** `force` names blocks to rebuild from the projection even though they are
- *  held or unchanged: the ones whose op the daemon refused. */
-export type Adopt = (next: Projection, realizing?: ReadonlySet<string>, force?: ReadonlySet<string>) => void;
+export type Adopt = (next: Projection, realizing?: ReadonlySet<string>) => void;
 
 export function adopter(view: EditorView, shadows: Map<string, Shadow>, outbox: Outbox, paints: Paints, shown: Shown): Adopt {
     const schema = view.state.schema;
@@ -74,13 +78,17 @@ export function adopter(view: EditorView, shadows: Map<string, Shadow>, outbox: 
         return pos ? tr.setSelection(TextSelection.create(tr.doc, Math.min(pos, tr.doc.content.size))) : tr;
     }
 
-    return function adopt(next, nowRealizing = new Set(), force = new Set()) {
+    return function adopt(next, nowRealizing = new Set()) {
         // The host reads the daemon's files asynchronously and a watcher can
         // fire twice for one write, so a projection can arrive after a newer
-        // one. `head` is the store's position and only grows. A forced
-        // adoption re-reads the projection in hand, so it is exempt.
-        if (!force.size && next.head < shown.projection.head) return;
+        // one. Within one store `head` only grows; a rebuilt store starts over.
+        const rebuilt = next.store !== shown.projection.store;
+        if (!rebuilt && next.head < shown.projection.head) return;
         outbox.flush();
+        if (rebuilt) outbox.rebuilt();
+        const force = new Set<string>();
+        if (rebuilt) view.state.doc.forEach(n => force.add(n.attrs.bid as string));
+        else for (const bid of outbox.reloadable(next.frontier)) force.add(bid);
         const prev = shown.projection, wasRealizing = shown.realizing;
         shown.projection = next;
         shown.realizing = nowRealizing;
@@ -117,7 +125,7 @@ export function adopter(view: EditorView, shadows: Map<string, Shadow>, outbox: 
                 tr = tr.replaceWith(at, at + tr.doc.nodeAt(at)!.nodeSize, node);
                 changed.add(b.id);
             }
-            markPaints(prev, next, changed, false, wasRealizing);
+            markPaints(prev, next, changed, rebuilt, wasRealizing);
             tr = tr.setMeta(RECORDED, []).setMeta(REPAINT, true);
             view.dispatch(restoreCaret(tr, caretBid, caretOff, caretRef));
             return;
@@ -133,7 +141,7 @@ export function adopter(view: EditorView, shadows: Map<string, Shadow>, outbox: 
             // Held and absent: the person removed it and the projection predates that.
             if (held.has(b.id) && !cur) continue;
             order.push(b.id);
-            if (cur?.attrs.head !== b.head) changed.add(b.id);
+            if (cur?.attrs.head !== b.head || force.has(b.id)) changed.add(b.id);
             if (cur && (held.has(b.id) || (cur.attrs.head === b.head && !force.has(b.id)))) { nodeFor.set(b.id, cur); continue; }
             const { node, shadow } = blockNode(schema, b);
             if (shadow) shadows.set(b.id, shadow);
@@ -149,7 +157,7 @@ export function adopter(view: EditorView, shadows: Map<string, Shadow>, outbox: 
             order.splice(at >= 0 ? at + 1 : 0, 0, bid);
         });
         for (const bid of currentNodes.keys()) if (!nodeFor.has(bid)) { shadows.delete(bid); outbox.forget(bid); }
-        markPaints(prev, next, changed, order.join(' ') !== page.join(' '), wasRealizing);
+        markPaints(prev, next, changed, rebuilt || order.join(' ') !== page.join(' '), wasRealizing);
         const newDoc = schema.nodes.doc.create(null, order.map(id => nodeFor.get(id)!));
         const tr = view.state.tr.replaceWith(0, view.state.doc.content.size, newDoc.content)
             .setMeta(RECORDED, []).setMeta(REPLACED, true).setMeta(REPAINT, true);

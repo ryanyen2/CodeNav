@@ -45,6 +45,8 @@ export class Outbox {
     private readonly recorder: Recorder;
     /** Blocks an open or just-ended IME composition changed, not yet recorded. */
     private readonly composed = new Set<string>();
+    /** Blocks one of whose ops the daemon refused, waiting to be re-read. */
+    private readonly stale = new Set<string>();
 
     /** `onHoldChange` is told each block whose hold changed, so its paints can be redrawn. */
     constructor(private readonly shadows: Map<string, Shadow>,
@@ -154,8 +156,10 @@ export class Outbox {
     /**
      * Take the daemon's answers. An applied op turns the shadow's provisional
      * refs into real ones and becomes its blocks' `lastOp`. Returns the blocks
-     * whose op was refused, with the reason: their shadows now say something
-     * the store does not, so the caller re-adopts them from the projection.
+     * whose op was refused, with the reason. Such a block's shadow now says
+     * something the store does not, so it is marked to be re-read from the
+     * projection (`reloadable`), but only once nothing else of it is in flight:
+     * re-reading it earlier would take away the words its other ops carry.
      */
     ack(acks: Ack[]): Map<string, string> {
         const refused = new Map<string, string>();
@@ -165,7 +169,7 @@ export class Outbox {
                 if (set.delete(a.cid)) {
                     waiting.push(bid);
                     this.onHoldChange(bid);
-                    if (a.conflict) refused.set(bid, a.conflict);
+                    if (a.conflict) { refused.set(bid, a.conflict); this.stale.add(bid); }
                     if (set.size === 0) this.unacked.delete(bid);
                 }
             }
@@ -185,6 +189,26 @@ export class Outbox {
             if ((this.unacked.get(bid)?.size ?? 0) > 0 || (op !== undefined && !inFrontier(op, frontier))) out.add(bid);
         }
         return out;
+    }
+
+    /** The refused blocks a projection with this frontier may now replace:
+     *  none of their ops in flight, and their last applied op in it. Each is
+     *  returned once. */
+    reloadable(frontier: Record<string, number>): Set<string> {
+        const held = this.held(frontier, new Set());
+        const out = new Set([...this.stale].filter(bid => !held.has(bid)));
+        for (const bid of out) this.stale.delete(bid);
+        return out;
+    }
+
+    /** The daemon rebuilt its store (a checkout, a fold), so what it applied
+     *  before means nothing now: drop every hold and every last-applied op.
+     *  Ops still queued stay queued. */
+    rebuilt(): void {
+        for (const bid of [...this.unacked.keys(), ...this.lastOp.keys()]) this.onHoldChange(bid);
+        this.unacked.clear();
+        this.lastOp.clear();
+        this.stale.clear();
     }
 
     /** A block has left the page for good. */

@@ -56,4 +56,19 @@ describe('the page', () => {
         const undoSent = posted.some(m => m.kind === 'submit' && (m as { subs: Submission[] }).subs.some(s => s.batch.startsWith('u-')));
         expect(undoSent || /undo/i.test(statusLine()), 'either the undo went out or the person was told why not').toBe(true);
     });
+
+    it('accepting a plan hands off the features it names, in the same batch', () => {
+        post({ kind: 'projection', proj: proj([block('h', 'heading', 'Title'), block('p', 'paragraph', 'one two')], { head: 30,
+            plans: [{ id: 'p-1', actor: 'agent:x', kind: 'edit', target: 'p', note: '', status: 'open', handoff: ['h'] },
+                    { id: 'p-2', actor: 'loop', kind: 'edit', target: 'p', note: '', status: 'open', handoff: [] }] }) });
+        posted.length = 0;
+        const accept = Array.from(document.querySelectorAll('.codoc-btn')).find(b => b.textContent?.startsWith('Accept all')) as HTMLButtonElement;
+        accept.click();
+        const subs = posted.filter(m => m.kind === 'submit').flatMap(m => (m as { subs: Submission[] }).subs)
+            .filter(s => s.kind === 'plan.accept' || s.kind === 'feature.handoff');
+        expect(subs.map(s => [s.kind, s.target, s.payload])).toEqual([
+            ['plan.accept', { pid: 'p-1' }, {}], ['plan.accept', { pid: 'p-2' }, {}],
+            ['feature.handoff', { fid: 'h' }, { asked: 'Build the plan p-1.' }]]);
+        expect(new Set(subs.map(s => s.batch)).size).toBe(1);
+    });
 });

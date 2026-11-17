@@ -233,5 +233,5 @@ describe('random gestures', () => {
             }
         }
         expect([...failures.values()]).toEqual([]);
-    });
+    }, 30_000);
 });

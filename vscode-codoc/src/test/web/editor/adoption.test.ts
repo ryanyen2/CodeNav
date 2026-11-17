@@ -219,3 +219,45 @@ describe('a projection that changed only words', () => {
         expect(shadowFaults(m)).toEqual([]);
     });
 });
+
+describe('a refused op', () => {
+    it('leaves the block held while its other ops are in flight, then re-reads it', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one')]);
+        const one = (m.proj.blocks[1].fields.text as TextField).runs[0].op;
+        select(m.view, posIn(m.view, 'p1', 3));
+        typeText(m.view, 'x');
+        m.handle.flush();
+        typeText(m.view, 'y');
+        m.handle.flush();
+        const [cidA, cidB] = m.submitted.map(s => s.cid);
+        m.handle.ack([{ cid: cidA, op: null, conflict: 'unknown_anchor' }]);
+        expect(m.conflicts).toEqual(['unknown_anchor']);
+        expect(texts(m.view.state.doc)[1]).toBe('onexy');            // y is still on its way
+        expect(shadowFaults(m)).toEqual([]);
+        m.handle.ack([{ cid: cidB, op: 'h:6', conflict: null }]);
+        expect(texts(m.view.state.doc)[1]).toBe('onexy');            // the projection in hand lacks h:6
+        m.handle.adopt(proj([block('h', 'heading', 'T'),
+                             para('p1', 1, [['one', { op: one, actor: 'human:a' }], ['y', { op: 'h:6', actor: 'human:local' }]])],
+                            { head: 10, frontier: { h: 6 } }));
+        expect(texts(m.view.state.doc)[1]).toBe('oney');              // re-read, though its head did not move
+        expect(shadowFaults(m)).toEqual([]);
+    });
+});
+
+describe('a projection of a rebuilt store', () => {
+    it('is adopted whole though its head is lower, and releases every hold', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', 'mine')], { head: 40, frontier: { s1: 39 }, store: 'a' });
+        select(m.view, posIn(m.view, 'p', 4));
+        typeText(m.view, '!');
+        m.handle.flush();
+        m.handle.ack([{ cid: m.submitted[0].cid, op: 's1:40', conflict: null }]);   // held: the projection lacks s1:40
+        m.handle.adopt(proj([block('h', 'heading', 'T'), block('p', 'paragraph', 'older text', 0, 3)], { head: 12, store: 'b' }));
+        expect(texts(m.view.state.doc)).toEqual(['T', 'older text']);
+        m.handle.adopt(proj([block('h', 'heading', 'T'), block('p', 'paragraph', 'their text', 0, 7)],
+                            { head: 500, frontier: { s9: 499 }, store: 'b' }));
+        expect(texts(m.view.state.doc)).toEqual(['T', 'their text']);
+        m.handle.adopt(proj([block('h', 'heading', 'T'), block('p', 'paragraph', 'stale', 0, 6)], { head: 300, store: 'b' }));
+        expect(texts(m.view.state.doc)).toEqual(['T', 'their text']);  // within one store, head still only grows
+        expect(shadowFaults(m)).toEqual([]);
+    });
+});

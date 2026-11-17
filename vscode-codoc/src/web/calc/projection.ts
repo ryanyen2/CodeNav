@@ -74,6 +74,9 @@ export interface PlanInfo {
     target: string | null;
     note: string;
     status: string;
+    /** The features accepting this plan hands off; empty for a plan by the loop,
+     *  a translator or a suggester, and for a delete plan. */
+    handoff?: string[];
 }
 
 export type Phase = 'synced' | 'edited' | 'queued' | 'realizing' | 'proposed' | 'drifted' | 'planned';
@@ -81,6 +84,8 @@ export type Phase = 'synced' | 'edited' | 'queued' | 'realizing' | 'proposed' | 
 export interface Watermarks { handoff: Record<string, number>; realized: Record<string, number> }
 
 export interface Projection {
+    /** Changes whenever the daemon rebuilds its store; `head` is comparable only within one. */
+    store?: string;
     head: number;
     frontier: Record<string, number>;
     blocks: ProjectedBlock[];

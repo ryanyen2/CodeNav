@@ -17,7 +17,7 @@ import './app.css';
 import type { HostToPage, PageToHost } from '../../wire';
 import { PHASE_CHANNEL, PHASE_LABEL } from '../calc/claims';
 import { newBatch, newBid, newCid } from '../calc/ids';
-import type { Ack, Phase, Projection, Submission } from '../calc/projection';
+import type { Ack, OpBody, Phase, Projection, Submission } from '../calc/projection';
 import { nextUndo, type HistoryWindow } from '../calc/window';
 import { Margin, type Thread } from './comments';
 import { mountEditor, type EditorHandle } from './editor';
@@ -214,10 +214,20 @@ function submit(subs: Submission[]): void {
     send({ kind: 'submit', subs });
 }
 
+/** Accept or reject plans, in one batch. Accepting also hands off each feature
+ *  the plan lists in `handoff`, so what was accepted gets built. */
 function verdicts(pids: string[], accept: boolean): void {
     editor?.flush();
     const batch = newBatch();
-    submit(pids.map(pid => ({ cid: newCid(), batch, kind: accept ? 'plan.accept' : 'plan.reject', target: { pid }, payload: {} })));
+    const ops: OpBody[] = pids.map(pid => ({ kind: accept ? 'plan.accept' : 'plan.reject', target: { pid }, payload: {} }));
+    if (accept) {
+        const asked = new Map<string, string[]>();
+        for (const p of projection?.plans ?? []) {
+            if (pids.includes(p.id)) for (const fid of p.handoff ?? []) asked.set(fid, [...(asked.get(fid) ?? []), `Build the plan ${p.id}.`]);
+        }
+        for (const [fid, asks] of asked) ops.push({ kind: 'feature.handoff', target: { fid }, payload: { asked: asks.join(' ') } });
+    }
+    submit(ops.map(op => ({ cid: newCid(), batch, ...op })));
 }
 
 /** Build it: hand the thread's feature off with the comment as the request, then run the build. */
