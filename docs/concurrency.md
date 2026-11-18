@@ -34,8 +34,9 @@ One process applies ops at a time. It is called the applier.
   own session's changed size. Then it applies, publishes the derived files, and releases
   the lock.
 - The lock is held per call. Held for the life of a process, it would leave every other
-  writer submitting to an inbox that no daemon drains. `codoc translate` and
-  `codoc rebuild` hold it for their whole run and refuse while a daemon is alive.
+  writer submitting to an inbox that no daemon drains. `codoc translate`,
+  `codoc rebuild` and `codoc sync` hold it for their whole run (a sync builds its store
+  inside it and holds it across its model calls) and refuse while a daemon is alive.
 - A long-lived writer with no daemon (the MCP server) keeps one store and one session
   file across calls. Its reads also rebuild when another process's log file changed.
   When a daemon appears, it closes its session and submits through the inbox.
@@ -264,7 +265,10 @@ A suggester's comment ops, all untagged:
 - The policy reads the plans and, for comments, who added a block. It does not read the
   rest of the document, so a log can be checked without the document it was written against.
 - The hub writes `human:gh:<login>` into the table when a user signs in, as `maintainer`,
-  `suggest` or `none`, from their GitHub permission on the repository.
+  `suggest` or `none`, from their GitHub permission on the repository, and again when a
+  periodic re-check finds that permission changed (`serve/auth.py`, `record_role`). The
+  table is in the tracked `config.json`, so a first sign-in adds a person to it and leaves
+  the file modified for the maintainer to commit; the hub writes only the `roles` key.
 
 **Foreign logs.** Because replay trusts the record, a log file is a capability: a file
 edited to remove the conflict from a refused verdict would apply on every clone that
@@ -291,7 +295,9 @@ guards only what that actor may write. Trust in a merged log comes from who may 
 the repository; on the hub, the server assigns each signed-in person's actor itself.
 
 `codoc rebuild` prints, per actor, how many applied ops in the local store the table
-would refuse today. That is a signal and changes nothing.
+would refuse today. That is a signal and changes nothing. It judges a withdrawal by the
+rule above, against its plan as it stood when the reject was written, so a machine taking
+back its own empty plan is not counted.
 
 ### The machine gate
 

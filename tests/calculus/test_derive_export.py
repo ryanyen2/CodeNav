@@ -12,6 +12,7 @@ from codoc.calculus.derive import (
     plan_claims,
     projection,
 )
+from codoc.calculus.block_md import GENERATED
 from codoc.calculus.doc import HEADING, PARAGRAPH
 from codoc.calculus.export import export_markdown
 from codoc.calculus.ids import START
@@ -23,7 +24,9 @@ from codoc.loops.realize import directive
 from codoc.workspace import Workspace
 from tests.helpers import Mint, build, heading, import_markdown, paragraph, seed_loop
 
-SAMPLE = """# Networking {#b-000000000001}
+SAMPLE = GENERATED + """
+
+# Networking {#b-000000000001}
 
 The client **retries three times** via [send](codoc:net/client.py#Client.send), see [rfc](https://r.fc/1).
 
@@ -57,7 +60,7 @@ def test_export_import_export_is_a_fixed_point():
     m, s = Mint(), Store()
     build(s, m, import_markdown(SAMPLE))
     out = export_markdown(s)
-    assert out == SAMPLE
+    assert out == SAMPLE and out.splitlines()[0] == GENERATED     # says it is derived; parse skips it
     m2, s2 = Mint("t"), Store()
     build(s2, m2, import_markdown(out))
     assert export_markdown(s2) == SAMPLE

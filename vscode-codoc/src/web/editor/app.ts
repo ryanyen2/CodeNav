@@ -371,7 +371,6 @@ window.addEventListener('message', (ev: MessageEvent<HostToPage>) => {
             const proj = m.proj;
             if (!proj) return;
             projection = proj;
-            const realizing = new Set(m.realizing ?? []);
             if (!editor) {
                 editor = mountEditor(page, proj, {
                     submit,
@@ -389,7 +388,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToPage>) => {
                     me: () => ({ actor, decides: decides() }),
                 });
             } else {
-                paint('the document', () => editor!.adopt(proj, realizing));
+                paint('the document', () => editor!.adopt(proj));
             }
             // Each pane is its own view of the one projection and is drawn
             // under `paint`, so a throw in one does not stop the others from

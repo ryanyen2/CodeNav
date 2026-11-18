@@ -177,7 +177,7 @@ describe('Backspace at the start of a heading', () => {
     // A heading that owns code, a theme with a child under it, a feature queued for a build.
     const cases: Array<[string, ProjectedBlock[], Partial<Projection>]> = [
         ['owns code', [block('f', 'heading', 'F'), block('p', 'paragraph', 'x')],
-         { bindings: { by_feature: { f: [{ file: 'a.py', symbol: 'a.py::f' }] }, by_file: {} } }],
+         { bindings: { by_feature: { f: [{ file: 'a.py', symbol: 'a.py::f' }] } } }],
         ['has a child heading', [block('f', 'heading', 'Theme'), block('c', 'heading', 'Child', 2)], {}],
         // Edited ranks above queued, so the phase alone would let this one go mid-build.
         ['is edited and queued', [block('f', 'heading', 'New'), block('p', 'paragraph', 'x')],

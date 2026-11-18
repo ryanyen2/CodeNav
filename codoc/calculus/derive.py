@@ -279,9 +279,8 @@ def ground(store: Store, fid: str) -> list[Claim]:
 
 
 def plan_claims(store: Store, fid: str) -> list[Claim]:
-    """Open plans' insertions (``open``), suggested deletions (``removed``) and
-    mark toggles (``marked`` / ``unmarked``) on this feature, plus accepted
-    plans' words (``accepted``)."""
+    """Open plans' insertions (``open``) and suggested deletions (``removed``)
+    on this feature, accepted plans' words (``accepted``), then ``mark_claims``."""
     out: list[Claim] = []
     for b in prose_blocks(store, fid):
         for f in b.layout.text:
@@ -296,6 +295,17 @@ def plan_claims(store: Store, fid: str) -> list[Claim]:
                 out.append(Claim(b.id, f, r.start, r.end, "plan", "open" if st == "open" else "accepted", r.actor, lt[r.start:r.end]))
             for sp in _suggest_spans(t, store):
                 out.append(Claim(b.id, f, sp.start, sp.end, "plan", "removed", store.plans[sp.attrs["plan"]].actor, lt[sp.start:sp.end]))
+    return out + mark_claims(store, fid)
+
+
+def mark_claims(store: Store, fid: str) -> list[Claim]:
+    """Open plans' mark toggles on words already there (``marked`` /
+    ``unmarked``), each with ``<mark>:<words>`` as its text."""
+    out: list[Claim] = []
+    for b in prose_blocks(store, fid):
+        for f in b.layout.text:
+            t = b.text(f)
+            lt = t.live_text()
             offsets = t.live_offsets()
             for m in t.proposals(kind=SUGGEST_MARK):
                 plan = store.plans.get(str(m.attrs.get("plan") or ""))
@@ -474,8 +484,8 @@ def block_entry(store: Store, b: Block) -> dict:
     The spans are the document's own marks, and nothing else: a plan never
     changes them, so a proposal to unbold a word leaves the word bold, the way
     a proposal to delete words leaves them struck rather than gone. What the
-    plan proposes is drawn over them from ``plan_claims`` (``marked`` /
-    ``unmarked``), and the words it inserted are in ``runs``, as before."""
+    plan proposes is drawn over them from ``mark_claims``, and the words it
+    inserted are in ``runs``, as before."""
     entry = {"id": b.id, "kind": b.kind, "level": b.level, "rank": b.rank, "head": store.block_head.get(b.id, 0),
              "fields": {}, **layout_entry(b.kind, b.layout)}     # an editor without the kind can still draw it
     for f in b.layout.text:
@@ -492,12 +502,19 @@ def block_entry(store: Store, b: Block) -> dict:
     return entry
 
 
+def feature_claims(store: Store, fid: str) -> list[dict]:
+    """The claims the editor cannot read off a block's runs and `suggest_del`:
+    the code channel (``ground``) and an open plan's mark toggles. It draws ink
+    and a plan's words and cuts from the block entries."""
+    return [c.__dict__ for c in ground(store, fid) + mark_claims(store, fid)]
+
+
 def projection(store: Store, realizing: set[str] = frozenset(), phases: dict[str, str] | None = None,
-               entry=block_entry) -> dict:
-    """What an editor needs: every live block with its text, runs, spans, plan
-    claims and its feature's phase. Dead segments are omitted; the editor asks
-    for ``ground`` per feature when History is on. ``phases`` and ``entry`` may
-    be passed in by a caller that already computed or memoized them."""
+               entry=block_entry, claims=feature_claims) -> dict:
+    """What an editor needs: every live block with its text, runs and spans,
+    each feature's phase, bindings and claims. ``phases``, ``entry`` and
+    ``claims`` may be passed in by a caller that already computed or memoized
+    them."""
     blocks = []
     phases = dict(phases) if phases is not None else {}
     for b in store.ordered():
@@ -506,9 +523,13 @@ def projection(store: Store, realizing: set[str] = frozenset(), phases: dict[str
         blocks.append(entry(store, b))
     watermarks = {fid: {"handoff": w.handoff, "realized": w.realized}
                   for fid, w in store.watermarks_by_fid.items() if (w.handoff or w.realized) and fid in phases}
+    by_feature: dict[str, list[dict]] = {}
+    for bd in store.bindings.values():
+        by_feature.setdefault(bd.feature, []).append({"file": bd.file, "symbol": bd.symbol})
     return {"store": store.id, "head": store.pos, "frontier": dict(store.frontier), "blocks": blocks,
             "phases": phases, "plans": [{**p.to_json(), "handoff": accept_handoffs(store, p)} for p in open_plans(store)],
-            "watermarks": watermarks,
+            "watermarks": watermarks, "bindings": {"by_feature": by_feature},
+            "claims": {fid: c for fid in phases if (c := claims(store, fid))},
             # The layouts this checkout's plugin kinds give a new block, so a
             # paste of a fence without `$layout` splits its fields the same way.
             "kinds": {k: layout.to_json() for k, layout in sorted(registered_layouts().items())}}

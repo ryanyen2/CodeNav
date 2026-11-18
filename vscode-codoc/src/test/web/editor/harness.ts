@@ -72,7 +72,7 @@ export function kindBlock(id: string, kind = 'image'): ProjectedBlock {
 }
 
 export const proj = (blocks: ProjectedBlock[], extra: Partial<Projection> = {}): Projection =>
-    ({ head: 9, frontier: {}, blocks, phases: {}, plans: [], bindings: { by_feature: {}, by_file: {} }, claims: {}, ...extra });
+    ({ head: 9, frontier: {}, blocks, phases: {}, plans: [], bindings: { by_feature: {} }, claims: {}, ...extra });
 
 export interface Mounted {
     handle: EditorHandle;

@@ -126,7 +126,12 @@ def record_role(codoc_dir: str | Path, login: str, role: str) -> None:
     ``config.json`` (``roles: {actor: role}``), so a rebuild on any
     machine applies that contributor's ops under the same authority. The actor
     is ``log.hub_actor``, never a bare ``human:<login>``, so no GitHub login can
-    name the maintainer's own identity."""
+    name the maintainer's own identity.
+
+    This adds the person to the role table, or changes their entry, and so
+    edits a tracked file: signing in for the first time, and a re-check that
+    finds a changed role, leave ``config.json`` modified for the maintainer to
+    commit. It writes the ``roles`` key and nothing else."""
     from codoc.workspace.config import read_config, write_config
     from codoc.workspace.log import hub_actor
     roles = dict(read_config(codoc_dir).get("roles") or {})

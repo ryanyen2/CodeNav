@@ -61,13 +61,14 @@ export interface ProjectedBlock {
 
 export interface Layout { text: string[]; flow: boolean; export: boolean }
 
+/** What a block's runs do not say: the code channel and a plan's mark toggles. */
 export interface Claim {
     bid: string;
     path: string;
     start: number;
     end: number;
-    channel: 'human' | 'plan' | 'code';
-    stage: 'unsent' | 'sent' | 'open' | 'accepted' | 'added' | 'removed' | 'marked' | 'unmarked';
+    channel: 'plan' | 'code';
+    stage: 'added' | 'removed' | 'marked' | 'unmarked';
     actor: string;
     text: string;
 }
@@ -96,7 +97,7 @@ export interface Projection {
     blocks: ProjectedBlock[];
     phases: Record<string, Phase>;
     plans: PlanInfo[];
-    bindings: { by_feature: Record<string, { file: string; symbol: string }[]>; by_file: Record<string, string[]> };
+    bindings: { by_feature: Record<string, { file: string; symbol: string }[]> };
     claims: Record<string, Claim[]>;
     /** Per feature, the hand-off and realized frontiers (absent when neither). */
     watermarks?: Record<string, Watermarks>;

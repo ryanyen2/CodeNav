@@ -3,25 +3,20 @@ hooks and read by the daemon.
 
 An epoch is one agent session's hold on the code. While it is open the daemon
 does not reflect code changes, since the agent is mid-edit; when it closes, the
-daemon reflects everything the session touched in one pass. The file also
-carries what the session is touching right now, which the editor draws.
+daemon reflects everything the session touched in one pass.
 
 Schema (version 1)::
 
     {
       "version": 1,
-      "epoch": {"id": "ep-<session_id>", "origin": "interactive | loop_b",
-                "open": true, "started_at": "<iso>", "ended_at": null,
-                "agent": {"id": "claude-code"}},
-      "touched": {"src/theme.py": {"symbols": [], "feature_ids": ["b-…"],
-                                   "last": "<iso>", "mode": "write"}},
-      "recent": [{"tool": "Edit", "file": "src/theme.py", "feature_ids": ["b-…"], "at": "<iso>"}],
-      "features": {"b-…": {"phase": "editing | reflecting", "at": "<iso>"}}
+      "epoch": {"id": "ep-<session_id>", "open": true, "started_at": "<iso>", "ended_at": null},
+      "touched": ["src/theme.py"]
     }
 
-``open`` is a lease, not a flag: a session that is hard-killed never runs the
-hook that would clear it, so a reader trusts it only while the file keeps being
-written (``epoch_alive``, ``EPOCH_STALE_SECONDS``).
+``touched`` is the repo-relative files the turn's tools read or wrote. ``open``
+is a lease, not a flag: a session that is hard-killed never runs the hook that
+would clear it, so a reader trusts it only while the file keeps being written
+(``epoch_alive``, ``EPOCH_STALE_SECONDS``).
 
 The file is not intent and is safe to delete; the next session start rewrites it.
 """
@@ -33,9 +28,6 @@ from pathlib import Path
 
 from codoc.workspace.layout import ACTIVITY, locked, read_json, write_json
 
-# The phase a feature is in while the agent is binding its change into the tree.
-PHASE_REFLECTING = "reflecting"
-
 # How long an open epoch is trusted without a fresh write to activity.json.
 # Hooks renew the file on Edit/Write/Read tool calls only, so a live session in
 # a long Bash or inference stretch is silent for minutes; this has to outlast that.
@@ -46,10 +38,8 @@ def _empty_activity() -> dict:
     """A fresh empty document (fresh nested dicts, because callers mutate in place)."""
     return {
         "version": 1,
-        "epoch": {"id": "", "origin": "interactive", "open": False,
-                  "started_at": None, "ended_at": None},
-        "touched": {},
-        "recent": [],
+        "epoch": {"id": "", "open": False, "started_at": None, "ended_at": None},
+        "touched": [],
     }
 
 
@@ -94,9 +84,7 @@ def epoch_alive(codoc_dir: str | Path, *, now: float | None = None,
 
 def epoch_touched_files(codoc_dir: str | Path) -> list[str]:
     """Return the list of files (repo-relative paths) touched in the last epoch."""
-    data = read_activity(codoc_dir)
-    touched: dict = data.get("touched") or {}
-    return list(touched.keys())
+    return list(read_activity(codoc_dir).get("touched") or [])
 
 
 def _now_iso() -> str:
@@ -108,27 +96,6 @@ def write_activity(codoc_dir: str | Path, data: dict) -> None:
     invocations and the realize runner share."""
     with _lock(codoc_dir):
         write_json(activity_path(codoc_dir), data)
-
-
-def mark_feature_phase(codoc_dir: str | Path, feature_ids: list[str], phase: str) -> None:
-    """Set the ``phase`` of ``feature_ids`` in ``activity.json``, merging into
-    the file under the lock. Best-effort: any failure is swallowed, since this
-    only drives an animation in the editor."""
-    if not feature_ids:
-        return
-    try:
-        with _lock(codoc_dir):
-            data = read_activity(codoc_dir)
-            feats = data.get("features")
-            if not isinstance(feats, dict):
-                feats = {}
-            now = _now_iso()
-            for fid in feature_ids:
-                feats[fid] = {"phase": phase, "at": now}
-            data["features"] = feats
-            write_json(activity_path(codoc_dir), data)
-    except Exception:  # noqa: BLE001 (never break a tool/hook over an animation hint)
-        pass
 
 
 def close_epoch(codoc_dir: str | Path, expected_id: str, *,
@@ -163,10 +130,9 @@ def close_epoch(codoc_dir: str | Path, expected_id: str, *,
                     return False
                 if (now if now is not None else _time.time()) - mtime <= stale_after:
                     return False  # a fresh write landed in the check→lock window
-            if not (ep.get("open") or data.get("features")):
-                return False  # already closed and cleared: nothing to heal
+            if not ep.get("open"):
+                return False  # already closed: nothing to heal
             data["epoch"] = {**ep, "open": False, "ended_at": _now_iso()}
-            data["features"] = {}
             write_json(dest, data)
             return True
     except Exception:  # noqa: BLE001 (heal is best-effort; never break the caller)

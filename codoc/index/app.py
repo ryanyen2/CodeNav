@@ -19,15 +19,15 @@ from cocoindex.connectors import lancedb, localfs
 from cocoindex.resources.file import FileLike, PatternFilePathMatcher
 from cocoindex.resources.id import generate_id
 
-from codoc.index.lang import detect_language, get_adapter
+from codoc.index.lang import EXTENSIONS, detect_language, get_adapter
 from codoc.index.schema import LANCE_DB, LANCE_TABLE_NAME, CodeChunk
 from codoc.index.tree_walk import walk as tree_walk
 
 _DEFAULT_LANCE_PATH = "./.codoc/lancedb"
 
-# Match every extension the tree-sitter adapters (codoc.index.lang.detect_language)
-# understand, so the walk never skips a file codoc can parse.
-_INCLUDED_PATTERNS = ["**/*.py", "**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"]
+# Every extension the tree-sitter adapters understand, so the walk never skips
+# a file codoc can parse.
+_INCLUDED_PATTERNS = [f"**/*{ext}" for ext in EXTENSIONS]
 _EXCLUDED_PATTERNS = [
     ".*/**",                 # dot-dirs (.git, .tox, .mypy_cache, …)
     "**/__pycache__/**",
@@ -181,16 +181,18 @@ async def app_main(sourcedir: pathlib.Path) -> None:
         table_name=LANCE_TABLE_NAME,
         table_schema=await lancedb.TableSchema.from_class(CodeChunk, primary_key=["id"]),
     )
-    files = localfs.walk_dir(
-        sourcedir,
-        recursive=True,
-        path_matcher=_SymlinkAwareMatcher(
-            sourcedir,
-            included_patterns=_INCLUDED_PATTERNS,
-            excluded_patterns=_EXCLUDED_PATTERNS + _gitignore_excludes(pathlib.Path(sourcedir)),
-        ),
-    )
+    files = localfs.walk_dir(sourcedir, recursive=True, path_matcher=source_matcher(sourcedir))
     await coco.mount_each(_process_file, files.items(), sourcedir, target)
+
+
+def source_matcher(sourcedir: pathlib.Path) -> _SymlinkAwareMatcher:
+    """The files the index walks: the adapters' extensions, minus the excludes
+    and the repo's ``.gitignore`` directories. The daemon asks it too."""
+    return _SymlinkAwareMatcher(
+        sourcedir,
+        included_patterns=_INCLUDED_PATTERNS,
+        excluded_patterns=_EXCLUDED_PATTERNS + _gitignore_excludes(pathlib.Path(sourcedir)),
+    )
 
 
 def make_app(sourcedir: pathlib.Path, app_name: str = "CodocIndex") -> coco.App:

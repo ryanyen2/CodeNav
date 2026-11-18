@@ -150,6 +150,27 @@ def test_accepting_a_plan_that_adds_features_queues_each_of_them(tmp_path):
     assert len(added) == 2 and sorted(queued(st)) == sorted(added), (added, queued(st))
 
 
+def test_sync_applies_under_the_applier_lock(tmp_path, monkeypatch):
+    """`codoc sync` is a daemonless applier like the MCP server: its whole
+    pass, model call included, runs inside the lock `client.applying` takes."""
+    from codoc.daemon.daemon import Daemon
+    from codoc.workspace.layout import APPLIER_LOCK, locked
+    root, cd = seeded(tmp_path)
+    held = []
+
+    def probe(*_a, **_k):
+        try:
+            with locked(cd / APPLIER_LOCK, timeout=0):
+                held.append(False)
+        except TimeoutError:
+            held.append(True)
+        return "probed"
+    monkeypatch.setattr(Daemon, "process_batch", lambda self, paths, **k: probe())
+    monkeypatch.setattr(Daemon, "reflect", lambda self, files, **k: probe())
+    r = runner.invoke(app, ["sync", "--root", str(root)])
+    assert r.exit_code == 0 and held == [True, True], (r.output, held)
+
+
 def test_a_daemon_that_starts_before_the_lock_gets_a_message_not_a_traceback(tmp_path, monkeypatch):
     """The commands that apply themselves learn about a daemon under the lock."""
     root, cd = seeded(tmp_path)

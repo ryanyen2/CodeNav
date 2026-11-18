@@ -83,13 +83,11 @@ def validate_logs(paths, *, roles: Roles, store: Store | None = None, recorded: 
     ours = recorded if recorded is not None else (store.ops if store else [])
     known = list({o.id: o for o in [*ours, *theirs]}.values())
     view = _policy_view(store, theirs)
-    turns = sorted((o.at, o.kind, str(o.target.get("pid"))) for o in known if o.kind in K.TURNS and o.conflict is None)
+    turns = _turns(known)
     for p, f in files:
         out.extend(Finding(str(p), pr.line, pr.reason) for pr in f.problems)
         for i, op in enumerate(f.ops, start=2):        # line 1 is the header
-            if op.kind == K.PLAN_REJECT:
-                _as_it_stood(view, op, known, turns)
-            if op.conflict is None and (why := roles.policy(view, op)):
+            if op.conflict is None and (why := _refusal(roles, view, op, known, turns)):
                 out.append(Finding(str(p), i, f"recorded as applied, but the roles table refuses it: {why}"))
             if op.conflict is None and op.plan and op.kind not in K.TURNS and _last_turn(turns, op.plan, op.at) in DECIDED:
                 out.append(Finding(str(p), i, f"recorded as applied under plan {op.plan} after its verdict"))
@@ -160,14 +158,30 @@ def refused_verdicts(store: Store, roles: Roles) -> dict[str, int]:
     """Per actor, how many applied ops in the store the table would refuse
     today. Not a gate: a demotion is allowed to leave earlier work standing, so
     this is the signal that says a log carries something the table never would
-    have let in (`codoc rebuild` prints it)."""
+    have let in (`codoc rebuild` prints it). Each op is judged by the rule
+    `validate_logs` uses (``_refusal``): a withdrawal against its plan as it
+    stood, not as the withdrawal left it."""
     out: dict[str, int] = {}
+    view, turns = _policy_view(store, []), _turns(store.ops)
     for op in store.ops:
         if op.batch.startswith(SNAPSHOT_BATCH):
             continue        # a fold re-expresses ops that were authorized when written
-        if op.conflict is None and roles.policy(store, op):
+        if op.conflict is None and _refusal(roles, view, op, store.ops, turns):
             out[op.actor] = out.get(op.actor, 0) + 1
     return out
+
+
+def _turns(known: list[Op]) -> list[tuple[str, str, str]]:
+    """Every applied verdict and reopen, ``(at, kind, pid)``, by clock."""
+    return sorted((o.at, o.kind, str(o.target.get("pid"))) for o in known if o.kind in K.TURNS and o.conflict is None)
+
+
+def _refusal(roles: Roles, view: Store, op: Op, known: list[Op], turns) -> str | None:
+    """Why the table refuses ``op``, or None, with the plan a reject names put
+    as it stood when the reject was written (``_as_it_stood``)."""
+    if op.kind == K.PLAN_REJECT:
+        _as_it_stood(view, op, known, turns)
+    return roles.policy(view, op)
 
 
 def _policy_view(store: Store | None, ops: list[Op]) -> Store:

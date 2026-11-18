@@ -104,7 +104,7 @@ class Feed:
         if proj is not None and proj != self.sent.get(PROJECTION):
             self.sent[PROJECTION] = proj
             try:
-                out.append({"kind": "projection", "proj": json.loads(proj), "realizing": []})
+                out.append({"kind": "projection", "proj": json.loads(proj)})
             except ValueError:
                 pass
         # Status is two files and a roles table; this runs twice a second per

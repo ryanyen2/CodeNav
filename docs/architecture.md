@@ -71,7 +71,8 @@ skill, and the `/codoc:sync`, `/codoc:plan` and `/codoc:ask` commands.
 
 - Open the agent epoch in `activity.json` while a turn runs and record the files it
   touched. The daemon holds those files and reflects them when the epoch closes, or after
-  900 seconds of silence.
+  900 seconds of silence. Nothing else reads the file: the editor and the hub learn that a
+  feature is being built from its `realizing` phase in the projection.
 - Tell the session when hand-offs are queued in `realize.md`.
 - Never raise and never open the workspace; they read published files only.
 
@@ -121,8 +122,7 @@ and no session is live.
 | `CODOC_LOG_PROMPTS` | `llm/provider.py` | `1` logs every prompt. |
 | `CODOC_LANCE_PATH`, `CODOC_INDEX_RETENTION_S` | `index/` | The chunk table's location; how long old index versions are kept. |
 | `CODOC_DOC_LANGUAGE` | `doclang.py` | Overrides `doc_language` for one process. |
-| `CODOC_AGENT`, `CODOC_EPOCH_ORIGIN` | `claude/hook.py` | The agent's name; the epoch's origin. |
 | `CODOC_REALIZE_OWNER` | `daemon/publish.py` | Marks the realize pass that holds the lease, so its own agent does not stand down. |
 | `CODOC_GITHUB_CLIENT_ID`, `CODOC_GITHUB_CLIENT_SECRET`, `CODOC_GITHUB_TOKEN`, `CODOC_SERVE_REPO`, `CODOC_GITHUB_API`, `CODOC_GITHUB_WEB` | `serve/` | GitHub sign-in and permission checks. |
-| `CODOC_SERVE_PR`, `CODOC_SERVE_BASE` | `cli/main.py` | `0` turns off the pull-request worker; the base branch (`main`). |
+| `CODOC_SERVE_PR`, `CODOC_SERVE_BASE` | `cli/main.py` | `0` turns off the pull-request worker, as `codoc serve --no-prs` does; the base branch (`main`). |
 | `CODOC_CONSULT_ALLOWLIST`, `CODOC_STATIC_DIR`, `CODOC_TUNNEL_CONFIG` | `serve/` | Consult URLs the hub's agent may fetch; the bundle; the tunnel config. |

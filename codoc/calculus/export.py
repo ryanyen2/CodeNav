@@ -6,7 +6,8 @@ whole. Comments and dead blocks are omitted. Headings carry their id; other
 blocks do not.
 
 The file is derived and one-way. Nothing reads it back into a store: the op
-log is what a clone rebuilds from.
+log is what a clone rebuilds from. Its first line (``block_md.GENERATED``)
+says so, since a hand edit is lost on the next export.
 """
 from __future__ import annotations
 
@@ -25,4 +26,4 @@ def export_spec(store: Store, b) -> BlockSpec | None:
 
 
 def export_markdown(store: Store, spec=export_spec) -> str:
-    return block_md.render([s for b in store.ordered() if (s := spec(store, b)) is not None], ids=True)
+    return block_md.render([s for b in store.ordered() if (s := spec(store, b)) is not None], ids=True, generated=True)

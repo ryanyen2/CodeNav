@@ -81,8 +81,9 @@ or `gh` failure is not a refusal, and neither is a sandbox that could not run
 at all (the SDK missing, the hook unsupported) — both leave the request
 unanswered, and the worker comes back to it on the next interval whether or not
 anybody has edited the tree since. `CODOC_SERVE_BASE` is the base
-branch (default `main`); `CODOC_SERVE_PR=0` turns the worker off and leaves the
-queue for a person.
+branch (default `main`); `codoc serve --no-prs` (or `CODOC_SERVE_PR=0`) turns the
+worker off and leaves the queue for a person. The server prints one line at startup
+when the worker runs.
 
 ## Routes
 

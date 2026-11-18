@@ -168,7 +168,7 @@ def test_the_export_of_a_kind_without_code_is_a_fence_that_parses_back(monkeypat
     s = Store()
     _submit(s, log)
     md = export_markdown(s)
-    assert md.startswith("```codoc:widget"), md
+    assert md.startswith(block_md.GENERATED + "\n\n```codoc:widget"), md
     (back,) = block_md.parse(md)
     assert back == block_spec(s, s.blocks[back.id], "rejected")
     assert back.content == {"$layout": WIDGET.to_json(), "url": "https://x.org", "caption": "A **plot**"}

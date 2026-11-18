@@ -145,6 +145,7 @@ def _bootstrap(root: str, cd: Path, *, organize: bool):
             typer.echo("  No supported source files found (Python and TypeScript are indexed).")
             publish(cd, ws.store, root_dir=root)
             return BootstrapResult()
+        typer.echo(f"  Sending {len({r.file for r in rows})} file(s) to the model, one call per file.")
         res = bootstrap(ws, rows, graph, repo_name=os.path.basename(os.path.abspath(root)), root_dir=root,
                         doc_language=workspace_doc_language(cd), organize=organize, printer=typer.echo)
         publish(cd, ws.store, root_dir=root)
@@ -187,19 +188,24 @@ def sync(root: str = ROOT):
     """One pass: drain client edits, reflect every changed file, publish."""
     from codoc.daemon.daemon import Daemon
     from codoc.daemon.pidfile import daemon_running
+    from codoc.daemon.publish import publish
+    from codoc.workspace.layout import APPLIER_LOCK, locked
     cd = _require(root)
-    if daemon_running(cd):
-        typer.echo("A daemon is watching; it syncs continuously.")
-        raise typer.Exit(0)
-    d = Daemon(root, cd, printer=typer.echo)
-    try:
-        note = d.process_batch([])
-        note2 = d.reflect(set())
-        typer.echo(f"▸ {note}; {note2}")
-        from codoc.daemon.publish import publish
-        publish(cd, d.ws.store, root_dir=root)
-    finally:
-        d.ws.close()
+    # The pass applies across a model call, so it holds the lock every
+    # daemonless applier takes (`client.applying`): an MCP server waits, then
+    # rebuilds from what this pass wrote. The store is built inside it.
+    with locked(cd / APPLIER_LOCK):
+        if daemon_running(cd):
+            typer.echo("A daemon is watching; it syncs continuously.")
+            raise typer.Exit(0)
+        d = Daemon(root, cd, printer=typer.echo)
+        try:
+            note = d.process_batch([])
+            note2 = d.reflect(set())
+            typer.echo(f"▸ {note}; {note2}")
+            publish(cd, d.ws.store, root_dir=root)
+        finally:
+            d.ws.close()
 
 
 def _resolve_feature(store, ref: str) -> str:
@@ -447,8 +453,15 @@ def serve(root: str = ROOT,
           port: int = typer.Option(8787, "--port"),
           static_dir: str = typer.Option(None, "--static-dir", help="The built editor bundle (default: auto-detected)."),
           tunnel: bool = typer.Option(False, "--tunnel", help="Expose over a cloudflared tunnel (needs GitHub auth configured)."),
+          prs: bool = typer.Option(True, "--prs/--no-prs", envvar="CODOC_SERVE_PR",
+                                   help="With GitHub auth: build each hand-off with an agent, push a branch and open a PR."),
           insecure_public: bool = typer.Option(False, "--i-understand-unauthenticated", hidden=True)):
-    """Serve the tree to GitHub-authorized people from this machine, supervising the daemon."""
+    """Serve the tree to GitHub-authorized people from this machine, supervising the daemon.
+
+    With GitHub auth configured it also, by default, runs a sandboxed agent on
+    each hand-off, pushes the result to a branch and opens a pull request
+    (--no-prs, or CODOC_SERVE_PR=0, turns that off). A first sign-in adds the
+    person to the role table in the tracked config.json."""
     from codoc.serve.github_auth import GithubAuthConfig, build_auth_context
     cd = _require(root)
     gh = GithubAuthConfig.from_env()
@@ -471,12 +484,14 @@ def serve(root: str = ROOT,
             if tunnel:
                 from codoc.serve.tunnel import launch_tunnel
                 tun = launch_tunnel(port, config=os.environ.get("CODOC_TUNNEL_CONFIG"))
-            if gh and os.environ.get("CODOC_SERVE_PR", "1") != "0":
+            if gh and prs:
                 # With GitHub configured the server decides what is built: each
                 # hand-off becomes a PR from a sandboxed agent on a worktree.
                 from codoc.serve.worker import Worker
-                worker = Worker(root, str(cd), base=os.environ.get("CODOC_SERVE_BASE", "main"),
-                                printer=typer.echo).start()
+                base = os.environ.get("CODOC_SERVE_BASE", "main")
+                typer.echo(f"Each hand-off: an agent builds it, its branch is pushed and a PR opened against {base} "
+                           "(--no-prs turns this off).")
+                worker = Worker(root, str(cd), base=base, printer=typer.echo).start()
             typer.echo(f"codoc hub on http://{host}:{port}" + (" (GitHub auth on)" if auth else " (localhost, no auth)"))
             uvicorn.run(application, host=host, port=port, log_level="warning")
     except OwnershipError as e:

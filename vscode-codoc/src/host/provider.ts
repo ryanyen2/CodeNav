@@ -44,7 +44,7 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
         const post = (m: HostToPage) => void panel.webview.postMessage(m);
         const postProjection = async () => {
             const proj = await readJson<Projection>(path.join(codocDir, 'projection.json'));
-            if (proj) post({ kind: 'projection', proj, realizing: await realizingSet(codocDir) });
+            if (proj) post({ kind: 'projection', proj });
         };
         const postStatus = async () => {
             const st = await readJson<Record<string, unknown>>(path.join(codocDir, 'status.json'));
@@ -170,14 +170,6 @@ async function appendSubmissions(codocDir: string, subs: Submission[]): Promise<
     await fsp.mkdir(dir, { recursive: true });
     const body = subs.map(s => JSON.stringify({ cid: s.cid, kind: s.kind, target: s.target, payload: s.payload, batch: s.batch, plan: s.plan ?? null })).join('\n') + '\n';
     await fsp.appendFile(path.join(dir, `${CLIENT}.jsonl`), body, 'utf8');
-}
-
-/** The features an agent is writing code for right now, from the agent's own activity file. */
-async function realizingSet(codocDir: string): Promise<string[]> {
-    const st = await readJson<{ state?: string }>(path.join(codocDir, 'status.json'));
-    if (st?.state !== 'realizing') return [];
-    const act = await readJson<{ features?: Record<string, { phase?: string }> }>(path.join(codocDir, 'activity.json'));
-    return Object.entries(act?.features ?? {}).filter(([, v]) => v?.phase === 'editing' || v?.phase === 'reflecting').map(([k]) => k);
 }
 
 /** Open `file` and put the caret on `symbol`: its definition when a Python or

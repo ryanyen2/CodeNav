@@ -13,14 +13,11 @@ import json
 from codoc.daemon.epoch import EPOCH_STALE_SECONDS, activity_path, close_epoch
 
 
-def _write(codoc_dir, *, open: bool, epoch_id: str, features: dict | None = None) -> None:
+def _write(codoc_dir, *, open: bool, epoch_id: str) -> None:
     data = {
         "version": 1,
-        "epoch": {"id": epoch_id, "origin": "interactive", "open": open,
-                  "started_at": "2026-07-11T00:00:00+00:00", "ended_at": None},
-        "touched": {"src/a.py": {"mode": "write", "symbols": [], "feature_ids": []}},
-        "recent": [],
-        "features": features or {},
+        "epoch": {"id": epoch_id, "open": open, "started_at": "2026-07-11T00:00:00+00:00", "ended_at": None},
+        "touched": ["src/a.py"],
     }
     activity_path(codoc_dir).write_text(json.dumps(data))
 
@@ -28,15 +25,13 @@ def _write(codoc_dir, *, open: bool, epoch_id: str, features: dict | None = None
 def test_closes_matching_stale_epoch(tmp_path):
     codoc_dir = tmp_path / ".codoc"
     codoc_dir.mkdir()
-    _write(codoc_dir, open=True, epoch_id="ep-dead",
-           features={"f-1": {"phase": "editing", "at": "2026-07-11T00:00:00+00:00"}})
+    _write(codoc_dir, open=True, epoch_id="ep-dead")
 
     assert close_epoch(codoc_dir, "ep-dead") is True
 
     healed = json.loads(activity_path(codoc_dir).read_text())
     assert healed["epoch"]["open"] is False
     assert healed["epoch"]["ended_at"]  # stamped
-    assert healed["features"] == {}
     # `touched` is preserved so the caller can still fold those files into Loop A.
     assert "src/a.py" in healed["touched"]
 
@@ -47,15 +42,13 @@ def test_refuses_when_a_newer_session_took_the_slot(tmp_path):
     live epoch is left intact."""
     codoc_dir = tmp_path / ".codoc"
     codoc_dir.mkdir()
-    _write(codoc_dir, open=True, epoch_id="ep-fresh",
-           features={"f-9": {"phase": "editing", "at": "2026-07-11T00:00:00+00:00"}})
+    _write(codoc_dir, open=True, epoch_id="ep-fresh")
 
     assert close_epoch(codoc_dir, "ep-dead") is False
 
     still = json.loads(activity_path(codoc_dir).read_text())
     assert still["epoch"]["id"] == "ep-fresh"
     assert still["epoch"]["open"] is True       # untouched
-    assert still["features"] == {"f-9": {"phase": "editing", "at": "2026-07-11T00:00:00+00:00"}}
 
 
 def test_refuses_when_same_id_but_freshly_rewritten(tmp_path):
@@ -83,7 +76,7 @@ def test_closes_same_id_when_confirmed_stale_under_lock(tmp_path):
     assert json.loads(activity_path(codoc_dir).read_text())["epoch"]["open"] is False
 
 
-def test_noop_when_already_closed_and_cleared(tmp_path):
+def test_noop_when_already_closed(tmp_path):
     codoc_dir = tmp_path / ".codoc"
     codoc_dir.mkdir()
     _write(codoc_dir, open=False, epoch_id="ep-1")

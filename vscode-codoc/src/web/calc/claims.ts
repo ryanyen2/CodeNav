@@ -3,8 +3,9 @@
  *
  * Every visual claim on the prose is read off the projection: a run's actor
  * and whether its op is inside the realized frontier give the human channel
- * (ink); the daemon's `claims` give the code channel (ground); `plan` runs and
- * `suggest_del` spans give the plan channel (opacity). One palette on every
+ * (ink); the daemon's `claims` give the code channel (ground) and a plan's mark
+ * toggles; `plan` runs and `suggest_del` spans give the rest of the plan
+ * channel (opacity). One palette on every
  * surface: blue is the person, gray a plan, green and red the code. Pure and
  * DOM-free; the editor turns `Paint`s into decorations at scalar → position.
  * A block's paints come from its edited field: `source` for a table, a

@@ -7,8 +7,7 @@ codoc reacts to each action as it happens:
   run), so the person can see what the agent is doing without reading the
   diff. Plain text, dim ANSI only on a tty.
 * **activity.json**: every file touch is recorded through the same code path
-  the interactive hooks use (``hook._handle_tool``), and a ``mcp__codoc__*``
-  call marks the features it names ``reflecting``.
+  the interactive hooks use (``hook._handle_tool``).
 * **status.json**: the pass holds the realizing lease and renews it from its
   own tool activity.
 
@@ -26,7 +25,6 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
-from codoc.daemon.epoch import PHASE_REFLECTING, mark_feature_phase
 from codoc.daemon.publish import REALIZE_OWNER_ENV, renew_realizing, write_realizing
 from codoc.workspace.layout import CODOC_DIR, REALIZE
 
@@ -60,21 +58,6 @@ def resolve_engine(engine: str) -> str:
 
 def _dim(s: str, tty: bool) -> str:
     return f"\x1b[2m{s}\x1b[0m" if tty else s
-
-
-def _collect_feature_ids(value: Any) -> list[str]:
-    """Recursively harvest ``feature_id`` values from a tool-input payload."""
-    out: list[str] = []
-    if isinstance(value, dict):
-        fid = value.get("feature_id")
-        if isinstance(fid, str) and fid:
-            out.append(fid)
-        for v in value.values():
-            out.extend(_collect_feature_ids(v))
-    elif isinstance(value, list):
-        for v in value:
-            out.extend(_collect_feature_ids(v))
-    return list(dict.fromkeys(out))
 
 
 class RealizeMonitor:
@@ -156,9 +139,6 @@ class RealizeMonitor:
             return
 
         if name.startswith("mcp__codoc__"):
-            fids = _collect_feature_ids(tool_input)
-            if fids:
-                mark_feature_phase(self.codoc_dir, fids, PHASE_REFLECTING)
             self.reflections += 1
             caused = tool_input.get("caused_by") or ""
             tail = f"  ⟨{caused}⟩" if caused else ""
@@ -236,11 +216,6 @@ async def _run(root_dir: str, codoc_dir: str, *, permission_mode: str,
         pass
 
     printer("codoc realize · /codoc:sync · claude-agent-sdk")
-    # Mark the epoch as a realize pass's for the spawned CLI (the SessionStart
-    # hook reads this); restored afterwards so a foreground `codoc realize`
-    # doesn't leak the mutation into its process.
-    prev_origin = os.environ.get("CODOC_EPOCH_ORIGIN")
-    os.environ.setdefault("CODOC_EPOCH_ORIGIN", "loop_b")
     try:
         await consume_stream(monitor, query(prompt="/codoc:sync", options=options))
     except Exception:  # noqa: BLE001
@@ -248,10 +223,6 @@ async def _run(root_dir: str, codoc_dir: str, *, permission_mode: str,
         # here; mark failed, never propagate.
         monitor.errored = True
     finally:
-        if prev_origin is None:
-            os.environ.pop("CODOC_EPOCH_ORIGIN", None)
-        else:
-            os.environ["CODOC_EPOCH_ORIGIN"] = prev_origin
         # The token names a pass that has ended. Left set, it would exempt a
         # later realize in this same process from a lease it does not own.
         if inherited is None:

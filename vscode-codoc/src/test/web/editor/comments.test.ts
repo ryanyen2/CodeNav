@@ -11,7 +11,7 @@ const comment = (id: string, anchor: string, anchorText: string, text: string, a
        fields: { thread: 'c1', anchor, anchor_text: anchorText, scope: 'code', status: 'open', body: body(text, actor) } });
 
 const proj = (blocks: ProjectedBlock[]): Projection =>
-    ({ head: 0, frontier: {}, phases: {}, plans: [], bindings: { by_feature: {}, by_file: {} }, claims: {}, blocks });
+    ({ head: 0, frontier: {}, phases: {}, plans: [], bindings: { by_feature: {} }, claims: {}, blocks });
 
 describe('threads', () => {
     it('group comment blocks by thread, in order', () => {

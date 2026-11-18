@@ -31,7 +31,7 @@ import { RECORDED, REPLACED } from './commands';
 import { REPAINT, unitOffset, type Paints, type Shown } from './decorations';
 import type { Outbox } from './outbox';
 
-export type Adopt = (next: Projection, realizing?: ReadonlySet<string>) => void;
+export type Adopt = (next: Projection) => void;
 
 export function adopter(view: EditorView, shadows: Map<string, Shadow>, outbox: Outbox, paints: Paints, shown: Shown): Adopt {
     const schema = view.state.schema;
@@ -39,17 +39,15 @@ export function adopter(view: EditorView, shadows: Map<string, Shadow>, outbox: 
     /**
      * Mark the blocks whose paints this projection can have changed. A block's
      * paints come from its own projected fields and from its feature's phase,
-     * claims and watermarks, so most projections touch few. A reorder or a
-     * change to the realizing set touches every block.
+     * claims and watermarks, so most projections touch few. A reorder touches
+     * every block.
      *
      * The plans list is not compared. That rests on the applier touching every
      * block a plan's ops landed in when the plan gets a verdict, which moves
      * those blocks' `head`s and puts them in `changed`.
      */
-    function markPaints(prev: Projection, next: Projection, changed: Set<string>, reordered: boolean, wasRealizing: ReadonlySet<string>): void {
-        const realizing = shown.realizing;
-        if (reordered || paints.allMarked
-            || wasRealizing.size !== realizing.size || [...realizing].some(f => !wasRealizing.has(f))) {
+    function markPaints(prev: Projection, next: Projection, changed: Set<string>, reordered: boolean): void {
+        if (reordered || paints.allMarked) {
             paints.mark();
             return;
         }
@@ -78,7 +76,7 @@ export function adopter(view: EditorView, shadows: Map<string, Shadow>, outbox: 
         return pos ? tr.setSelection(TextSelection.create(tr.doc, Math.min(pos, tr.doc.content.size))) : tr;
     }
 
-    return function adopt(next, nowRealizing = new Set()) {
+    return function adopt(next) {
         // The host reads the daemon's files asynchronously and a watcher can
         // fire twice for one write, so a projection can arrive after a newer
         // one. Within one store `head` only grows; a rebuilt store starts over.
@@ -92,14 +90,13 @@ export function adopter(view: EditorView, shadows: Map<string, Shadow>, outbox: 
         const held = outbox.held(next.frontier);
         const force = rebuilt ? new Set<string>() : outbox.reloadable(next.frontier);
         if (rebuilt) view.state.doc.forEach(n => { if (!held.has(n.attrs.bid)) force.add(n.attrs.bid as string); });
-        const prev = shown.projection, wasRealizing = shown.realizing;
+        const prev = shown.projection;
         shown.projection = next;
-        shown.realizing = nowRealizing;
         const current: Array<{ bid: string; head: number }> = [];
         view.state.doc.forEach(n => current.push({ bid: n.attrs.bid as string, head: force.has(n.attrs.bid) ? -1 : n.attrs.head as number }));
         const plan = adoptionPlan(current, next, held);
         if (!plan.length) {
-            markPaints(prev, next, new Set(), false, wasRealizing);
+            markPaints(prev, next, new Set(), false);
             view.dispatch(view.state.tr.setMeta(REPAINT, true));
             return;
         }
@@ -127,7 +124,7 @@ export function adopter(view: EditorView, shadows: Map<string, Shadow>, outbox: 
                 tr = tr.replaceWith(at, at + tr.doc.nodeAt(at)!.nodeSize, node);
                 changed.add(b.id);
             }
-            markPaints(prev, next, changed, rebuilt, wasRealizing);
+            markPaints(prev, next, changed, rebuilt);
             tr = tr.setMeta(RECORDED, []).setMeta(REPAINT, true);
             view.dispatch(restoreCaret(tr, caretBid, caretOff, caretRef));
             return;
@@ -159,7 +156,7 @@ export function adopter(view: EditorView, shadows: Map<string, Shadow>, outbox: 
             order.splice(at >= 0 ? at + 1 : 0, 0, bid);
         });
         for (const bid of currentNodes.keys()) if (!nodeFor.has(bid)) { shadows.delete(bid); outbox.forget(bid); }
-        markPaints(prev, next, changed, rebuilt || order.join(' ') !== page.join(' '), wasRealizing);
+        markPaints(prev, next, changed, rebuilt || order.join(' ') !== page.join(' '));
         const newDoc = schema.nodes.doc.create(null, order.map(id => nodeFor.get(id)!));
         const tr = view.state.tr.replaceWith(0, view.state.doc.content.size, newDoc.content)
             .setMeta(RECORDED, []).setMeta(REPLACED, true).setMeta(REPAINT, true);

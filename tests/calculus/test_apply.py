@@ -407,3 +407,32 @@ def test_a_handoff_records_no_commit_and_one_that_named_a_commit_still_applies()
     op = apply(s, m.op(K.FEATURE_HANDOFF, {"fid": "h1"}, {"base_sha": "abc123", "asked": "x"}))
     assert op.conflict is None and "base_sha" not in op.payload
     assert s.watermarks("h1").handoffs == [op.id]
+
+
+def test_a_heading_made_prose_leaves_as_a_delete_does():
+    """`block.set kind` away from heading takes the feature's bindings off in
+    the same op, as `block.delete` does; its undo and a plan's reject put them
+    back."""
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Top")
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"file": "f.py", "symbol": "g", "fingerprint": "x"}))
+    sk = apply(s, m.op(K.BLOCK_SET, {"bid": "h1", "path": "kind"}, {"value": PARAGRAPH}))
+    assert sk.conflict is None and s.bindings == {}
+    assert [(e["file"], e["symbol"]) for e in sk.payload["detached"]] == [("f.py", "g")]
+    assert apply(s, m.op(K.BIND_REFRESH, {"fid": "h1"}, {"file": "f.py", "symbol": "g"})).conflict == "not_bound"
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+    invert(s, m, sk)
+    assert s.blocks["h1"].kind == HEADING and s.bindings[("f.py", "g")].fingerprint == "x"
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+    # Under a plan: the reject re-binds; a forged `bindings` in a plan attaches nothing.
+    ag = Mint("a", "agent:x")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "pl"}, {"kind": "edit"}))
+    assert apply(s, ag.op(K.BLOCK_SET, {"bid": "h1", "path": "kind"}, {"value": PARAGRAPH}, plan="pl")).conflict is None
+    assert s.bindings == {}
+    assert apply(s, m.op(K.PLAN_REJECT, {"pid": "pl"}, {})).conflict is None
+    assert s.blocks["h1"].kind == HEADING and s.bindings[("f.py", "g")].feature == "h1"
+    paragraph(m, s, "p1", "body", after="h1")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "p2"}, {"kind": "edit"}))
+    forged = [{"fid": "p1", "feature": "p1", "file": "x.py", "symbol": "y"}]
+    apply(s, ag.op(K.BLOCK_SET, {"bid": "p1", "path": "kind"}, {"value": HEADING, "bindings": forged}, plan="p2"))
+    assert ("x.py", "y") not in s.bindings

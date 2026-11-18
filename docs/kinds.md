@@ -124,9 +124,10 @@ whole and does not grow (I2). A comment is not exported to `tree.codoc` and is l
 
 ## 7. In the editor
 
-The editor edits heading and paragraph blocks. Every other in-flow block is a read-only
-`kindBlock` node drawn from the projection's fields (kind name, then one row per field).
-A plugin block's projection entry carries its `layout`, which says which fields are Text.
+The editor edits headings, paragraphs, list items, and the `source` of a table, diagram or
+code block. A plugin block is a `kindBlock` card: the kind's name, a text area per Text
+field, and its other fields read-only. Its projection entry carries its `layout`, which
+says which fields are Text.
 Comments are cards in the margin ([editor.md](editor.md)). The structure guard refuses a
 transaction that would drop a kind block, and a selection delete across one is refused.
 

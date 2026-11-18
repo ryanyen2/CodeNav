@@ -82,9 +82,9 @@ codoc serve                           # serve the tree to GitHub collaborators
 
 The editor is a document. Type; press Enter for a new paragraph; type `## ` at
 the start of a line, or `/`, for a heading; Tab and Shift-Tab change a
-heading's level; drag the handle to move a feature with everything under it;
-`@` cites a symbol the tree already knows; ⌘F finds and ⌘⌥F replaces. Lists,
-tables, code blocks and diagrams are shown read-only for now.
+heading's level with everything under it, or a list item's depth; drag the
+handle to move a feature with everything under it; `@` cites a symbol the tree
+already knows; ⌘F finds and ⌘⌥F replaces.
 
 Two signals in prose are instructions: **bold** is *Focus* (the agent is told
 which words matter) and an external link is *Consult* (the agent reads it

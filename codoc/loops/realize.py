@@ -212,15 +212,18 @@ def _at_realized(store: Store, text: Text, realized: dict) -> Text:
 
 def _authored(store: Store, op_id: OpId) -> bool:
     """Whether a reader would call this the author's word: a person wrote it,
-    or a person ACCEPTED it. Accepting is how an author adopts an agent's
-    words, since a plan is a request to build, so an accepted edge has to reach the directive the same way a typed one does."""
+    or a person ACCEPTED a plan that asks for code (``plan.build``, the rule
+    ``derive.accept_handoffs`` uses). Accepting an agent's proposal is how an
+    author adopts its words as a request, so an accepted edge reaches the
+    directive the same way a typed one does. An accepted reflect plan
+    describes code that is already there and asks for nothing."""
     o = store.by_id.get(op_id)
     if o is None:
         return False
     if is_human(o.actor):
         return True
     plan = store.plans.get(o.plan) if o.plan else None
-    return plan is not None and plan.status == "accepted"
+    return plan is not None and plan.status == "accepted" and plan.build
 
 
 def _human_changes(store: Store, fid: str, w: Watermarks) -> list[str]:

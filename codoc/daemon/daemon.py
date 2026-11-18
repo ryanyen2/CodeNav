@@ -21,20 +21,20 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
+from functools import cached_property
+from pathlib import Path, PurePosixPath
 
 from codoc.daemon.epoch import EPOCH_STALE_SECONDS, close_epoch, epoch_touched_files, read_epoch
 from codoc.daemon.pidfile import clear_pidfile, daemon_running, write_pidfile
 from codoc.daemon.publish import Publisher, realizing_is_fresh
 from codoc.index.git import head_sha
 from codoc.index.graph import Graph
+from codoc.index.lang import detect_language
 from codoc.loops import realize as R
 from codoc.workspace import Roles, Workspace
 from codoc.workspace import log as L
 from codoc.workspace.layout import ACTIVITY, APPLIER_LOCK, CODOC_DIR, GRAPH_CACHE, atomic_write, locked
 
-CODE_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".rb", ".cpp", ".c", ".h"}
-SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", ".pytest_cache", ".mypy_cache", CODOC_DIR}
 DEBOUNCE_MS = 600
 
 
@@ -70,6 +70,22 @@ class Daemon:
         self.publisher = Publisher(self.codoc_dir, str(self.root))
 
     # ── routing ────────────────────────────────────────────────────────────
+    @cached_property
+    def _source(self):
+        # ponytail: built on first use (importing the index takes seconds) and
+        # once, so a .gitignore edited while the daemon runs counts from its next start.
+        from codoc.index.app import source_matcher
+        return source_matcher(self.root)
+
+    def code_path(self, path: str) -> str | None:
+        """``path`` relative to the root when the index reads it (a language
+        adapter parses it and no index exclude covers it), else None."""
+        try:
+            rel = Path(path).resolve().relative_to(self.root.resolve()).as_posix()
+        except ValueError:
+            return None
+        return rel if detect_language(rel) and self._source.is_file_included(PurePosixPath(rel)) else None
+
     def classify(self, paths: list[str]) -> tuple[set[str], bool]:
         """``(code_files, activity_touched)``. An inbox change needs no flag:
         every batch drains the inboxes."""
@@ -77,13 +93,10 @@ class Daemon:
         activity = False
         act = (self.codoc_dir / ACTIVITY).resolve()
         for p in paths:
-            rp = Path(p).resolve()
-            if rp == act:
+            if Path(p).resolve() == act:
                 activity = True
-            elif any(part in SKIP_DIRS for part in rp.parts):
-                continue
-            elif rp.suffix in CODE_EXTENSIONS and self.root.resolve() in rp.parents:
-                code.add(str(rp.relative_to(self.root.resolve())))
+            elif (rel := self.code_path(p)) is not None:
+                code.add(rel)
         return code, activity
 
     def process_batch(self, paths: list[str], *, now: float | None = None) -> str:
@@ -189,7 +202,7 @@ class Daemon:
         atexit.register(self.ws.close)
         self.process_batch([])   # absorb anything that queued while we were down
         self.say(f"codoc watching {self.root} (session {self.ws.session})")
-        for changes in watchfiles.watch(str(self.root), debounce=debounce_ms, watch_filter=_filter(self.codoc_dir)):
+        for changes in watchfiles.watch(str(self.root), debounce=debounce_ms, watch_filter=_filter(self.codoc_dir, self.code_path)):
             paths = [p for _c, p in changes]
             try:
                 note = self.process_batch(paths)
@@ -224,15 +237,12 @@ def _propose():
     return propose_tree_update_raw
 
 
-def _filter(codoc_dir: Path):
+def _filter(codoc_dir: Path, code_path):
     inbox = L.inbox_dir(codoc_dir).resolve()
     act = (codoc_dir / ACTIVITY).resolve()
 
     def keep(_change, path: str) -> bool:
         rp = Path(path).resolve()
-        if rp == act or (inbox in rp.parents and not rp.name.endswith(".ack.jsonl")):
-            return True
-        if any(part in SKIP_DIRS for part in rp.parts):
-            return False
-        return rp.suffix in CODE_EXTENSIONS
+        return (rp == act or (inbox in rp.parents and not rp.name.endswith(".ack.jsonl"))
+                or code_path(path) is not None)
     return keep

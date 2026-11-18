@@ -85,7 +85,7 @@ Op         := { id, at, actor,              set by the applier; actor from the c
 | `dead` | The op that killed the block. Absent while it is live. |
 | `dead_actor`, `dead_at` | Who killed it and when. |
 | `dead_in` | The feature whose description it was removed from, read when it died. A block that dies with its heading records that heading; a block merged into its neighbour, or added by a plan that was rejected, records none, since no words were removed. `removed:` and the `edited` phase read it, so where the dead block sits later does not matter. |
-| `detached` | On a dead heading: the bindings it owned when it died. |
+| `detached` | On a dead heading: the bindings it owned when it died. A heading made into another kind records them on its `block.set` instead. |
 | `void` | `{move: [rank, level, ranked_by]}`: moves of rejected plans that could not be put back, since the block had been ranked again, each with the place it found the block. An undo that would restore `ranked_by` to one of them goes on to its place ([concurrency.md](concurrency.md#9-plans-and-verdicts)). |
 
 ### Block kinds
@@ -306,7 +306,7 @@ Target `{bid, path}`; `path` defaults to `text`.
 | op | target | wire payload | canonical payload adds | inverse |
 |---|---|---|---|---|
 | `block.add` | `bid` | `kind`, `level?`, `after: BlockId \| START` or `under: BlockId \| START`, `content`, `layout?` | `after`, `level`, `rank`; `layout` for a kind that is not builtin | `block.delete {ids: [bid]}` |
-| `block.set` | `bid`, `path` | `value`, or `unset: true` to remove a non-Text field; with `path = kind`, optional `level` | `prev`; for `kind` also `prev_level`, `level` | `block.set` to the previous value, or `unset` when the field was absent |
+| `block.set` | `bid`, `path` | `value`, or `unset: true` to remove a non-Text field; with `path = kind`, optional `level`, and `bindings` on an inverse | `prev`; for `kind` also `prev_level`, `level`, and `detached` when a heading becomes another kind | `block.set` to the previous value (with `bindings: detached`), or `unset` when the field was absent |
 | `block.split` | `bid`, `path` | `at: CharRef \| START`, `new: BlockId` | `new_first`, `rank`, `bid`, `path` | `block.merge {into: bid, bid: new}`, with `rejoin` for a heading |
 | `block.merge` | `into`, `bid`, `path` | none | `at` (the seam), `order`, `rank` of the dead block | `block.split {at, new: bid, rank, new_takes}` |
 | `block.move` | `bid` | `after: BlockId \| START` and `level_delta`, or `under: BlockId \| START` | `after`, `level_delta`, `range`, `prev: [[id, rank, level, ranked_by]]` | `block.move {restore: prev}` |
@@ -348,6 +348,11 @@ Target `{bid, path}`; `path` defaults to `text`.
 - **move.** A heading moves with its `range`; any other block moves alone. The range is
   computed at apply and gets fresh ranks after the anchor. `level_delta` applies to the
   headings in the range, clamped.
+- **set.** A `kind` change away from heading ends the feature as a delete does: its
+  bindings are removed in the same op and recorded as `detached`. Its inverse carries them
+  as `bindings` and re-attaches each whose symbol has no owner now. A plan's `block.set`
+  never re-attaches from its payload; rejecting the plan puts the detached bindings back
+  as `bind` steps.
 - **delete.** A heading dies with its `body`; any other block dies alone. Descendant
   headings survive. The bindings of a killed heading are removed, kept on the block as
   `detached`, and recorded. A gesture that deletes a subtree sends one `block.delete` per
@@ -466,8 +471,8 @@ the one place where a diff decides what happened.
 3. `base_text` must equal the field's live text, or the call is refused `stale_base` and
    the caller reads again.
 4. Both texts are tokenised: a run of word characters, a run of punctuation, a run of
-   whitespace; each character of a word in an unspaced script (Han, Kana) is its own
-   token. The diff is a longest common subsequence over tokens in which whitespace never
+   whitespace; each character of a word in a script `codoc/calculus/scripts.py` lists as
+   `PER_CHARACTER` (Han, Kana, Thai, Lao, Khmer, Myanmar, Hangul) is its own token. The diff is a longest common subsequence over tokens in which whitespace never
    anchors a match on its own.
 5. Each hunk is one `text.delete` over the base characters it drops and one `text.insert`
    anchored after the last surviving base character before it, or `START`.
@@ -571,6 +576,8 @@ Round trip:
 - Blocks: `parse(render(specs)) == specs` when each prose text is inline Markdown as the
   writer writes it, item levels step by at most one, and ids are written.
 - `tree.codoc` is one-way. Nothing reads it back into a store; a clone rebuilds from the log.
+  Its first line is `block_md.GENERATED`, a comment saying that a hand edit is
+  overwritten. A reader skips that line, so a pasted export parses to the same blocks.
 
 ## 8. Derived views
 
@@ -595,10 +602,11 @@ rejected plan's words are dead.
 | `block_spec(b, mode)` | The block as the Markdown form says it, or nothing when it says nothing in this mode: an empty block, a block holding only an open plan's words under `rejected`, a kind that is not exported. |
 | `description(f, mode)` | The prose and source blocks of `body(f)` after the heading, as block Markdown. |
 | `attribution(field)` | The live segments as offset runs `{start, end, actor, at, plan, op, k0}`. Merged where adjacent runs share actor and plan, for display; unmerged for the editor, where `(op, k0 + i)` is the identity of character `i`. |
-| `block_written_by(b)` | The actor of the newest live segment in the block, an open plan's words excluded. Any person reads as `human`. |
+| `block_written_by(b)` | `human` when a person wrote any live character of the block, else the actor of the newest live segment; an open plan's words are left out. |
 | `ink(f)` | Untagged live segments a person minted on the in-flow blocks of `body(f)`, outside `realized`: `sent` when inside `handoff`, else `unsent`. |
 | `ground(f)` | What the loop did since the person last engaged. `since` is the newest clock of a character the person minted or killed, or a mark they placed. A live untagged loop segment is `added` and a segment the loop killed is `removed`, when its clock is after `since` and its op is outside `handoff`. Empty for a feature with no hand-off and no trace of a person. |
-| `plan_claims(f)` | Tagged live runs of open plans (`open`) and accepted plans (`accepted`); `suggest_del` spans of open plans (`removed`); `suggest_mark` records of open plans (`marked`, `unmarked`). |
+| `plan_claims(f)` | Tagged live runs of open plans (`open`) and accepted plans (`accepted`); `suggest_del` spans of open plans (`removed`); then `mark_claims(f)`. |
+| `mark_claims(f)` | `suggest_mark` records of open plans (`marked`, `unmarked`). |
 | `open_plans_on(f)` | Open plans that target a block of `body(f)` or have an applied op recorded on one. |
 | `open_plans()` | Open plans whose target is null or live: the ones offered for a verdict. |
 | `phase(f)` | Below. |
@@ -608,7 +616,7 @@ rejected plan's words are dead.
 | `history_window(n)` | The timeline: the applied ops among the last `n` (200 as published). Per op: `blocks`, the text of each Text field of each block it touched as it read right after the op (`{bid: {field: text}}`), its recorded inverse, the blocks it took off or put on the page, and the ranks, kinds and levels it displaced; plus what was true entering the window. Computed by un-applying the window backwards on clones of the live fields, by character identity. |
 | `dead_cites(known)` | `cite` marks whose `(file, symbol)` is not in the index. |
 | `export` | `block_spec` of every live block in `rejected` mode, written with heading ids. |
-| `projection` | `{store, head, frontier, blocks, phases, plans, watermarks, kinds, bindings, claims}`. `kinds` maps each plugin kind registered in this checkout to the layout it gives a new block, so an editor pasting a `codoc:<kind>` fence without `$layout` splits its fields as the applier would. `store` names the store instance and changes on every rebuild; `head` is comparable only under one `store`. Each plan carries `handoff`: the features accepting it hands off (`accept_handoffs`: a plan opened with `build`, which `codoc_propose` sets, that is not a delete plan). A block entry is `{id, kind, level, rank, head, fields}`, plus `layout` for a kind that is not builtin, so an editor without the kind can draw it. A Text field is `{text, runs, spans, suggest_del}` in `live` mode, with unmerged runs and the document's own marks. `plans` is `open_plans()`. `claims` is `ink`, `ground` and `plan_claims` per feature. |
+| `projection` | `{store, head, frontier, blocks, phases, plans, watermarks, kinds, bindings, claims}`. `kinds` maps each plugin kind registered in this checkout to the layout it gives a new block, so an editor pasting a `codoc:<kind>` fence without `$layout` splits its fields as the applier would. `store` names the store instance and changes on every rebuild; `head` is comparable only under one `store`. Each plan carries `handoff`: the features accepting it hands off (`accept_handoffs`: a plan opened with `build`, which `codoc_propose` sets, that is not a delete plan). A block entry is `{id, kind, level, rank, head, fields}`, plus `layout` for a kind that is not builtin, so an editor without the kind can draw it. A Text field is `{text, runs, spans, suggest_del}` in `live` mode, with unmerged runs and the document's own marks. `plans` is `open_plans()`. `bindings` is `{by_feature: {f: [{file, symbol}]}}`. `claims` is `ground` and `mark_claims` per feature, the claims a block entry does not carry: an editor draws ink and a plan's words and cuts from the runs and `suggest_del`. |
 | `state_fingerprint` | Blocks with text and marks, bindings, plans, watermarks. Equal fingerprints mean the same document. |
 
 ### Phase
@@ -617,7 +625,7 @@ rejected plan's words are dead.
 
 | phase | holds when |
 |---|---|
-| `edited` | `ink(f)` has an `unsent` claim, or a person killed characters on the in-flow blocks of `body(f)` with an op outside both `handoff` and `realized`., or a person deleted a whole in-flow block of `body(f)` that held document words, with an op outside both. Changing a block's kind, level or place is layout and does not count. |
+| `edited` | `ink(f)` has an `unsent` claim, or a person killed characters on the in-flow blocks of `body(f)` with an op outside both `handoff` and `realized`, or a person deleted a whole in-flow block of `body(f)` that held document words, with an op outside both. Changing a block's kind, level or place is layout and does not count. |
 | `realizing` | `f` is queued and a realize pass holds the lease: `status.json` says `realizing` and was written within the last 300 seconds. The lease is the one input from outside the store. |
 | `queued` | `f` is queued and has at least one binding. |
 | `planned` | `f` is queued and has no binding. |

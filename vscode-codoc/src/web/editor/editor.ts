@@ -82,7 +82,7 @@ export interface EditorHandle {
 export function mountEditor(container: HTMLElement, proj: Projection, host: EditorHost): EditorHandle {
     const schema = codocSchema();
     const { doc, shadows } = docFrom(schema, proj);
-    const shown: Shown = { projection: proj, realizing: new Set(), history: false };
+    const shown: Shown = { projection: proj, history: false };
     const cards: CardFields = new Map();
     const env: Env = {
         shadows, nextBid: newBid, nextCid: newCid, refuse: why => host.onConflict?.('', why), projection: () => shown.projection, cards,
@@ -204,7 +204,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             // Adopt the projection in hand again, always. A block this ack
             // released is re-read exactly when the projection already contains
             // its op, and a refused block once none of its ops is in flight.
-            adopt(shown.projection, shown.realizing);
+            adopt(shown.projection);
         },
         flush: () => { settle(); outbox.flush(); },
         setHistory(on) {

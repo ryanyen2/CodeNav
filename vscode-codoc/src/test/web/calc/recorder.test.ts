@@ -18,7 +18,7 @@ function block(id: string, kind: 'heading' | 'paragraph', text: string, runs: Ar
 }
 
 function proj(blocks: ProjectedBlock[]): Projection {
-    return { head: 9, frontier: {}, blocks, phases: {}, plans: [], bindings: { by_feature: {}, by_file: {} }, claims: {} };
+    return { head: 9, frontier: {}, blocks, phases: {}, plans: [], bindings: { by_feature: {} }, claims: {} };
 }
 
 let n = 0;

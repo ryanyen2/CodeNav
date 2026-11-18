@@ -486,7 +486,19 @@ def _h_block_set(store: Store, op: Op, touched: set[str]):
         b.kind = value
         b.level = level_for(value, op.payload.get("level") or keep)
         canonical.update({"prev": prev_kind, "prev_level": prev_level, "level": b.level, "_structural": True})
-        inverse = [body(K.BLOCK_SET, {"bid": bid, "path": "kind"}, {"value": prev_kind, "level": prev_level})]
+        back: dict = {"value": prev_kind, "level": prev_level}
+        # A feature leaves as it does by `block.delete`: its bindings come off
+        # in this op, and the undo that makes it a heading again puts them back.
+        # A plan's set never re-attaches (a suggester could name any symbol);
+        # its reject puts back what it detached (`_undo_steps`).
+        if prev_kind == HEADING and value != HEADING:
+            if detached := _unbind(store, bid, touched):
+                canonical["detached"] = back["bindings"] = detached
+        elif value == HEADING and prev_kind != HEADING and op.payload.get("bindings") and not op.plan:
+            _reattach(store, [e for e in op.payload["bindings"]
+                              if isinstance(e, dict) and e.get("fid") == bid and "file" in e and "symbol" in e], touched)
+            canonical["bindings"] = op.payload["bindings"]
+        inverse = [body(K.BLOCK_SET, {"bid": bid, "path": "kind"}, back)]
     elif path == "level":
         if b.kind not in LEVELLED:
             raise Conflict("no_level", bid)
@@ -670,16 +682,22 @@ def _detach_dead(store: Store, fids: list[str], touched: set[str]) -> list[dict]
     fold may take this op away), and return them for the inverse."""
     out = []
     for fid in fids:
-        mine = []
-        for key, b in list(store.bindings.items()):
-            if b.feature == fid:
-                mine.append({"fid": fid, **b.to_json()})
-                del store.bindings[key]
-                touched.add(fid)
+        mine = _unbind(store, fid, touched)
         if mine:
             store.blocks[fid].detached = mine
         out.extend(mine)
     return out
+
+
+def _unbind(store: Store, fid: str, touched: set[str]) -> list[dict]:
+    """Drop ``fid``'s bindings and return them as ``_reattach`` reads them."""
+    mine = []
+    for key, b in list(store.bindings.items()):
+        if b.feature == fid:
+            mine.append({"fid": fid, **b.to_json()})
+            del store.bindings[key]
+            touched.add(fid)
+    return mine
 
 
 def _reattach(store: Store, entries: list[dict], touched: set[str]) -> None:
@@ -1083,7 +1101,12 @@ def _undo_steps(store: Store, o: Op) -> list[dict]:
             to = {"level": p["prev"]}
         else:
             to = {} if o.inverse[0]["payload"].get("unset") else {path: p["prev"]}
-        return [{"do": "set", "bid": b.id, "from": _read(b, list(to) or [path]), "to": to}]
+        # A heading the plan made prose took its bindings off; they come back
+        # with it unless someone bound the symbol since (their attach stands).
+        back = [{"do": "bind", "file": e["file"], "symbol": e["symbol"], "from": None,
+                 "to": {k: v for k, v in e.items() if k != "fid"}}
+                for e in p.get("detached") or [] if (e["file"], e["symbol"]) not in store.bindings]
+        return [{"do": "set", "bid": b.id, "from": _read(b, list(to) or [path]), "to": to}, *back]
     if o.kind == K.BLOCK_MOVE:
         out = []
         for bid, *was in p.get("prev", []):

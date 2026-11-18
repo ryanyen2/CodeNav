@@ -29,7 +29,7 @@ bullet   := text*              attrs: bid, head, level        a list item; level
 numbered := text*              attrs: bid, head, level        its number is drawn, not stored
 source   := text*              attrs: bid, head, kind (table | diagram | code), lang, derived
                                raw text, newlines allowed, no marks
-kindBlock:= atom               attrs: bid, head, kind, fields; drawn read-only
+kindBlock:= atom               attrs: bid, head, kind, fields; a card (card.ts)
 marks    := bold | code | link{href} | cite{file, symbol} | comment{block} | suggest_del{plan} | plan{pid}
 ```
 
@@ -40,8 +40,8 @@ marks    := bold | code | link{href} | cite{file, symbol} | comment{block} | sug
 - A numbered item's number is computed when drawn: consecutive numbered items at the same
   level count 1, 2, 3; a deeper item between them does not restart the count.
 - A `source` node edits the store's `source` field. Enter inside it types a newline.
-- Every other projected kind except `comment` is a `kindBlock`: the kind's name, then one
-  row per field with a value.
+- Every other projected kind except `comment` is a `kindBlock`: the kind's name, a text
+  area per Text field its layout names, and every other field read-only.
 - A comment block is not in the document. It is a card in the margin (section 7).
 - The person sets `bold`, `code`, `link` and `cite`, and the recorder sends them. The
   projection sets `comment`, `suggest_del` and `plan`; the recorder never sends them. Every
@@ -165,7 +165,7 @@ whose paints can have changed.
 | `plan-mark`, `plan-unmark` | `marked`, `unmarked` claims. | A dashed gray underline. |
 | `code-added`, `code-removed` | `ground` claims, where no ink overlaps. Removed words are a widget at their place. | Green, red. |
 | `author-*` | In History mode, merged runs per actor kind. | One colour per kind. |
-| Phase marker | `phases`, at each heading that is not `synced`; `realizing` from `status.json`. | A glyph with an `aria-label`. |
+| Phase marker | `phases`, at each heading that is not `synced`. | A glyph with an `aria-label`. |
 
 Each painted run carries its meaning as `title` and `aria-description`. One palette on
 every surface: blue is the person, gray a plan, green and red the code.

@@ -19,11 +19,9 @@ import { NO_WATERMARKS, type Phase, type Projection, type Watermarks } from '../
 import { REPLACED } from './commands';
 import { sameStructure } from './guards';
 
-/** What the page is showing: the projection in hand, the features an agent is
- *  building right now, and whether the History stance is on. */
+/** What the page is showing: the projection in hand, and whether the History stance is on. */
 export interface Shown {
     projection: Projection;
-    realizing: ReadonlySet<string>;
     history: boolean;
 }
 
@@ -81,13 +79,13 @@ export function listNumbers(): Plugin<DecorationSet> {
 
 /** The decorations for the blocks in `only`, or for every block. */
 function decorationsFor(doc: PMNode, paints: Map<string, Paint[]>, phases: Record<string, Phase>,
-                        realizing: ReadonlySet<string>, only?: ReadonlySet<string>): Decoration[] {
+                        only?: ReadonlySet<string>): Decoration[] {
     const decos: Decoration[] = [];
     doc.forEach((block, pos) => {
         const bid = block.attrs.bid as string | null;
         if (!bid || (only && !only.has(bid))) return;
         if (block.type.name === 'heading') {
-            const phase: Phase = realizing.has(bid) ? 'realizing' : (phases[bid] ?? 'synced');
+            const phase: Phase = phases[bid] ?? 'synced';
             if (phase !== 'synced') {
                 decos.push(Decoration.widget(pos + 1, () => {
                     const el = document.createElement('span');
@@ -166,7 +164,7 @@ export class Paints {
                     let set = prev.map(tr.mapping, state.doc);
                     if (dirty.size) {
                         for (const r of blockRanges(state.doc, dirty)) set = set.remove(set.find(r.from, r.to));
-                        set = set.add(state.doc, decorationsFor(state.doc, paints, this.shown.projection.phases, this.shown.realizing, dirty));
+                        set = set.add(state.doc, decorationsFor(state.doc, paints, this.shown.projection.phases, dirty));
                     }
                     return set;
                 },
@@ -187,7 +185,7 @@ export class Paints {
     }
 
     private build(doc: PMNode): DecorationSet {
-        return DecorationSet.create(doc, decorationsFor(doc, this.refresh(doc), this.shown.projection.phases, this.shown.realizing));
+        return DecorationSet.create(doc, decorationsFor(doc, this.refresh(doc), this.shown.projection.phases));
     }
 
     /** Recompute the marked paints, clear the marks, and return the paints. */

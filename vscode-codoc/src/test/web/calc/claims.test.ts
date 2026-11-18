@@ -35,7 +35,6 @@ describe('plan paints', () => {
         const claims = [
             claim(8, 12, 'plan', 'unmarked', 'loop', 'bold:once'),
             claim(0, 7, 'plan', 'marked', 'agent:x', 'bold:Retries'),
-            claim(0, 3, 'plan', 'open', 'loop', 'new'),
             claim(0, 3, 'code', 'added', 'loop', 'x'),
         ];
         expect(markPaints(claims).map(p => [p.cls, p.start, p.end, p.text, p.title])).toEqual([

@@ -15,8 +15,8 @@ import type { Ack, Projection, Submission } from './web/calc/projection';
 import type { HistoryWindow } from './web/calc/window';
 
 export type HostToPage =
-    /** `projection.json`, with the features an agent is building right now. */
-    | { kind: 'projection'; proj: Projection; realizing?: string[] }
+    /** `projection.json`. */
+    | { kind: 'projection'; proj: Projection }
     /** `status.json` plus the tree's language, and on the hub the viewer's actor and role. */
     | { kind: 'status'; status: Record<string, unknown> }
     /** The daemon's answers to this client's submissions. */

@@ -27,7 +27,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from codoc.calculus.derive import block_entry, ground, ink, open_plans, phase, plan_claims, projection
+from codoc.calculus.derive import block_entry, feature_claims, open_plans, phase, projection
 from codoc.calculus.export import export_markdown, export_spec
 from codoc.calculus.store import Store
 from codoc.calculus.window import history_window
@@ -84,23 +84,11 @@ class Publisher:
     def projection(self, store: Store, phases: dict[str, str], realizing: set[str] = frozenset(),
                    keys: dict[str, tuple] | None = None) -> dict:
         keys = keys if keys is not None else self._feature_keys(store, realizing)
-        p = projection(store, phases=phases, entry=lambda s, b: self._memo(
-            self._entries, self._block_key(s, b.id), b.id, lambda: block_entry(s, b)))
-        by_feature: dict[str, list[dict]] = {}
-        by_file: dict[str, list[str]] = {}
-        for b in store.bindings.values():
-            by_feature.setdefault(b.feature, []).append({"file": b.file, "symbol": b.symbol})
-            by_file.setdefault(b.file, [])
-            if b.feature not in by_file[b.file]:
-                by_file[b.file].append(b.feature)
-        p["bindings"] = {"by_feature": by_feature, "by_file": by_file}
-        p["claims"] = {}
-        for fid in p["phases"]:
-            claims = self._memo(self._claims, keys.get(fid) or self._feature_key(store, fid, realizing), fid,
-                                lambda fid=fid: [c.__dict__ for c in ink(store, fid) + ground(store, fid) + plan_claims(store, fid)])
-            if claims:
-                p["claims"][fid] = claims
-        return p
+        return projection(
+            store, phases=phases,
+            entry=lambda s, b: self._memo(self._entries, self._block_key(s, b.id), b.id, lambda: block_entry(s, b)),
+            claims=lambda s, fid: self._memo(self._claims, keys.get(fid) or self._feature_key(s, fid, realizing), fid,
+                                             lambda: feature_claims(s, fid)))
 
     def export(self, store: Store) -> str:
         return export_markdown(store, spec=lambda s, b: self._memo(

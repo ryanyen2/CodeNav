@@ -171,4 +171,13 @@ describe('the page', () => {
             ['feature.handoff', { fid: 'h' }, { asked: 'Build the plan p-1.' }]]);
         expect(new Set(subs.map(s => s.batch)).size).toBe(1);
     });
+
+    // The daemon's lease is the one definition of realizing, and it reaches the
+    // page as a phase. An older host also sent a `realizing` list; it changes nothing.
+    it("draws each feature's phase as the projection says it", () => {
+        post({ kind: 'projection', proj: proj([block('h', 'heading', 'Title'), block('p', 'paragraph', 'one two')],
+            { head: 40, phases: { h: 'edited' } }), realizing: ['h'] });
+        expect(Array.from(document.querySelectorAll('.codoc-marker'))
+            .map(e => [...e.classList].find(c => c.startsWith('codoc-marker-')))).toEqual(['codoc-marker-edited']);
+    });
 });

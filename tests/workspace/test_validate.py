@@ -194,6 +194,22 @@ def test_rebuild_counts_what_the_table_would_refuse_today(tmp_path):
     assert refused_verdicts(ws2.store, Roles.load(cd)) == {"human:gh:alice": 1}
 
 
+def test_rebuild_does_not_count_a_machines_honest_withdrawal(tmp_path):
+    """`_withdraw_if_empty` rejects a plan nothing landed under, as its
+    opener. Judged against the final store the plan is rejected, so the table
+    would refuse a machine's reject; judged as the plan stood, as
+    `validate_logs` judges it, it is the allowed withdrawal."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed(ws)
+    out = ws.propose(actor="agent:x", kind="edit", target="p1", note="nothing to say")
+    assert out.plan is None
+    withdrawn = [o for o in ws.store.ops if o.kind == K.PLAN_REJECT]
+    assert [(o.actor, o.conflict) for o in withdrawn] == [("agent:x", None)]
+    ws.close()
+    assert refused_verdicts(Workspace(cd, readonly=True).store, Roles.load(cd)) == {}
+
+
 def test_a_finding_reads_as_a_place_and_a_reason():
     assert str(Finding("log/s-1.jsonl", 4, "why")) == "log/s-1.jsonl:4: why"
     assert str(Finding("log/snapshot-x.jsonl", 0, "why")) == "log/snapshot-x.jsonl: why"

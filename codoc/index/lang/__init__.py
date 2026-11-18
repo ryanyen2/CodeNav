@@ -18,15 +18,16 @@ def get_adapter(language: str) -> LanguageAdapter:
     return cls()
 
 
+EXTENSIONS = {
+    ".py": "python",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".mts": "typescript",
+    ".cts": "typescript",
+}
+
+
 def detect_language(file_path: str) -> str | None:
     """Detect language from file extension. Returns None if unsupported."""
-    ext_map = {
-        ".py": "python",
-        ".ts": "typescript",
-        ".tsx": "typescript",
-        ".mts": "typescript",
-        ".cts": "typescript",
-    }
     from pathlib import Path
-    suffix = Path(file_path).suffix.lower()
-    return ext_map.get(suffix)
+    return EXTENSIONS.get(Path(file_path).suffix.lower())

@@ -9,7 +9,9 @@ and plans are in [concurrency.md](concurrency.md).
 ### Code to document: reflect
 
 The daemon reflects every changed code file that an agent session is not holding
-([concurrency.md](concurrency.md#4-a-submissions-path), the daemon's batch). `codoc sync`
+([concurrency.md](concurrency.md#4-a-submissions-path), the daemon's batch). A code file
+is one the index reads: a language adapter parses it (`.py`, `.ts`, `.tsx`, `.mts`,
+`.cts`) and no index exclude or `.gitignore` directory covers it. `codoc sync`
 runs one pass without a daemon. A pass, in `codoc/loops/reflect.py`:
 
 | step | ops, all by `loop` | lands |
@@ -67,7 +69,8 @@ One gesture is one batch, and a batch is the undo unit. Typing is flushed as one
 | Backspace at the start, or Delete at the end, of a paragraph next to a paragraph | editor | `block.merge` | One paragraph. Each word keeps its author. |
 | Backspace or Delete at a heading boundary | editor | none | The caret moves across the boundary. |
 | Delete or Backspace over a selection across paragraphs | editor | `text.delete` per block, one `block.delete` naming every block wholly inside, `block.merge` of the two ends | A selection that touches a heading is refused with a message. |
-| Tab, Shift-Tab on a heading | editor | `block.set(level)` on that heading | Only that heading changes level (I3). |
+| Tab, Shift-Tab on a heading | editor | `block.move` of the heading to where it is, with `level_delta` ±1 | Every heading under it changes level with it. |
+| Tab, Shift-Tab on a list item | editor | `block.set(level)` on that item | Only that item changes depth. |
 | Drag a block's handle | editor | `block.move` | A heading moves with its range. |
 | Paste several paragraphs | editor | `text.insert` into the caret's block, then `block.add` and `text.insert` per further paragraph | The person is the author of all of it. |
 | Paste inside one block | editor | `text.delete`, `text.insert`, `text.mark` per mark in the pasted text | |
@@ -167,8 +170,9 @@ skipped, so a second run does not stack translations. The daemon must be stopped
 
 | surface | reads |
 |---|---|
-| Ink, ground, plan words in the prose | `claims` and the runs and spans of each block in `projection.json` |
-| Marker at each heading, tree rows | `phases` |
+| Ink, plan words and cuts in the prose | the runs, spans and `suggest_del` of each block in `projection.json` |
+| Ground, a plan's mark toggles | `claims` |
+| Marker at each heading, tree rows | `phases`; `realizing` comes from the lease in `status.json`, applied by the daemon |
 | History | `attribution` runs; `history.json` for the scrubber |
 | Status line, toolbar chip | `status.json` |
 | Comment cards | `comment` blocks of the projection, beside their anchor block |

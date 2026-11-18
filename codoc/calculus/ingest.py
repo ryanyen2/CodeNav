@@ -41,7 +41,6 @@ order plus a decision; the substrate mints ids and applies them as one batch.
 from __future__ import annotations
 
 import re
-import unicodedata
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
@@ -50,6 +49,7 @@ from codoc.calculus.block_md import BlockSpec
 from codoc.calculus.doc import BUILTIN, LAYOUT_KEY, Layout, is_source_field, layout_entry, layout_of
 from codoc.calculus.ids import REWRITERS, START, CharRef, actor_kind, is_human, new_block_id
 from codoc.calculus.inline_md import parse
+from codoc.calculus.scripts import PER_CHARACTER, script_of
 from codoc.calculus.text import BOLD, CITE, CODE, GROWS_AFTER, LINK, Mark, Text, nfc
 
 VISIBLE_MARKS = frozenset({BOLD, CODE, LINK, CITE})     # the kinds Markdown can express
@@ -73,8 +73,9 @@ class Ingest:
 def tokenize(text: str) -> list[str]:
     """Lossless script-aware tokens: ``"".join(tokenize(t)) == t``. Words,
     punctuation runs and whitespace runs are separate tokens; each character
-    of an unspaced script (Han, Kana, Thai …) is its own token, so a rewrite of
-    one character does not re-author a sentence."""
+    of a script ``scripts.PER_CHARACTER`` names (Han, Kana, Hangul, Thai, Lao,
+    Khmer, Myanmar) is its own token, so a rewrite of one character does not
+    re-author a sentence."""
     out: list[str] = []
     for m in re.finditer(r"\s+|\w+|[^\w\s]+", text):
         tok = m.group(0)
@@ -86,7 +87,7 @@ def tokenize(text: str) -> list[str]:
 
 
 def _unspaced(word: str) -> bool:
-    return any(unicodedata.east_asian_width(c) in ("W", "F") and c.isalpha() for c in word)
+    return any(script_of(c) in PER_CHARACTER for c in word)
 
 
 def ingest(text: Text, *, bid: str, path: str, base_text: str, new_md: str, actor: str,

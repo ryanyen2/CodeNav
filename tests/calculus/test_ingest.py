@@ -28,6 +28,20 @@ def test_tokenize_is_lossless_and_script_aware():
     assert "你" in toks and "hello" in toks and "  " in toks and toks[-1] == "ok"
 
 
+def test_one_thai_word_changed_re_authors_that_word_only():
+    """Thai is unspaced, as `doclang` knows: the script table both read cuts it
+    per character, so a loop's rewrite of one word leaves the sentence the
+    person's."""
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Client")
+    paragraph(m, s, "p1", "ส่งคำขอสามครั้ง", after="h1")         # "send the request three times"
+    res, applied = run_ingest(s, Mint("l", "loop"), "p1", "ส่งคำขอสี่ครั้ง")  # three -> four
+    assert res.refused is None and all(o.conflict is None for o in applied)
+    t = s.blocks["p1"].text()
+    assert t.live_text() == "ส่งคำขอสี่ครั้ง"
+    assert len("".join(g.chars for g in t.segs if g.live and g.actor == "loop")) <= 2
+
+
 def test_ingest_repairs_keep_human_words_and_attribute_new_ones_to_loop():
     m, s = Mint(), Store()
     heading(m, s, "h1", "Client")

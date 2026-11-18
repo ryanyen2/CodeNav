@@ -1,4 +1,6 @@
 """Block kinds: declarations, writes, lift and lower (docs/kinds.md)."""
+import pytest
+
 from codoc.calculus import ops as K
 from codoc.calculus.derive import attribution, markdown
 from codoc.calculus.doc import layout_of
@@ -106,26 +108,28 @@ def test_a_lift_lands_on_the_trunk_however_much_of_the_picture_changed(tmp_path)
     assert markdown(src, "rejected", ws.store) == src.live_text() == "flowchart TB\n  alpha"
 
 
-def test_an_accepted_plan_on_a_diagram_reaches_the_directive(tmp_path):
-    """Accepting a plan is how an author adopts an agent's words, and an
-    accepted plan is a request to build. `_at_realized` holds back what the
-    author changed since the last realization, so an edge they accepted
-    reaches `lower` as theirs, not in `old`."""
+@pytest.mark.parametrize("build", [True, False])
+def test_an_accepted_build_plan_on_a_diagram_reaches_the_directive(tmp_path, build):
+    """Accepting an agent's proposal (a plan with ``build``) is how an author
+    adopts its words as a request. `_at_realized` holds back what the author
+    changed since the last realization, so an edge they accepted reaches
+    `lower` as theirs, not in `old`. An accepted reflect plan (no ``build``)
+    describes code already there and asks for nothing."""
     ws = Workspace(tmp_path / ".codoc")
     seed_loop(ws)
     ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": "c.py::retry"}}], actor="loop")
     d = kind_block(ws, "diagram", {"source": "", "derived": True}, after="p1", actor="loop")
     assert lift_pass(ws, Graph([])) == 1                              # no edges in the code yet
     base = ws.store.blocks[d].text("source").live_text()
-    pid = ws.open_plan(actor="agent:claude-code", kind="edit", target=d, note="wire the retry")
-    res, ops = ws.ingest(d, "source", base_text=base, new_md=base + "\n  send --> retry",
-                         actor="agent:claude-code", plan=pid)
-    assert not res.refused and ops
+    pid = ws.propose(actor="agent:claude-code", kind="edit", target=d, note="wire the retry", build=build,
+                     rewrites=[(d, "source", base + "\n  send --> retry", base)]).plan
+    assert pid and ws.store.plans[pid].build == build
     ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}},
                {"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {"asked": f"Build the plan {pid}."}}],
               actor="human:local")
     out = directive(ws.store, "h1")
-    assert "send --> retry" in out and "Add a dependency or call from `send` to `retry`" in out, out
+    asked = "Add a dependency or call from `send` to `retry`" in out
+    assert "send --> retry" in out and asked == build, out
 
 
 def test_mcp_write_block_adds_and_edits_as_the_agent(tmp_path):
