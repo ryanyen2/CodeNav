@@ -34,8 +34,7 @@ class LanguageAdapter(Protocol):
     @property
     def comment_node_kinds(self) -> set[str]:
         """Return the set of tree-sitter node type names that are comments for this language.
-        Used by fingerprinting to drop comment nodes.
-        Exposed as a property so that codoc.core.fingerprint can read it via getattr."""
+        ``tree_walk`` drops these when it fingerprints a chunk."""
         ...
 
     def resolve_symbol_path(self, source: str, symbol_path: str) -> tuple[int, int] | None:

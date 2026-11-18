@@ -110,6 +110,26 @@ describe('the page', () => {
         post({ kind: 'acks', acks: undoSubs().map(s => ({ cid: s.cid, op: 'k:9', conflict: null })) });
     });
 
+    it('offers a split undo refused not_adjacent again once someone removed a block', () => {
+        const op = (pos: number, batch: string, actor: string, kind: string, bid: string): HistoryWindow['ops'][number] => ({ pos, id: `j:${pos}`,
+            at: String(pos), actor, kind, batch, batch_first: pos, plan: null, caused_by: null, blocks: {},
+            inverse: [{ kind: kind === 'block.split' ? 'block.merge' : 'block.restore', target: kind === 'block.split' ? { into: 'p', bid: 'n' } : { bid }, payload: {} }] });
+        const undoSubs = () => posted.filter(m => m.kind === 'submit').flatMap(m => (m as { subs: Submission[] }).subs);
+        const cmdZ = () => document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true }));
+        const base = [op(0, 'j-old', 'human:local', 'block.add', 'q'), op(1, 'j-split', 'human:local', 'block.split', 'p')];
+        posted.length = 0;
+        cmdZ();
+        post({ kind: 'history', history: { start: 0, head: 2, before: {}, ops: base } });
+        expect(undoSubs().map(s => s.batch)).toEqual(['u-j-split']);
+        post({ kind: 'acks', acks: undoSubs().map(s => ({ cid: s.cid, op: null, conflict: 'not_adjacent' })) });
+        // Bob deletes y, the block between the halves; the delete names only y.
+        posted.length = 0;
+        cmdZ();
+        post({ kind: 'history', history: { start: 0, head: 3, before: {}, ops: [...base, op(2, 'j-bob', 'human:bob', 'block.delete', 'y')] } });
+        expect(undoSubs().map(s => s.batch)).toEqual(['u-j-split']);
+        post({ kind: 'acks', acks: undoSubs().map(s => ({ cid: s.cid, op: 'j:9', conflict: null })) });
+    });
+
     it('answers an undo even when the batch it sent never appears in the history window', async () => {
         posted.length = 0;
         const pm = document.querySelector('#app .ProseMirror') as HTMLElement;
