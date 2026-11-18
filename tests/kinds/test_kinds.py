@@ -59,7 +59,7 @@ def test_add_and_write_block_attribute_text_fields_and_set_the_rest(tmp_path):
 def test_diagram_lifts_from_the_graph_and_lowers_an_edge_delta(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
     seed_loop(ws)
-    ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": "c.py::retry"}}], actor="loop")
+    ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"symbol": "c.py::retry"}}], actor="loop")
     g = Graph([{"src_symbol": "c.py::send", "dst_name": "retry", "dst_symbol": "c.py::retry", "kind": "call", "src_file": "c.py", "internal": True}])
     d = kind_block(ws, "diagram", {"source": "", "derived": True}, after="p1", actor="loop")
     assert lift_pass(ws, g) == 1
@@ -96,12 +96,12 @@ def test_a_lift_lands_on_the_trunk_however_much_of_the_picture_changed(tmp_path)
     ws = Workspace(tmp_path / ".codoc")
     seed_loop(ws)
     for sym in ("retry", "backoff", "jitter"):
-        ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": f"c.py::{sym}"}}], actor="loop")
+        ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"symbol": f"c.py::{sym}"}}], actor="loop")
     d = kind_block(ws, "diagram", {"source": "", "derived": True}, after="p1", actor="loop")
     assert lift_pass(ws, graph()) == 1 and "jitter" in ws.store.blocks[d].text("source").live_text()
     for sym in ("send", "retry", "backoff", "jitter"):                # every symbol it drew is gone
-        ws.submit([{"kind": K.BIND_DETACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": f"c.py::{sym}"}}], actor="loop")
-    ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": "c.py::alpha"}}], actor="loop")
+        ws.submit([{"kind": K.BIND_DETACH, "target": {"fid": "h1"}, "payload": {"symbol": f"c.py::{sym}"}}], actor="loop")
+    ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"symbol": "c.py::alpha"}}], actor="loop")
     assert lift_pass(ws, graph()) == 1
     assert [p.id for p in ws.store.plans.values() if p.status == "open"] == []
     src = ws.store.blocks[d].text("source")
@@ -117,7 +117,7 @@ def test_an_accepted_build_plan_on_a_diagram_reaches_the_directive(tmp_path, bui
     describes code already there and asks for nothing."""
     ws = Workspace(tmp_path / ".codoc")
     seed_loop(ws)
-    ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": "c.py::retry"}}], actor="loop")
+    ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"symbol": "c.py::retry"}}], actor="loop")
     d = kind_block(ws, "diagram", {"source": "", "derived": True}, after="p1", actor="loop")
     assert lift_pass(ws, Graph([])) == 1                              # no edges in the code yet
     base = ws.store.blocks[d].text("source").live_text()
@@ -217,7 +217,7 @@ def test_the_directive_speaks_through_the_kind_codecs(tmp_path):
     from codoc.loops.realize import directive
     ws = Workspace(tmp_path / ".codoc")
     seed_loop(ws)
-    ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": "c.py::send"}}], actor="loop")
+    ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"symbol": "c.py::send"}}], actor="loop")
     kind_block(ws, "diagram", {"source": "flowchart TB\n  send --> recv", "derived": True}, after="p1")
     kind_block(ws, "comment", {"thread": "t1", "anchor": "p1", "anchor_text": "once", "body": "Twice?", "scope": "code"},
                after="p1")

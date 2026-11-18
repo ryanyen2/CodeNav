@@ -11,11 +11,11 @@ from tests.helpers import Mint, apply_mark, heading, md_of, paragraph, run_inges
 
 
 def test_inline_md_parse_and_render_fixed_point():
-    md = "Retries **three times** via [the client](codoc:net/client.py#Client.send), see [docs](https://x.y/z)."
+    md = "Retries **three times** via [the client](codoc:net/client.py::Client.send), see [docs](https://x.y/z)."
     text, spans = parse(md)
     assert text == "Retries three times via the client, see docs."
     assert [(s.kind, s.start, s.end) for s in spans] == [(BOLD, 8, 19), (CITE, 24, 34), (LINK, 40, 44)]
-    assert spans[1].attrs == {"file": "net/client.py", "symbol": "Client.send"}
+    assert spans[1].attrs == {"symbol": "net/client.py::Client.send"}
     assert render(text, spans) == md
     # Non-forms are plain text.
     assert parse("a * b [c] (d) **")[0] == "a * b [c] (d) **"
@@ -77,9 +77,9 @@ def test_ingest_keeps_human_marks_by_identity_and_refuses_dropping_them():
     apply(s, m.op(K.TEXT_MARK, {"bid": "p1", "path": "text"},
                   {"kind": BOLD, "attrs": {}, "start": [ins.id, 8], "end": [ins.id, 11], "on": True}))
     apply(s, m.op(K.TEXT_MARK, {"bid": "p1", "path": "text"},
-                  {"kind": CITE, "attrs": {"file": "c.py", "symbol": "C"}, "start": [ins.id, 17], "end": [ins.id, 26], "on": True}))
+                  {"kind": CITE, "attrs": {"symbol": "c.py::C"}, "start": [ins.id, 17], "end": [ins.id, 26], "on": True}))
     # Loop rephrases around them, keeping both forms in its markdown.
-    res, applied = run_ingest(s, Mint("l", "loop"), "p1", "Now retries **once** via [the client](codoc:c.py#C) only.")
+    res, applied = run_ingest(s, Mint("l", "loop"), "p1", "Now retries **once** via [the client](codoc:c.py::C) only.")
     assert res.refused is None
     t = s.blocks["p1"].text()
     assert t.live_text() == "Now retries once via the client only."
@@ -90,7 +90,7 @@ def test_ingest_keeps_human_marks_by_identity_and_refuses_dropping_them():
     assert res2.refused == "would_drop_human_bold"
     # A new link the loop adds is minted with the loop as its actor.
     res3, applied3 = run_ingest(s, Mint("l3", "loop"), "p1",
-                                "Now retries **once** via [the client](codoc:c.py#C) only, see [rfc](https://r.fc).")
+                                "Now retries **once** via [the client](codoc:c.py::C) only, see [rfc](https://r.fc).")
     assert res3.refused is None and all(o.conflict is None for o in applied3)
     t = s.blocks["p1"].text()
     assert any(mk.kind == LINK and mk.actor == "loop" for mk in t.marks)
@@ -142,7 +142,7 @@ def test_ingest_is_a_fixed_point_on_text_and_marks_fuzzed():
         t = s.blocks["p1"].text()
         lt = t.live_text()
         cited = None
-        for kind, attrs in ((BOLD, {}), (CITE, {"file": "c.py", "symbol": "C"})):
+        for kind, attrs in ((BOLD, {}), (CITE, {"symbol": "c.py::C"})):
             w = rng.choice(base_words)
             lo = lt.index(w)
             apply(s, m.op(K.TEXT_MARK, {"bid": "p1", "path": "text"},
@@ -155,7 +155,7 @@ def test_ingest_is_a_fixed_point_on_text_and_marks_fuzzed():
         parts = []
         for w in new_words:
             if w == cited and (actor == "loop" or rng.random() < 0.5):
-                parts.append(f"[{w}](codoc:c.py#C)")
+                parts.append(f"[{w}](codoc:c.py::C)")
             elif rng.random() < 0.3:
                 parts.append(f"**{w}**")
             else:
@@ -208,7 +208,7 @@ def test_ingest_fixed_point_with_multi_word_marks_and_inner_inserts_fuzzed():
         paragraph(m, s, "p1", " ".join(base), after="h1")
         t = s.blocks["p1"].text()
         lt = t.live_text()
-        kind, attrs = rng.choice([(BOLD, {}), (LINK, {"href": "https://u"}), (CITE, {"file": "c.py", "symbol": "C"})])
+        kind, attrs = rng.choice([(BOLD, {}), (LINK, {"href": "https://u"}), (CITE, {"symbol": "c.py::C"})])
         i, j = sorted(rng.sample(range(len(base)), 2))
         lo = lt.index(base[i]) if i == 0 else len(" ".join(base[:i])) + 1
         hi = len(" ".join(base[:j + 1])) - 1
@@ -225,7 +225,7 @@ def test_ingest_fixed_point_with_multi_word_marks_and_inner_inserts_fuzzed():
             base_now = list(base)
         k = rng.randint(0, len(base_now))
         new_words = base_now[:k] + [rng.choice(words)] + base_now[k:]
-        wrap = lambda w, on: (f"**{w}**" if kind == BOLD else f"[{w}](https://u)" if kind == LINK else f"[{w}](codoc:c.py#C)") if on else w
+        wrap = lambda w, on: (f"**{w}**" if kind == BOLD else f"[{w}](https://u)" if kind == LINK else f"[{w}](codoc:c.py::C)") if on else w
         parts = []
         for idx, w in enumerate(new_words):
             orig = idx if idx < k else idx - 1

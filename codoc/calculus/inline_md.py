@@ -3,7 +3,7 @@
     **bold**                         → bold
     `code`                           → code
     [label](https://host/path)       → link{href}
-    [label](codoc:file.py#Symbol)    → cite{file, symbol}
+    [label](codoc:file.py::Symbol)   → cite{symbol}, the binding key
     \\X  for X in ESCAPABLE           → the literal character
 
 Nesting is link ⊃ bold ⊃ code: a label may hold bold and code, bold may hold
@@ -110,8 +110,7 @@ def _link(md: str, i: int, out: list[str], spans: list[Span]) -> int:
         return -1
     start, plain, target = _length(out), "".join(label), m.group(1)
     if target.startswith("codoc:"):
-        file, _, symbol = target[len("codoc:"):].partition("#")
-        spans.append(Span(CITE, {"file": file, "symbol": symbol}, start, start + len(plain)))
+        spans.append(Span(CITE, {"symbol": target[len("codoc:"):]}, start, start + len(plain)))
     else:
         spans.append(Span(LINK, {"href": target}, start, start + len(plain)))
     spans.extend(Span(s.kind, s.attrs, s.start + start, s.end + start) for s in inner)
@@ -181,8 +180,7 @@ def _covered(length: int, spans: list[Span]) -> list[bool]:
 
 def _close_link(s: Span) -> str:
     if s.kind == CITE:
-        sym = s.attrs.get("symbol") or ""
-        return f"](codoc:{s.attrs.get('file', '')}{'#' + sym if sym else ''})"
+        return f"](codoc:{s.attrs.get('symbol', '')})"
     return f"]({s.attrs.get('href', '')})"
 
 

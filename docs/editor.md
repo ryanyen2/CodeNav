@@ -30,7 +30,7 @@ numbered := text*              attrs: bid, head, level        its number is draw
 source   := text*              attrs: bid, head, kind (table | diagram | code), lang, derived
                                raw text, newlines allowed, no marks
 kindBlock:= atom               attrs: bid, head, kind, fields; a card (card.ts)
-marks    := bold | code | link{href} | cite{file, symbol} | comment{block} | suggest_del{plan} | plan{pid}
+marks    := bold | code | link{href} | cite{symbol} | comment{block} | suggest_del{plan} | plan{pid}
 ```
 
 - `bid` is the block id. `head` is the store position of the last op that touched the
@@ -173,7 +173,7 @@ whose paints can have changed.
 | `plan-mark`, `plan-unmark` | `marked`, `unmarked` claims. | A dashed gray underline. |
 | `code-added`, `code-removed` | `ground` claims, where no ink overlaps. Removed words are a widget at their place. | Green, red. |
 | `author-*` | In History mode, merged runs per actor kind. | One colour per kind. |
-| Phase marker | `phases`, at each heading that is not `synced`. | A glyph with an `aria-label`. |
+| Phase marker | `phases`, at each heading that is not `synced`. | A glyph with an `aria-label`. An `edited` feature whose `editors` do not include the viewer is a ring titled with who edited it. The tree row's glyph is the same. |
 
 Each painted run carries its meaning as `title` and `aria-description`. One palette on
 every surface: blue is the person, gray a plan, green and red the code.
@@ -200,7 +200,7 @@ the window. It never writes to the live editor.
 | Language | Sets `doc_language`. |
 | Comment | Starts a thread on the selected words. |
 | Accept all (n), Reject all (n) | `plan.accept` or `plan.reject` per open plan, in one batch. Accept also sends `feature.handoff` for each feature in the plans' `handoff`. |
-| Hand off (n), ⌘S | `feature.handoff` per `edited` feature, with no `covers`. |
+| Hand off (n), ⌘S | `feature.handoff` per `edited` feature whose `editors` include the viewer, with no `covers`. |
 | Build now | Asks the host to run `codoc realize`. Shown when a feature is `queued` or `planned`. |
 | ⌘F, ⌘⌥F or ⌘H | Find; Find and Replace (`find.ts`). Matches stay inside a block; a replacement is ordinary typing. |
 | `/` | The block menu (section 4). |

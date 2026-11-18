@@ -229,10 +229,7 @@ function link(cs: string[], i: number, out: string[], spans: Span[]): number {
     const start = out.length;
     const target = m[1];
     if (target.startsWith('codoc:')) {
-        const rest = target.slice('codoc:'.length);
-        const hash = rest.indexOf('#');
-        const [file, symbol] = hash < 0 ? [rest, ''] : [rest.slice(0, hash), rest.slice(hash + 1)];
-        spans.push({ kind: 'cite', attrs: { file, symbol }, start, end: start + label.length });
+        spans.push({ kind: 'cite', attrs: { symbol: target.slice('codoc:'.length) }, start, end: start + label.length });
     } else {
         spans.push({ kind: 'link', attrs: { href: target }, start, end: start + label.length });
     }
@@ -261,7 +258,7 @@ const DEPTH: Record<string, number> = { link: 0, cite: 0, bold: 1, code: 2 };
 const OPEN: Record<string, string> = { link: '[', cite: '[', bold: '**', code: '`' };
 
 function closeOf(s: Span): string {
-    if (s.kind === 'cite') return `](codoc:${s.attrs.file ?? ''}${s.attrs.symbol ? `#${s.attrs.symbol}` : ''})`;
+    if (s.kind === 'cite') return `](codoc:${s.attrs.symbol ?? ''})`;
     if (s.kind === 'link') return `](${s.attrs.href ?? ''})`;
     return OPEN[s.kind];
 }

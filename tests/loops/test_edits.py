@@ -53,7 +53,7 @@ def kinds(store: Store, fid: str) -> list[tuple[str, int]]:
 
 def test_add_node_writes_the_description_as_blocks_and_binds_the_code():
     s, m = Store(), Mint()
-    c = Compiler(s, hashes={("a.py", "a.py::send"): ("fp", "th")})
+    c = Compiler(s, hashes={"a.py::send": ("fp", "th")})
     change = c.compile({"kind": "add_node", "id": "n1", "title": "HTTP adapter", "description": SKETCH,
                         "bindings": ["a.py::send", ["a.py", "a.py::recv"], "not a symbol"], "rationale": "main class"})
     assert change.structural and change.note == "main class"
@@ -61,8 +61,8 @@ def test_add_node_writes_the_description_as_blocks_and_binds_the_code():
     fid = change.target
     assert title(s, fid) == "HTTP adapter" and description(s, fid) == SKETCH
     assert kinds(s, fid) == [(PARAGRAPH, 0), (BULLET, 1), (BULLET, 1), (TABLE, 0)]
-    assert change.bound == [("a.py", "a.py::send"), ("a.py", "a.py::recv")]
-    assert s.bindings[("a.py", "a.py::send")].fingerprint == "fp" and s.bindings[("a.py", "a.py::recv")].feature == fid
+    assert change.bound == ["a.py::send", "a.py::recv"]
+    assert s.bindings["a.py::send"].fingerprint == "fp" and s.bindings["a.py::recv"].feature == fid
 
 
 def test_a_reply_can_nest_under_a_node_it_just_created_without_applying_first():
@@ -220,11 +220,11 @@ def test_a_block_cannot_change_medium():
 
 def test_attach_move_retire_and_what_is_refused():
     s, m, fid, body = _seeded()
-    c = Compiler(s, bindable={("a.py", "a.py::f")})
+    c = Compiler(s, bindable={"a.py::f"})
     other = c.compile({"kind": "add_node", "title": "Other", "description": "O."})
     land(s, m, other)
     att = c.compile({"kind": "attach", "feature_id": fid, "bindings": ["a.py::f", "b.py::not_shown"]})
-    assert att.bound == [("a.py", "a.py::f")] and not att.structural
+    assert att.bound == ["a.py::f"] and not att.structural
     assert c.compile({"kind": "attach", "feature_id": fid, "bindings": ["b.py::not_shown"]}).refused == "no bindable symbol"
     mv = c.compile({"kind": "move_node", "feature_id": other.target, "parent_id": fid})
     land(s, m, mv)

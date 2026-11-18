@@ -42,25 +42,6 @@ class ChangeSet:
     def touched_files(self) -> set[str]:
         return {c.file for c in (self.added + self.removed + self.modified)}
 
-    def fingerprints(self) -> dict[tuple[str, str], str]:
-        """(file, symbol_path) → fingerprint for every added/modified chunk."""
-        out: dict[tuple[str, str], str] = {}
-        for c in self.added + self.modified:
-            out[(c.file, c.symbol_path)] = c.fingerprint
-        return out
-
-    def types_hashes(self) -> dict[tuple[str, str], str]:
-        """(file, symbol_path) → types_hash for every added/modified chunk.
-
-        Recorded onto the binding when it is attached, so a later RENAME (same
-        AST shape, new name) is still recognisable after the old symbol has
-        left the index."""
-        out: dict[tuple[str, str], str] = {}
-        for c in self.added + self.modified:
-            if c.types_hash:
-                out[(c.file, c.symbol_path)] = c.types_hash
-        return out
-
 
 def compute_changeset(
     root_dir: str,

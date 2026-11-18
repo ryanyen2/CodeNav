@@ -15,7 +15,7 @@
 import './app.css';
 
 import type { HostToPage, PageToHost } from '../../wire';
-import { PHASE_CHANNEL, PHASE_LABEL } from '../calc/claims';
+import { PHASE_CHANNEL, PHASE_LABEL, theirEdits } from '../calc/claims';
 import { newBatch, newBid, newCid } from '../calc/ids';
 import type { Ack, OpBody, Phase, Projection, Submission } from '../calc/projection';
 import { nextUndo, type HistoryWindow } from '../calc/window';
@@ -139,13 +139,14 @@ function renderTree(proj: Projection): void {
     for (const h of heads) {
         const phase: Phase = proj.phases[h.id] ?? 'synced';
         const title = titleOf(proj, h.id);
-        const key = `${h.level}|${phase}|${title}|${selected === h.id}`;
+        const theirs = theirEdits(proj, h.id, actor);
+        const key = `${h.level}|${phase}|${title}|${selected === h.id}|${theirs}`;
         let hit = rows.get(h.id);
         if (!hit || hit.key !== key) {
             const row = el('div', `codoc-row codoc-l${h.level} codoc-ch-${PHASE_CHANNEL[phase]}${selected === h.id ? ' is-selected' : ''}`);
             row.dataset.fid = h.id;
-            const dot = el('span', `codoc-dot codoc-dot-${phase}`);
-            dot.title = PHASE_LABEL[phase];
+            const dot = el('span', `codoc-dot codoc-dot-${phase}${theirs ? ' is-theirs' : ''}`);
+            dot.title = theirs || PHASE_LABEL[phase];
             row.append(dot, el('span', 'codoc-row-title', title));
             row.addEventListener('click', () => reveal(h.id));
             // Step the cursor off the row before removing it. `at` walks the
@@ -164,7 +165,7 @@ function renderTree(proj: Projection): void {
 function renderToolbar(proj: Projection): void {
     toolbar.replaceChildren();
     const openPlans = proj.plans.filter(p => p.status === 'open');
-    const edited = Object.values(proj.phases).filter(p => p === 'edited').length;
+    const edited = mine(proj).length;
     const queued = Object.values(proj.phases).filter(p => p === 'queued' || p === 'planned').length;
     const title = el('span', 'codoc-crumb', 'tree.codoc');
     const chip = el('span', `codoc-chip codoc-chip-${String(status.state ?? 'synced')}`, String(status.detail || status.state || 'synced'));
@@ -305,9 +306,15 @@ function featureOfBlock(bid: string): string | null {
     return null;
 }
 
+/** The `edited` features with this viewer's own edits: what ⌘S hands off. A
+ *  teammate's unsent edits go out with their own ⌘S. */
+function mine(proj: Projection): string[] {
+    return Object.keys(proj.phases).filter(fid => proj.phases[fid] === 'edited' && !theirEdits(proj, fid, actor));
+}
+
 function handoffAll(): void {
     if (!projection) return;
-    submitOps(Object.entries(projection.phases).filter(([, p]) => p === 'edited').map(([fid]) => handoff(fid)));
+    submitOps(mine(projection).map(fid => handoff(fid)));
 }
 
 function select(fid: string): void {
@@ -384,7 +391,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToPage>) => {
                 editor = mountEditor(page, proj, {
                     submit,
                     onFeature: fid => { if (fid && fid !== selected) select(fid); },
-                    openCite: (file, symbol) => send({ kind: 'open-cite', file, symbol }),
+                    openCite: symbol => send({ kind: 'open-cite', symbol }),
                     onConflict: (bid, conflict) => notify(bid ? `an edit could not apply (${conflict}); the block was reloaded` : conflict),
                     actor: () => actor,
                 });
@@ -421,7 +428,11 @@ window.addEventListener('message', (ev: MessageEvent<HostToPage>) => {
         case 'status':
             status = m.status ?? {};
             if (typeof status.doc_language === 'string') language = status.doc_language;
-            if (typeof status.actor === 'string' && status.actor !== actor) { actor = status.actor; editor?.repaint(); }
+            if (typeof status.actor === 'string' && status.actor !== actor) {
+                actor = status.actor;
+                editor?.repaint();
+                if (projection) renderTree(projection);
+            }
             if (projection) renderToolbar(projection);
             renderStatus();
             return;

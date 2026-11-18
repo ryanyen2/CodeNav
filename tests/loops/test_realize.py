@@ -58,7 +58,7 @@ def test_an_agent_that_attaches_its_new_code_with_caused_by_closes_the_request(t
                 "payload": {"after": list(t.last_live_ref()), "text": " Logs each retry."}}], actor=H)
     ho = handoff(ws, "h1", actor=H)
     ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"},
-                "payload": {"file": "c.py", "symbol": "c.py::log_retry"}}], actor="agent:claude-code", caused_by=ho.id)
+                "payload": {"symbol": "c.py::log_retry"}}], actor="agent:claude-code", caused_by=ho.id)
     r = reflect(ws, ChangeSet(), Graph(), propose=lambda *a, **k: [], under_epoch=True)
     assert not r.ops and settle(ws, r)
     assert phase(ws.store, "h1") == "synced"

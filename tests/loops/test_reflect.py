@@ -23,7 +23,7 @@ def test_a_malformed_attach_does_not_make_a_feature_one_that_lost_its_code(tmp_p
         {"kind": K.BLOCK_ADD, "target": {"bid": "h1"}, "payload": {"kind": HEADING, "level": 1, "after": START}},
         {"kind": K.TEXT_INSERT, "target": {"bid": "h1", "path": "text"}, "payload": {"after": START, "text": "Client"}},
     ], actor="loop")
-    bad = ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "d.py"}}], actor="loop")[0]
+    bad = ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {}}], actor="loop")[0]
     assert bad.conflict == "missing:symbol"
     assert _emptied(ws.store) == [], ("never had code, proposed for deletion:", ws.store.bound_once)
 
@@ -35,13 +35,28 @@ def test_deterministic_maintenance_needs_no_llm(tmp_path):
     cs = ChangeSet(modified=[chunk("c.py", "c.py::send", "f2", "t1")])
     r = reflect(ws, cs, Graph(), propose=lambda *a, **k: calls.append(a) or [])
     assert r.auto["refresh"] == 1 and r.llm_calls == 1     # a modified bound chunk asks whether prose is stale
-    assert ws.store.bindings[("c.py", "c.py::send")].fingerprint == "f2"
+    assert ws.store.bindings["c.py::send"].fingerprint == "f2"
     # A relocation (same content, new name) rebinds without the model.
     cs = ChangeSet(removed=[chunk("c.py", "c.py::send", "f2", "t1")], added=[chunk("c.py", "c.py::deliver", "f2", "t1")])
     r = reflect(ws, cs, Graph(), propose=lambda *a, **k: [])
     assert r.auto["detach"] == 1 and r.auto["relocate"] == 1
-    assert ws.store.bindings[("c.py", "c.py::deliver")].feature == "h1"
+    assert ws.store.bindings["c.py::deliver"].feature == "h1"
     assert r.llm_calls == 0
+
+
+def test_a_binding_is_keyed_by_its_symbol_alone(tmp_path):
+    """The bind op names only the symbol. The index's chunk finds the binding
+    by its symbol path, and a cite in the prose names the same key."""
+    from codoc.calculus.inline_md import parse
+    ws = Workspace(tmp_path / ".codoc")
+    seed_loop(ws)
+    attach = next(o for o in ws.store.ops if o.kind == K.BIND_ATTACH)
+    assert "file" not in attach.payload and attach.payload["symbol"] == "c.py::send"
+    reflect(ws, ChangeSet(modified=[chunk("c.py", "c.py::send", "f2", "t1")]), Graph(), propose=lambda *a, **k: [])
+    b = ws.store.bindings["c.py::send"]
+    assert (b.feature, b.file, b.fingerprint) == ("h1", "c.py", "f2")
+    _, spans = parse("[send](codoc:c.py::send)")
+    assert spans[0].attrs == {"symbol": "c.py::send"} and ws.store.bindings[spans[0].attrs["symbol"]] is b
 
 
 def test_llm_amend_is_block_keyed_and_small_repairs_land_on_trunk(tmp_path):
@@ -95,7 +110,7 @@ def test_add_node_is_a_plan_with_its_bindings_and_coverage_net(tmp_path):
     plan = ws.store.plans[r.plans[0]]
     assert plan.kind == "add" and ws.store.blocks[plan.target].level == 2
     assert title(ws.store, plan.target) == "Storage"
-    assert ws.store.bindings[("s.py", "s.py::save")].feature == plan.target
+    assert ws.store.bindings["s.py::save"].feature == plan.target
     assert any(ws.store.by_id[i].kind == K.BIND_ATTACH for i in plan.ops)   # the binding is part of the proposal
     # Accept: the node's words keep the loop as author and it is now a real feature.
     ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": plan.id}, "payload": {}}], actor="human:local")
@@ -154,12 +169,12 @@ def test_a_symbol_an_open_plan_borrowed_does_not_make_its_owner_look_emptied(tmp
                {"kind": K.TEXT_INSERT, "target": {"bid": "h2", "path": "text"},
                 "payload": {"after": START, "text": "Sender"}},
                {"kind": K.BIND_ATTACH, "target": {"fid": "h2"},
-                "payload": {"file": "c.py", "symbol": "c.py::send"}}],
+                "payload": {"symbol": "c.py::send"}}],
               actor="agent:claude-code", plan=pid)
-    assert ws.store.bindings[("c.py", "c.py::send")].feature == "h2"
+    assert ws.store.bindings["c.py::send"].feature == "h2"
     assert _emptied(ws.store) == [], "h1 is empty only while a proposal nobody answered says so"
     ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": pid}, "payload": {}}], actor="human:local")
-    assert ws.store.bindings[("c.py", "c.py::send")].feature == "h1"
+    assert ws.store.bindings["c.py::send"].feature == "h1"
     assert _emptied(ws.store) == []
 
 
@@ -170,11 +185,11 @@ def test_rejecting_an_add_plan_detaches_its_bindings(tmp_path):
     r = reflect(ws, ChangeSet(added=[chunk("s.py", "s.py::save", "f9", "t9")]), Graph(), propose=propose)
     pid = r.plans[0]
     fid = ws.store.plans[pid].target
-    assert ws.store.bindings[("s.py", "s.py::save")].feature == fid
+    assert ws.store.bindings["s.py::save"].feature == fid
     rej = ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": pid}, "payload": {}}], actor="human:local")[0]
-    assert not ws.store.blocks[fid].live and ("s.py", "s.py::save") not in ws.store.bindings
+    assert not ws.store.blocks[fid].live and "s.py::save" not in ws.store.bindings
     ws.submit([dict(b) for b in rej.inverse], actor="human:local")           # reopen restores the binding
-    assert ws.store.blocks[fid].live and ws.store.bindings[("s.py", "s.py::save")].feature == fid
+    assert ws.store.blocks[fid].live and ws.store.bindings["s.py::save"].feature == fid
 
 
 def test_amend_is_one_unit_and_omission_means_unchanged(tmp_path):
@@ -209,7 +224,7 @@ def test_model_may_not_attach_a_symbol_the_index_removed_and_bad_shapes_are_refu
                                      {"kind": "add_node"}, "junk"]
     cs = ChangeSet(removed=[chunk("c.py", "c.py::send", "f1", "t1")], added=[chunk("n.py", "n.py::x", "fz", "tz")])
     r = reflect(ws, cs, Graph(), propose=propose, allow_delete=False)
-    assert ("c.py", "c.py::send") not in ws.store.bindings
+    assert "c.py::send" not in ws.store.bindings
     assert r.refused == [("attach", "no bindable symbol"), ("amend", "amend.blocks must be a list of objects"),
                          ("add_node", "add_node.title must be a non-empty string"), ("", "not an object")]
     assert len(r.plans) == 1                                               # the coverage net still placed n.py::x
@@ -242,7 +257,7 @@ def test_emptied_covers_a_feature_whose_last_binding_was_displaced(tmp_path):
     ws = Workspace(tmp_path / ".codoc"); seed(ws)
     ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "h2"}, "payload": {"kind": HEADING, "level": 1, "after": "p1"}},
                {"kind": K.TEXT_INSERT, "target": {"bid": "h2", "path": "text"}, "payload": {"after": START, "text": "Server"}}], actor=H)
-    ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h2"}, "payload": {"file": "c.py", "symbol": "c.py::send", "fingerprint": "f1"}}], actor="loop")
+    ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h2"}, "payload": {"symbol": "c.py::send", "fingerprint": "f1"}}], actor="loop")
     assert not any(b.feature == "h1" for b in ws.store.bindings.values())
     assert "h1" in _emptied(ws.store)
     ws.close()

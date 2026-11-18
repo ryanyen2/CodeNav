@@ -159,7 +159,7 @@ function inlineOnly(slice: Slice): boolean {
 
 export function markAttrs(kind: string, attrs: Record<string, unknown>): Record<string, string> {
     if (kind === 'link') return { href: String(attrs.href ?? '') };
-    if (kind === 'cite') return { file: String(attrs.file ?? ''), symbol: String(attrs.symbol ?? '') };
+    if (kind === 'cite') return { symbol: String(attrs.symbol ?? '') };
     return {};
 }
 

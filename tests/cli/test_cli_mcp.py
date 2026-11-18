@@ -71,7 +71,7 @@ def test_reflect_attaches_and_repairs_and_closes_the_queue(tmp_path):
     assert res["ok"] and all(a["conflict"] is None for a in res["applied"])
     assert res["amended"][0]["refused"] == [] and res["amended"][0]["status"].startswith("plan:")  # queued: a plan
     st = client.read(cd).store
-    assert ("net/client.py", "net/client.py::Client.retry") in st.bindings
+    assert "net/client.py::Client.retry" in st.bindings
     assert "three times" in tools.description(st, client_id)
     assert any(o.caused_by == ho and o.kind == "bind.attach" for o in st.ops)
     status = tools.read_status(str(cd))

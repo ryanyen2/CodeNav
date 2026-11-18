@@ -46,6 +46,26 @@ def test_a_forged_verdict_in_a_pull_requests_log_is_refused(tmp_path):
     assert Workspace(cd, readonly=True).store.plans[pid].status == "accepted"
 
 
+def test_a_git_person_outside_the_table_writes_the_trunk_and_a_hub_sign_in_does_not(tmp_path):
+    """A teammate who pushes to the repository (`human:<email>`) is an owner
+    whether or not the table names them, so their pushed trunk edit is not a
+    finding. A hub sign-in the table does not name is a suggester."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed(ws)
+    edit = {"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": "START", "text": "Mine. "}}
+    mate = ws.submit([edit], actor="human:bob@example.com")[0]
+    hub = ws.submit([edit], actor="human:gh:bob")[0]
+    assert mate.conflict is None and hub.conflict == "authority"
+    ws.close()
+    roles = Roles.load(cd)
+    assert validate_logs(L.list_sessions(cd), roles=roles) == []
+    assert refused_verdicts(Workspace(cd, readonly=True).store, roles) == {}
+    _forge(L.list_sessions(cd)[0], hub.id)
+    found = validate_logs(L.list_sessions(cd), roles=roles)
+    assert len(found) == 1 and "refuses it" in found[0].reason, found
+
+
 def test_a_suggesters_op_on_a_plan_the_pull_request_opens_is_fine(tmp_path):
     cd = tmp_path / ".codoc"
     ws = Workspace(cd)
@@ -112,11 +132,11 @@ def test_a_withdraw_carrying_forged_steps_does_nothing_on_rebuild(tmp_path):
 
     forge(steps=[{"do": "kill", "bid": "p1", "path": "text", "segments": [[words.id, 0, 13]]},
                  {"do": "kill_block", "bid": "h1"},
-                 {"do": "bind", "file": "c.py", "symbol": "c.py::send", "from": None, "to": None}])
+                 {"do": "bind", "symbol": "c.py::send", "from": None, "to": None}])
     assert validate_logs([path], roles=Roles.load(cd)) == []
     store = Workspace(cd, readonly=True).store
     assert store.blocks["h1"].live and store.blocks["p1"].text().live_text() == "Retries once."
-    assert ("c.py", "c.py::send") in store.bindings and store.plans[pid].status == "rejected"
+    assert "c.py::send" in store.bindings and store.plans[pid].status == "rejected"
     # Naming a folded verdict is a snapshot's to do, and is caught.
     forge(verdict=words.id)
     found = validate_logs([path], roles=Roles.load(cd))

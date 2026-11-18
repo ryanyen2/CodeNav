@@ -89,7 +89,7 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
                     if (msg.subs?.length) await appendSubmissions(codocDir, msg.subs);
                     return;
                 case 'open-cite':
-                    if (msg.file) await openSymbol(root, msg.file, msg.symbol ?? '');
+                    if (msg.symbol) await openSymbol(root, msg.symbol);
                     return;
                 case 'history': {
                     const history = await readJson<HistoryWindow>(path.join(codocDir, 'history.json'));
@@ -172,13 +172,15 @@ async function appendSubmissions(codocDir: string, subs: Submission[]): Promise<
     await fsp.appendFile(path.join(dir, `${CLIENT}.jsonl`), body, 'utf8');
 }
 
-/** Open `file` and put the caret on `symbol`: its definition when a Python or
- *  JavaScript keyword introduces it, otherwise its first occurrence. */
-async function openSymbol(root: string, file: string, symbol: string): Promise<void> {
-    const uri = vscode.Uri.file(path.join(root, file));
+/** Open the file `symbol` (`file::symbol_path`) names and put the caret on it:
+ *  its definition when a Python or JavaScript keyword introduces it, otherwise
+ *  its first occurrence. A symbol with no `::` names a whole file. */
+async function openSymbol(root: string, symbol: string): Promise<void> {
+    const at = symbol.indexOf('::');
+    const uri = vscode.Uri.file(path.join(root, at < 0 ? symbol : symbol.slice(0, at)));
     const doc = await vscode.workspace.openTextDocument(uri);
     const editor = await vscode.window.showTextDocument(doc, { preview: true });
-    const leaf = symbol.split('::').pop()?.split('.').pop();
+    const leaf = at < 0 ? '' : symbol.slice(at + 2).split('.').pop();
     if (!leaf) return;
     const text = doc.getText();
     const name = leaf.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

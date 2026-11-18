@@ -29,7 +29,7 @@ Text       := { segs: Seg[], marks: Mark[] }       segs in document order, live 
 Seg        := { op, k0, chars, actor, at, plan?, dead?, dead_actor?, dead_at? }
 Mark       := { kind, attrs, start: CharRef, end: CharRef, actor, op, at }     end is inclusive
 
-Binding    := { feature: BlockId, file, symbol, fingerprint, types_hash }      keyed by (file, symbol)
+Binding    := { feature: BlockId, symbol, fingerprint, types_hash }      keyed by symbol, `file::symbol_path`
 
 Plan       := { id, actor,                  actor: who opened it
                 kind,                       edit | add | move | delete; only delete has a meaning in the applier,
@@ -209,7 +209,7 @@ mark by `op`.
 | `bold` | none | yes | no | no | `**words**` |
 | `code` | none | no | no | no | `` `words` `` |
 | `link` | `href` | no | with `cite` | no | `[words](https://…)` |
-| `cite` | `file`, `symbol` | no | with `link` | no | `[words](codoc:file#symbol)` |
+| `cite` | `symbol` | no | with `link` | no | `[words](codoc:file::symbol_path)` |
 | `comment` | `block` | no | no | yes | none |
 | `suggest_del` | `plan`, `chars` | no | no | yes | none |
 | `suggest_mark` | `plan`, `mark`, `on`, `a:<attr>`… | no | no | yes | none |
@@ -243,9 +243,11 @@ mark by `op`.
 
 ## 4. Bindings, plans, watermarks
 
-**Binding.** `(file, symbol)` has at most one owner (I8). A dead heading owns nothing. The
-store also keeps `bound_once`, the set of features that ever had a binding: the loop
-proposes deleting a feature that had code and has none now.
+**Binding.** A symbol has at most one owner (I8). The symbol is the index's name for a
+chunk, `file::symbol_path`, so it says its file, and a cite names a binding by the same
+string. A dead heading owns nothing. The store also keeps `bound_once`, the set of
+features that ever had a binding: the loop proposes deleting a feature that had code and
+has none now.
 
 **Plan.** A plan is a tag, and the document stays one document. Words a plan proposes are
 live segments carrying `plan`. Words it wants removed stay live under a `suggest_del`
@@ -366,9 +368,9 @@ Target `{fid}`.
 
 | op | wire payload | canonical payload adds | inverse |
 |---|---|---|---|
-| `bind.attach` | `file`, `symbol`, `fingerprint`, `types_hash` | `displaced`, the prior owner; or the previous hashes when `fid` already owned it | detach, then re-attach the prior owner; or refresh to the previous hashes |
-| `bind.detach` | `file`, `symbol` | the hashes | `bind.attach` |
-| `bind.refresh` | `file`, `symbol`, `fingerprint`, `types_hash` | the previous hashes | `bind.refresh` to them |
+| `bind.attach` | `symbol`, `fingerprint`, `types_hash` | `displaced`, the prior owner; or the previous hashes when `fid` already owned it | detach, then re-attach the prior owner; or refresh to the previous hashes |
+| `bind.detach` | `symbol` | the hashes | `bind.attach` |
+| `bind.refresh` | `symbol`, `fingerprint`, `types_hash` | the previous hashes | `bind.refresh` to them |
 
 `bind.attach` needs a live heading and takes the symbol from any other owner (I8).
 `bind.detach` and `bind.refresh` need `fid` to own the symbol, and set `code_at` to the
@@ -524,7 +526,7 @@ escape     := "\" X                 X is one of  * [ ] \ # ` - + . |
 code       := "`" raw "`"           not empty, one line; inside, only \` and \\ are escapes
 bold       := "**" … "**"           not empty, one line; may hold code
 link       := "[" label "](" target ")"       the label may hold bold and code
-target     := "codoc:" file ["#" symbol]      a cite
+target     := "codoc:" symbol                 a cite; symbol is a binding key, `file::symbol_path`
             | "http://…" | "https://…"        a link
 ```
 
@@ -614,9 +616,9 @@ rejected plan's words are dead.
 | `directive(f)` | The realize prompt item: title and `description` in `rejected` mode; `added:` from `sent` ink; `removed:` from characters a person killed inside `handoff` and outside `realized`; `Focus:` from a person's bold marks outside `realized`; `Consult:` from links; each kind block's `consult` and `lower`, or for an in-flow block of a kind this process has no code for, `<kind>: <words>` from its Text fields; `Author asked:` from the latest hand-off. For a dead heading: a removal item, which deletes code only when the hand-off set `delete_code`. |
 | `history(f)` | Every op recorded against a block of `body(f)`, oldest first, conflicted ones included. Ops on blocks the feature no longer holds are left out. |
 | `history_window(n)` | The timeline: the applied ops among the last `n` (200 as published). Per op: `blocks`, the text of each Text field of each block it touched as it read right after the op (`{bid: {field: text}}`), its recorded inverse, the blocks it took off or put on the page, and the ranks, kinds and levels it displaced; plus what was true entering the window. Computed by un-applying the window backwards on clones of the live fields, by character identity. |
-| `dead_cites(known)` | `cite` marks whose `(file, symbol)` is not in the index. |
+| `dead_cites` | `cite` marks whose `symbol` no binding has. |
 | `export` | `block_spec` of every live block in `rejected` mode, written with heading ids. |
-| `projection` | `{store, head, frontier, blocks, phases, plans, watermarks, kinds, bindings, claims}`. `kinds` maps each plugin kind registered in this checkout to the layout it gives a new block, so an editor pasting a `codoc:<kind>` fence without `$layout` splits its fields as the applier would. `store` names the store instance and changes on every rebuild; `head` is comparable only under one `store`. Each plan carries `handoff`: the features accepting it hands off (`accept_handoffs`: a plan opened with `build`, which `codoc_propose` sets, that is not a delete plan). A block entry is `{id, kind, level, rank, head, fields}`, plus `layout` for a kind that is not builtin, so an editor without the kind can draw it. A Text field is `{text, runs, spans, suggest_del}` in `live` mode, with unmerged runs and the document's own marks. `plans` is `open_plans()`. `bindings` is `{by_feature: {f: [{file, symbol}]}}`. `claims` is `ground` and `mark_claims` per feature, the claims a block entry does not carry: an editor draws ink and a plan's words and cuts from the runs and `suggest_del`. |
+| `projection` | `{store, head, frontier, blocks, phases, editors, plans, watermarks, kinds, bindings, claims}`. `kinds` maps each plugin kind registered in this checkout to the layout it gives a new block, so an editor pasting a `codoc:<kind>` fence without `$layout` splits its fields as the applier would. `store` names the store instance and changes on every rebuild; `head` is comparable only under one `store`. Each plan carries `handoff`: the features accepting it hands off (`accept_handoffs`: a plan opened with `build`, which `codoc_propose` sets, that is not a delete plan). A block entry is `{id, kind, level, rank, head, fields}`, plus `layout` for a kind that is not builtin, so an editor without the kind can draw it. A Text field is `{text, runs, spans, suggest_del}` in `live` mode, with unmerged runs and the document's own marks. `plans` is `open_plans()`. `editors` maps each `edited` feature to the actors whose unsent ink or unsent removals are in it (`derive.editors`); the editor's ⌘S hands off only the features that list the viewer. `bindings` is `{by_feature: {f: [symbol]}}`. `claims` is `ground` and `mark_claims` per feature, the claims a block entry does not carry: an editor draws ink and a plan's words and cuts from the runs and `suggest_del`. |
 | `state_fingerprint` | Blocks with text and marks, bindings, plans, watermarks. Equal fingerprints mean the same document. |
 
 ### Phase
@@ -666,7 +668,7 @@ A publish from a cold cache and one from a warm cache write the same bytes.
    every apply path, conflicts included.
 7. **I7 Documentation never writes code.** No op touches a source file. A directive is
    derived; a hand-off is a gesture.
-8. **I8 Binding uniqueness.** `(file, symbol)` has at most one live owner. `bind.attach`
+8. **I8 Binding uniqueness.** A symbol has at most one live owner. `bind.attach`
    displaces and records.
 9. **I9 Frontiers are monotone.** A feature's `handoff` and `realized` only grow, except
    when a person undoes their own hand-off.

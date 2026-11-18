@@ -184,7 +184,7 @@ def seed(ws: Workspace, actor=H, bind=True):
     ], actor=actor)
     if bind:
         ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"},
-                    "payload": {"file": "c.py", "symbol": "c.py::send", "fingerprint": "f1", "types_hash": "t1"}}], actor="loop")
+                    "payload": {"symbol": "c.py::send", "fingerprint": "f1", "types_hash": "t1"}}], actor="loop")
 
 
 def seed_loop(ws: Workspace):
@@ -194,7 +194,7 @@ def seed_loop(ws: Workspace):
         {"kind": K.TEXT_INSERT, "target": {"bid": "h1", "path": "text"}, "payload": {"after": START, "text": "Client"}},
         {"kind": K.BLOCK_ADD, "target": {"bid": "p1"}, "payload": {"kind": PARAGRAPH, "after": "h1"}},
         {"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "Retries once before giving up."}},
-        {"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": "c.py::send", "fingerprint": "f1", "types_hash": "t1"}},
+        {"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"symbol": "c.py::send", "fingerprint": "f1", "types_hash": "t1"}},
     ], actor="loop")
 
 

@@ -39,7 +39,7 @@ export function adopter(view: EditorView, shadows: Map<string, Shadow>, outbox: 
     /**
      * Mark the blocks whose paints this projection can have changed. A block's
      * paints come from its own projected fields and from its feature's phase,
-     * claims and watermarks, so most projections touch few. A reorder touches
+     * editors, claims and watermarks, so most projections touch few. A reorder touches
      * every block.
      *
      * The plans list is not compared. That rests on the applier touching every
@@ -54,7 +54,7 @@ export function adopter(view: EditorView, shadows: Map<string, Shadow>, outbox: 
         const features = new Set<string>();
         const pw = prev.watermarks ?? {}, nw = next.watermarks ?? {};
         for (const fid of new Set([...Object.keys(prev.phases), ...Object.keys(next.phases)])) {
-            if (prev.phases[fid] !== next.phases[fid]) features.add(fid);
+            if (prev.phases[fid] !== next.phases[fid] || !sameJson(prev.editors?.[fid], next.editors?.[fid])) features.add(fid);
         }
         for (const fid of new Set([...Object.keys(prev.claims), ...Object.keys(next.claims)])) {
             if (!sameJson(prev.claims[fid], next.claims[fid])) features.add(fid);

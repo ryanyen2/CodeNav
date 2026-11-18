@@ -132,7 +132,7 @@ class Block:
     content: dict = field(default_factory=dict)   # field -> Text | JSON
     dead: OpId | None = None
     # A dead heading owns no code, so its bindings leave the store when it
-    # dies. They are kept here as `[{file, symbol, fingerprint, types_hash}]`:
+    # dies. They are kept here as `[{fid, feature, symbol, fingerprint, types_hash}]`:
     # the removal directive names the symbols to delete, and an undo re-attaches them.
     detached: list = field(default_factory=list)
 

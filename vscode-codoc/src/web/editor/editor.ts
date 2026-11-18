@@ -56,7 +56,7 @@ export interface EditorHost {
     /** The caret moved into this feature. */
     onFeature?(fid: string | null): void;
     /** Open the code a citation names. */
-    openCite?(file: string, symbol: string): void;
+    openCite?(symbol: string): void;
     /** A gesture was not performed (`bid` is empty and `conflict` says why), or
      *  the daemon refused an op and its block was reloaded. */
     onConflict?(bid: string, conflict: string): void;
@@ -177,7 +177,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             const cite = (event.target as HTMLElement | null)?.closest?.('[data-cite]') as HTMLElement | null;
             if (cite && host.openCite) {
                 const m = node.marks.find(x => x.type.name === 'cite') ?? null;
-                if (m) { host.openCite(m.attrs.file, m.attrs.symbol); return true; }
+                if (m) { host.openCite(m.attrs.symbol); return true; }
             }
             return false;
         },

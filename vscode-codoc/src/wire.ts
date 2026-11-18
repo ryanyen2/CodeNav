@@ -37,6 +37,6 @@ export type PageToHost =
     /** Run `codoc realize` where the person can watch it. */
     | { kind: 'realize' }
     /** Open the code a citation names. */
-    | { kind: 'open-cite'; file: string; symbol: string }
+    | { kind: 'open-cite'; symbol: string }
     /** Set the language the tree is written in. */
     | { kind: 'set-language'; tag: string };

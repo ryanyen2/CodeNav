@@ -96,8 +96,10 @@ export interface Projection {
     frontier: Record<string, number>;
     blocks: ProjectedBlock[];
     phases: Record<string, Phase>;
+    /** Per `edited` feature, who edited it since its last hand-off. ⌘S hands off only the viewer's. */
+    editors?: Record<string, string[]>;
     plans: PlanInfo[];
-    bindings: { by_feature: Record<string, { file: string; symbol: string }[]> };
+    bindings: { by_feature: Record<string, string[]> };   // feature -> the symbols it owns
     claims: Record<string, Claim[]>;
     /** Per feature, the hand-off and realized frontiers (absent when neither). */
     watermarks?: Record<string, Watermarks>;

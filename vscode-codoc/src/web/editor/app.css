@@ -74,6 +74,8 @@ html, body { margin: 0; height: 100%; background: var(--codoc-bg); color: var(--
 .codoc-marker-proposed, .codoc-marker-planned { background: var(--codoc-plan); }
 .codoc-marker-drifted { background: var(--codoc-added); }
 .codoc-marker-realizing { border: 1.5px solid var(--codoc-muted); animation: codoc-pulse 1.4s ease-in-out infinite; }
+/* A teammate's unsent edits, which the viewer's ⌘S does not send: a ring, not a filled dot. */
+.codoc-dot.is-theirs, .codoc-marker.is-theirs { background: transparent; border: 1.5px solid var(--codoc-human); box-sizing: border-box; }
 
 /* History: word runs by author */
 .is-history .codoc-paint { outline: 1px solid transparent; }

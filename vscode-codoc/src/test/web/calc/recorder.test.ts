@@ -82,12 +82,12 @@ describe('Recorder', () => {
         const p = proj([block('p', 'paragraph', 'abcd', [['s:1', 0, 4]])]);
         const { doc, shadows } = docFrom(schema, p);
         const state = EditorState.create({ schema, doc });
-        const tr = state.tr.addMark(2, 4, schema.marks.cite.create({ file: 'f.py', symbol: 'g' }))
+        const tr = state.tr.addMark(2, 4, schema.marks.cite.create({ symbol: 'f.py::g' }))
             .addMark(1, 3, schema.marks.plan.create({ pid: 'p1' }));
         const got = new Recorder(shadows, cid).record(tr.steps, tr.docs);
         expect(got.unhandled).toEqual([]);
         expect(got.ops).toEqual([{ kind: 'text.mark', target: { bid: 'p', path: 'text' },
-            payload: { kind: 'cite', attrs: { file: 'f.py', symbol: 'g' }, start: ['s:1', 1], end: ['s:1', 2], on: true } }]);
+            payload: { kind: 'cite', attrs: { symbol: 'f.py::g' }, start: ['s:1', 1], end: ['s:1', 2], on: true } }]);
     });
 
     it('leaves cross-block steps unhandled and the fallback reconciles one block', () => {

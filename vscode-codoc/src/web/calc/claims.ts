@@ -126,6 +126,14 @@ export const PHASE_LABEL: Record<Phase, string> = {
     planned: 'planned, no code yet',
 };
 
+/** For an `edited` feature the viewer has no edits in: who edited it, said so the
+ *  person knows their ⌘S does not send it. '' for any other feature. */
+export function theirEdits(proj: Projection, fid: string, viewer: string): string {
+    const who = proj.editors?.[fid] ?? [];
+    return proj.phases[fid] === 'edited' && !who.includes(viewer)
+        ? `edited by ${who.join(', ')}, not yet handed off; your ⌘S does not send it` : '';
+}
+
 export const PHASE_CHANNEL: Record<Phase, 'human' | 'plan' | 'code' | 'none'> = {
     synced: 'none', edited: 'human', queued: 'human', realizing: 'none', proposed: 'plan', drifted: 'code', planned: 'plan',
 };

@@ -19,10 +19,7 @@ from codoc.index.graph import Graph
 
 
 def owner_of(store: Store, symbol: str) -> str | None:
-    if "::" not in symbol:
-        return None
-    file = symbol.split("::", 1)[0]
-    b = store.bindings.get((file, symbol))
+    b = store.bindings.get(symbol)
     return b.feature if b else None
 
 

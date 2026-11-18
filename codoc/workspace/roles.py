@@ -18,7 +18,7 @@ from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
 from codoc.calculus.text import AnchorError
 from codoc.workspace.config import read_config
-from codoc.workspace.log import LOCAL, local_actor
+from codoc.workspace.log import hub_actor
 
 OWNER = "owner"
 SUGGEST = "suggest"
@@ -122,15 +122,15 @@ def _own_comment(store: Store, op: Op) -> bool:
 class Roles:
     """Actor → role, and the policy the applier runs.
 
-    - ``owner`` / ``maintainer``: everything.
+    - ``owner`` / ``maintainer``: everything. A git person the table does not
+      name is an owner.
     - ``machine`` (agents, the loop, translators, imports): the trunk and plans,
       but no verdicts and no hand-offs; ``feature.realized`` only from the loop
       itself, which is the daemon settling evidence.
-    - ``suggest`` (everyone else): ``plan.open``, ops tagged with a plan the
+    - ``suggest`` (everyone else: a hub sign-in, and an actor the grammar does
+      not name, ``unknown:x``): ``plan.open``, ops tagged with a plan the
       same actor opened, and comments. Riding someone else's open plan would
-      land a stranger's words when the maintainer accepts it. "Everyone else"
-      is by the actor's KIND, so an actor the grammar does not name
-      (``unknown:x``) is a suggester, not a machine. A contributor does not
+      land a stranger's words when the maintainer accepts it. A contributor does not
       have to tag anything themselves: the drain opens the plan and tags their
       ops, turning a deletion into the plan's ``suggest_del``. What
       it cannot carry under a plan (a merge, a block delete) stays refused.
@@ -154,26 +154,27 @@ class Roles:
     @classmethod
     def load(cls, codoc_dir: str | Path) -> "Roles":
         """The table every clone must agree on lives in the tracked
-        ``config.json`` (``roles: {actor: role}``); this checkout's person
-        (``log.local_actor``), ``human:local`` and an import are owners unless
-        it says otherwise."""
-        return cls.from_config(read_config(codoc_dir), local_actor(Path(codoc_dir).parent))
+        ``config.json`` (``roles: {actor: role}``)."""
+        return cls.from_config(read_config(codoc_dir))
 
     @classmethod
-    def from_config(cls, cfg: dict, person: str = LOCAL) -> "Roles":
+    def from_config(cls, cfg: dict) -> "Roles":
         """The same table from a ``config.json`` already in hand, so a caller
-        that has read it does not read it twice or build the defaults again."""
-        table = {LOCAL: OWNER, person: OWNER, "human:import": OWNER}
+        that has read it does not read it twice."""
         roles = cfg.get("roles")
-        if isinstance(roles, dict):
-            table.update({str(k): str(v) for k, v in roles.items()})
-        return cls(table)
+        return cls({str(k): str(v) for k, v in roles.items()} if isinstance(roles, dict) else {})
 
     def role(self, actor: str) -> str:
         if actor in self.table:
             return self.table[actor]
-        if actor_kind(actor) in MACHINE_KINDS:
+        kind = actor_kind(actor)
+        if kind in MACHINE_KINDS:
             return "machine"
+        # A git person (`human:<email>`, `human:local`) can push to the
+        # repository, which is where trust in a merged log comes from. A hub
+        # sign-in (`log.hub_actor`) cannot, so it is what the hub recorded.
+        if kind == "human" and not actor.startswith(hub_actor("")):
+            return OWNER
         return self.default
 
     def policy(self, store: Store, op: Op) -> str | None:

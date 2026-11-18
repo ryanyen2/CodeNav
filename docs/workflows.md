@@ -85,7 +85,7 @@ One gesture is one batch, and a batch is the undo unit. Typing is flushed as one
 | Comment on selected words | editor | `block.add(comment)`, `text.insert` of the body, `text.mark(comment)` | A card in the margin. |
 | Reply, Resolve | editor | `block.add(comment)` with the same `thread`; `block.set(status)` on each message | |
 | Build it on a comment | editor | `feature.handoff` with the thread's words as `asked` | The host runs `codoc realize` in a terminal. |
-| Hand off (⌘S or the toolbar) | editor | `feature.handoff` per `edited` feature | Ink turns from unsent to sent. |
+| Hand off (⌘S or the toolbar) | editor | `feature.handoff` per `edited` feature the projection's `editors` lists the viewer in | Ink turns from unsent to sent. A feature only a teammate edited stays edited, drawn as a ring, and goes out with their ⌘S. |
 | `codoc handoff <feature> [--asked …] [--delete-code]` | CLI | `feature.handoff` | |
 | Accept all, Reject all | editor | `plan.accept` or `plan.reject` per open plan; with Accept, `feature.handoff` for each feature a plan opened with `build` touches (the projection's `plans[].handoff`) | Accepted words become ordinary text with the plan's author; an accepted `codoc_propose` plan is queued. |
 | `codoc accept <plan>` | CLI | `plan.accept`, and `feature.handoff` per feature by the same rule as the editor; `--build` hands off any plan's features, `--no-build` none; never for a delete plan | As above. |

@@ -153,8 +153,8 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
         emit(K.BLOCK_ADD, {"bid": b.id}, payload)
         prev = b.id
     for bnd in store.bindings.values():
-        emit(K.BIND_ATTACH, {"fid": bnd.feature}, {"file": bnd.file, "symbol": bnd.symbol,
-                                                   "fingerprint": bnd.fingerprint, "types_hash": bnd.types_hash})
+        emit(K.BIND_ATTACH, {"fid": bnd.feature}, {"symbol": bnd.symbol, "fingerprint": bnd.fingerprint,
+                                                   "types_hash": bnd.types_hash})
     for p in store.plans.values():
         # Every plan in a folded prefix is decided: an open one is work in
         # flight, so `settled_prefix` stopped before its first op.

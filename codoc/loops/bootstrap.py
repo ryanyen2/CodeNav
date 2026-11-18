@@ -153,7 +153,7 @@ def _land(ws: Workspace, res: BootstrapResult, compiler: Compiler, raw: dict, ba
 
 def _land_file(ws: Workspace, res: BootstrapResult, ops: list[dict], frows: list, batch: str) -> list[str]:
     """One file's ``add_node`` edits. Returns the titles added."""
-    hashes = {(r.file, r.symbol_path): (r.tokens_hash, r.types_hash) for r in frows}
+    hashes = {r.symbol_path: (r.tokens_hash, r.types_hash) for r in frows}
     compiler = Compiler(ws.store, hashes=hashes, bindable=set(hashes))
     return [o["title"].strip() for o in ops
             if o.get("kind") == "add_node" and _land(ws, res, compiler, o, batch)]
@@ -221,17 +221,17 @@ def _ensure_file_coverage(ops: list[dict], frows: list, file: str) -> list[dict]
     - ``__module__`` goes to the first top-level node. A node left owning
       nothing, with no children, is dropped: it described only imports
       (``bootstrap_file.txt`` rule 3)."""
-    keys = {(r.file, r.symbol_path) for r in frows}
-    seen: set[tuple[str, str]] = set()
+    keys = {r.symbol_path for r in frows}
+    seen: set[str] = set()
     for o in ops:
         kept = []
         for b in o.get("bindings") or []:
             key = symbol(b)
             if key in keys and key not in seen:
                 seen.add(key)
-                kept.append(key[1])
+                kept.append(key)
         o["bindings"] = kept
-    uncovered = [s for _, s in sorted(keys - seen)]
+    uncovered = sorted(keys - seen)
     adds = [o for o in ops if o.get("kind") == "add_node" and (o.get("title") or "").strip()]
     if uncovered and not adds:
         return list(ops) + [{"kind": "add_node", "title": title_from_file(file), "description": "",

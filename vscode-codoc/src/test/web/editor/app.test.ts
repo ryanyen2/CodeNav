@@ -200,4 +200,19 @@ describe('the page', () => {
         expect(Array.from(document.querySelectorAll('.codoc-marker'))
             .map(e => [...e.classList].find(c => c.startsWith('codoc-marker-')))).toEqual(['codoc-marker-edited']);
     });
+
+    it("⌘S hands off only the features with the viewer's own edits; a teammate's are drawn as theirs", () => {
+        post({ kind: 'projection', proj: proj([block('h', 'heading', 'Title'), block('p', 'paragraph', 'one two'), block('g', 'heading', 'Other')],
+            { head: 50, phases: { h: 'edited', g: 'edited' }, editors: { h: ['human:bob@x.org', 'human:local'], g: ['human:bob@x.org'] } }) });
+        expect(Array.from(document.querySelectorAll('.codoc-btn')).map(b => b.textContent)).toContain('Hand off (1)');
+        const dot = (fid: string) => document.querySelector(`.codoc-row[data-fid="${fid}"] .codoc-dot`) as HTMLElement;
+        expect(dot('h').classList.contains('is-theirs')).toBe(false);
+        expect(dot('g').classList.contains('is-theirs')).toBe(true);
+        expect(dot('g').title).toBe('edited by human:bob@x.org, not yet handed off; your ⌘S does not send it');
+        expect(document.querySelector('.codoc-marker.is-theirs')?.getAttribute('aria-label')).toBe(dot('g').title);
+        posted.length = 0;
+        document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true }));
+        const subs = posted.filter(m => m.kind === 'submit').flatMap(m => (m as { subs: Submission[] }).subs);
+        expect(subs.filter(s => s.kind === 'feature.handoff').map(s => s.target)).toEqual([{ fid: 'h' }]);
+    });
 });

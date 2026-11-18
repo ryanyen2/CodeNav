@@ -496,7 +496,7 @@ def _h_block_set(store: Store, op: Op, touched: set[str]):
                 canonical["detached"] = back["bindings"] = detached
         elif value == HEADING and prev_kind != HEADING and op.payload.get("bindings") and not op.plan:
             _reattach(store, [e for e in op.payload["bindings"]
-                              if isinstance(e, dict) and e.get("fid") == bid and "file" in e and "symbol" in e], touched)
+                              if isinstance(e, dict) and e.get("fid") == bid and "symbol" in e], touched)
             canonical["bindings"] = op.payload["bindings"]
         inverse = [body(K.BLOCK_SET, {"bid": bid, "path": "kind"}, back)]
     elif path == "level":
@@ -704,13 +704,13 @@ def _reattach(store: Store, entries: list[dict], touched: set[str]) -> None:
     """Re-attach what a delete detached, unless the symbol has an owner now
     (their attach stands)."""
     for e in entries:
-        key = (e["file"], e["symbol"])
+        key = e["symbol"]
         owner = store.blocks.get(e["fid"])
         if key not in store.bindings and owner is not None:
-            store.bindings[key] = Binding(e["fid"], e["file"], e["symbol"], e.get("fingerprint", ""), e.get("types_hash", ""))
+            store.bindings[key] = Binding(e["fid"], key, e.get("fingerprint", ""), e.get("types_hash", ""))
             touched.add(e["fid"])
         if owner is not None:
-            owner.detached = [d for d in owner.detached if (d["file"], d["symbol"]) != key]
+            owner.detached = [d for d in owner.detached if d["symbol"] != key]
 
 
 def _h_block_delete(store: Store, op: Op, touched: set[str]):
@@ -771,7 +771,7 @@ def _h_bind_attach(store: Store, op: Op, touched: set[str]):
     fid = op.target["fid"]
     _live_feature(store, fid)
     p = op.payload
-    key = (p["file"], p["symbol"])
+    key = p["symbol"]
     # After the payload is read, not before: a malformed attach conflicts, and
     # a feature that never had code must not be remembered as one that lost it
     # (`reflect._emptied` proposes deleting exactly those).
@@ -782,22 +782,21 @@ def _h_bind_attach(store: Store, op: Op, touched: set[str]):
     if prior and prior.feature == fid:
         store.bindings[key] = replace(prior, fingerprint=fp, types_hash=th)
         canonical = {**p, "displaced": None, "prev_fingerprint": prior.fingerprint, "prev_types_hash": prior.types_hash}
-        return canonical, [body(K.BIND_REFRESH, {"fid": fid}, {"file": prior.file, "symbol": prior.symbol,
-                                                              "fingerprint": prior.fingerprint, "types_hash": prior.types_hash})]
-    store.bindings[key] = Binding(fid, p["file"], p["symbol"], fp, th)
+        return canonical, [body(K.BIND_REFRESH, {"fid": fid}, {"symbol": key, "fingerprint": prior.fingerprint,
+                                                              "types_hash": prior.types_hash})]
+    store.bindings[key] = Binding(fid, key, fp, th)
     canonical = {**p, "displaced": prior.to_json() if prior else None}
-    inverse = [body(K.BIND_DETACH, {"fid": fid}, {"file": p["file"], "symbol": p["symbol"]})]
+    inverse = [body(K.BIND_DETACH, {"fid": fid}, {"symbol": key})]
     if prior:
         touched.add(prior.feature)
         inverse.append(body(K.BIND_ATTACH, {"fid": prior.feature},
-                            {"file": prior.file, "symbol": prior.symbol,
-                             "fingerprint": prior.fingerprint, "types_hash": prior.types_hash}))
+                            {"symbol": key, "fingerprint": prior.fingerprint, "types_hash": prior.types_hash}))
     return canonical, inverse
 
 
 def _h_bind_detach(store: Store, op: Op, touched: set[str]):
     fid = op.target["fid"]
-    key = (op.payload["file"], op.payload["symbol"])
+    key = op.payload["symbol"]
     prior = store.bindings.get(key)
     if prior is None or prior.feature != fid:
         raise Conflict("not_bound", f"{key} on {fid}")
@@ -805,13 +804,13 @@ def _h_bind_detach(store: Store, op: Op, touched: set[str]):
     store.watermarks(fid).code_at = max(store.watermarks(fid).code_at, op.at)
     touched.add(fid)
     canonical = {**op.payload, "fingerprint": prior.fingerprint, "types_hash": prior.types_hash}
-    return canonical, [body(K.BIND_ATTACH, {"fid": fid}, {"file": prior.file, "symbol": prior.symbol,
-                                                          "fingerprint": prior.fingerprint, "types_hash": prior.types_hash})]
+    return canonical, [body(K.BIND_ATTACH, {"fid": fid}, {"symbol": key, "fingerprint": prior.fingerprint,
+                                                          "types_hash": prior.types_hash})]
 
 
 def _h_bind_refresh(store: Store, op: Op, touched: set[str]):
     fid = op.target["fid"]
-    key = (op.payload["file"], op.payload["symbol"])
+    key = op.payload["symbol"]
     prior = store.bindings.get(key)
     if prior is None or prior.feature != fid:
         raise Conflict("not_bound", f"{key} on {fid}")
@@ -820,8 +819,8 @@ def _h_bind_refresh(store: Store, op: Op, touched: set[str]):
     store.watermarks(fid).code_at = max(store.watermarks(fid).code_at, op.at)
     touched.add(fid)
     canonical = {**op.payload, "prev_fingerprint": prior.fingerprint, "prev_types_hash": prior.types_hash}
-    return canonical, [body(K.BIND_REFRESH, {"fid": fid}, {"file": prior.file, "symbol": prior.symbol,
-                                                           "fingerprint": prior.fingerprint, "types_hash": prior.types_hash})]
+    return canonical, [body(K.BIND_REFRESH, {"fid": fid}, {"symbol": key, "fingerprint": prior.fingerprint,
+                                                           "types_hash": prior.types_hash})]
 
 
 # ── plans ────────────────────────────────────────────────────────────────────
@@ -906,7 +905,7 @@ def _closure(plan_ops: list[Op], subset: list[OpId]) -> list[OpId]:
 #   set         bid from to                       kind, level, rank with ranked_by, or content fields; a field missing from one side was absent there
 #   void        bid op to                         a move that could not be put back; `to` is the place it found the block
 #   kill_block  bid [in]                          the block killed by the op that records the step, while in feature `in`
-#   bind        file symbol from to               the binding replaced; null is unbound
+#   bind        symbol from to                    the binding replaced; null is unbound
 #   detach      fid bindings                      a dead heading's bindings, removed and kept on it
 #
 # `bid` and `path` say where a step took effect; its characters are found by
@@ -1024,15 +1023,14 @@ def _step(store: Store, me: Op, s: dict, touched: set[str], undo_of: str | None)
         touched.add(b.id)
         return [dict(s)]
     if do == "bind":
-        key = (str(s["file"]), str(s["symbol"]))
+        key = str(s["symbol"])
         want = s.get("to") if fwd else s.get("from")
         owner = store.blocks.get(want["feature"]) if want else None
         if want and not fwd and (owner is None or not owner.live):
             return []           # a dead heading owns no code, whatever the verdict undid
         cur = store.bindings.get(key)
         if want:
-            store.bindings[key] = Binding(want["feature"], key[0], key[1], want.get("fingerprint", ""),
-                                          want.get("types_hash", ""))
+            store.bindings[key] = Binding(want["feature"], key, want.get("fingerprint", ""), want.get("types_hash", ""))
             touched.add(want["feature"])
         else:
             store.bindings.pop(key, None)
@@ -1103,9 +1101,8 @@ def _undo_steps(store: Store, o: Op) -> list[dict]:
             to = {} if o.inverse[0]["payload"].get("unset") else {path: p["prev"]}
         # A heading the plan made prose took its bindings off; they come back
         # with it unless someone bound the symbol since (their attach stands).
-        back = [{"do": "bind", "file": e["file"], "symbol": e["symbol"], "from": None,
-                 "to": {k: v for k, v in e.items() if k != "fid"}}
-                for e in p.get("detached") or [] if (e["file"], e["symbol"]) not in store.bindings]
+        back = [{"do": "bind", "symbol": e["symbol"], "from": None, "to": {k: v for k, v in e.items() if k != "fid"}}
+                for e in p.get("detached") or [] if e["symbol"] not in store.bindings]
         return [{"do": "set", "bid": b.id, "from": _read(b, list(to) or [path]), "to": to}, *back]
     if o.kind == K.BLOCK_MOVE:
         out = []
@@ -1119,13 +1116,13 @@ def _undo_steps(store: Store, o: Op) -> list[dict]:
             out.append({"do": "set", "bid": bid, "from": _read(b, list(to)), "to": to})
         return out
     if o.kind == K.BIND_ATTACH:
-        key, cur = (p["file"], p["symbol"]), store.bindings.get((p["file"], p["symbol"]))
+        cur = store.bindings.get(p["symbol"])
         if cur is None or cur.feature != t["fid"]:
             return []
         # A plan that only refreshed a binding the feature already had gives the old hashes back.
         to = {**cur.to_json(), "fingerprint": p.get("prev_fingerprint", ""), "types_hash": p.get("prev_types_hash", "")} \
             if "prev_fingerprint" in p else p.get("displaced")
-        return [{"do": "bind", "file": key[0], "symbol": key[1], "from": cur.to_json(), "to": to}]
+        return [{"do": "bind", "symbol": p["symbol"], "from": cur.to_json(), "to": to}]
     return []
 
 

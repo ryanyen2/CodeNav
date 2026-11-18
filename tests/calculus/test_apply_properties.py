@@ -238,7 +238,7 @@ def test_refusals():
     heading(m, s, "h9", "Gone", after="p1")
     apply(s, m.op(K.BLOCK_DELETE, {"bid": "h9"}, {}))
     assert apply(s, m.op(K.BLOCK_SPLIT, {"bid": "p1", "path": "text"}, {"at": [ins.id, 1], "new": "h9"})).conflict == "duplicate_block"
-    assert apply(s, m.op(K.BIND_ATTACH, {"fid": "h9"}, {"file": "f", "symbol": "s"})).conflict == "dead_block"
+    assert apply(s, m.op(K.BIND_ATTACH, {"fid": "h9"}, {"symbol": "s"})).conflict == "dead_block"
     dead_title = s.blocks["h9"].text()
     assert apply(s, m.op(K.TEXT_MARK, {"bid": "h9", "path": "text"},
                          {"kind": BOLD, "attrs": {}, "start": list(dead_title.ref_at(0)), "end": list(dead_title.ref_at(1)), "on": True})).conflict == "dead_block"
@@ -380,7 +380,7 @@ def random_op(rng: random.Random, m: Mint, s: Store, step: int, plans: bool = Fa
         victim = rng.choice([x for x in blocks if x.id != "h1"] or blocks)
         return m.op(K.BLOCK_DELETE, {"bid": victim.id}, {})
     heads = [x for x in blocks if x.kind == HEADING]
-    return m.op(K.BIND_ATTACH, {"fid": rng.choice(heads).id}, {"file": "f.py", "symbol": rng.choice(["a", "b", "c"])})
+    return m.op(K.BIND_ATTACH, {"fid": rng.choice(heads).id}, {"symbol": rng.choice(["a", "b", "c"])})
 
 
 def soup(seed: int, steps: int, plans: bool = False) -> Store:

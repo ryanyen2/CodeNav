@@ -20,3 +20,8 @@ def test_block_case(case):
 def test_inline_case(case):
     text, spans = inline_md.parse(case["md"])
     assert (text, [asdict(s) for s in spans]) == (case["text"], case["spans"])
+
+
+@pytest.mark.parametrize("case", CASES["render"], ids=lambda c: c["name"])
+def test_render_case(case):
+    assert inline_md.render(case["text"], [inline_md.Span(**s) for s in case["spans"]]) == case["md"]

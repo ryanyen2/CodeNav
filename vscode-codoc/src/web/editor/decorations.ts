@@ -14,7 +14,7 @@ import type { Node as PMNode } from '@tiptap/pm/model';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 
-import { PHASE_CHANNEL, PHASE_LABEL, paintsFor, type Paint } from '../calc/claims';
+import { PHASE_CHANNEL, PHASE_LABEL, paintsFor, theirEdits, type Paint } from '../calc/claims';
 import { NO_WATERMARKS, type Phase, type Projection, type Watermarks } from '../calc/projection';
 import { REPLACED } from './commands';
 import { sameStructure } from './guards';
@@ -80,22 +80,24 @@ export function listNumbers(): Plugin<DecorationSet> {
 }
 
 /** The decorations for the blocks in `only`, or for every block. */
-function decorationsFor(doc: PMNode, paints: Map<string, Paint[]>, phases: Record<string, Phase>,
+function decorationsFor(doc: PMNode, paints: Map<string, Paint[]>, shown: Shown,
                         only?: ReadonlySet<string>): Decoration[] {
     const decos: Decoration[] = [];
+    const viewer = shown.viewer();
     doc.forEach((block, pos) => {
         const bid = block.attrs.bid as string | null;
         if (!bid || (only && !only.has(bid))) return;
         if (block.type.name === 'heading') {
-            const phase: Phase = phases[bid] ?? 'synced';
+            const phase: Phase = shown.projection.phases[bid] ?? 'synced';
+            const theirs = theirEdits(shown.projection, bid, viewer);
             if (phase !== 'synced') {
                 decos.push(Decoration.widget(pos + 1, () => {
                     const el = document.createElement('span');
-                    el.className = `codoc-marker codoc-marker-${phase} codoc-ch-${PHASE_CHANNEL[phase]}`;
-                    el.title = PHASE_LABEL[phase];
-                    el.setAttribute('aria-label', PHASE_LABEL[phase]);
+                    el.className = `codoc-marker codoc-marker-${phase} codoc-ch-${PHASE_CHANNEL[phase]}${theirs ? ' is-theirs' : ''}`;
+                    el.title = theirs || PHASE_LABEL[phase];
+                    el.setAttribute('aria-label', el.title);
                     return el;
-                }, { side: -1, key: `marker:${bid}:${phase}` }));
+                }, { side: -1, key: `marker:${bid}:${phase}:${theirs}` }));
             }
         }
         for (const p of paints.get(bid) ?? []) {
@@ -166,7 +168,7 @@ export class Paints {
                     let set = prev.map(tr.mapping, state.doc);
                     if (dirty.size) {
                         for (const r of blockRanges(state.doc, dirty)) set = set.remove(set.find(r.from, r.to));
-                        set = set.add(state.doc, decorationsFor(state.doc, paints, this.shown.projection.phases, dirty));
+                        set = set.add(state.doc, decorationsFor(state.doc, paints, this.shown, dirty));
                     }
                     return set;
                 },
@@ -187,7 +189,7 @@ export class Paints {
     }
 
     private build(doc: PMNode): DecorationSet {
-        return DecorationSet.create(doc, decorationsFor(doc, this.refresh(doc), this.shown.projection.phases));
+        return DecorationSet.create(doc, decorationsFor(doc, this.refresh(doc), this.shown));
     }
 
     /** Recompute the marked paints, clear the marks, and return the paints. */

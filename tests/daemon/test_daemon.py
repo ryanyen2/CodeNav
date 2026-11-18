@@ -33,7 +33,7 @@ def test_code_change_reflects_and_publishes(tmp_path):
     (d.root / "c.py").write_text("def send(): ...")
     note = d.process_batch([str(d.root / "c.py")])
     assert "reflect" in note and calls == [{"c.py"}]
-    assert d.ws.store.bindings[("c.py", "c.py::send")].fingerprint == "f2"
+    assert d.ws.store.bindings["c.py::send"].fingerprint == "f2"
     assert (d.codoc_dir / "tree.codoc").read_text().split("\n\n", 1)[1].startswith("# Client")
     proj = json.loads((d.codoc_dir / "projection.json").read_text())
     assert proj["phases"] == {"h1": "drifted"}
@@ -165,7 +165,7 @@ def test_a_warm_publisher_writes_what_a_cold_one_would(tmp_path):
             ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {}}], actor="human:local")
         else:
             ws.submit([{"kind": K.BIND_REFRESH, "target": {"fid": "h1"},
-                        "payload": {"file": "c.py", "symbol": "c.py::send", "fingerprint": f"f{step}"}}], actor="loop")
+                        "payload": {"symbol": "c.py::send", "fingerprint": f"f{step}"}}], actor="loop")
         got = warm.publish(ws.store, force=True)
         warm_files = {f: (tmp_path / ".codoc" / f).read_text() for f in ("projection.json", "tree.codoc")}
         cold = Publisher(tmp_path / ".codoc", str(tmp_path))
@@ -198,7 +198,7 @@ def test_derive_builds_the_projection_the_publisher_writes(tmp_path):
     publish(tmp_path / ".codoc", ws.store, root_dir=str(tmp_path))
     published = json.loads((tmp_path / ".codoc" / "projection.json").read_text())
     assert published == json.loads(json.dumps(projection(ws.store)))
-    assert published["bindings"] == {"by_feature": {"h1": [{"file": "c.py", "symbol": "c.py::send"}]}}
+    assert published["bindings"] == {"by_feature": {"h1": ["c.py::send"]}}
     assert [(c["channel"], c["stage"], c["text"]) for c in published["claims"]["h1"]] == [
         ("code", "added", " Loop."), ("plan", "marked", "bold:Retries")]
 
@@ -272,7 +272,7 @@ def test_rebuild_with_equal_pos_publishes_fresh_files(tmp_path):
                {"kind": K.TEXT_INSERT, "target": {"bid": "h1", "path": "text"}, "payload": {"after": START, "text": "Server"}},
                {"kind": K.BLOCK_ADD, "target": {"bid": "p1"}, "payload": {"kind": PARAGRAPH, "after": "h1"}},
                {"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "Listens forever."}},
-               {"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "s.py", "symbol": "s.py::serve"}}], actor="loop")
+               {"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"symbol": "s.py::serve"}}], actor="loop")
     ws.close()
     d.ws.close()
     shutil.rmtree(d.codoc_dir / "log")
@@ -291,7 +291,7 @@ def test_an_agents_citing_binding_op_settles_its_handoff_with_no_epoch(tmp_path)
     d, calls = make(tmp_path, [])
     ho = handoff(d.ws, "h1", actor="human:local")
     L.submit(d.codoc_dir, "agent-cursor", [Submission(
-        cid="c1", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload={"file": "c.py", "symbol": "c.py::retry"},
+        cid="c1", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload={"symbol": "c.py::retry"},
         caused_by=ho.id)])
     d.process_batch([str(L.inbox_dir(d.codoc_dir) / "agent-cursor.jsonl")])
     st = d.ws.store
@@ -310,8 +310,8 @@ def test_binding_ops_that_do_not_cite_the_latest_handoff_settle_nothing(tmp_path
     old = handoff(d.ws, "h1", actor="human:local")
     handoff(d.ws, "h1", actor="human:local", asked="and log each retry")
     L.submit(d.codoc_dir, "agent-cursor", [
-        Submission(cid="c1", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload={"file": "c.py", "symbol": "c.py::a"}),
-        Submission(cid="c2", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload={"file": "c.py", "symbol": "c.py::b"},
+        Submission(cid="c1", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload={"symbol": "c.py::a"}),
+        Submission(cid="c2", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload={"symbol": "c.py::b"},
                    caused_by=old.id)])
     assert "2 client op" in d.process_batch([str(L.inbox_dir(d.codoc_dir) / "agent-cursor.jsonl")])
     assert queued(d.ws.store) == ["h1"]
@@ -328,7 +328,7 @@ def test_a_citing_attach_settles_nothing_while_an_agent_epoch_is_open_and_settle
     write_activity(d.codoc_dir, {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": []})
     assert "opened" in d.process_batch([str(act)])
     L.submit(d.codoc_dir, "agent-claude-code", [Submission(
-        cid="c1", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload={"file": "c.py", "symbol": "c.py::retry"},
+        cid="c1", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload={"symbol": "c.py::retry"},
         caused_by=ho.id)])
     d.process_batch([str(L.inbox_dir(d.codoc_dir) / "agent-claude-code.jsonl")])
     assert queued(d.ws.store) == ["h1"]

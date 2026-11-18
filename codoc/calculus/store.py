@@ -36,19 +36,24 @@ from codoc.calculus.ops import Op, frontier_union
 from codoc.calculus.text import AnchorError, Mark, Text
 
 
+def file_of(symbol: str) -> str:
+    """The file a symbol names: ``f.py`` for ``f.py::g`` and for ``f.py``."""
+    return symbol.split("::", 1)[0]
+
+
 @dataclass
 class Binding:
     feature: str
-    file: str
-    symbol: str
+    symbol: str             # the key: ``file::symbol_path``, as the index names a chunk
     fingerprint: str = ""
     types_hash: str = ""
 
-    def key(self) -> tuple[str, str]:
-        return (self.file, self.symbol)
+    @property
+    def file(self) -> str:
+        return file_of(self.symbol)
 
     def to_json(self) -> dict:
-        return {"feature": self.feature, "file": self.file, "symbol": self.symbol,
+        return {"feature": self.feature, "symbol": self.symbol,
                 "fingerprint": self.fingerprint, "types_hash": self.types_hash}
 
 
@@ -110,7 +115,7 @@ class Store:
         # Feature id -> the blocks that recorded it when they died (``Block.dead_in``).
         # A revived block stays listed and is filtered out on read.
         self.removed: dict[str, set[str]] = {}
-        self.bindings: dict[tuple[str, str], Binding] = {}
+        self.bindings: dict[str, Binding] = {}   # symbol -> its one owner (I8)
         self.plans: dict[str, Plan] = {}
         # The open ones, kept as they open and close. Every reader that asks
         # "is anything in flight" asks per feature, and a tree accumulates
@@ -429,7 +434,7 @@ class Store:
             blocks.append(j)
         return {
             "blocks": blocks,
-            "bindings": sorted((list(k), v.to_json()) for k, v in self.bindings.items()),
+            "bindings": sorted((k, v.to_json()) for k, v in self.bindings.items()),
             "plans": sorted((p.id, {**p.to_json(), "ops": sorted(p.ops)}) for p in self.plans.values()),
             "watermarks": {fid: {"handoff": w.handoff, "realized": w.realized}
                            for fid, w in self.watermarks_by_fid.items() if w.handoff or w.realized},

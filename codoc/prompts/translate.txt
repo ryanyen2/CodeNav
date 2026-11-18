@@ -20,7 +20,7 @@ add or drop blocks.
 
 | thing | rule |
 |---|---|
-| code citations `[label](codoc:path/file.py#symbol)` | Copy the part after `codoc:` character for character. Every citation in the original appears in the translation. Translate the label only when it is ordinary words, not a symbol name. |
+| code citations `[label](codoc:path/file.py::symbol)` | Copy the part after `codoc:` character for character. Every citation in the original appears in the translation. Translate the label only when it is ordinary words, not a symbol name. |
 | web links `[label](https://…)` | Keep the URL exactly. |
 | bold `**like this**` | Bold marks what an agent must get right. Keep the same number of bolded spans, on the words that carry the same meaning. Never add bold. |
 | anything in backticks, and identifiers | Function, class, file and setting names stay as they are. Library and API terms stay in the form readers of this code use, usually English: engineers writing in {language} keep request, response, redirect, header, session, proxy, cache and token as they are, and so do you. |

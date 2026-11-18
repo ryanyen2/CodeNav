@@ -3,7 +3,7 @@
  *
  *   doc    := (heading | paragraph | bullet | numbered | source | kindBlock)+
  *   inline := text
- *   marks  := bold | code | link{href} | cite{file, symbol} | comment{block} | suggest_del{plan} | plan{pid}
+ *   marks  := bold | code | link{href} | cite{symbol} | comment{block} | suggest_del{plan} | plan{pid}
  *
  * The nodes follow the store's block kinds (docs/model.md, "Block kinds").
  * A heading, a paragraph and a list item hold one line of inline text; a line
@@ -209,12 +209,11 @@ const Cite = Mark.create({
     inclusive: false,
     excludes: 'link',
     addAttributes() {
-        return { file: { default: '' }, symbol: { default: '' } };
+        return { symbol: { default: '' } };
     },
     parseHTML() { return [{ tag: 'span[data-cite]' }]; },
     renderHTML({ mark, HTMLAttributes }) {
-        const sym = mark.attrs.symbol ? `#${mark.attrs.symbol}` : '';
-        return ['span', mergeAttributes(HTMLAttributes, { 'data-cite': '', class: 'codoc-cite', title: `codoc:${mark.attrs.file}${sym}` }), 0];
+        return ['span', mergeAttributes(HTMLAttributes, { 'data-cite': '', class: 'codoc-cite', title: `codoc:${mark.attrs.symbol}` }), 0];
     },
 });
 

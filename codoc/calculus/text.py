@@ -35,7 +35,7 @@ from codoc.calculus.ids import END, START, CharRef, OpId
 #   bold          focus; grows over text typed at its end
 #   code          an identifier or literal; fixed anchor
 #   link{href}    an external reference; fixed anchor; exclusive with cite
-#   cite{file, symbol}   a reference into the code; fixed anchor; exclusive with link
+#   cite{symbol}  a reference into the code, named as a binding is; fixed anchor; exclusive with link
 #   comment{block}       anchors a comment thread; removed whole
 #   suggest_del{plan}    characters an open plan proposes to delete; removed whole
 #   suggest_mark{plan, mark, on, a:*}   a mark toggle an open plan proposes; removed whole

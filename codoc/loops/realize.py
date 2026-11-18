@@ -31,7 +31,7 @@ from codoc.calculus.derive import (
 from codoc.calculus.doc import BUILTIN
 from codoc.calculus.ids import OpId, is_human
 from codoc.calculus.ops import Op, covered, in_frontier
-from codoc.calculus.store import Store, Watermarks
+from codoc.calculus.store import Store, Watermarks, file_of
 from codoc.calculus.text import BOLD, LINK, Text
 from codoc.llm.prompt import format_prompt, load_prompt
 from codoc.workspace import Workspace
@@ -92,12 +92,12 @@ def settle(ws: Workspace, res=None, *, sha: str = "") -> list[Op]:
             continue
         out.extend(ws.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": fid},
                                "payload": {"covers": dict(w.handoff), "sha": sha,
-                                           "files": sorted({o.payload["file"] for o in cites})}}],
+                                           "files": sorted({file_of(o.payload["symbol"]) for o in cites})}}],
                              actor="loop", caused_by=did))
     return out
 
 
-def _phantom_done(store: Store, fid: str, did: str, removed: set[tuple[str, str]]) -> bool:
+def _phantom_done(store: Store, fid: str, did: str, removed: set[str]) -> bool:
     """A deleted feature settles on its code going away, never on a binding op:
     the delete already detached its bindings, so no ``bind.*`` op can
     cite the hand-off and the phantom would queue forever. What it owned is
@@ -110,7 +110,7 @@ def _phantom_done(store: Store, fid: str, did: str, removed: set[tuple[str, str]
         return False
     if not ho.payload.get("delete_code"):
         return True
-    owned = {(e["file"], e["symbol"]) for e in b.detached}
+    owned = {e["symbol"] for e in b.detached}
     return bool(owned) and owned <= removed
 
 

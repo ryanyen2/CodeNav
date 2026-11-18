@@ -104,11 +104,11 @@ def test_suggest_role_writes_only_plans(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
     seed(ws, bind=False)
     denied = ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "X"}}],
-                       actor="human:contrib")
+                       actor="human:gh:contrib")
     assert denied[0].conflict == "authority"
-    pid = ws.open_plan(actor="human:contrib", note="suggestion")
+    pid = ws.open_plan(actor="human:gh:contrib", note="suggestion")
     ok = ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "X"}}],
-                   actor="human:contrib", plan=pid)
+                   actor="human:gh:contrib", plan=pid)
     assert ok[0].conflict is None
     assert ws.store.blocks["p1"].text().segs[0].plan == pid
 
@@ -294,9 +294,9 @@ def test_deleting_a_bound_heading_detaches_and_undo_reattaches(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
     seed_loop(ws)
     d = ws.submit([{"kind": K.BLOCK_DELETE, "target": {"bid": "h1"}, "payload": {}}], actor="human:local")[0]
-    assert ("c.py", "c.py::send") not in ws.store.bindings and d.payload["detached"][0]["symbol"] == "c.py::send"
+    assert "c.py::send" not in ws.store.bindings and d.payload["detached"][0]["symbol"] == "c.py::send"
     ws.submit([dict(b) for b in d.inverse], actor="human:local")
-    assert ws.store.bindings[("c.py", "c.py::send")].feature == "h1"
+    assert ws.store.bindings["c.py::send"].feature == "h1"
     ws.close()
     ws2 = Workspace(tmp_path / ".codoc")
     assert ws2.store.state_fingerprint() == ws.store.state_fingerprint()

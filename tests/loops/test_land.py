@@ -33,7 +33,7 @@ def test_a_detach_from_the_model_lands_on_the_trunk(tmp_path):
     res = ReflectResult()
     assert _land(_Pass(ws, res, {}), Compiler(ws.store).compile(
         {"kind": "detach", "feature_id": "h1", "bindings": ["c.py::send"]}))
-    assert ("c.py", "c.py::send") not in ws.store.bindings and res.auto["detach"] == 1
+    assert "c.py::send" not in ws.store.bindings and res.auto["detach"] == 1
     ws.close()
 
 
@@ -126,6 +126,6 @@ def test_propose_makes_each_removal_its_own_delete_plan(tmp_path):
         client.write(cd, client="cli", bodies=[{"kind": K.PLAN_ACCEPT, "target": {"pid": p}, "payload": {}}
                                                for p in out["plan_ids"]])
         st = client.read(cd).store
-        assert not st.blocks["h1"].live and ("c.py", "c.py::send") not in st.bindings
+        assert not st.blocks["h1"].live and "c.py::send" not in st.bindings
     finally:
         client.release(cd)

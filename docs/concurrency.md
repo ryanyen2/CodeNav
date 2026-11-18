@@ -248,13 +248,20 @@ same thing after it.
 The role table is `roles: {actor: role}` in the tracked `config.json`, so every clone
 reads the same one. An actor's role is, first match:
 
-1. Its entry in the table. This checkout's own person (section 5), `human:local` and
-   `human:import` are `owner` unless the table says otherwise. Another clone's person is
-   whatever the table says, so a teammate who is not in it is a `suggest`er here: their
-   applied trunk ops are counted by `codoc rebuild` and reported by `codoc validate-logs`
-   as ops the table would refuse. A team that shares the log through git lists each person.
+1. Its entry in the table, `none` included.
 2. `machine`, when the actor's kind is `agent`, `translator`, `loop` or `import`.
-3. `suggest`.
+3. `owner`, when the actor is a git person: `human:<email>` or `human:local` (section 5).
+4. `suggest`: a hub sign-in (`human:gh:<login>`) and any other actor.
+
+A git person is an owner because they can already push to the repository, and trust in a
+merged log comes from who may push (Foreign logs, below). So a teammate's pushed trunk
+edits apply on every clone, and `codoc rebuild` and `codoc validate-logs` do not report
+them. What this trusts is the actor a log line names, which nothing signs: anyone whose
+log reaches the trunk can write as any `human:<email>`, as they already could as
+`human:local`. A reviewer who merges a pull request vouches for its logs as for its code.
+To hold a git person to less, give them an entry (`suggest`, or `none`). A hub sign-in is
+not trusted this way: the server assigns its actor, and the table holds what the hub
+recorded for it.
 
 | role | may write |
 |---|---|
@@ -449,7 +456,7 @@ changed nothing is not recorded.
 | `set` | `bid`, `from`, `to` | `kind`, `level`, `rank` with `ranked_by`, or content fields went from `from` to `to`. A content field missing from one side was absent there. | `from` again; for `rank`, only while `ranked_by` is still the one in `to`. |
 | `void` | `bid`, `op`, `to` | The move `op` could not be put back, and `to` is the place it found the block, kept in the block's `void`. | It is dropped from `void`. |
 | `kill_block` | `bid`, `in`? | The block died by the op that recorded the step, while in feature `in`. | It lives again, if that op is still its killer. |
-| `bind` | `file`, `symbol`, `from`, `to` | The binding went from `from` to `to`; `null` is unbound. | `from` again, unless its heading is dead. |
+| `bind` | `symbol`, `from`, `to` | The binding went from `from` to `to`; `null` is unbound. | `from` again, unless its heading is dead. |
 | `detach` | `fid`, `bindings` | The dead heading's bindings were removed and kept on it. | Each is re-attached unless the symbol has an owner now. |
 
 A `mark` step finds its mark by the characters it covered, so a split that cut the mark

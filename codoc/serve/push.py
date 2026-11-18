@@ -43,8 +43,8 @@ def status_message(codoc_dir: Path, actor: str = "") -> dict | None:
         cfg = json.loads(_read(codoc_dir / CONFIG) or "{}")
     except ValueError:
         return None
-    from codoc.workspace.roles import OWNER, Roles
-    role = Roles.from_config(cfg, L.local_actor(codoc_dir.parent)).role(actor) if actor else OWNER
+    from codoc.workspace.roles import OWNER
+    role = Roles.from_config(cfg).role(actor) if actor else OWNER
     return {"kind": "status", "status": {**status, "doc_language": cfg.get("doc_language", "en"),
                                          "actor": actor, "role": role}}
 

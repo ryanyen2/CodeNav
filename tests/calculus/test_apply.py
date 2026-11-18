@@ -70,11 +70,11 @@ def test_every_op_inverts_and_replays(tmp_path):
     invert(s, m, de)
     assert [b.id for b in s.ordered()] == ["h1", "p1", "h2", "p3"]
     # bindings with displacement
-    apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"file": "f.py", "symbol": "g", "fingerprint": "x"}))
-    a2 = apply(s, m.op(K.BIND_ATTACH, {"fid": "h2"}, {"file": "f.py", "symbol": "g", "fingerprint": "y"}))
-    assert s.bindings[("f.py", "g")].feature == "h2" and a2.payload["displaced"]["feature"] == "h1"
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"symbol": "g", "fingerprint": "x"}))
+    a2 = apply(s, m.op(K.BIND_ATTACH, {"fid": "h2"}, {"symbol": "g", "fingerprint": "y"}))
+    assert s.bindings["g"].feature == "h2" and a2.payload["displaced"]["feature"] == "h1"
     invert(s, m, a2)
-    assert s.bindings[("f.py", "g")].feature == "h1"
+    assert s.bindings["g"].feature == "h1"
     # watermarks
     ho = apply(s, m.op(K.FEATURE_HANDOFF, {"fid": "h1"}, {"asked": "make it faster"}))
     assert s.watermarks("h1").handoff == s.frontier or s.watermarks("h1").handoff["s"] <= s.frontier["s"]
@@ -293,9 +293,9 @@ def test_reopen_never_binds_code_to_a_dead_heading(tmp_path):
     from tests.helpers import H, seed
     ws = Workspace(tmp_path / ".codoc"); seed(ws)
     a = ws.open_plan(actor="loop", kind="edit", target="h1")
-    ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"file": "d.py", "symbol": "d.py::x"}}], actor="loop", plan=a)
+    ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"symbol": "d.py::x"}}], actor="loop", plan=a)
     rej = ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": a}, "payload": {}}], actor=H)[0]
-    assert ("d.py", "d.py::x") not in ws.store.bindings
+    assert "d.py::x" not in ws.store.bindings
     ws.submit([{"kind": K.BLOCK_DELETE, "target": {"bid": "h1"}, "payload": {}}], actor=H)
     assert not ws.store.blocks["h1"].live and not [b for b in ws.store.bindings.values() if b.feature == "h1"]
     re = ws.submit([dict(b) for b in rej.inverse], actor=H)[0]        # the person undoes the reject
@@ -312,7 +312,7 @@ def test_reopen_never_binds_code_to_a_dead_heading(tmp_path):
     {"do": "set", "bid": "p1", "from": {"text": ""}, "to": {}},
     {"do": "kill", "segments": [["ghost:1", 0, 1]]},
     {"do": "detach", "fid": "h1", "bindings": [{"file": "f"}]},
-    {"do": "bind", "file": "f", "symbol": "s", "to": {"x": 1}},
+    {"do": "bind", "symbol": "s", "to": {"x": 1}},
     {"do": "unheard-of"},
     {"segments": []},
 ])
@@ -339,7 +339,7 @@ def test_merged_link_keeps_the_existing_placer_even_when_it_also_displaces():
     heading(m, s, "h1", "C")
     ins = paragraph(m, s, "p1", "read the client docs", after="h1")
     human = apply_mark(m, s, "p1", ins, 0, 3, LINK, {"href": "https://u"})
-    apply_mark(m, s, "p1", ins, 9, 14, CITE, {"file": "c.py", "symbol": "C"})
+    apply_mark(m, s, "p1", ins, 9, 14, CITE, {"symbol": "c.py::C"})
     apply_mark(m, s, "p1", ins, 4, 14, LINK, {"href": "https://u"}, actor="loop")
     links = [mk for mk in s.blocks["p1"].text().marks if mk.kind == LINK]
     assert [(mk.actor, mk.op) for mk in links] == [("human:a", human.id)]
@@ -415,14 +415,14 @@ def test_a_heading_made_prose_leaves_as_a_delete_does():
     back."""
     m, s = Mint(), Store()
     heading(m, s, "h1", "Top")
-    apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"file": "f.py", "symbol": "g", "fingerprint": "x"}))
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"symbol": "g", "fingerprint": "x"}))
     sk = apply(s, m.op(K.BLOCK_SET, {"bid": "h1", "path": "kind"}, {"value": PARAGRAPH}))
     assert sk.conflict is None and s.bindings == {}
-    assert [(e["file"], e["symbol"]) for e in sk.payload["detached"]] == [("f.py", "g")]
-    assert apply(s, m.op(K.BIND_REFRESH, {"fid": "h1"}, {"file": "f.py", "symbol": "g"})).conflict == "not_bound"
+    assert [e["symbol"] for e in sk.payload["detached"]] == ["g"]
+    assert apply(s, m.op(K.BIND_REFRESH, {"fid": "h1"}, {"symbol": "g"})).conflict == "not_bound"
     assert replay(s).state_fingerprint() == s.state_fingerprint()
     invert(s, m, sk)
-    assert s.blocks["h1"].kind == HEADING and s.bindings[("f.py", "g")].fingerprint == "x"
+    assert s.blocks["h1"].kind == HEADING and s.bindings["g"].fingerprint == "x"
     assert replay(s).state_fingerprint() == s.state_fingerprint()
     # Under a plan: the reject re-binds; a forged `bindings` in a plan attaches nothing.
     ag = Mint("a", "agent:x")
@@ -430,9 +430,9 @@ def test_a_heading_made_prose_leaves_as_a_delete_does():
     assert apply(s, ag.op(K.BLOCK_SET, {"bid": "h1", "path": "kind"}, {"value": PARAGRAPH}, plan="pl")).conflict is None
     assert s.bindings == {}
     assert apply(s, m.op(K.PLAN_REJECT, {"pid": "pl"}, {})).conflict is None
-    assert s.blocks["h1"].kind == HEADING and s.bindings[("f.py", "g")].feature == "h1"
+    assert s.blocks["h1"].kind == HEADING and s.bindings["g"].feature == "h1"
     paragraph(m, s, "p1", "body", after="h1")
     apply(s, ag.op(K.PLAN_OPEN, {"pid": "p2"}, {"kind": "edit"}))
-    forged = [{"fid": "p1", "feature": "p1", "file": "x.py", "symbol": "y"}]
+    forged = [{"fid": "p1", "feature": "p1", "symbol": "y"}]
     apply(s, ag.op(K.BLOCK_SET, {"bid": "p1", "path": "kind"}, {"value": HEADING, "bindings": forged}, plan="p2"))
-    assert ("x.py", "y") not in s.bindings
+    assert "y" not in s.bindings

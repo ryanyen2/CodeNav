@@ -147,8 +147,8 @@ def test_a_second_fold_keeps_what_only_a_fold_writes():
     heading(m, s, "h1", "One")
     heading(m, s, "h2", "Two", after="h1")
     paragraph(m, s, "p2", "body", after="h2")
-    apply(s, m.op(K.BIND_ATTACH, {"fid": "h2"}, {"file": "f.py", "symbol": "x", "fingerprint": "a"}))
-    apply(s, m.op(K.BIND_REFRESH, {"fid": "h2"}, {"file": "f.py", "symbol": "x", "fingerprint": "b"}))
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h2"}, {"symbol": "x", "fingerprint": "a"}))
+    apply(s, m.op(K.BIND_REFRESH, {"fid": "h2"}, {"symbol": "x", "fingerprint": "b"}))
     apply(s, m.op(K.BLOCK_DELETE, {"bid": "h2"}, {}))
     f = Store()
     for d in snapshot_ops(s, "snap", clock):
@@ -264,7 +264,7 @@ def test_emptied_is_the_same_state_before_and_after_a_fold(tmp_path):
     from codoc.loops.reflect import _emptied
     cd = tmp_path / ".codoc"
     ws = Workspace(cd); seed(ws)
-    ws.submit([{"kind": K.BIND_DETACH, "target": {"fid": "h1"}, "payload": {"file": "c.py", "symbol": "c.py::send"}}], actor="loop")
+    ws.submit([{"kind": K.BIND_DETACH, "target": {"fid": "h1"}, "payload": {"symbol": "c.py::send"}}], actor="loop")
     assert _emptied(ws.store) == ["h1"]
     ws.close()
     fold(cd)
@@ -407,9 +407,9 @@ def test_drift_survives_a_fold_that_takes_every_op_away(tmp_path):
                    {"kind": K.TEXT_INSERT, "target": {"bid": f"p{i}", "path": "text"},
                     "payload": {"after": START, "text": f"Body {i}."}}], actor="loop")
         ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": f"h{i}"},
-                    "payload": {"file": f"m{i}.py", "symbol": f"m{i}.py::f", "fingerprint": "a"}}], actor="loop")
+                    "payload": {"symbol": f"m{i}.py::f", "fingerprint": "a"}}], actor="loop")
         ws.submit([{"kind": K.BIND_REFRESH, "target": {"fid": f"h{i}"},
-                    "payload": {"file": f"m{i}.py", "symbol": f"m{i}.py::f", "fingerprint": "b"}}], actor="loop")
+                    "payload": {"symbol": f"m{i}.py::f", "fingerprint": "b"}}], actor="loop")
     before = {h.id: phase(ws.store, h.id) for h in ws.store.headings()}
     assert set(before.values()) == {"drifted"}, before
     ws.close()

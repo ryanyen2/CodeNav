@@ -95,7 +95,7 @@ def test_bold_merges_and_partial_off_splits():
 def test_exclusive_link_displaces_cite_and_inverse_restores():
     t = Text()
     typed(t, "abcdef", 1)
-    t.set_mark(CITE, {"file": "f", "symbol": "s"}, (op(1), 0), (op(1), 5), True)
+    t.set_mark(CITE, {"symbol": "s"}, (op(1), 0), (op(1), 5), True)
     removed, added = t.set_mark(LINK, {"href": "h"}, (op(1), 2), (op(1), 3), True)
     kinds = sorted((m.kind, m.start[1], m.end[1]) for m in t.marks)
     assert kinds == [(CITE, 0, 1), (CITE, 4, 5), (LINK, 2, 3)]

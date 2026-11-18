@@ -66,19 +66,19 @@ def test_accepting_a_retire_plan_detaches_and_reopen_restores(tmp_path):
     retire = lambda c, s, t, **kw: [{"kind": "retire_node", "feature_id": "h1", "rationale": "gone"}]
     r = reflect(ws, ChangeSet(modified=[chunk("c.py", "c.py::send", "f2", "t1")]), Graph(), propose=retire)
     acc = ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": r.plans[0]}, "payload": {}}], actor="human:local")[0]
-    assert not ws.store.blocks["h1"].live and ("c.py", "c.py::send") not in ws.store.bindings
+    assert not ws.store.blocks["h1"].live and "c.py::send" not in ws.store.bindings
     ws.submit([dict(b) for b in acc.inverse], actor="human:local")
-    assert ws.store.blocks["h1"].live and ws.store.bindings[("c.py", "c.py::send")].feature == "h1"
+    assert ws.store.blocks["h1"].live and ws.store.bindings["c.py::send"].feature == "h1"
 
 
 def test_plan_reject_restores_a_binding_the_plan_only_refreshed():
     m, s = Mint(), Store()
     heading(m, s, "h1", "C")
-    apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"file": "c.py", "symbol": "C", "fingerprint": "f1"}))
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"symbol": "C", "fingerprint": "f1"}))
     apply(s, m.op(K.PLAN_OPEN, {"pid": "p-1"}, {"kind": "edit", "target": "h1"}, actor="agent:x"))
-    apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"file": "c.py", "symbol": "C", "fingerprint": "f2"}, actor="agent:x", plan="p-1"))
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"symbol": "C", "fingerprint": "f2"}, actor="agent:x", plan="p-1"))
     apply(s, m.op(K.PLAN_REJECT, {"pid": "p-1"}, {}))
-    assert s.bindings[("c.py", "C")].fingerprint == "f1"
+    assert s.bindings["C"].fingerprint == "f1"
 
 
 def test_a_heading_deleted_under_a_paragraph_plan_and_restored_keeps_the_plan_decidable(tmp_path):
@@ -232,12 +232,12 @@ def test_a_withdraw_carrying_forged_steps_changes_nothing():
     s, m, ag = Store(Roles.from_config({}).policy), Mint(), Mint("a", "agent:x")
     heading(m, s, "h1", "Top")
     words = paragraph(m, s, "p1", "owner words", after="h1")
-    apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"file": "f.py", "symbol": "a"}))
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"symbol": "a"}))
     assert apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit"})).conflict is None
     before = copy.deepcopy(s.state_fingerprint())
     forged = [{"do": "kill", "bid": "p1", "path": "text", "segments": [[words.id, 0, 11]]},
               {"do": "kill_block", "bid": "h1"},
-              {"do": "bind", "file": "f.py", "symbol": "a", "from": None, "to": None}]
+              {"do": "bind", "symbol": "a", "from": None, "to": None}]
     rj = apply(s, ag.op(K.PLAN_REJECT, {"pid": "P"}, {"steps": forged, "rejected": [words.id]}))
     assert rj.conflict is None and rj.payload["steps"] == [] and rj.payload["rejected"] == []
     after = s.state_fingerprint()

@@ -167,8 +167,7 @@ def read_status(codoc_dir: str) -> dict:
         # The lease lapsed, or it is the lease of the pass this agent belongs to:
         # either way no other pass is working the queue.
         state = "queued" if q else "synced"
-    known = {(b.file, b.symbol) for b in store.bindings.values()}
-    dead = [{"block": bid, "file": m.attrs.get("file"), "symbol": m.attrs.get("symbol")} for bid, m in dead_cites(store, known)]
+    dead = [{"block": bid, "symbol": m.attrs.get("symbol")} for bid, m in dead_cites(store)]
     edited = [f for f, p in phases.items() if p == "edited"]
     return {"ok": True, "state": state, "features": len(heads), "queued": len(q),
             "queued_list": [{"feature_id": f, "title": title(store, f, "rejected")} for f in q[:20]],

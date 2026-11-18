@@ -796,14 +796,13 @@
   },
   {
    "name": "a cite",
-   "md": "[Client](codoc:src/client.py#Client.send)",
+   "md": "[Client](codoc:src/client.py::Client.send)",
    "text": "Client",
    "spans": [
     {
      "kind": "cite",
      "attrs": {
-      "file": "src/client.py",
-      "symbol": "Client.send"
+      "symbol": "src/client.py::Client.send"
      },
      "start": 0,
      "end": 6
@@ -811,15 +810,14 @@
    ]
   },
   {
-   "name": "a cite without a symbol",
+   "name": "a cite of a whole file",
    "md": "[file](codoc:README.md)",
    "text": "file",
    "spans": [
     {
      "kind": "cite",
      "attrs": {
-      "file": "README.md",
-      "symbol": ""
+      "symbol": "README.md"
      },
      "start": 0,
      "end": 4
@@ -1035,14 +1033,13 @@
    "md": "**ab`c`**`de`f"
   },
   {
-   "name": "a cite with and without a symbol",
+   "name": "a cite of a symbol and of a whole file",
    "text": "Client README",
    "spans": [
     {
      "kind": "cite",
      "attrs": {
-      "file": "c.py",
-      "symbol": "Client"
+      "symbol": "c.py::Client"
      },
      "start": 0,
      "end": 6
@@ -1050,14 +1047,13 @@
     {
      "kind": "cite",
      "attrs": {
-      "file": "README.md",
-      "symbol": ""
+      "symbol": "README.md"
      },
      "start": 7,
      "end": 13
     }
    ],
-   "md": "[Client](codoc:c.py#Client) [README](codoc:README.md)"
+   "md": "[Client](codoc:c.py::Client) [README](codoc:README.md)"
   },
   {
    "name": "stars next to a bold edge",

@@ -16,8 +16,7 @@ describe('menus', () => {
         expect(at(19)).toBeNull();                                           // "x/y|"
     });
     it('ranks cite candidates by leaf prefix, then substring, and dedups', () => {
-        const bindings = { by_feature: { h1: [{ file: 'c.py', symbol: 'c.py::Client' }, { file: 'c.py', symbol: 'c.py::Client.send' }],
-                                         h2: [{ file: 'c.py', symbol: 'c.py::Client' }, { file: 's.py', symbol: 's.py::save' }] } };
+        const bindings = { by_feature: { h1: ['c.py::Client', 'c.py::Client.send'], h2: ['c.py::Client', 's.py::save'] } };
         expect(citeItems(bindings, 'cl').map(i => i.label)).toEqual(['Client', 'Client.send']);
         expect(citeItems(bindings, '').length).toBe(3);
         expect(citeItems(bindings, 'zzz')).toEqual([]);

@@ -53,7 +53,7 @@ Check the shape before writing bullets:
 
 - Never write `**bold**`. Bold is the author's way to mark what an agent must get right.
 - Never write a link to a web page. A web link tells an agent to fetch that page.
-- A code citation `[label](codoc:path/file.py#symbol)` is allowed where a line is about that one symbol. Copy the path and symbol exactly from the bindings you were given.
+- A code citation `[label](codoc:path/file.py::symbol)` is allowed where a line is about that one symbol. Copy the symbol exactly from the bindings you were given.
 - No headings inside a description. A heading is a feature.
 
 ### Example

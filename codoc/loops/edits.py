@@ -65,7 +65,7 @@ class Change:
     bodies: list[dict] = field(default_factory=list)
     rewrites: list[Rewrite] = field(default_factory=list)
     strikes: list[str] = field(default_factory=list)
-    bound: list[tuple[str, str]] = field(default_factory=list)     # (file, symbol) this change attaches
+    bound: list[str] = field(default_factory=list)     # the symbols this change attaches
     structural: bool = False
     refused: str | None = None
 
@@ -107,14 +107,12 @@ def validate(raw) -> str | None:
     return None
 
 
-def symbol(binding) -> tuple[str, str] | None:
-    """A binding as ``(file, symbol)``. The symbol is ``file::symbol_path``; a
-    ``[file, symbol]`` pair is read too, since the symbol alone says the file."""
+def symbol(binding) -> str | None:
+    """A binding as its key, ``file::symbol_path``. A ``[file, symbol]`` pair
+    is read too, since the symbol alone says the file."""
     if isinstance(binding, (list, tuple)) and len(binding) == 2:
         binding = binding[1]
-    if not isinstance(binding, str) or "::" not in binding:
-        return None
-    return binding.split("::", 1)[0], binding
+    return binding if isinstance(binding, str) and "::" in binding else None
 
 
 def one_line(md: str) -> str:
@@ -139,9 +137,9 @@ class Compiler:
     reply land the same whether the caller applies each before compiling the
     next or compiles them all first.
 
-    ``hashes`` maps ``(file, symbol)`` to ``(fingerprint, types_hash)`` for the
+    ``hashes`` maps a symbol to ``(fingerprint, types_hash)`` for the
     chunks the caller knows; a binding outside it is attached without hashes.
-    ``bindable``, when given, is the set of ``(file, symbol)`` an edit may bind;
+    ``bindable``, when given, is the set of symbols an edit may bind;
     anything else is dropped (a model may only place the code it was shown)."""
 
     def __init__(self, store: Store, *, hashes: dict | None = None, bindable: set | None = None) -> None:
@@ -167,7 +165,7 @@ class Compiler:
         binds = self._binds(raw.get("bindings"))
         if not binds:
             return Change("attach", fid, refused="no bindable symbol")
-        return Change("attach", fid, bodies=[self._bind(fid, f, s) for f, s in binds], bound=binds)
+        return Change("attach", fid, bodies=[self._bind(fid, s) for s in binds], bound=binds)
 
     def _detach(self, raw: dict) -> Change:
         """Only symbols the feature owns now; anything else is not this
@@ -175,7 +173,7 @@ class Compiler:
         fid = self._feature(raw["feature_id"])
         if fid is None:
             return Change("detach", refused=f"unknown feature {raw['feature_id']!r}")
-        owned: list[tuple[str, str]] = []
+        owned: list[str] = []
         for raw_bind in raw.get("bindings") or []:
             key = symbol(raw_bind)
             bound = self.store.bindings.get(key) if key else None
@@ -184,7 +182,7 @@ class Compiler:
         if not owned:
             return Change("detach", fid, refused="the feature owns none of those symbols")
         return Change("detach", fid, bodies=[{"kind": K.BIND_DETACH, "target": {"fid": fid},
-                                              "payload": {"file": f, "symbol": s}} for f, s in owned])
+                                              "payload": {"symbol": s}} for s in owned])
 
     def _add_node(self, raw: dict) -> Change:
         specs = [BlockSpec(HEADING, 1, one_line(raw["title"]))]
@@ -196,7 +194,7 @@ class Compiler:
         bodies[0] = {"kind": K.BLOCK_ADD, "target": {"bid": fid},
                      "payload": {"kind": HEADING, "under": self._feature(raw.get("parent_id")) or START}}
         binds = self._binds(raw.get("bindings"))
-        bodies += [self._bind(fid, f, s) for f, s in binds]
+        bodies += [self._bind(fid, s) for s in binds]
         if raw.get("id"):
             self.minted[raw["id"]] = fid
         return Change("add_node", fid, bodies=bodies, bound=binds, structural=True)
@@ -260,18 +258,18 @@ class Compiler:
         b = self.store.blocks.get(ref) if ref else None
         return ref if b is not None and b.live and b.kind == HEADING else None
 
-    def _binds(self, raw_binds) -> list[tuple[str, str]]:
-        out: list[tuple[str, str]] = []
+    def _binds(self, raw_binds) -> list[str]:
+        out: list[str] = []
         for b in raw_binds or []:
             key = symbol(b)
             if key and key not in out and (self.bindable is None or key in self.bindable):
                 out.append(key)
         return out
 
-    def _bind(self, fid: str, file: str, sym: str) -> dict:
-        fingerprint, types_hash = self.hashes.get((file, sym), ("", ""))
+    def _bind(self, fid: str, sym: str) -> dict:
+        fingerprint, types_hash = self.hashes.get(sym, ("", ""))
         return {"kind": K.BIND_ATTACH, "target": {"fid": fid},
-                "payload": {"file": file, "symbol": sym, "fingerprint": fingerprint, "types_hash": types_hash}}
+                "payload": {"symbol": sym, "fingerprint": fingerprint, "types_hash": types_hash}}
 
     def _rewrite(self, change: Change, block, spec: BlockSpec) -> str | None:
         """Make ``block`` read as ``spec``. A prose block may change marker

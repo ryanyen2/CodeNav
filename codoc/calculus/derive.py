@@ -346,23 +346,28 @@ def _op(store: Store, op_id: OpId) -> Op | None:
 PHASES = ("edited", "realizing", "queued", "planned", "proposed", "drifted", "synced")
 
 
-def unsent_removal(store: Store, fid: str) -> bool:
-    """Whether the person has removed words here that no hand-off has carried.
+def editors(store: Store, fid: str) -> list[str]:
+    """Who has edited this feature since its last hand-off: the actors of its
+    unsent ink and of the words and blocks they removed that no hand-off has
+    carried. A feature with any is `edited`, and the editor's ⌘S hands off
+    only the ones that name the viewer.
 
-    Not part of `ink`, which the editor draws as what the person wrote and
-    not what they removed. A removal is pending intent all the same (emptying
-    a title by deleting characters flags the feature, and the directive
-    carries it as a `removed:` line), so the phase sees it; otherwise the
-    person would be told there is nothing to hand off while there is."""
+    A removal is not part of `ink`, which the editor draws as what the person
+    wrote and not what they removed. It is pending intent all the same
+    (emptying a title by deleting characters flags the feature, and the
+    directive carries it as a `removed:` line); otherwise the person would be
+    told there is nothing to hand off while there is."""
     w = store.watermarks(fid)
+    out = {c.actor for c in ink(store, fid) if c.stage == "unsent"}
     for b in prose_blocks(store, fid):
         for f in b.layout.text:
             for sg in b.text(f).segs:
                 if sg.dead and is_human(sg.dead_actor) and not in_frontier(sg.dead, w.handoff) \
                         and not in_frontier(sg.dead, w.realized):
-                    return True
-    return any(not in_frontier(b.dead, w.handoff) and not in_frontier(b.dead, w.realized)
-               for b in removed_blocks(store, fid))
+                    out.add(sg.dead_actor)
+    out.update(b.dead_actor for b in removed_blocks(store, fid)
+               if not in_frontier(b.dead, w.handoff) and not in_frontier(b.dead, w.realized))
+    return sorted(out)
 
 
 def removed_blocks(store: Store, fid: str) -> list[Block]:
@@ -384,7 +389,7 @@ def phase(store: Store, fid: str, realizing: set[str] = frozenset()) -> str:
     intent outranks anything the code side has to say. ``realizing`` is the
     one ephemeral input (a lease outside the store)."""
     w = store.watermarks(fid)
-    if any(c.stage == "unsent" for c in ink(store, fid)) or unsent_removal(store, fid):
+    if editors(store, fid):
         return "edited"
     if fid in realizing:
         return "realizing"
@@ -461,12 +466,12 @@ def history(store: Store, fid: str) -> list[Op]:
     return store.ops_on(_body_ids(store, fid))
 
 
-def dead_cites(store: Store, known: set[tuple[str, str]]) -> list[tuple[str, Mark]]:
+def dead_cites(store: Store) -> list[tuple[str, Mark]]:
     out = []
     for b in store.ordered():
         for f in b.layout.text:
             for m in b.text(f).marks:
-                if m.kind == CITE and (m.attrs.get("file", ""), m.attrs.get("symbol", "")) not in known:
+                if m.kind == CITE and m.attrs.get("symbol", "") not in store.bindings:
                     out.append((b.id, m))
     return out
 
@@ -509,7 +514,8 @@ def feature_claims(store: Store, fid: str) -> list[dict]:
 def projection(store: Store, realizing: set[str] = frozenset(), phases: dict[str, str] | None = None,
                entry=block_entry, claims=feature_claims) -> dict:
     """What an editor needs: every live block with its text, runs and spans,
-    each feature's phase, bindings and claims. ``phases``, ``entry`` and
+    each feature's phase, who edited each `edited` one (``editors``), bindings
+    and claims. ``phases``, ``entry`` and
     ``claims`` may be passed in by a caller that already computed or memoized
     them."""
     blocks = []
@@ -520,11 +526,12 @@ def projection(store: Store, realizing: set[str] = frozenset(), phases: dict[str
         blocks.append(entry(store, b))
     watermarks = {fid: {"handoff": w.handoff, "realized": w.realized}
                   for fid, w in store.watermarks_by_fid.items() if (w.handoff or w.realized) and fid in phases}
-    by_feature: dict[str, list[dict]] = {}
+    by_feature: dict[str, list[str]] = {}
     for bd in store.bindings.values():
-        by_feature.setdefault(bd.feature, []).append({"file": bd.file, "symbol": bd.symbol})
+        by_feature.setdefault(bd.feature, []).append(bd.symbol)
     return {"store": store.id, "head": store.pos, "frontier": dict(store.frontier), "blocks": blocks,
-            "phases": phases, "plans": [{**p.to_json(), "handoff": accept_handoffs(store, p)} for p in open_plans(store)],
+            "phases": phases, "editors": {fid: editors(store, fid) for fid, p in phases.items() if p == "edited"},
+            "plans": [{**p.to_json(), "handoff": accept_handoffs(store, p)} for p in open_plans(store)],
             "watermarks": watermarks, "bindings": {"by_feature": by_feature},
             "claims": {fid: c for fid in phases if (c := claims(store, fid))},
             # The layouts this checkout's plugin kinds give a new block, so a

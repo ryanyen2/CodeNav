@@ -36,23 +36,21 @@ export function triggerAt(state: EditorState): Trigger | null {
 }
 
 /** Code the tree already cites or binds, filtered by the query; nearest names first. */
-export function citeItems(bindings: Projection['bindings'], query: string, limit = 8): Array<{ file: string; symbol: string; label: string }> {
+export function citeItems(bindings: Projection['bindings'], query: string, limit = 8): Array<{ symbol: string; label: string }> {
     const q = query.toLowerCase();
     const seen = new Set<string>();
-    const out: Array<{ file: string; symbol: string; label: string; rank: number }> = [];
+    const out: Array<{ symbol: string; label: string; rank: number }> = [];
     for (const list of Object.values(bindings.by_feature)) {
-        for (const b of list) {
-            const key = `${b.file}#${b.symbol}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            const label = b.symbol.split('::').pop() || b.file;
-            const hay = `${b.symbol} ${b.file}`.toLowerCase();
-            const rank = !q ? 1 : label.toLowerCase().startsWith(q) ? 0 : hay.includes(q) ? 1 : -1;
-            if (rank >= 0) out.push({ file: b.file, symbol: b.symbol, label, rank });
+        for (const symbol of list) {
+            if (seen.has(symbol)) continue;
+            seen.add(symbol);
+            const label = symbol.split('::').pop() || symbol;
+            const rank = !q ? 1 : label.toLowerCase().startsWith(q) ? 0 : symbol.toLowerCase().includes(q) ? 1 : -1;
+            if (rank >= 0) out.push({ symbol, label, rank });
         }
     }
     return out.sort((a, b) => a.rank - b.rank || a.label.localeCompare(b.label)).slice(0, limit)
-        .map(({ file, symbol, label }) => ({ file, symbol, label }));
+        .map(({ symbol, label }) => ({ symbol, label }));
 }
 
 export class Menus {
@@ -138,11 +136,11 @@ export class Menus {
 
     private citeMenu(t: Trigger): MenuItem[] {
         return citeItems(this.projection().bindings, t.query).map(c => ({
-            label: c.label, detail: c.file,
+            label: c.label, detail: c.symbol.split('::')[0],
             run: () => {
                 const { state } = this.view;
                 const to = state.selection.from;
-                const mark = state.schema.marks.cite.create({ file: c.file, symbol: c.symbol });
+                const mark = state.schema.marks.cite.create({ symbol: c.symbol });
                 let tr = state.tr.replaceWith(t.from, to, state.schema.text(c.label, [mark]));
                 tr = tr.setSelection(TextSelection.create(tr.doc, t.from + c.label.length)).removeStoredMark(mark);
                 this.view.dispatch(tr);

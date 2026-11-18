@@ -46,11 +46,11 @@ def _as_stored(spans: list[Span], n: int) -> list[Span]:
 # ── inline ───────────────────────────────────────────────────────────────────
 
 def test_inline_forms():
-    text, spans = parse("Calls `send()` **once**, see [docs](https://x.y/z) and [Client](codoc:a.py#a.py::Client).")
+    text, spans = parse("Calls `send()` **once**, see [docs](https://x.y/z) and [Client](codoc:a.py::Client).")
     assert text == "Calls send() once, see docs and Client."
     assert [(s.kind, text[s.start:s.end]) for s in spans] == [
         (CODE, "send()"), (BOLD, "once"), (LINK, "docs"), (CITE, "Client")]
-    assert spans[3].attrs == {"file": "a.py", "symbol": "a.py::Client"}
+    assert spans[3].attrs == {"symbol": "a.py::Client"}
 
 
 def test_code_holds_markup_literally():
@@ -85,7 +85,7 @@ def test_inline_round_trip_fuzz():
             a = rng.randrange(n)
             b = rng.randint(a + 1, n)
             kind = rng.choice([BOLD, CODE, LINK, CITE])
-            attrs = {LINK: {"href": "https://x.y/z"}, CITE: {"file": "a.py", "symbol": "a.py::f"}}.get(kind, {})
+            attrs = {LINK: {"href": "https://x.y/z"}, CITE: {"symbol": "a.py::f"}}.get(kind, {})
             # the store keeps link and cite exclusive: no two overlap
             if kind in (LINK, CITE) and any(s.kind in (LINK, CITE) and s.start < b and a < s.end for s in spans):
                 continue
@@ -217,7 +217,7 @@ def test_block_round_trip_fuzz():
 
 def test_render_parse_edges():
     for text, spans in (("*a", [Span(BOLD, {}, 1, 2)]), ("a*b", [Span(BOLD, {}, 2, 3)]),
-                        ("a]b", [Span(LINK, {"href": "https://u"}, 0, 3)]), ("\\a]", [Span(CITE, {"file": "c.py", "symbol": "C"}, 1, 3)]),
+                        ("a]b", [Span(LINK, {"href": "https://u"}, 0, 3)]), ("\\a]", [Span(CITE, {"symbol": "c.py::C"}, 1, 3)]),
                         ("**x", []), ("[a](https://b)", [Span(BOLD, {}, 0, 3)])):
         assert parse(render(text, spans)) == (text, spans), (text, spans, render(text, spans))
     rng = random.Random(5)
@@ -228,6 +228,6 @@ def test_render_parse_edges():
         if rng.random() < 0.8:
             i, j = sorted(rng.sample(range(len(text) + 1), 2)) if len(text) > 1 else (0, 1)
             kind = rng.choice([BOLD, LINK, CITE])
-            spans = [Span(kind, {} if kind == BOLD else {"href": "https://u"} if kind == LINK else {"file": "c.py", "symbol": "C"}, i, j)]
+            spans = [Span(kind, {} if kind == BOLD else {"href": "https://u"} if kind == LINK else {"symbol": "c.py::C"}, i, j)]
         md = render(text, spans)
         assert parse(md) == (text, spans), (text, spans, md)

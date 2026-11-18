@@ -28,7 +28,7 @@ SAMPLE = GENERATED + """
 
 # Networking {#b-000000000001}
 
-The client **retries three times** via [send](codoc:net/client.py#Client.send), see [rfc](https://r.fc/1).
+The client **retries three times** via [send](codoc:net/client.py::Client.send), see [rfc](https://r.fc/1).
 
 Second paragraph.
 
@@ -68,6 +68,23 @@ def test_export_import_export_is_a_fixed_point():
     assert description(s, "b-000000000001").count("\n\n") == 1
 
 
+def test_the_projection_says_who_edited_each_feature_since_its_hand_off():
+    """⌘S hands off only the features naming the viewer, read off the actors of
+    the unsent words and removals."""
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Client", actor="loop")
+    a = paragraph(m, s, "p1", "Retries once.", after="h1", actor="loop")
+    heading(m, s, "h2", "Server", after="p1", actor="loop")
+    b = paragraph(m, s, "p2", "Listens.", after="h2", actor="loop")
+    assert projection(s)["editors"] == {}
+    apply(s, m.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [a.id, 12], "text": " Mine."}, actor="human:a"))
+    apply(s, m.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": START, "text": "Then "}, actor="human:b"))
+    apply(s, m.op(K.TEXT_DELETE, {"bid": "p2", "path": "text"}, {"from": [b.id, 0], "to": [b.id, 2]}, actor="human:b"))
+    assert projection(s)["editors"] == {"h1": ["human:a", "human:b"], "h2": ["human:b"]}
+    apply(s, m.op(K.FEATURE_HANDOFF, {"fid": "h1"}, {}, actor="human:a"))
+    assert projection(s)["editors"] == {"h2": ["human:b"]}
+
+
 def test_three_channels_and_phase():
     m, s = Mint(), Store()
     heading(m, s, "h1", "Client", actor="loop")                              # bootstrap prose is not ink
@@ -82,7 +99,7 @@ def test_three_channels_and_phase():
     apply(s, m.op(K.FEATURE_HANDOFF, {"fid": "h1"}, {"asked": "stop after one retry"}))
     assert [c.stage for c in ink(s, "h1")] == ["sent"]
     assert phase(s, "h1") == "planned"
-    apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"file": "c.py", "symbol": "Client"}))
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"symbol": "Client"}))
     assert phase(s, "h1") == "queued"
     d = directive(s, "h1")
     assert "Retries once. Then stops." in d and "Author asked: stop after one retry" in d
@@ -156,7 +173,7 @@ def test_ink_keeps_unsent_words_apart_from_sent_neighbours():
     ins = paragraph(m, s, "p1", "Retries once.", after="h1", actor="loop")
     a = apply(s, m.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [ins.id, 12], "text": " A"}))
     apply(s, m.op(K.FEATURE_HANDOFF, {"fid": "h1"}, {}))
-    apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"file": "c.py", "symbol": "C"}))
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"symbol": "c.py::C"}))
     apply(s, m.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [a.id, 1], "text": " B"}))
     assert [(c.stage, c.text) for c in ink(s, "h1")] == [("sent", " A"), ("unsent", " B")]
     assert phase(s, "h1") == "edited"
@@ -169,7 +186,7 @@ def test_partial_realization_is_one_fact():
     a, b, s = Mint("a", "human:a"), Mint("b", "human:a"), Store()
     heading(a, s, "h1", "C", actor="loop")
     ins = paragraph(a, s, "p1", "x", after="h1", actor="loop")
-    apply(s, a.op(K.BIND_ATTACH, {"fid": "h1"}, {"file": "c.py", "symbol": "C"}))
+    apply(s, a.op(K.BIND_ATTACH, {"fid": "h1"}, {"symbol": "c.py::C"}))
     apply(s, b.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [ins.id, 0], "text": "y"}))
     apply(s, a.op(K.FEATURE_HANDOFF, {"fid": "h1"}, {}))
     w = s.watermarks("h1")
@@ -184,7 +201,7 @@ def test_bold_across_a_cite_edge_and_literal_markup_round_trip():
     heading(m, s, "b-000000000001", "T")
     ins = paragraph(m, s, "b-000000000002", "see the client now", after="b-000000000001")
     apply(s, m.op(K.TEXT_MARK, {"bid": "b-000000000002", "path": "text"},
-                  {"kind": CITE, "attrs": {"file": "c.py", "symbol": "C"}, "start": [ins.id, 4], "end": [ins.id, 13], "on": True}))
+                  {"kind": CITE, "attrs": {"symbol": "c.py::C"}, "start": [ins.id, 4], "end": [ins.id, 13], "on": True}))
     apply(s, m.op(K.TEXT_MARK, {"bid": "b-000000000002", "path": "text"}, {"kind": BOLD, "attrs": {}, "start": [ins.id, 8], "end": [ins.id, 13], "on": True}))
     paragraph(m, s, "b-000000000003", "# Not a heading {#b-000000000009}", after="b-000000000002")
     paragraph(m, s, "b-000000000004", "type **stars** to bold and [x](https://y) too", after="b-000000000003")

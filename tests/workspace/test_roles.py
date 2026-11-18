@@ -23,11 +23,11 @@ def test_agents_write_no_verdicts_and_suggesters_ride_only_their_own_plans(tmp_p
     ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {}}], actor="human:local")
     assert ws.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": "h1"}, "payload": {}}], actor="loop")[0].conflict is None
     smuggled = ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "x"}}],
-                         actor="human:contrib", plan=pid)[0]
+                         actor="human:gh:contrib", plan=pid)[0]
     assert smuggled.conflict == "authority" and smuggled.id not in ws.store.plans[pid].ops
-    own = ws.open_plan(actor="human:contrib")
+    own = ws.open_plan(actor="human:gh:contrib")
     ok = ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "x"}}],
-                   actor="human:contrib", plan=own)[0]
+                   actor="human:gh:contrib", plan=own)[0]
     assert ok.conflict is None
 
 
@@ -35,7 +35,7 @@ def test_roles_table_over_every_kind():
     roles = Roles({"human:local": "owner", "human:m": "maintainer"})
     from codoc.calculus.ops import Op
     store = Store()
-    store.plans["p-mine"] = __import__("codoc.calculus.store", fromlist=["Plan"]).Plan("p-mine", "human:s")
+    store.plans["p-mine"] = __import__("codoc.calculus.store", fromlist=["Plan"]).Plan("p-mine", "human:gh:s")
     store.plans["p-theirs"] = __import__("codoc.calculus.store", fromlist=["Plan"]).Plan("p-theirs", "loop")
 
     def allowed(actor, kind, plan=None):
@@ -45,9 +45,9 @@ def test_roles_table_over_every_kind():
         assert allowed("human:local", kind) and allowed("human:m", kind)
         assert allowed("agent:a", kind) == (kind not in K.VERDICTS)
         assert allowed("loop", kind) == (kind not in K.VERDICTS or kind == K.FEATURE_REALIZED)
-        assert allowed("human:s", kind) == (kind == K.PLAN_OPEN)
-        assert allowed("human:s", kind, "p-mine")            # the policy allows; apply's not_plannable decides the rest
-        assert not allowed("human:s", kind, "p-theirs") or kind == K.PLAN_OPEN
+        assert allowed("human:gh:s", kind) == (kind == K.PLAN_OPEN)
+        assert allowed("human:gh:s", kind, "p-mine")            # the policy allows; apply's not_plannable decides the rest
+        assert not allowed("human:gh:s", kind, "p-theirs") or kind == K.PLAN_OPEN
 
 
 def test_roles_from_config_make_every_clone_agree(tmp_path):
@@ -60,7 +60,7 @@ def test_roles_from_config_make_every_clone_agree(tmp_path):
     pid = ws.open_plan(actor="loop")
     ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "P "}}], actor="loop", plan=pid)
     assert ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor="human:alice")[0].conflict is None
-    assert ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor="human:bob")[0].conflict == "authority"
+    assert ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor="human:gh:bob")[0].conflict == "authority"
     ws.close()
     ws2 = Workspace(cd)
     assert ws2.roles.role("human:alice") == "maintainer" and ws2.store.state_fingerprint() == ws.store.state_fingerprint()
@@ -81,9 +81,11 @@ def test_the_local_person_is_their_git_email_and_human_local_without_one(tmp_pat
     assert L.actor_for("ide", tmp_path / "no-repo" / ".codoc") == "human:local"
     # The status the editor reads says who the page's person is.
     assert write_status(named / ".codoc", Store())["actor"] == "human:ada@example.com"
-    # A person working alone owns their checkout; another clone's person is what the tracked table says.
+    # Every git person is an owner, since they can push; a hub sign-in is a suggester; the table wins.
     roles = Roles.load(named / ".codoc")
-    assert roles.role("human:ada@example.com") == "owner" and roles.role("human:bob@example.com") == "suggest"
+    assert roles.role("human:ada@example.com") == roles.role("human:bob@example.com") == "owner"
+    assert roles.role("human:gh:bob") == "suggest"
+    assert Roles.from_config({"roles": {"human:bob@example.com": "none"}}).role("human:bob@example.com") == "none"
 
 
 def test_a_later_demotion_does_not_rewrite_what_was_written(tmp_path):
@@ -96,7 +98,7 @@ def test_a_later_demotion_does_not_rewrite_what_was_written(tmp_path):
     pid = ws.open_plan(actor="loop")
     ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": START, "text": "P "}}], actor="loop", plan=pid)
     acc = ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor="human:alice")[0]
-    bad = ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor="human:bob")[0]
+    bad = ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor="human:gh:bob")[0]
     assert acc.conflict is None and bad.conflict == "authority"
     fp = ws.store.state_fingerprint()
     ws.close()

@@ -108,7 +108,7 @@ def test_projection_spans_agree_with_rejected_markdown_by_character_identity(tmp
             if r < 0.25 and len(live) > 3:
                 i, j = sorted(rng.sample(range(len(live)), 2))
                 kind = rng.choice([BOLD, BOLD, LINK, CITE])
-                attrs = {"href": "https://x"} if kind == LINK else {"file": "f", "symbol": "s"} if kind == CITE else {}
+                attrs = {"href": "https://x"} if kind == LINK else {"symbol": "s"} if kind == CITE else {}
                 plan = rng.choice(plans + [None, None]) if plans else None
                 mark(ws, "p1", kind, live[i], live[j], on=rng.random() < 0.7, actor="loop" if plan else H, plan=plan, attrs=attrs)
             elif r < 0.45 and live:
@@ -215,7 +215,7 @@ def test_a_plan_cite_that_displaced_a_human_link_is_undone_whole_by_reject(tmp_p
     mark(ws, "p1", LINK, r[0], r[11], attrs={"href": "https://x.test/"})     # [Retries once](…)
     before = [m.to_json() for m in ws.store.blocks["p1"].text().marks]
     a = ws.open_plan(actor="loop", kind="edit", target="p1")
-    mark(ws, "p1", CITE, r[3], r[5], actor="loop", plan=a, attrs={"file": "c.py", "symbol": "send"})
+    mark(ws, "p1", CITE, r[3], r[5], actor="loop", plan=a, attrs={"symbol": "send"})
     rej = ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": a}, "payload": {}}], actor=H)[0]
     assert rej.conflict is None
     t = ws.store.blocks["p1"].text()
@@ -229,7 +229,7 @@ def test_rejected_read_mode_while_the_displacing_plan_is_open(tmp_path):
     r = refs(ws, "p1")
     mark(ws, "p1", LINK, r[0], r[11], attrs={"href": "https://x.test/"})
     a = ws.open_plan(actor="loop", kind="edit", target="p1")
-    mark(ws, "p1", CITE, r[3], r[5], actor="loop", plan=a, attrs={"file": "c.py", "symbol": "send"})
+    mark(ws, "p1", CITE, r[3], r[5], actor="loop", plan=a, attrs={"symbol": "send"})
     t = ws.store.blocks["p1"].text()
     assert markdown(t, "rejected", ws.store) == "[Retries once](https://x.test/).", markdown(t, "rejected", ws.store)
 
