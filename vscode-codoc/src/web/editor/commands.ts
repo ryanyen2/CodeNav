@@ -620,16 +620,17 @@ export function pasteBlocks(state: EditorState, env: Env, pieces: Piece[]): Gest
     for (const p of rest) {
         const nb = env.nextBid();
         if (!isBuiltin(p.kind)) {
-            // A card. Its fields split by the fence's layout, which the add then
-            // records. A fence with none sends none, so the applier records its
-            // registry's, and is split by the layout the projection says the kind
-            // registers, else by a block of that kind on the page, else all JSON.
+            // A card. Its fields split by a layout: the fence's, else the one the
+            // projection says the kind registers, else a block of that kind on the
+            // page. The add records the layout it was split by, as
+            // ingest.block_bodies does; knowing none, it sends every field as JSON
+            // and no layout.
             const proj = env.projection?.();
-            const split = p.layout ?? proj?.kinds?.[p.kind] ?? proj?.blocks.find(b => b.kind === p.kind && b.layout)?.layout
-                ?? { text: [], flow: true, export: true };
+            const known = p.layout ?? proj?.kinds?.[p.kind] ?? proj?.blocks.find(b => b.kind === p.kind && b.layout)?.layout;
+            const split = known ?? { text: [], flow: true, export: true };
             const json = Object.fromEntries(Object.entries(p.content).filter(([k]) => !split.text.includes(k)));
             const payload: Record<string, unknown> = { kind: p.kind, after, ...(Object.keys(json).length ? { content: json } : {}),
-                                                       ...(p.layout ? { layout: p.layout } : {}) };
+                                                       ...(known ? { layout: known } : {}) };
             ops.push({ kind: 'block.add', target: { bid: nb }, payload });
             const fields: Record<string, unknown> = { ...json };
             const shadows = new Map<string, Shadow>();

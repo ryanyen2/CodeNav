@@ -149,24 +149,25 @@ describe('a block of a kind this editor does not know', () => {
 describe('a pasted `codoc:` fence with no `$layout`', () => {
     const fence = '```codoc:image\n{"asset": "a.png", "caption": "A **cat**"}\n```';
 
-    it('sends no layout, and splits its fields by the layout the projection shows for the kind', () => {
-        const img: ProjectedBlock = { id: 'i', kind: 'image', level: 0, rank: 'i', head: 1, layout: { text: ['alt', 'caption'], flow: true, export: true },
+    const layout = { text: ['alt', 'caption'], flow: true, export: true };
+
+    it('splits by the layout of a block of the kind on the page, and sends that layout', () => {
+        const img: ProjectedBlock = { id: 'i', kind: 'image', level: 0, rank: 'i', head: 1, layout,
                                       fields: { asset: 'b.png', alt: { text: '', runs: [], spans: [], suggest_del: [] }, caption: { text: '', runs: [], spans: [], suggest_del: [] } } };
         const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', ''), img]);
         m.view.dispatch(m.view.state.tr.setSelection(TextSelection.create(m.view.state.doc, posIn(m.view, 'p', 0))));
         pasteText(m, fence);
         const ops = sent(m);
-        expect(ops[0].payload).toEqual({ kind: 'image', after: 'p', content: { asset: 'a.png' } });
+        expect(ops[0].payload).toEqual({ kind: 'image', after: 'p', content: { asset: 'a.png' }, layout });
         expect(ops.slice(1).map(o => [o.kind, o.target.path])).toEqual([['text.insert', 'caption'], ['text.mark', 'caption']]);
     });
 
-    it('splits by the layout the projection says the kind registers, and still sends no layout', () => {
-        const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', '')],
-                        { kinds: { image: { text: ['alt', 'caption'], flow: true, export: true } } });
+    it('splits by the layout the projection says the kind registers, and sends that layout', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', '')], { kinds: { image: layout } });
         m.view.dispatch(m.view.state.tr.setSelection(TextSelection.create(m.view.state.doc, posIn(m.view, 'p', 0))));
         pasteText(m, fence);
         const ops = sent(m);
-        expect(ops[0].payload).toEqual({ kind: 'image', after: 'p', content: { asset: 'a.png' } });
+        expect(ops[0].payload).toEqual({ kind: 'image', after: 'p', content: { asset: 'a.png' }, layout });
         expect(ops.slice(1).map(o => [o.kind, o.target.path])).toEqual([['text.insert', 'caption'], ['text.mark', 'caption']]);
     });
 
