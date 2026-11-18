@@ -30,6 +30,27 @@ describe('the page', () => {
         expect(statusLine()).toBe(before);
     });
 
+    it('says when an undo is refused, and the next undo moves past that batch', () => {
+        const mine = (pos: number, batch: string, kind: string): HistoryWindow['ops'][number] => ({ pos, id: `s:${pos}`, at: String(pos),
+            actor: 'human:local', kind, batch, batch_first: pos, plan: null, caused_by: null, blocks: {},
+            inverse: [{ kind: 'plan.reopen', target: { pid: 'x' }, payload: {} }] });
+        const w: HistoryWindow = { start: 0, head: 2, before: {}, ops: [mine(0, 'b-old', 'text.insert'), mine(1, 'b-verdict', 'plan.accept')] };
+        const undoSubs = () => posted.filter(m => m.kind === 'submit').flatMap(m => (m as { subs: Submission[] }).subs);
+        const cmdZ = () => document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true }));
+        posted.length = 0;
+        cmdZ();
+        post({ kind: 'history', history: w });
+        const first = undoSubs();
+        expect(first.map(s => s.batch)).toEqual(['u-b-verdict']);
+        post({ kind: 'acks', acks: first.map(s => ({ cid: s.cid, op: null, conflict: 'verdict_folded' })) });
+        expect(statusLine()).toBe('could not undo plan.accept (verdict_folded)');
+        posted.length = 0;
+        cmdZ();
+        post({ kind: 'history', history: w });                          // the refused undo is not in the window
+        expect(undoSubs().map(s => s.batch)).toEqual(['u-b-old']);
+        post({ kind: 'acks', acks: undoSubs().map(s => ({ cid: s.cid, op: 's:9', conflict: null })) });
+    });
+
     it('answers an undo even when the batch it sent never appears in the history window', async () => {
         posted.length = 0;
         const pm = document.querySelector('#app .ProseMirror') as HTMLElement;

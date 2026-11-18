@@ -43,10 +43,22 @@ let pendingUndo: 'undo' | 'redo' | null = null;
  *  newest 200, so a batch can be answered and never show up there. */
 const inFlight = new Map<string, Set<string>>();
 
+/** Undo submissions waiting for an ack: client id → the undo batch and what it undoes. */
+const undoing = new Map<string, { batch: string; what: string }>();
+/** Undo batches the daemon refused: the next undo moves past them instead of sending them again. */
+const refusedUndo = new Set<string>();
+
 function retire(acks: Ack[]): void {
     for (const a of acks) {
         for (const [b, cids] of inFlight) {
             if (cids.delete(a.cid) && !cids.size) inFlight.delete(b);
+        }
+        const u = undoing.get(a.cid);
+        if (!u) continue;
+        undoing.delete(a.cid);
+        if (a.conflict && !refusedUndo.has(u.batch)) {
+            refusedUndo.add(u.batch);
+            notify(`could not undo ${u.what} (${a.conflict})`);
         }
     }
 }
@@ -290,10 +302,14 @@ function applyUndo(w: HistoryWindow): void {
     for (const e of w.ops) inFlight.delete(e.batch);
     if (inFlight.size) return;                    // something sent is still unanswered; its ack asks again
     const redo = pendingUndo === 'redo';
-    const next = nextUndo(w, actor, redo);
+    const next = nextUndo(w, actor, redo, refusedUndo);
     pendingUndo = null;
     if (!next) { notify(redo ? 'nothing to redo' : 'nothing to undo'); return; }
-    submit(next.ops.map(op => ({ cid: newCid(), batch: next.batch, ...op })));
+    const subs = next.ops.map(op => ({ cid: newCid(), batch: next.batch, ...op }));
+    // What the batch did, by its op kinds, for the notice if the daemon refuses the undo.
+    const what = [...new Set(w.ops.filter(e => e.batch === next.batch.slice(2)).map(e => e.kind))].join(', ');
+    for (const s of subs) undoing.set(s.cid, { batch: next.batch, what });
+    submit(subs);
 }
 
 document.addEventListener('keydown', ev => {
