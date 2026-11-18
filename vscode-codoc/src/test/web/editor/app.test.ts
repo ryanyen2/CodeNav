@@ -43,7 +43,7 @@ describe('the page', () => {
         const first = undoSubs();
         expect(first.map(s => s.batch)).toEqual(['u-b-verdict']);
         post({ kind: 'acks', acks: first.map(s => ({ cid: s.cid, op: null, conflict: 'verdict_folded' })) });
-        expect(statusLine()).toBe('could not undo plan.accept (verdict_folded)');
+        expect(statusLine()).toBe('Could not undo accepting the proposal: it is in a snapshot now.');
         posted.length = 0;
         cmdZ();
         post({ kind: 'history', history: w });                          // the refused undo is not in the window

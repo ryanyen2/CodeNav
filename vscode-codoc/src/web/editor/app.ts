@@ -47,6 +47,13 @@ const inFlight = new Map<string, Set<string>>();
 const undoing = new Map<string, { batch: string; what: string }>();
 /** Undo batches the daemon refused: the next undo moves past them instead of sending them again. */
 const refusedUndo = new Set<string>();
+/** Why an undo was refused, in the person's words; any other code is shown as it is. */
+const WHY_NOT: Record<string, string> = {
+    verdict_folded: 'it is in a snapshot now',
+    not_current_verdict: 'the proposal was decided again since',
+    plan_open: 'the proposal is open again',
+    authority: 'your role does not allow it',
+};
 
 function retire(acks: Ack[]): void {
     for (const a of acks) {
@@ -58,7 +65,7 @@ function retire(acks: Ack[]): void {
         undoing.delete(a.cid);
         if (a.conflict && !refusedUndo.has(u.batch)) {
             refusedUndo.add(u.batch);
-            notify(`could not undo ${u.what} (${a.conflict})`);
+            notify(`Could not undo ${u.what}: ${WHY_NOT[a.conflict] ?? a.conflict}.`);
         }
     }
 }
@@ -307,7 +314,9 @@ function applyUndo(w: HistoryWindow): void {
     if (!next) { notify(redo ? 'nothing to redo' : 'nothing to undo'); return; }
     const subs = next.ops.map(op => ({ cid: newCid(), batch: next.batch, ...op }));
     // What the batch did, by its op kinds, for the notice if the daemon refuses the undo.
-    const what = [...new Set(w.ops.filter(e => e.batch === next.batch.slice(2)).map(e => e.kind))].join(', ');
+    const kinds = new Set(w.ops.filter(e => e.batch === next.batch.slice(2)).map(e => e.kind));
+    const what = kinds.has('plan.accept') ? 'accepting the proposal' : kinds.has('plan.reject') ? 'rejecting the proposal'
+        : kinds.has('feature.handoff') ? 'the hand-off' : 'the edit';
     for (const s of subs) undoing.set(s.cid, { batch: next.batch, what });
     submit(subs);
 }
