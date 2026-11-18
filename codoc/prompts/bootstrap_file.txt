@@ -12,11 +12,12 @@ Return a small set of features that says what this file is for.
    - If one feature would own more than about 12 chunks, check that they are one concern. An opening sentence that has to list four subsystems means four features.
    - Two classes that implement the same interface independently (two tokenizer backends) are two features.
 2. A class and its methods are one feature. Add a child feature only for a group of methods that is a separable concern.
-3. Every chunk listed must be bound by exactly one feature you return.
+3. Every chunk listed must be bound by exactly one feature you return. A parent does not list the chunks its children bind.
    - `<file>::__module__` (imports, module setup) goes to the first feature you return, never to a feature of its own. Never describe imports.
-   - A module-level constant goes to the feature that uses it most.
+   - A module-level constant, type variable or type alias goes to the feature that uses it most, never to a feature of its own.
 4. Do not add a feature whose title paraphrases one in the list of existing titles below.
 5. A file with no logic of its own (it only re-exports names, or only lists literal values or type aliases) is one feature with one sentence saying what it is for. Do not list its names.
+   - A file of type declarations whose comments state behaviour (when a callback runs, what it may return, a default, an allowed value) is not such a file: describe that behaviour as you would code.
 
 ## Relations
 
@@ -31,7 +32,7 @@ Give a feature a temporary id (`"id": "n1"`). A child sets `"parent_id": "n1"`. 
 
 | field | what goes in it |
 |---|---|
-| `title` | 3 to 6 words, sentence case, a noun phrase naming what the code is for ("HTTP transport adapter"). Never the file name. |
+| `title` | 3 to 6 words, sentence case, a noun phrase naming what the code is for ("HTTP transport adapter"). Never the file name, and never the kind of code instead of its concern: no "type definitions", "helpers", "module", "plumbing" or "re-exports". A file of types is titled by what the types describe ("Parsed config file shape"). |
 | `description` | Markdown, written as the guide below says. Never empty. |
 | `bindings` | the chunks this feature owns, each by its full name `file::symbol_path` as listed below |
 | `rationale` | one short line: why this is a feature of its own |
@@ -55,7 +56,7 @@ a literal).
 
 <solution>
 {"ops": [
-  {"id": "n1", "kind": "add_node", "title": "HTTP transport adapter", "description": "`HTTPAdapter.send(request)` sends a prepared request over a pooled connection and returns a `Response`.\n\n- One pool per `(host, proxy)` pair, reused by every later request to that host.\n- Retries are off by default (`max_retries=0`). When on, only connection errors are retried, never a response.\n- TLS verification uses the `certifi` bundle unless `verify` is a path.", "bindings": ["adapters.py::HTTPAdapter", "adapters.py::HTTPAdapter.send"], "rationale": "the file's main class"},
+  {"id": "n1", "kind": "add_node", "title": "HTTP transport adapter", "description": "`HTTPAdapter.send(request)` sends a prepared request over a pooled connection and returns a `Response`.\n\n- One pool per `(host, proxy)` pair, reused by every later request to that host.\n- Retries are off by default (`max_retries=0`).\n    - When on, only connection errors are retried, never a response.\n- TLS verification uses the `certifi` bundle unless `verify` is a path.", "bindings": ["adapters.py::HTTPAdapter", "adapters.py::HTTPAdapter.send"], "rationale": "the file's main class"},
   {"id": "n2", "kind": "add_node", "parent_id": "n1", "title": "Proxy connection setup", "description": "`proxy_manager_for(proxy)` returns the connection pool for a request that goes through `proxy`.\n\n| proxy scheme | pool |\n|---|---|\n| `socks*` | a `SOCKSProxyManager`, created once per proxy URL |\n| `http`, `https` | urllib3's `proxy_from_url`, with the proxy auth headers attached |\n| none | the adapter's own pool manager |", "bindings": ["adapters.py::HTTPAdapter.proxy_manager_for"], "rationale": "separable: proxy handling"}
 ]}
 </solution>
@@ -96,7 +97,10 @@ Each entry has the commit's `subject` and, when the author wrote one, `why`
 (the opening of its message). Use an entry only for a claim its text makes.
 Ignore entries that describe the edit without giving a reason.
 
-Before you answer, reread each `because`, `so that` and `to` clause you wrote. Keep it only
-if a comment above, the brief or a commit gives that reason; otherwise cut the clause.
+Before you answer, reread what you wrote:
+
+- Each `because`, `so that` and `to` clause: keep it only if a comment above, the brief or a commit gives that reason; otherwise cut the clause.
+- Each first line: one sentence of under about 150 characters, stopping at its first full stop.
+- Each bullet: one sentence. Move a second sentence to a bullet of its own, or nest it under the first when it qualifies it.
 
 Return this file's features, inside solution tags.

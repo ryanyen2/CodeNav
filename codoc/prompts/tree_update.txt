@@ -71,7 +71,7 @@ double-quote character (use backticks around a literal).
   {"kind": "attach", "feature_id": "b-1a2b3c4d5e6f", "bindings": ["metrics_utils.py::print_metrics_table", "metrics_utils.py::format_delta"], "rationale": "binds terminal rendering to the metrics summary"},
   {"kind": "amend", "feature_id": "b-1a2b3c4d5e6f", "blocks": [{"id": "b-91ac00000001", "text": "- Flags a run when any metric is more than `REGRESSION_PCT = 5` percent below the baseline."}, {"text": "- [print_metrics_table()](codoc:metrics_utils.py::print_metrics_table) draws the comparison in the terminal, with coloured deltas."}], "rationale": "sets the threshold to 5 percent and adds a bullet on terminal output"},
   {"kind": "amend", "feature_id": "b-3c4d00000002", "blocks": [{"id": "b-0c2e00000003", "text": "1. Write the queue to a temporary file in the same directory."}, {"text": "2. Rename it over the old file, so a crash leaves either the old queue or the new one."}, {"id": "b-0c2e00000004", "delete": true}], "rationale": "replaces the bullet on writing in place with the temp file and rename steps"},
-  {"kind": "add_node", "parent_id": "b-09cd00000005", "title": "Relevant subtree selection", "description": "Picks the features one update call is shown, so the prompt stays the same size as the tree grows.\n\n- Seeds: features bound in the changed files.\n- Adds one hop along the call graph, plus each seed's parent and children.\n- Features that are planned and have no code yet are always included.", "bindings": ["codoc/loops/context.py::select_context"], "rationale": "adds a feature for how the context is chosen"}
+  {"kind": "add_node", "parent_id": "b-09cd00000005", "title": "Relevant subtree selection", "description": "`select_context(store, graph, files)` picks the features one update call is shown.\n\n- Seeds: features bound in the changed files.\n- Adds one hop along the call graph, plus each seed's parent and children.\n- Features that are planned and have no code yet are always included.", "bindings": ["codoc/loops/context.py::select_context"], "rationale": "adds a feature for how the context is chosen"}
 ]}
 </solution>
 
@@ -106,5 +106,8 @@ wrote it).
 | `modified` | chunks whose code changed and stay bound to `current_feature_id`; use them to decide whether that feature's description is still true |
 | `graph` | call, import and containment edges near the changed symbols, and the latest ops on these features |
 | `impacted` | features whose code calls or imports the changed symbols. Amend one only when the change makes its description false. |
+
+Before you answer, reread every block you wrote: a bullet is one sentence, so a second
+sentence becomes a bullet of its own, or a nested one when it qualifies the first.
 
 Return the smallest op set for this change, inside solution tags.
