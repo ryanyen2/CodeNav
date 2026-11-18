@@ -95,10 +95,17 @@ describe('the page', () => {
         cmdZ();
         post({ kind: 'history', history: { start: 0, head: 2, before: {}, ops: base } });
         post({ kind: 'acks', acks: undoSubs().map(s => ({ cid: s.cid, op: null, conflict: 'dead_block' })) });
-        // Bob restores a block (block.set's history entry names no blocks): the kind change may apply now.
+        // An agent adds a block elsewhere: nothing changed for this undo, so ⌘Z moves past it.
+        const agent = op(2, 'k-agent', 'agent:x', 'block.add', 'z');
         posted.length = 0;
         cmdZ();
-        post({ kind: 'history', history: { start: 0, head: 3, before: {}, ops: [...base, op(2, 'k-bob', 'human:bob', 'block.restore', 'p')] } });
+        post({ kind: 'history', history: { start: 0, head: 3, before: {}, ops: [...base, agent] } });
+        expect(undoSubs().map(s => s.batch)).toEqual(['u-k-old']);
+        post({ kind: 'acks', acks: undoSubs().map(s => ({ cid: s.cid, op: 'k:8', conflict: null })) });
+        // Bob restores the block (block.set's history entry names no blocks; its inverse does): the kind change may apply now.
+        posted.length = 0;
+        cmdZ();
+        post({ kind: 'history', history: { start: 0, head: 4, before: {}, ops: [...base, agent, op(3, 'k-bob', 'human:bob', 'block.restore', 'p')] } });
         expect(undoSubs().map(s => s.batch)).toEqual(['u-k-mine']);
         post({ kind: 'acks', acks: undoSubs().map(s => ({ cid: s.cid, op: 'k:9', conflict: null })) });
     });

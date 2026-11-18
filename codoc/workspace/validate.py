@@ -143,11 +143,11 @@ def changed_logs(root: str | Path, base: str, change: str = "AM") -> list[Path]:
     moved into ``archive/`` is removed. Anything outside ``.codoc/log/`` is not
     this validator's business."""
     root = Path(root)
-    try:
-        raw = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "--no-renames", f"--diff-filter={change}", f"{base}...HEAD"],
-                             capture_output=True, text=True, timeout=30, check=True).stdout
-    except (subprocess.SubprocessError, OSError):
-        return []
+    run = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "--no-renames", f"--diff-filter={change}", f"{base}...HEAD"],
+                         capture_output=True, text=True, timeout=30)
+    if run.returncode != 0:     # a shallow clone or an unrelated base: checking nothing must not pass
+        raise ValueError(f"cannot diff {base}...HEAD: {run.stderr.strip()}")
+    raw = run.stdout
     out = []
     for line in raw.splitlines():
         p = Path(line.strip())

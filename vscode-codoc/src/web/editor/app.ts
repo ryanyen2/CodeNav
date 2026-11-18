@@ -49,12 +49,12 @@ type Undoing = { batch: string; what: string; pos: number; blocks: Set<string> }
 const undoing = new Map<string, Undoing>();
 /** Undo batches the daemon refused. The next undo moves past them. One is offered again
  *  only when it may now succeed: its refusal was not final, and someone else has since
- *  changed the document's structure or a block it touches (typing elsewhere does not count). */
+ *  changed a block it touches. A change elsewhere does not count, so an agent writing in
+ *  another feature cannot make every ⌘Z resend it; a split undo refused because a block
+ *  sits between stays skipped when that block is removed. */
 const refusedUndo = new Map<string, Undoing & { conflict: string }>();
 /** Refusals no later change answers: the undo can never apply. */
 const FINAL = new Set(['authority', 'verdict_folded', 'not_current_verdict', 'plan_not_open']);
-/** Ops that change which blocks exist or where: any of them may make a refused undo possible. */
-const STRUCTURE = new Set(['block.add', 'block.delete', 'block.restore', 'block.move', 'block.split', 'block.merge', 'block.set']);
 /** The blocks an entry changed: its text snapshots and the blocks its inverse names. */
 const touchedBy = (e: HistoryWindow['ops'][number]): string[] => [
     ...Object.keys(e.blocks),
@@ -324,8 +324,7 @@ function applyUndo(w: HistoryWindow): void {
     if (inFlight.size) return;                    // something sent is still unanswered; its ack asks again
     const redo = pendingUndo === 'redo';
     for (const [b, r] of refusedUndo) {
-        const changed = w.ops.some(e => e.actor !== actor && e.pos > r.pos
-            && (STRUCTURE.has(e.kind) || touchedBy(e).some(x => r.blocks.has(x))));
+        const changed = w.ops.some(e => e.actor !== actor && e.pos > r.pos && touchedBy(e).some(x => r.blocks.has(x)));
         if (!FINAL.has(r.conflict) && changed) refusedUndo.delete(b);
     }
     const next = nextUndo(w, actor, redo, new Set(refusedUndo.keys()));

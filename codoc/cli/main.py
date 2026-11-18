@@ -374,9 +374,13 @@ def validate_logs_cmd(paths: list[str] = typer.Argument(None, help="Log files to
     from codoc.workspace.validate import Finding, base_records, changed_logs, validate_logs
     from codoc.workspace import Roles, Workspace
     cd = _require(root)
-    files = [Path(p) for p in paths] if paths else changed_logs(root, base)
-    removed = [] if paths else [Finding(str(p), 0, "removes a session file; the answers it records would be lost")
-                                for p in changed_logs(root, base, "D")]
+    try:
+        files = [Path(p) for p in paths] if paths else changed_logs(root, base)
+        removed = [] if paths else [Finding(str(p), 0, "removes a session file; the answers it records would be lost")
+                                    for p in changed_logs(root, base, "D")]
+    except ValueError as e:
+        typer.echo(f"✗ {e}")
+        raise typer.Exit(2)
     if not files and not removed:
         typer.echo("no session logs to check")
         return

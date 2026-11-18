@@ -606,7 +606,10 @@ def _h_block_merge(store: Store, op: Op, touched: set[str]):
 def _h_block_move(store: Store, op: Op, touched: set[str]):
     if "restore" in op.payload:
         # [id, rank, level, ranked_by]; a row without the last is ranked by this op.
-        rows = [(str(i), str(r), int(l), str(rb[0]) if rb else op.id) for i, r, l, *rb in op.payload["restore"]]
+        # A plan's restore is always ranked by itself: what it names would decide
+        # whether its own reject puts the block back.
+        rows = [(str(i), str(r), int(l), str(rb[0]) if rb and op.plan is None else op.id)
+                for i, r, l, *rb in op.payload["restore"]]
         for i, *_ in rows:
             if i not in store.blocks:
                 raise Conflict("no_block", i)

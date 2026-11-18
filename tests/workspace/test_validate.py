@@ -271,6 +271,15 @@ def test_a_removed_session_file_is_reported(tmp_path):
     assert changed_logs(tmp_path, "main") == []
 
 
+def test_a_base_git_cannot_diff_against_fails_the_check(tmp_path):
+    """A shallow clone or an unrelated base would check nothing; that is not a pass."""
+    import pytest
+    from codoc.workspace.validate import changed_logs
+    _git_workspace(tmp_path)
+    with pytest.raises(ValueError, match="cannot diff"):
+        changed_logs(tmp_path, "no-such-base")
+
+
 def test_a_session_file_that_rewrites_its_merge_base_is_reported(tmp_path):
     """A pull request may only append to a session file. One that edits a
     recorded answer is reported, and the base version is the record."""
