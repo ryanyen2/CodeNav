@@ -387,6 +387,28 @@ class Text:
             out.extend(sg.ref(j) for j in range(lo, hi + 1))
         return out
 
+    def segments_between(self, start: CharRef, end: CharRef) -> list[Segment]:
+        """Every character from ``start`` to ``end`` inclusive, live or dead,
+        as runs: what a mark over that range covers, by identity."""
+        (si, so), (ei, eo) = self.locate(start), self.locate(end)
+        out: list[Segment] = []
+        for i in range(si, ei + 1):
+            s = self.segs[i]
+            lo, hi = (so if i == si else 0), (eo if i == ei else len(s.chars) - 1)
+            out.append((s.op, s.k0 + lo, hi - lo + 1))
+        return out
+
+    def bounds(self, segments: list[Segment]) -> tuple[CharRef, CharRef] | None:
+        """The first and the last of the named characters held here, in
+        sequence order, or None when this Text holds none of them."""
+        hit: list[tuple[CharRef, CharRef]] = []
+        for s in self.segs:
+            ov = [(max(s.k0, k0), min(s.k0 + len(s.chars), k0 + n) - 1) for op, k0, n in segments if op == s.op]
+            ov = [(lo, hi) for lo, hi in ov if lo <= hi]
+            if ov:
+                hit.append(((s.op, min(lo for lo, _ in ov)), (s.op, max(hi for _, hi in ov))))
+        return (hit[0][0], hit[-1][1]) if hit else None
+
     def ops_between(self, start: CharRef, end: CharRef) -> set[OpId]:
         """The ops that minted the live characters from ``start`` to ``end``
         inclusive: what ``delete`` would kill, without killing it."""

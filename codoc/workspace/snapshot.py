@@ -13,8 +13,9 @@ actors, clocks, marks) as ``texts``; one ``bind.attach`` per binding; one
 **The fold stops at the first op of open work.** A verdict on an open plan
 undoes the plan's own ops by identity, so those ops stay in the log. The fold
 runs up to the first op that names a feature with an open plan on it, an open
-plan, its target or one of its ops; everything from there on stays an ordinary
-session log. A tree with no open plan folds whole.
+plan, its target or one of its ops, or a plan decided or reopened after that
+point, since it was open across it; everything from there on stays an
+ordinary session log. A tree with no open plan folds whole.
 
 Replay applies a snapshot first, then every op outside its frontier. Neither
 is checked for authority again: an op was judged when it arrived, and replay
@@ -55,9 +56,11 @@ def settled_prefix(store: Store) -> int:
     (``derive.reads_its_ops`` says which and why). Stopping at the oldest op of
     any feature that is NOT is conservative, not exact (the cut lands at that
     feature's creation rather than at the oldest op its verdict will need), and
-    it is linear, where replaying forward to test each prefix would be
-    quadratic. An exact cut would be worth having only if a tree commonly had
-    an old open plan and much newer work; it does not.
+    it is one linear pass more each time a plan is found in flight across the
+    cut, where replaying
+    forward to test each prefix would be quadratic. An exact cut would be worth
+    having only if a tree commonly had an old open plan and much newer work; it
+    does not.
     """
     live: set[str] = set()
     for b in list(store.blocks.values()):
@@ -69,12 +72,19 @@ def settled_prefix(store: Store) -> int:
         live.add(p.id)
         if p.target:
             live.add(p.target)
-    for i, op in enumerate(store.ops):
-        named = {op.target.get("bid"), op.target.get("fid"), op.target.get("into"),
-                 op.target.get("pid"), op.payload.get("bid"), op.payload.get("new"), op.id}
-        if named & live:
-            return i
-    return len(store.ops)
+    while True:
+        cut = next((i for i, op in enumerate(store.ops) if live & {
+            op.target.get("bid"), op.target.get("fid"), op.target.get("into"), op.target.get("pid"),
+            op.payload.get("bid"), op.payload.get("new"), op.id}), len(store.ops))
+        # A plan answered or reopened after the cut was in flight across it: a
+        # verdict there judges the plan's ops, so they stay, from its opening.
+        late = {str(op.target.get("pid")) for op in store.ops[cut:]
+                if op.kind in (K.PLAN_ACCEPT, K.PLAN_REJECT, K.PLAN_REOPEN) and op.conflict is None} - live
+        if not late:
+            return cut
+        for pid in late:
+            live.add(pid)
+            live.update(store.plans[pid].ops if pid in store.plans else ())
 
 
 def state_at(store: Store, cut: int) -> Store:
@@ -149,7 +159,9 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
         # The person who answered, not the importer: after the fold the log
         # that said so is archived, and a verdict nobody signed is a verdict
         # the History card cannot explain.
-        emit(K.PLAN_ACCEPT if p.status == "accepted" else K.PLAN_REJECT, {"pid": p.id}, {},
+        # It names the verdict it folded: the plan keeps it, and the blocks
+        # above already hold what that verdict did.
+        emit(K.PLAN_ACCEPT if p.status == "accepted" else K.PLAN_REJECT, {"pid": p.id}, {"verdict": p.verdict},
              actor=p.decided_by or SNAPSHOT_ACTOR)
     for fid, w in store.watermarks_by_fid.items():
         if fid not in store.blocks:

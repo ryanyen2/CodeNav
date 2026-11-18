@@ -41,7 +41,8 @@ Plan       := { id, actor,                  actor: who opened it
                 ops: OpId[],                the ops applied under the plan, in apply order
                 opened_by,                  the plan.open op
                 build,                      accepting it hands off its features (an agent's codoc_propose)
-                decided_by }                the actor of the verdict
+                decided_by,                 the actor of the verdict
+                verdict }                   the op of the current verdict, the one a reopen may undo
 
 Watermarks := { handoff: Frontier,          the ops the person has handed to the agent
                 realized: Frontier,         the ops a realization has settled
@@ -223,7 +224,10 @@ mark by `op`.
   different kind or attrs back to the pieces outside the range. The inverse restores them.
 - **Whole.** Turning one on adds a mark with exactly the given range; an exact repeat
   does nothing. Turning one off must name the exact start and end of an existing mark
-  with the same attrs, or the op conflicts `mark_partial`.
+  with the same attrs, or the op conflicts `mark_partial`. An off that also names the
+  placing `op` (the inverse of placing one) removes every mark of that kind, attrs and
+  placer, in every field that holds one: the pieces a split cut it into. It conflicts
+  `mark_partial` when there is none.
 - `block.split` turns a mark that spans the cut into two marks. `block.merge` rejoins a
   mark that ends at the seam with a same-kind, same-attrs mark that starts at it.
 - A mark whose characters are all dead produces no span in any view.
@@ -368,9 +372,9 @@ op's clock. `bind.attach` does not: a relocation is not drift.
 | op | target | wire payload | canonical payload adds | inverse |
 |---|---|---|---|---|
 | `plan.open` | `pid` | `kind` (default `edit`), `target`, `note`, `build?` (honoured from an agent only) | | none |
-| `plan.accept` | `pid` | `subset: OpId[]?`; a replay or a redo also sends `steps`, `accepted`, `rejected` | `accepted`, `rejected`, `steps` | `plan.reopen` |
-| `plan.reject` | `pid` | none; a replay or a redo sends `steps`, `rejected` | `rejected`, `steps` | `plan.reopen` |
-| `plan.reopen` | `pid` | `from`, `by` (the verdict), its `steps`, `accepted`, `rejected`, `subset` | `steps`, the ones it undid | the verdict, carrying those `steps` |
+| `plan.accept` | `pid` | `subset: OpId[]?` | `accepted`, `rejected`, `steps` | `plan.reopen {by: this op}` |
+| `plan.reject` | `pid` | none | `rejected`, `steps` | `plan.reopen {by: this op}` |
+| `plan.reopen` | `pid` | `by`, the verdict | `from`, `steps`, the ones it undid | the verdict again, with its `subset` |
 | `feature.handoff` | `fid` | `covers?`, `asked`, `delete_code` | `covers` | `feature.handoff {restore: previous frontier, handoff: this op}` |
 | `feature.realized` | `fid` | `covers?`, `sha`, `files`, `summary` | `covers` | none |
 
@@ -379,8 +383,9 @@ op's clock. `bind.attach` does not: a relocation is not drift.
   carries `block.delete` or `block.merge`: a plan to delete a feature has `kind = delete`.
 - What a verdict does to each tagged op, and the steps it records, are in
   [concurrency.md](concurrency.md#9-plans-and-verdicts). `plan.reopen` is sent only as
-  the inverse of a verdict. A step of a verdict or a reopen that does not resolve (an
-  unknown block or character, a malformed step) conflicts before anything changes.
+  the inverse of a verdict. Neither reads steps from its payload: a verdict computes
+  them from `subset` and the plan, and a reopen undoes the ones the store recorded on
+  the plan's current verdict, so a replay recomputes every effect and a log cannot add one.
 - `feature.handoff` needs a heading, live or dead, and sets `handoff` to
   `union(handoff, covers)`. `covers` defaults to the store's frontier at apply, which
   includes the ops earlier in the same batch. Its restore form sets `handoff` back and
@@ -433,6 +438,8 @@ Codes are stable identifiers. A conflicted op changes nothing.
 | `not_bound` | detach, refresh | The feature does not own the symbol. |
 | `duplicate_plan`, `delete_plan_needs_target` | `plan.open` | The plan id exists; a delete plan has no target. |
 | `no_plan`, `plan_open` | verdicts, reopen | No such plan; reopening a plan that is open. |
+| `not_current_verdict` | reopen | `by` is not the plan's current verdict: someone reopened and decided it again since. |
+| `verdict_folded` | reopen | A snapshot folded the verdict, its steps and the plan's ops. |
 | `nothing_queued` | `feature.realized` | No hand-off is waiting. |
 
 ## 6. Content as ops

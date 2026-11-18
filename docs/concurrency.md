@@ -274,9 +274,13 @@ rebuilds. `codoc validate-logs` checks the session files a merge would add or ch
 |---|---|
 | An op recorded as applied that the role table would refuse. | A forged or unauthorised write. |
 | A snapshot file. | It states a whole state; only the workspace that folds its own log may write one. |
+| An op carrying a field only a snapshot writes (`ops.SNAPSHOT_ONLY`: a block's texts and death, a plan's ops, a folded verdict's `verdict`). | It would claim another actor's words or a decision nobody made. |
 | A stamp more than 24 hours ahead of this machine's clock. | It would pull every clock that observes it into the future. |
 | An op recorded as applied under a plan after that plan's verdict (by clock, with no reopen between). | The applier refuses it with `plan_not_open`; a log that drops the conflict would put words into a decided plan. |
 | Any failure of the read checks in section 2. | |
+
+A verdict's `steps` need no finding: replay computes them again from the plan and
+never reads the recorded ones (section 9).
 
 `codoc rebuild` prints, per actor, how many applied ops in the local store the table
 would refuse today. That is a signal and changes nothing.
@@ -343,6 +347,8 @@ No write is merged by guessing. An op either applies or is recorded with a code
 | `bind.attach` of a symbol another feature owns. | Applies. The other feature loses the symbol, and the op records it. |
 | An op tagged with a plan that has been decided. | `plan_not_open`. |
 | A second verdict on a plan. | `plan_not_open`. |
+| The undo of a verdict after someone reopened and decided the plan again. | `not_current_verdict`. |
+| The undo of a verdict a snapshot folded. | `verdict_folded`. |
 | A machine repair to a feature with pending intent. | It becomes a plan (section 7). |
 | An actor whose role no longer allows a write. | Earlier ops stand. New ones conflict `authority`. |
 | A suggester's `block.merge` or `block.delete`. | `authority`. Every other edit of theirs becomes a plan. |
@@ -384,55 +390,64 @@ What each tagged op becomes:
 `plan.accept`, in order:
 
 1. The plan must be open.
-2. A verdict that carries `steps` (a replay of a recorded one, or the redo a reopen
-   records) resolves them and does them as recorded. The rest of this list then judges
-   only the plan ops its `accepted` and `rejected` do not name: ops the plan gained
-   after a reopen, or ops a merge put before the verdict.
-3. The accepted set is every applied op of the plan. With a `subset`, it is the subset
+2. The accepted set is every applied op of the plan. With a `subset`, it is the subset
    plus every plan op that minted an anchor an accepted op uses or created the block an
-   accepted op lives in.
-4. The `suggest_del` marks of accepted ops are resolved before anything is mutated.
-5. Plan ops outside the accepted set are undone, newest first, as a reject would.
-6. Each resolved `suggest_del` kills its recorded characters and is removed.
-7. Each accepted `suggest_mark` record is applied, in the order the records were placed.
+   accepted op lives in. `subset` is the decision; nothing else in the payload is read.
+3. The `suggest_del` marks of accepted ops are resolved before anything is mutated.
+4. Plan ops outside the accepted set are undone, newest first, as a reject would.
+5. Each resolved `suggest_del` kills its recorded characters and is removed.
+6. Each accepted `suggest_mark` record is applied, in the order the records were placed.
    A record asking to turn off a whole mark that is already gone is dropped as satisfied.
-8. For `kind = delete` with a live target: the heading's body dies and its bindings are detached.
-9. The plan is `accepted` and `decided_by` is the actor.
+7. For `kind = delete` with a live target: the heading's body dies and its bindings are detached.
+8. The plan is `accepted`, `decided_by` is the actor and `verdict` is this op.
 
-`plan.reject` is steps 1, 2 and 5 with an empty accepted set: it undoes every applied op
+`plan.reject` is steps 1, 4 and 8 with an empty accepted set: it undoes every applied op
 of the plan, newest first.
 
-**Steps.** A verdict records every change it made as an ordered list, `steps`. A step
-names what it changed by identity and carries what it replaced, so undoing it needs the
-step alone: not the plan's ops, which a snapshot may have archived, and not the steps
-around it. A step that changed nothing is not recorded.
+**Steps.** A verdict records every change it made as an ordered list, `steps`. The list
+is the applier's record and is never read from a payload: a verdict computes it from
+its decision and the plan's ops each time it applies, a replay included. A log edited to
+add steps to a verdict therefore changes nothing on a rebuild, and a machine's withdrawal
+of its own empty plan does nothing whatever it carries. A step names what it changed by
+identity and carries what it replaced, so undoing it needs the step alone. A step that
+changed nothing is not recorded.
 
 | `do` | fields | did | undone |
 |---|---|---|---|
 | `kill` | `bid`, `path`, `segments`; `by`, `actor`, `at` when it put back another op's kill | The characters die, by the op that recorded the step unless `by` says otherwise. | They live again, those still dead by that killer. |
 | `revive` | `bid`, `path`, `segments`, `by`, `actor`, `at` | The characters `by` had killed live again. | They die again, by `by`, with its actor and clock. |
-| `mark` | `bid`, `path`, `mark` (with its `actor`, `op`, `at`), `on` | That exact mark was added (`on`) or removed. | The opposite. |
+| `mark` | `bid`, `path`, `mark` (with its `actor`, `op`, `at`), `on`, `segments` | That mark was added (`on`) or removed; `segments` are the characters it covered. | Removed: every mark equal to it but for its range whose first character is one of `segments`, in every field holding them. Added: one piece per field holding any of `segments`, from the first of them to the last. |
 | `set` | `bid`, `from`, `to` | `kind`, `level`, `rank` or content fields went from `from` to `to`. A content field missing from one side was absent there. | `from` again. |
 | `kill_block` | `bid`, `in`? | The block died by the op that recorded the step, while in feature `in`. | It lives again, if that op is still its killer. |
 | `bind` | `file`, `symbol`, `from`, `to` | The binding went from `from` to `to`; `null` is unbound. | `from` again, unless its heading is dead. |
 | `detach` | `fid`, `bindings` | The dead heading's bindings were removed and kept on it. | Each is re-attached unless the symbol has an owner now. |
 
-`plan.reopen` resolves every step first, so a step that does not resolve is a conflict
-that changed nothing; then it undoes them newest first, wherever the characters and
-blocks are now, dead blocks included. It records the steps as it undid them, a `set` or
-`bind` with the value it displaced as `to`, and its inverse is the verdict again,
-carrying those steps. A redo therefore needs no archived op either.
+A `mark` step finds its mark by the characters it covered, so a split that cut the mark
+in two, a merge or a move since does not stop the undo.
+
+`plan.reopen` reads only `by`. It must name the plan's current verdict, or it conflicts
+`not_current_verdict`: an undo of an earlier verdict that arrives after someone reopened
+and decided the plan again changes nothing. It undoes the steps the store recorded on
+that verdict, newest first, wherever the characters and blocks are now, dead blocks
+included, and records them as it undid them, a `set` or `bind` with the value it
+displaced as `to`. Its inverse is the verdict's decision again: `plan.accept` with the
+same `subset`, or `plan.reject`. A redo is therefore judged against the plan as it is
+then, so words the plan gained or took back after the reopen, and a paragraph written
+under a heading a delete plan removes, are decided with the rest.
+
+A move a plan made is put back unless an op other than a verdict or a reopen of that
+plan re-ranked the block since. The re-rank a reopen did is the plan's own.
 
 A reader finds the trunk marks a verdict removed or added as its `mark` steps: `on` true
 for added, false for removed, each with the placer's `op`. The proposal records it
 dropped are `mark` steps too, of kind `suggest_del` or `suggest_mark`. A reopen's `mark`
 steps are the ones it undid, so there `on` true means it removed that mark.
 
-A fresh verdict on a plan whose ops a snapshot archived still needs those ops, and does
-nothing for the ones it cannot find. That happens only when a decided plan was folded
-and then reopened by an undo taken before the fold, and the person then gives a
-different verdict instead of the redo. The ops are not kept on the plan, because a fold
-exists to drop them.
+**A folded verdict is not reopened.** The undo of a verdict a snapshot folded conflicts
+`verdict_folded` and changes nothing. The fold archived the verdict's steps and the
+plan's ops, and any verdict after the reopen, its redo included, would have to judge
+those ops. A plan whose verdict or reopen comes after the cut is not folded (section 12),
+so this happens only to an undo taken before `codoc snapshot` and sent after it.
 
 - **The applier never adds a hand-off to a verdict; the sender does.** The editor's
   Accept and `codoc accept` send `feature.handoff` in the same batch for the features
@@ -558,7 +573,10 @@ must stay in the log. The cut is the position of the first op, in apply order, t
 any of:
 
 - a block of a feature that has an open plan on it (the heading and its body);
-- an open plan, its target, or one of its ops.
+- an open plan, its target, or one of its ops;
+- a plan with a verdict or a reopen at or after the cut, or one of its ops. Such a plan
+  was in flight across the cut, and a verdict on it judges its ops. The rule is applied
+  again until the cut stops moving.
 
 Everything before the cut is folded. Everything from the cut on stays an ordinary
 session log. A tree with no open plan folds whole. When the cut is at position 0 the
@@ -573,7 +591,7 @@ store as the folded ops left it:
 | `block.add` | block, live or dead | `rank`, `level`, the full Text of each Text field (segments with actors, clocks and killers; marks), other fields, `dead`, `dead_actor`, `dead_at`, `dead_in`, `detached`, `bound_once`, `code_at`, `realized_at` | `import` |
 | `bind.attach` | binding | the hashes | `import` |
 | `plan.open` | plan | `kind`, `target`, `note`, `ops`, `opened_by`, `build` | the plan's actor |
-| `plan.accept` or `plan.reject` | plan | | the actor who decided |
+| `plan.accept` or `plan.reject` | plan | `verdict`, the op it folded; it sets the plan's status and verdict and does nothing else | the actor who decided |
 | `feature.handoff` | feature with a hand-off | `covers`, and `asked`, `delete_code` of the latest hand-off | that hand-off's actor |
 | `feature.realized` | feature with a realization | `covers` | `import` |
 

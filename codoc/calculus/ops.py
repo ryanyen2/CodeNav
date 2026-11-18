@@ -77,6 +77,8 @@ STRUCTURAL = frozenset({BLOCK_ADD, BLOCK_SPLIT, BLOCK_MERGE, BLOCK_MOVE, BLOCK_D
 SNAPSHOT_ONLY = {
     BLOCK_ADD: ("texts", "dead", "dead_actor", "dead_at", "dead_in", "detached", "bound_once", "code_at", "realized_at"),
     PLAN_OPEN: ("ops", "opened_by"),
+    PLAN_ACCEPT: ("verdict",),
+    PLAN_REJECT: ("verdict",),
 }
 
 

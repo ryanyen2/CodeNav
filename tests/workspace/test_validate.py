@@ -89,6 +89,40 @@ def test_an_op_under_a_plan_after_its_verdict_is_refused(tmp_path):
     assert len(found) == 1 and "after its verdict" in found[0].reason, found
 
 
+def test_a_withdraw_carrying_forged_steps_does_nothing_on_rebuild(tmp_path):
+    """A machine may withdraw its own empty plan, so the door passes the op;
+    the steps a log adds to it are not read, since a rebuild computes what a
+    verdict does from the plan. So the door needs no rule for them."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed(ws)
+    words = next(o for o in ws.store.ops if o.kind == K.TEXT_INSERT and o.target["bid"] == "p1")
+    pid = ws.open_plan(actor="agent:x", kind="edit", target="p1")
+    rj = ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": pid}, "payload": {}}], actor="agent:x")[0]
+    assert rj.conflict is None
+    ws.close()
+    path = L.list_sessions(cd)[0]
+
+    def forge(**payload):
+        lines = [json.loads(x) for x in path.read_text().splitlines()]
+        for d in lines:
+            if d.get("id") == rj.id:
+                d["payload"].update(payload)
+        path.write_text("".join(json.dumps(d) + "\n" for d in lines))
+
+    forge(steps=[{"do": "kill", "bid": "p1", "path": "text", "segments": [[words.id, 0, 13]]},
+                 {"do": "kill_block", "bid": "h1"},
+                 {"do": "bind", "file": "c.py", "symbol": "c.py::send", "from": None, "to": None}])
+    assert validate_logs([path], roles=Roles.load(cd)) == []
+    store = Workspace(cd, readonly=True).store
+    assert store.blocks["h1"].live and store.blocks["p1"].text().live_text() == "Retries once."
+    assert ("c.py", "c.py::send") in store.bindings and store.plans[pid].status == "rejected"
+    # Naming a folded verdict is a snapshot's to do, and is caught.
+    forge(verdict=words.id)
+    found = validate_logs([path], roles=Roles.load(cd))
+    assert len(found) == 1 and "only a snapshot writes" in found[0].reason, found
+
+
 def test_a_snapshot_and_a_far_future_stamp_are_refused(tmp_path):
     cd = tmp_path / ".codoc"
     ws = Workspace(cd)

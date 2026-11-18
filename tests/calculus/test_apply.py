@@ -316,26 +316,22 @@ def test_reopen_never_binds_code_to_a_dead_heading(tmp_path):
     {"do": "unheard-of"},
     {"segments": []},
 ])
-def test_a_reopen_whose_step_does_not_resolve_is_a_conflict_not_a_crash(step):
-    """`apply` is total: a reopen naming an unknown block, anchor or step
-    is a recorded conflict, not an exception that would stop a rebuild, and
-    nothing before the bad step has been undone."""
+def test_a_reopen_and_a_verdict_read_no_steps_from_their_payload(step):
+    """Steps a reopen or a verdict carries, well formed or not, are not read:
+    each undoes or does what the store computes, here nothing, and neither
+    raises. A reopen's own `from` does not decide what its redo is."""
     m, s = Mint(), Store()
     heading(m, s, "h1", "Client")
     ins = paragraph(m, s, "p1", "Retries once.", after="h1")
     apply(s, m.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit", "target": "p1"}))
-    rej = apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {}))
-    assert rej.conflict is None
-    before = copy.deepcopy(s.state_fingerprint())
-    # Undone first (a reopen undoes newest first), and it would kill "Ret".
-    good = {"do": "revive", "bid": "p1", "path": "text", "segments": [[ins.id, 0, 3]], "by": "x:9", "actor": "human:z", "at": "1"}
-    bad = m.op(K.PLAN_REOPEN, {"pid": "P"}, {"from": "accepted", "by": rej.id, "steps": [step, good]})
-    try:
-        out = apply(s, bad)
-    except Exception as e:  # noqa: BLE001
-        pytest.fail(f"apply raised {e!r} instead of recording a conflict")
-    assert out.conflict is not None
-    assert s.plans["P"].status == "rejected" and s.state_fingerprint() == before
+    good = {"do": "kill", "bid": "p1", "path": "text", "segments": [[ins.id, 0, 3]]}
+    rej = apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {"steps": [step, good]}))
+    assert rej.conflict is None and rej.payload["steps"] == []
+    before = {k: v for k, v in s.state_fingerprint().items() if k != "plans"}
+    out = apply(s, m.op(K.PLAN_REOPEN, {"pid": "P"}, {"from": "accepted", "by": rej.id, "steps": [step, good]}))
+    assert out.conflict is None and out.payload["steps"] == [] and s.plans["P"].status == "open"
+    assert {k: v for k, v in s.state_fingerprint().items() if k != "plans"} == before
+    assert [b["kind"] for b in out.inverse] == [K.PLAN_REJECT]
 
 
 def test_merged_link_keeps_the_existing_placer_even_when_it_also_displaces():

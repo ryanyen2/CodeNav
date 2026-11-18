@@ -9,11 +9,12 @@ from codoc.calculus.export import export_markdown
 from codoc.calculus.ids import START
 from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
+from codoc.calculus.text import SUGGEST_DEL
 from codoc.index.changes import ChangeSet
 from codoc.index.graph import Graph
 from codoc.loops.reflect import reflect
 from codoc.workspace import Workspace
-from codoc.workspace.snapshot import snapshot_ops
+from codoc.workspace.snapshot import settled_prefix, snapshot_ops, state_at
 from tests.helpers import (
     H,
     Clock,
@@ -186,9 +187,9 @@ def test_a_reopen_after_the_paragraph_was_deleted_undoes_the_verdict_inside_it()
     assert T(s, "p1") == "Base. Bar"
 
 
-def test_a_reopen_and_its_redo_need_no_op_a_fold_archived():
-    """Reopen and redo read the verdict's steps, not the plan's ops, so the
-    folded store and the live one agree after both."""
+def test_a_verdict_a_fold_archived_is_not_reopened():
+    """A redo judges the plan's ops, which the fold archived with the verdict,
+    so the undo of a folded verdict is a conflict that changes nothing."""
     m, s, (a, _) = _proposal("insert", "delete")
     v = apply(s, m.op(K.PLAN_ACCEPT, {"pid": "P"}, {"subset": [a.id]}))
     assert T(s, "p1") == "Base. Foo"
@@ -196,14 +197,221 @@ def test_a_reopen_and_its_redo_need_no_op_a_fold_archived():
     for d in snapshot_ops(s, "snap", Clock()):
         replay_recorded(folded, Op.from_json(copy.deepcopy(d)))
     assert folded.state_fingerprint() == s.state_fingerprint() and a.id not in folded.by_id
-    for st in (s, folded):
-        u = Mint("u", "human:a")
-        (r,) = invert(st, u, v)
-        assert r.conflict is None and T(st, "p1") == "Base."
-        (again,) = invert(st, u, r)
-        assert again.conflict is None and T(st, "p1") == "Base. Foo"
-    assert folded.state_fingerprint() == s.state_fingerprint()
+    before = copy.deepcopy(folded.state_fingerprint())
+    (r,) = invert(folded, Mint("u", "human:a"), v)
+    assert r.conflict == "verdict_folded" and folded.state_fingerprint() == before
     assert replay(folded).state_fingerprint() == folded.state_fingerprint()
+
+
+def test_a_folded_accept_of_a_delete_plan_does_not_kill_its_restored_heading():
+    """The fold's verdict restores the plan's status; the blocks it restores
+    already hold what the verdict did, and a heading the person brought back
+    since stays."""
+    m, s, ag = Mint(), Store(), Mint("a", "agent:x")
+    heading(m, s, "h1", "A")
+    heading(m, s, "h2", "B", after="h1")
+    d = apply(s, m.op(K.BLOCK_DELETE, {"bid": "h2"}, {}))
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "D"}, {"kind": "delete", "target": "h1"}))
+    apply(s, m.op(K.PLAN_ACCEPT, {"pid": "D"}, {}))
+    invert(s, m, d)
+    assert not s.blocks["h1"].live
+    apply(s, m.op(K.BLOCK_RESTORE, {}, {"ids": ["h1"]}))
+    assert s.blocks["h1"].live and s.plans["D"].status == "accepted"
+    folded = Store()
+    for o in snapshot_ops(s, "snap", Clock()):
+        replay_recorded(folded, Op.from_json(copy.deepcopy(o)))
+    assert folded.state_fingerprint() == s.state_fingerprint()
+
+
+# ── a verdict never takes its effects from a payload ──────────────────────────
+
+def test_a_withdraw_carrying_forged_steps_changes_nothing():
+    """A machine may withdraw its own empty plan. Steps it sends are not read:
+    the applier computes what a verdict does from the plan, and records that."""
+    from codoc.workspace.roles import Roles
+    s, m, ag = Store(Roles.from_config({}).policy), Mint(), Mint("a", "agent:x")
+    heading(m, s, "h1", "Top")
+    words = paragraph(m, s, "p1", "owner words", after="h1")
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"file": "f.py", "symbol": "a"}))
+    assert apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit"})).conflict is None
+    before = copy.deepcopy(s.state_fingerprint())
+    forged = [{"do": "kill", "bid": "p1", "path": "text", "segments": [[words.id, 0, 11]]},
+              {"do": "kill_block", "bid": "h1"},
+              {"do": "bind", "file": "f.py", "symbol": "a", "from": None, "to": None}]
+    rj = apply(s, ag.op(K.PLAN_REJECT, {"pid": "P"}, {"steps": forged, "rejected": [words.id]}))
+    assert rj.conflict is None and rj.payload["steps"] == [] and rj.payload["rejected"] == []
+    after = s.state_fingerprint()
+    assert after["blocks"] == before["blocks"] and after["bindings"] == before["bindings"]
+    assert replay(s).state_fingerprint() == after
+    # A reopen's own payload names no effects either: it inverts what the store recorded.
+    m2, s2, (a,) = _proposal("insert")
+    v = apply(s2, m2.op(K.PLAN_REJECT, {"pid": "P"}, {}))
+    r = apply(s2, m2.op(K.PLAN_REOPEN, {"pid": "P"}, {"by": v.id, "steps": forged[:1], "from": "accepted"}))
+    assert r.conflict is None and T(s2, "p1") == "Base. Foo" and s2.plans["P"].status == "open"
+    (redo,) = r.inverse
+    assert redo["kind"] == K.PLAN_REJECT
+
+
+def test_a_redo_of_a_reject_undoes_what_the_plan_took_back_since_the_reopen():
+    m, s, ag = Mint(), Store(), Mint("a", "agent:x")
+    heading(m, s, "h1", "Top")
+    x = paragraph(m, s, "p1", "x", after="h1")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit"}))
+    i = apply(s, ag.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [x.id, 0], "text": "abc"}, plan="P"))
+    (r,) = invert(s, m, apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {})))
+    assert T(s, "p1") == "xabc"
+    apply(s, ag.op(K.TEXT_DELETE, {"bid": "p1", "path": "text"}, {"segments": [[i.id, 1, 1]]}, plan="P"))
+    (redo,) = invert(s, m, r)
+    assert redo.conflict is None and T(s, "p1") == "x"
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+def test_a_redo_of_a_delete_accept_takes_a_paragraph_written_after_the_reopen():
+    m, s, ag = Mint(), Store(), Mint("a", "agent:x")
+    heading(m, s, "h1", "A"); paragraph(m, s, "p1", "a body", after="h1")
+    heading(m, s, "h2", "B", after="p1"); paragraph(m, s, "p2", "b body", after="h2")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "D"}, {"kind": "delete", "target": "h2"}))
+    (r,) = invert(s, m, apply(s, m.op(K.PLAN_ACCEPT, {"pid": "D"}, {})))
+    paragraph(m, s, "p3", "new words under B", after="p2")
+    (redo,) = invert(s, m, r)
+    assert redo.conflict is None and [b.id for b in s.ordered()] == ["h1", "p1"]
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+def test_a_reject_after_a_reopen_of_a_reject_puts_the_move_back():
+    """The reopen's own re-rank is the plan's, not someone else's move."""
+    m, s, ag = Mint(), Store(), Mint("a", "agent:x")
+    heading(m, s, "h1", "Top")
+    paragraph(m, s, "a", "a", after="h1"); paragraph(m, s, "b", "b", after="a"); paragraph(m, s, "c", "c", after="b")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "M"}, {"kind": "move"}))
+    apply(s, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "c"}, plan="M"))
+    invert(s, m, apply(s, m.op(K.PLAN_REJECT, {"pid": "M"}, {})))
+    assert [b.id for b in s.ordered()] == ["h1", "b", "c", "a"]
+    assert apply(s, m.op(K.PLAN_REJECT, {"pid": "M"}, {})).conflict is None
+    assert [b.id for b in s.ordered()] == ["h1", "a", "b", "c"]
+
+
+def test_a_reopen_of_a_verdict_that_is_not_the_plans_current_one_is_refused():
+    m, s, ag, other = Mint(), Store(), Mint("a", "agent:x"), Mint("b", "human:b")
+    heading(m, s, "h1", "Top")
+    x = paragraph(m, s, "p1", "x", after="h1")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit"}))
+    apply(s, ag.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [x.id, 0], "text": " plan"}, plan="P"))
+    v1 = apply(s, m.op(K.PLAN_ACCEPT, {"pid": "P"}, {}))
+    invert(s, other, v1)
+    apply(s, other.op(K.PLAN_REJECT, {"pid": "P"}, {}))
+    before = copy.deepcopy(s.state_fingerprint())
+    (stale,) = invert(s, m, v1)                 # the first undo, sent late
+    assert stale.conflict == "not_current_verdict" and s.state_fingerprint() == before
+
+
+def _marks(s):
+    return sorted((b.id, m.kind, m.attrs.get("mark", "")) for b in s.ordered() for m in b.text().marks)
+
+
+def test_a_reopen_finds_the_marks_a_verdict_placed_after_a_split_cut_them():
+    m, s, ag = Mint(), Store(), Mint("a", "agent:x")
+    heading(m, s, "h1", "Top")
+    x = paragraph(m, s, "p1", "alpha beta", after="h1")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit"}))
+    apply(s, ag.op(K.TEXT_MARK, {"bid": "p1", "path": "text"},
+                   {"kind": "bold", "attrs": {}, "start": [x.id, 0], "end": [x.id, 9], "on": True}, plan="P"))
+    acc = apply(s, m.op(K.PLAN_ACCEPT, {"pid": "P"}, {}))
+    apply(s, m.op(K.BLOCK_SPLIT, {"bid": "p1", "path": "text"}, {"at": [x.id, 5], "new": "p2"}))
+    assert _marks(s) == [("p1", "bold", ""), ("p2", "bold", "")]
+    (ro,) = invert(s, m, acc)
+    assert ro.conflict is None and _marks(s) == [("p1", "suggest_mark", "bold"), ("p2", "suggest_mark", "bold")]
+    assert apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {})).conflict is None and _marks(s) == []
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+def test_a_reopen_puts_back_a_proposed_cut_across_a_split_and_accepting_it_cuts():
+    m, s, ag = Mint(), Store(), Mint("a", "agent:x")
+    heading(m, s, "h1", "Top")
+    x = paragraph(m, s, "p1", "alpha beta", after="h1")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit"}))
+    apply(s, ag.op(K.TEXT_MARK, {"bid": "p1", "path": "text"},
+                   {"kind": SUGGEST_DEL, "attrs": {}, "start": [x.id, 0], "end": [x.id, 9], "on": True}, plan="P"))
+    rj = apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {}))
+    apply(s, m.op(K.BLOCK_SPLIT, {"bid": "p1", "path": "text"}, {"at": [x.id, 5], "new": "p2"}))
+    (ro,) = invert(s, m, rj)
+    assert ro.conflict is None and _marks(s) == [("p1", SUGGEST_DEL, ""), ("p2", SUGGEST_DEL, "")]
+    assert apply(s, m.op(K.PLAN_ACCEPT, {"pid": "P"}, {})).conflict is None
+    assert [T(s, b) for b in ("p1", "p2")] == ["", ""] and _marks(s) == []
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+def test_undoing_a_proposed_cut_after_a_split_removes_both_pieces():
+    m, s, ag = Mint(), Store(), Mint("a", "agent:x")
+    heading(m, s, "h1", "Top")
+    x = paragraph(m, s, "p1", "alpha beta", after="h1")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit"}))
+    cut = apply(s, ag.op(K.TEXT_MARK, {"bid": "p1", "path": "text"},
+                         {"kind": SUGGEST_DEL, "attrs": {}, "start": [x.id, 0], "end": [x.id, 9], "on": True}, plan="P"))
+    apply(s, m.op(K.BLOCK_SPLIT, {"bid": "p1", "path": "text"}, {"at": [x.id, 5], "new": "p2"}))
+    (un,) = invert(s, ag, cut)
+    assert un.conflict is None and _marks(s) == []
+    redo = invert(s, ag, un)                    # one piece per paragraph
+    assert [r.conflict for r in redo] == [None, None]
+    assert _marks(s) == [("p1", SUGGEST_DEL, ""), ("p2", SUGGEST_DEL, "")]
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+# ── live and fold-then-replay agree ───────────────────────────────────────────
+
+def _folded(s: Store) -> tuple[Store, int]:
+    """The store a rebuild makes after `codoc snapshot`: the settled prefix
+    folded, then the rest replayed as recorded."""
+    cut = settled_prefix(s)
+    folded = Store()
+    for d in snapshot_ops(state_at(s, cut), "snap", Clock()):
+        assert replay_recorded(folded, Op.from_json(d)).conflict is None
+    for o in s.ops[cut:]:
+        replay_recorded(folded, Op.from_json(copy.deepcopy(o.to_json())))
+    return folded, cut
+
+
+def _late_open_plan(m: Mint, s: Store, ag: Mint) -> None:
+    """A second feature with a plan still open, so the cut falls after it."""
+    heading(m, s, "h2", "B", after="p1")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "Q"}, {"kind": "edit", "target": "h2"}))
+    apply(s, ag.op(K.TEXT_INSERT, {"bid": "h2", "path": "text"}, {"after": START, "text": "q"}, plan="Q"))
+
+
+def test_a_fold_keeps_a_plan_answered_after_the_cut():
+    """The plan was open where the cut falls and decided after it. Folding
+    its ops would state it decided before its verdict."""
+    m, s, ag = Mint(), Store(), Mint("a", "agent:x")
+    heading(m, s, "h1", "A")
+    x = paragraph(m, s, "p1", "x", after="h1")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit", "target": "h1"}))
+    apply(s, ag.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [x.id, 0], "text": " plan"}, plan="P"))
+    _late_open_plan(m, s, ag)
+    apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {}))
+    folded, cut = _folded(s)
+    assert cut > 0 and folded.state_fingerprint() == s.state_fingerprint()
+
+
+def test_a_plans_own_restore_after_a_reopen_replays_the_same_after_a_fold():
+    """Accepted, then the person's undo reopens it and the plan gives back a
+    word it took back, then it is accepted again. The fold keeps the plan's
+    ops, and whether the restore takes back the plan's own delete is asked of
+    the plan's op list, which a fold keeps, not of an op it archived."""
+    m, s, ag = Mint(), Store(), Mint("a", "agent:x")
+    heading(m, s, "h1", "Top")
+    x = paragraph(m, s, "p1", "x", after="h1")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit"}))
+    i = apply(s, ag.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [x.id, 0], "text": "abc"}, plan="P"))
+    d = apply(s, ag.op(K.TEXT_DELETE, {"bid": "p1", "path": "text"}, {"segments": [[i.id, 1, 1]]}, plan="P"))
+    v = apply(s, m.op(K.PLAN_ACCEPT, {"pid": "P"}, {}))
+    _late_open_plan(m, s, ag)
+    invert(s, m, v)
+    r = apply(s, ag.op(K.TEXT_RESTORE, {"bid": "p1", "path": "text"}, {"segments": [[i.id, 1, 1]], "by": d.id}, plan="P"))
+    assert r.conflict is None and T(s, "p1") == "xabc"
+    apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {}))
+    assert T(s, "p1") == "x"
+    folded, cut = _folded(s)
+    assert cut > 0 and folded.state_fingerprint() == s.state_fingerprint()
 
 
 def test_a_redo_also_decides_what_the_plan_gained_after_the_reopen():

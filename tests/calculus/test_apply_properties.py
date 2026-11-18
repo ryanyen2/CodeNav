@@ -7,13 +7,14 @@ import random
 import pytest
 
 from codoc.calculus import ops as K
-from codoc.calculus.apply import apply
+from codoc.calculus.apply import apply, replay_recorded
 from codoc.calculus.doc import HEADING, PARAGRAPH
 from codoc.calculus.ids import START
 from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
 from codoc.calculus.text import BOLD, SUGGEST_DEL
-from tests.helpers import Mint, T, heading, invert, paragraph, replay
+from codoc.workspace.snapshot import settled_prefix, snapshot_ops, state_at
+from tests.helpers import Clock, Mint, T, heading, invert, paragraph, replay
 
 # ── one holder per identity; verdicts find their characters ──────────
 
@@ -279,9 +280,9 @@ def plan_op(rng: random.Random, m: Mint, s: Store, step: int, undos: bool) -> Op
         else:
             payload, path = ({"unset": True} if rng.random() < 0.4 else {"value": rng.randint(0, 9)}), "note"
         return m.op(K.BLOCK_SET, {"bid": b.id, "path": path}, payload, actor=AGENT, plan=pid)
-    if r < 0.78 and undos:
-        # A cut proposal. Left out where ordinary ops are undone: a mark's
-        # inverse names its exact range, which a split since has cut in two.
+    if r < 0.78:
+        # A cut proposal. Its undo names it by the op that placed it, so a
+        # split since that cut it in two does not stop the undo.
         b = rng.choice(blocks)
         live = list(b.text().live_refs())
         if len(live) > 1:
@@ -407,10 +408,7 @@ def test_conflict_never_moves_the_state_fuzz():
         op = random_op(rng, m, s, step, plans=True, undos=True)
         if rng.random() < 0.3:
             keys = [k for k in ("after", "from", "to", "start", "end", "at") if k in op.payload]
-            if op.kind in VERDICT_KINDS and "steps" in op.payload:
-                # A recorded step that no longer resolves, after ones that would.
-                op.payload["steps"] = [*op.payload["steps"], {"do": "kill", "segments": [["ghost:1", 0, 1]]}]
-            elif keys and rng.random() < 0.7:
+            if keys and rng.random() < 0.7:
                 op.payload[rng.choice(keys)] = ["ghost:1", 0]
             elif op.kind == K.TEXT_DELETE and rng.random() < 0.5:
                 op.payload = {"segments": [[p.id, 0, 2], ["ghost:1", 0, 1]]}
@@ -454,3 +452,35 @@ def test_a_verdict_then_its_reopen_is_the_document_before_it_fuzzed():
             checked += 1
         assert checked > 5, seed
         assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+@pytest.mark.parametrize("seed", [13, 15, 21, 29, 38])
+def test_a_fold_then_the_rest_of_the_log_replays_to_the_live_store(seed):
+    """Fold a prefix that leaves no plan in flight across the cut (none open
+    at it, none answered or reopened after it: what `settled_prefix` keeps
+    to), replay the rest as recorded, and get the same store. Nothing replayed
+    after the cut needs an op the fold archived. A cut with a plan in flight
+    across it cannot be folded at all: a verdict after it judges the plan's
+    ops, which the fold would take."""
+    rng = random.Random(seed)
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Root")
+    paragraph(m, s, "p1", "seed text here", after="h1")
+    for step in range(160):
+        if not s.ordered():
+            break
+        apply(s, random_op(rng, m, s, step, plans=True, undos=True))
+    folds = 0
+    for cut in [*range(len(s.ops) // 4, len(s.ops), 2), settled_prefix(s)]:
+        prefix = state_at(s, cut)
+        if prefix.open_plans or any(o.kind in VERDICT_KINDS and o.target.get("pid") in prefix.plans for o in s.ops[cut:]):
+            assert cut != settled_prefix(s), cut
+            continue
+        folded = Store()
+        for d in snapshot_ops(prefix, "snap", Clock()):
+            assert replay_recorded(folded, Op.from_json(d)).conflict is None
+        for o in s.ops[cut:]:
+            replay_recorded(folded, Op.from_json(copy.deepcopy(o.to_json())))
+        assert folded.state_fingerprint() == s.state_fingerprint(), (seed, cut)
+        folds += 1
+    assert folds > 2, seed

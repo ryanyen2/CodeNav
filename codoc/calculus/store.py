@@ -74,11 +74,14 @@ class Plan:
     # emits carries the fold's clock, so a stored `decided_at` would be the one
     # timestamp that looked authentic and was not.
     decided_by: str = ""
+    # The op of the current verdict, the one a reopen may undo. A fold keeps it
+    # as it keeps who decided, so a reopen asks the same question either side.
+    verdict: OpId = ""
 
     def to_json(self) -> dict:
         return {"id": self.id, "actor": self.actor, "kind": self.kind, "target": self.target,
                 "note": self.note, "status": self.status, "ops": list(self.ops), "opened_by": self.opened_by,
-                "build": self.build, "decided_by": self.decided_by}
+                "build": self.build, "decided_by": self.decided_by, "verdict": self.verdict}
 
 
 @dataclass

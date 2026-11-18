@@ -8,7 +8,8 @@ they will touch before the first mutation, so a conflict discovered midway
 never leaves a partial change behind. A verdict undoes, strikes and applies
 mark records in turn and records each change as an ordered step; a proposal
 it cannot apply is one the document has already satisfied, not a reason to
-stop half way. Its reopen resolves every step, then undoes them newest first.
+stop half way. Its reopen undoes the steps the store recorded for it, newest
+first; neither reads steps from a payload.
 
 On success the op leaves with its canonical payload (what it actually did) and
 its inverse (op bodies that undo it). The inverse of an inverse is the
@@ -35,7 +36,7 @@ from codoc.calculus.ops import Op, OpBody, body, covered, frontier_union
 from codoc.calculus.rank import RankError
 from codoc.calculus.store import Binding, Plan, Store
 from codoc.calculus.text import (
-    PROPOSALS, SUGGEST_DEL, SUGGEST_MARK, AnchorError, Mark, MarkError, Text, nfc, struck_chars,
+    PROPOSALS, SUGGEST_DEL, SUGGEST_MARK, WHOLE, AnchorError, Mark, MarkError, Text, nfc, struck_chars,
 )
 
 RESERVED_PATHS = frozenset({"id", "rank", "dead", LAYOUT_KEY})   # LAYOUT_KEY: the fence's own key for the layout
@@ -244,10 +245,11 @@ def _only_own_plan(store: Store, op: Op, work, segs) -> None:
         # A restore under a plan undoes a delete of that plan's. Reviving
         # characters somebody ELSE killed would override their op. A
         # maintainer removing a plan's words is an ordinary trunk delete and a
-        # proposal does not get to answer it.
-        undone = store.by_id.get(str(op.payload.get("by") or ""))
-        if undone is None or undone.plan != op.plan:
-            raise Conflict("not_this_plans_delete", str(op.payload.get("by") or ""))
+        # proposal does not get to answer it. Asked of the plan's op list,
+        # which a fold keeps, not of the op, which it may archive.
+        by = str(op.payload.get("by") or "")
+        if by not in store.plans[op.plan].ops:
+            raise Conflict("not_this_plans_delete", by)
         return
     named = {(str(o), int(k) + i) for o, k, n in segs for i in range(int(n))}
     for block, p in work:
@@ -282,6 +284,8 @@ def _h_text_mark(store: Store, op: Op, touched: set[str]):
     attrs = dict(op.payload.get("attrs") or {})
     start, end = _char(op.payload["start"]), _char(op.payload["end"])
     on = bool(op.payload.get("on", True))
+    if not on and kind in WHOLE and op.payload.get("op"):
+        return _whole_mark_off(store, op, kind, attrs, touched)
     block, p = store.locate_char(start, (bid, path))
     if not block.live:
         raise Conflict("dead_block", block.id)
@@ -325,9 +329,7 @@ def _h_text_mark(store: Store, op: Op, touched: set[str]):
         touched.add(block.id)
         canonical = {"kind": kind, "attrs": attrs, "start": ref_to_json(start), "end": ref_to_json(end), "on": on,
                      "bid": block.id, "path": p, "proposed": record.to_json(), "removed": [], "added": []}
-        return canonical, [body(K.TEXT_MARK, {"bid": block.id, "path": p},
-                                {"kind": SUGGEST_MARK, "attrs": dict(record.attrs), "start": list(start),
-                                 "end": list(end), "on": False})]
+        return canonical, _mark_inverse(block.id, p, [], [record])
     removed, added = text.set_mark(kind, attrs, start, end, on, actor=actor, op=placer, at=at)
     store.index_text(block.id, p, text)
     touched.add(block.id)
@@ -340,14 +342,41 @@ def _h_text_mark(store: Store, op: Op, touched: set[str]):
         canonical["op"] = placer
     if op.payload.get("at"):
         canonical["at"] = at          # a restored mark keeps when it was placed, as it keeps who
-    inverse: list[OpBody] = []
+    return canonical, _mark_inverse(block.id, p, removed, added)
+
+
+def _mark_inverse(bid: str, path: str, removed: list[Mark], added: list[Mark]) -> list[OpBody]:
+    """Off for each added mark, then on for each removed one with its placer.
+    An added mark that is removed whole is named by its placer, so a split
+    that cut it since does not stop the undo."""
+    out: list[OpBody] = []
     for m in added:
-        inverse.append(body(K.TEXT_MARK, {"bid": block.id, "path": p},
-                            {"kind": m.kind, "attrs": m.attrs, "start": list(m.start), "end": list(m.end), "on": False}))
+        out.append(body(K.TEXT_MARK, {"bid": bid, "path": path},
+                        {"kind": m.kind, "attrs": dict(m.attrs), "start": list(m.start), "end": list(m.end), "on": False,
+                         **({"op": m.op} if m.kind in WHOLE and m.op else {})}))
     for m in removed:
-        inverse.append(body(K.TEXT_MARK, {"bid": block.id, "path": p},
-                            {"kind": m.kind, "attrs": m.attrs, "start": list(m.start), "end": list(m.end),
-                             "on": True, "actor": m.actor, "op": m.op, "at": m.at}))
+        out.append(body(K.TEXT_MARK, {"bid": bid, "path": path},
+                        {"kind": m.kind, "attrs": dict(m.attrs), "start": list(m.start), "end": list(m.end),
+                         "on": True, "actor": m.actor, "op": m.op, "at": m.at}))
+    return out
+
+
+def _whole_mark_off(store: Store, op: Op, kind: str, attrs: dict, touched: set[str]):
+    """Turn off a mark that is removed whole, named by the op that placed it:
+    every piece of it, in every field that holds one now. Only one placement
+    makes marks of that kind, attrs and placer, so these are its pieces."""
+    placer = str(op.payload["op"])
+    gone = [(b, f, m) for b, f in store.mark_holders(placer) for m in b.text(f).marks
+            if m.op == placer and m.kind == kind and m.attrs == attrs]
+    if not gone:
+        raise MarkError(f"no {kind} mark placed by {placer}")
+    for b, f, m in gone:
+        b.text(f).marks.remove(m)
+        touched.add(b.id)
+    b0, f0 = gone[0][0].id, gone[0][1]
+    canonical = {"kind": kind, "attrs": attrs, "start": op.payload["start"], "end": op.payload["end"], "on": False,
+                 "op": placer, "bid": b0, "path": f0, "removed": [m.to_json() for _, _, m in gone], "added": []}
+    inverse = [x for b, f, m in gone for x in _mark_inverse(b.id, f, [m], [])]
     return canonical, inverse
 
 
@@ -818,77 +847,40 @@ def _closure(plan_ops: list[Op], subset: list[OpId]) -> list[OpId]:
 # ── verdict steps ────────────────────────────────────────────────────────────
 #
 # A verdict records what it changed as an ordered list of steps, and its
-# reopen undoes them newest first. A step names what it changed by identity
-# and carries what it replaced, so undoing it needs the step and nothing else:
-# not the plan's ops, which a fold may have archived, and not the steps around
-# it. Both directions record the steps as they took effect, so a record never
+# reopen undoes them newest first. The steps are the applier's record and are
+# never read from a payload: a verdict computes them from its decision and the
+# plan every time it applies, a replay included, so a log cannot carry an
+# effect its verdict would not have. A step names what it changed by identity
+# and carries what it replaced, so undoing it needs the step and nothing else.
+# Both directions record the steps as they took effect, so a record never
 # claims a change that did not happen.
 #
 #   kill        bid path segments [by actor at]   killed by the op that records the step, or as `by` (a kill of that op's put back)
 #   revive      bid path segments by actor at     characters `by` had killed, brought back
-#   mark        bid path mark on                  that exact mark added (on) or removed
+#   mark        bid path mark on segments         that mark added (on) or removed, over these characters
 #   set         bid from to                       kind, level, rank or content fields; a field missing from one side was absent there
 #   kill_block  bid [in]                          the block killed by the op that records the step, while in feature `in`
 #   bind        file symbol from to               the binding replaced; null is unbound
 #   detach      fid bindings                      a dead heading's bindings, removed and kept on it
 #
-# `bid` and `path` say where a text step took effect; its characters are found
-# by identity, wherever they are now.
+# `bid` and `path` say where a step took effect; its characters are found by
+# identity, wherever they are now.
 
 _SHAPE = ("kind", "level", "rank")      # block attributes a `set` step changes; any other key is a content field
-
-
-def _check_steps(store: Store, steps) -> list[Wire]:
-    """Resolve every step before the first one is done, so a step that does
-    not resolve is a conflict that changed nothing."""
-    out = []
-    for s in steps or []:
-        s = Wire(s)
-        do, hint = s["do"], (str(s.get("bid")), str(s.get("path", "text")))
-        if do in ("kill", "revive"):
-            for o, k, _ in _seglist(s["segments"]):
-                store.locate_char((o, k), hint)
-        elif do == "mark":
-            store.locate_char(Mark.from_json(Wire(s["mark"])).start, hint)
-            s["on"]
-        elif do == "bind":
-            s["file"], s["symbol"]
-            for side in (s.get("from"), s.get("to")):
-                if side is not None:
-                    Wire(side)["feature"]
-        elif do in ("set", "kill_block", "detach"):
-            b = store.blocks.get(s["fid"] if do == "detach" else s["bid"])
-            if b is None:
-                raise Conflict("no_block", str(s.get("bid") or s.get("fid")))
-            if do == "set":
-                _check_set(b, s.get("from") or {}, s.get("to") or {})
-            if do == "detach":
-                for e in s.get("bindings") or []:
-                    Wire(e)["fid"], Wire(e)["file"], Wire(e)["symbol"]
-        else:
-            raise Conflict("malformed", f"step {do!r}")
-        out.append(s)
-    return out
-
-
-def _check_set(b: Block, frm: dict, to: dict) -> None:
-    if not (isinstance(frm, dict) and isinstance(to, dict)):
-        raise Conflict("malformed", "set step")
-    for k in {*frm, *to}:
-        if k in _SHAPE:
-            if k not in frm or k not in to:
-                raise Conflict("malformed", f"set step names {k} on one side")
-        elif k in RESERVED_PATHS or k in b.layout.text:
-            raise Conflict("reserved_path", k)
-    if "kind" in frm and not (is_one_line(frm["kind"]) and is_one_line(to["kind"]) and is_one_line(b.kind)):
-        raise Conflict("kind_incompatible", f"{frm['kind']}->{to['kind']}")
-    if any(not (isinstance(side.get("rank", "r"), str) and side.get("rank", "r")) or not isinstance(side.get("level", 0), int)
-           for side in (frm, to)):
-        raise Conflict("malformed", "set step")
+_VERDICTS = (K.PLAN_ACCEPT, K.PLAN_REJECT, K.PLAN_REOPEN)
 
 
 def _seglist(v) -> list[tuple[str, int, int]]:
     return [(str(o), int(k), int(n)) for o, k, n in v]
+
+
+def _mark_step(block: Block, path: str, m: Mark, on: bool) -> dict:
+    """A ``mark`` step: the mark, and the characters it covers here. Undoing
+    it finds the mark by those characters, so a split, a merge or a move since
+    does not hide it: removed, every piece of it goes; put back, it is placed
+    in each field that holds any of them."""
+    return {"do": "mark", "bid": block.id, "path": path, "mark": m.to_json(), "on": on,
+            "segments": [list(x) for x in block.text(path).segments_between(m.start, m.end)]}
 
 
 def _run(store: Store, me: Op, steps, touched: set[str], undo_of: str | None = None) -> list[dict]:
@@ -921,20 +913,23 @@ def _step(store: Store, me: Op, s: dict, touched: set[str], undo_of: str | None)
                 touched.add(block.id)
         return out
     if do == "mark":
-        mk = Mark.from_json(s["mark"])
-        block, p = store.locate_char(mk.start, (str(s.get("bid")), str(s.get("path", "text"))))
-        t = block.text(p)
-        if bool(s["on"]) == fwd:
-            if mk in t.marks or not t.holds(mk.end):
-                return []
-            t.marks.append(mk)
-        elif mk in t.marks:
-            t.marks.remove(mk)
-        else:
-            return []
-        store.index_text(block.id, p, t)
-        touched.add(block.id)
-        return [{**s, "bid": block.id, "path": p}]
+        mk, segs = Mark.from_json(s["mark"]), _seglist(s["segments"])
+        named = lambda ref: any(o == ref[0] and k <= ref[1] < k + n for o, k, n in segs)
+        out = []
+        for block, p in _holders_of(store, segs):
+            t = block.text(p)
+            if bool(s["on"]) == fwd:
+                ends = t.bounds(segs)
+                got = [x for x in ([mk.piece(*ends)] if ends else []) if x not in t.marks]
+                t.marks.extend(got)
+            else:
+                got = [x for x in t.marks if x.piece(mk.start, mk.end) == mk and named(x.start)]
+                t.marks = [x for x in t.marks if x not in got]
+            if got:
+                store.index_text(block.id, p, t)
+                touched.add(block.id)
+                out += [{**s, "bid": block.id, "path": p, "mark": x.to_json()} for x in got]
+        return out
     if do == "set":
         b = store.blocks[s["bid"]]
         frm, to = dict(s.get("from") or {}), dict(s.get("to") or {})
@@ -985,7 +980,7 @@ def _step(store: Store, me: Op, s: dict, touched: set[str], undo_of: str | None)
             touched.add(cur.feature)
         was = cur.to_json() if cur else None
         return [{**s, "from": was, "to": want} if fwd else {**s, "from": want, "to": was}]
-    # detach, the one kind left: `_check_steps` refused any other
+    # detach, the one kind left: only this module writes steps
     if fwd:
         got = _detach_dead(store, [s["fid"]], touched)
         return [{"do": "detach", "fid": s["fid"], "bindings": got}] if got else []
@@ -1007,16 +1002,27 @@ def _holders_of(store: Store, segs) -> list[tuple[Block, str]]:
     return list(seen.values())
 
 
-def _undo_steps(store: Store, o: Op, verdict_pos: int) -> list[dict]:
+def _reranked_since(store: Store, bid: str, pos: int, pid: str | None) -> bool:
+    """Whether an op after position ``pos`` re-ranked ``bid``, other than a
+    verdict or a reopen of plan ``pid`` (the verdict being applied included):
+    those put the plan's own move back and forth."""
+    last = store.rank_head.get(bid, 0) - 1
+    if last <= pos or last >= store.pos:
+        return False
+    o = store.ops[last]
+    return not (o.kind in _VERDICTS and o.target.get("pid") == pid)
+
+
+def _undo_steps(store: Store, o: Op) -> list[dict]:
     """What undoes one plan op, read from the op and the store as they are
     now. An insert's characters die. A delete's come back and a restore's go
     back to dead by the delete it undid, so a plan that typed, took back and
     gave back the same words is undone one op at a time. A mark record is
     dropped. A block the plan created dies if it is now empty. A set goes back
     to the previous value, absent included. A move is put back unless someone
-    other than this verdict re-ranked the block since (their move stands), and
-    a binding goes back to the owner it displaced unless someone re-bound it
-    since (their attach stands)."""
+    else re-ranked the block since (their move stands), and a binding goes
+    back to the owner it displaced unless someone re-bound it since (their
+    attach stands)."""
     p, t = o.payload, o.target
     if o.kind == K.TEXT_INSERT:
         return [{"do": "kill", "bid": p["bid"], "path": p["path"], "segments": [[o.id, 0, len(p["text"])]]}]
@@ -1029,9 +1035,9 @@ def _undo_steps(store: Store, o: Op, verdict_pos: int) -> list[dict]:
                  "actor": undone.actor if undone else "", "at": undone.at if undone else ""}]
     if o.kind == K.TEXT_MARK:
         # A plan's mark toggle never touched the trunk: it is a record beside
-        # it, found by the plan it names, so a merge, a split or another plan
-        # moving the trunk's marks cannot hide it.
-        return [{"do": "mark", "bid": b.id, "path": f, "mark": m.to_json(), "on": False}
+        # it, found by the op that placed it, so a merge, a split or another
+        # plan moving the trunk's marks cannot hide it.
+        return [_mark_step(b, f, m, False)
                 for b, f in store.mark_holders(o.id) for m in b.text(f).proposals(o.plan) if m.op == o.id]
     if o.kind in (K.BLOCK_ADD, K.BLOCK_SPLIT):
         b = store.blocks.get(t["bid"] if o.kind == K.BLOCK_ADD else p["new"])
@@ -1050,14 +1056,10 @@ def _undo_steps(store: Store, o: Op, verdict_pos: int) -> list[dict]:
             to = {} if o.inverse[0]["payload"].get("unset") else {path: p["prev"]}
         return [{"do": "set", "bid": b.id, "from": _read(b, list(to) or [path]), "to": to}]
     if o.kind == K.BLOCK_MOVE:
-        # An archived op (position -1) predates every re-rank this store knows,
-        # so "did someone move it since?" cannot be asked of the ranks here.
-        pos = store.position.get(o.id, -1)
         out = []
         for bid, rank, level in p.get("prev", []):
             b = store.blocks.get(bid)
-            head = store.rank_head.get(bid, 0)
-            if b is None or (pos >= 0 and head > pos + 1 and head != verdict_pos + 1):
+            if b is None or _reranked_since(store, bid, store.position[o.id], o.plan):
                 continue
             to = {"rank": rank, **({"level": level} if b.kind == HEADING else {})}
             out.append({"do": "set", "bid": bid, "from": _read(b, list(to)), "to": to})
@@ -1106,17 +1108,17 @@ def _apply_proposals(store: Store, pid: str, take: set[str], touched: set[str]) 
         t.marks.remove(m)
         store.index_text(block.id, p, t)
         touched.add(block.id)
-        steps += [{"do": "mark", "bid": block.id, "path": p, "mark": x.to_json(), "on": on}
+        steps += [_mark_step(block, p, x, on)
                   for x, on in [*((x, False) for x in removed), *((x, True) for x in added), (m, False)]]
     return steps
 
 
 def _verdict(store: Store, op: Op, touched: set[str], accept: bool):
-    """``plan.accept`` and ``plan.reject``. A verdict that carries ``steps``
-    (a replay, or the redo a reopen recorded) does them as recorded, then
-    judges the plan ops its ``accepted`` and ``rejected`` do not name: ops the
-    plan gained since, or ops a merge put before it. Neither needs an op a
-    fold has archived."""
+    """``plan.accept`` and ``plan.reject``: the decision is ``subset`` (an
+    accept of part of the plan) and nothing else in the payload is read. What
+    the verdict does is computed from the decision and the plan's ops as they
+    are now, so a redo is the verdict again, judged against the plan as it
+    has become since the reopen."""
     pid = op.target["pid"]
     plan = store.plans.get(pid)
     if plan is None:
@@ -1124,33 +1126,33 @@ def _verdict(store: Store, op: Op, touched: set[str], accept: bool):
     if plan.status != "open":
         raise Conflict("plan_not_open", pid)
     p = op.payload
-    redo = "steps" in p
-    given = _check_steps(store, p["steps"]) if redo else []
-    was_acc = [str(i) for i in p.get("accepted") or []] if redo else []
-    was_rej = [str(i) for i in p.get("rejected") or []] if redo else []
     every = _plan_ops(store, plan)
     _touch_plan(store, plan, every, touched)
-    pops = [o for o in every if o.id not in {*was_acc, *was_rej}]
+    if "verdict" in p:
+        # A snapshot restoring a verdict it folded: the blocks it restored
+        # already hold what the verdict did, and the plan keeps its verdict op.
+        _decide(store, plan, op, accept, str(p["verdict"]))
+        return {"verdict": plan.verdict}, [body(K.PLAN_REOPEN, {"pid": pid}, {"by": plan.verdict})]
     subset = p.get("subset") if accept else None
     if not accept:
         take: set[str] = set()
     elif subset is None:
-        take = {o.id for o in pops}
+        take = {o.id for o in every}
     else:
-        take = set(_closure(pops, [str(s) for s in subset]))
+        take = set(_closure(every, [str(s) for s in subset]))
     if accept and plan.kind == "delete" and plan.target and plan.target not in store.blocks:
         raise Conflict("no_feature", plan.target)
-    strike = [(b, f, m) for o in pops if o.id in take and o.kind == K.TEXT_MARK
+    strike = [(b, f, m) for o in every if o.id in take and o.kind == K.TEXT_MARK
               and o.payload.get("kind") == SUGGEST_DEL and o.payload.get("on", True)
               for b, f in store.mark_holders(o.id) for m in b.text(f).marks_of(o.id)]
-    steps = _run(store, op, given, touched)
-    for o in reversed(pops):
+    steps: list[dict] = []
+    for o in reversed(every):
         if o.id not in take:
-            steps += _run(store, op, _undo_steps(store, o, store.pos), touched)
+            steps += _run(store, op, _undo_steps(store, o), touched)
     for b, f, m in strike:
         if m in b.text(f).marks:
             steps += _run(store, op, [{"do": "kill", "bid": b.id, "path": f, "segments": [list(c) for c in struck_chars(m)]},
-                                      {"do": "mark", "bid": b.id, "path": f, "mark": m.to_json(), "on": False}], touched)
+                                      _mark_step(b, f, m, False)], touched)
     if accept:
         steps += _apply_proposals(store, plan.id, take, touched)
         # A feature the person deleted by hand before answering the proposal
@@ -1158,33 +1160,44 @@ def _verdict(store: Store, op: Op, touched: set[str], accept: bool):
         if plan.kind == "delete" and plan.target and store.blocks[plan.target].live:
             steps += _run(store, op, [{"do": "kill_block", "bid": i, "in": plan.target} for i in store.body_ids(plan.target)]
                           + [{"do": "detach", "fid": plan.target}], touched)
-    plan.status, plan.decided_by = ("accepted" if accept else "rejected"), op.actor
-    store.open_plans.pop(pid, None)
-    record: dict = {"rejected": was_rej + [o.id for o in pops if o.id not in take], "steps": steps}
+    _decide(store, plan, op, accept, op.id)
+    record: dict = {"rejected": [o.id for o in every if o.id not in take], "steps": steps}
     if accept:
-        record = {"subset": subset, "accepted": was_acc + [o.id for o in pops if o.id in take], **record}
-    return record, [body(K.PLAN_REOPEN, {"pid": pid}, {"from": plan.status, "by": op.id, **record})]
+        record = {"subset": subset, "accepted": [o.id for o in every if o.id in take], **record}
+    return record, [body(K.PLAN_REOPEN, {"pid": pid}, {"by": op.id})]
+
+
+def _decide(store: Store, plan: Plan, op: Op, accept: bool, verdict: str) -> None:
+    plan.status, plan.decided_by, plan.verdict = ("accepted" if accept else "rejected"), op.actor, verdict
+    store.open_plans.pop(plan.id, None)
 
 
 def _h_plan_reopen(store: Store, op: Op, touched: set[str]):
-    """The inverse of a verdict: undo its steps, newest first. Its own inverse
-    is the verdict again, carrying the steps this reopen undid."""
+    """The inverse of a verdict: undo the steps the store recorded for the
+    plan's current verdict, newest first. Nothing but ``by`` is read from the
+    payload. Its own inverse is that verdict's decision again."""
     pid = op.target["pid"]
     plan = store.plans.get(pid)
     if plan is None:
         raise Conflict("no_plan", pid)
     if plan.status == "open":
         raise Conflict("plan_open", pid)
-    p = op.payload
-    by = str(p["by"])
-    did = _run(store, op, _check_steps(store, p.get("steps")), touched, undo_of=by)
-    plan.status, plan.decided_by = "open", ""
+    by = str(op.payload["by"])
+    if by != plan.verdict:
+        raise Conflict("not_current_verdict", by)
+    verdict = store.by_id.get(by)
+    if verdict is None or verdict.kind not in (K.PLAN_ACCEPT, K.PLAN_REJECT) or verdict.target.get("pid") != pid:
+        # A fold archived it, and with it the plan's ops, which any verdict
+        # after this reopen, its redo included, would have to judge.
+        raise Conflict("verdict_folded", by)
+    did = _run(store, op, verdict.payload["steps"], touched, undo_of=by)
+    was = plan.status
+    plan.status, plan.decided_by, plan.verdict = "open", "", ""
     store.open_plans[pid] = plan
     _touch_plan(store, plan, _plan_ops(store, plan), touched)
-    verdict = K.PLAN_ACCEPT if p.get("from") == "accepted" else K.PLAN_REJECT
-    keep = {k: p[k] for k in ("subset", "accepted", "rejected") if k in p}
-    return ({"from": "accepted" if verdict == K.PLAN_ACCEPT else "rejected", "by": by, "steps": did, **keep},
-            [body(verdict, {"pid": pid}, {"steps": did, **keep})])
+    subset = verdict.payload.get("subset")
+    redo = body(verdict.kind, {"pid": pid}, {} if subset is None else {"subset": subset})
+    return {"from": was, "by": by, "steps": did}, [redo]
 
 
 def _touch_plan(store: Store, plan: Plan, pops: list[Op], touched: set[str]) -> None:
