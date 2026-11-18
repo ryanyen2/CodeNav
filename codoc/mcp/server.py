@@ -1,15 +1,19 @@
 """codoc MCP server (FastMCP, stdio): the coding agent's surface.
 
-Registered in ``<root>/.mcp.json`` by ``codoc init``. The ``.codoc`` directory
-is found by walking up from the agent's cwd. Tools return dicts; a missing
+Registered at Claude Code's local scope, for this machine, by ``codoc
+install-hooks``. The ``.codoc`` directory is found by walking up from the
+agent's cwd. Tools return dicts; a missing
 workspace returns ``{"ok": False, "error": …}`` rather than raising.
 """
 from __future__ import annotations
 
 import os
+import signal
+import sys
 
 from fastmcp import FastMCP
 
+from codoc.daemon import client
 from codoc.workspace.layout import find_codoc_dir
 from codoc.mcp import tools
 
@@ -30,11 +34,11 @@ def _root(cd: str) -> str:
 @mcp.tool
 def codoc_context(files: list[str] | None = None, feature_id: str | None = None, include_bindings: bool = True) -> dict:
     """The relevant slice of the feature tree for the code you are working on,
-    and the PREFERRED read before editing or proposing. Pass repo-relative file paths
-    and/or a feature_id: returns the features bound to those files expanded one
-    hop along call/import edges, each with its paragraphs BY BLOCK ID (an amend
-    names the paragraph it changes), a title outline for orientation, and nearby
-    graph edges. Bounded by the edit, not the repo."""
+    and the PREFERRED read before editing or proposing. `files` (repo-relative):
+    the features bound to them expanded one hop along call/import edges.
+    `feature_id`: that feature, the features under it, and the features owning
+    code it calls. Each feature comes with its paragraphs BY BLOCK ID (an amend
+    names the paragraph it changes), plus a title outline and nearby graph edges."""
     cd, err = _need_dir()
     return err or tools.read_context(cd, files=files, feature_id=feature_id, include_bindings=include_bindings)
 
@@ -50,9 +54,11 @@ def codoc_tree(root_id: str | None = None, depth: int = 0, include_bindings: boo
 @mcp.tool
 def codoc_status() -> dict:
     """Where the tree and the code stand: `state` (synced | edited | queued |
-    realizing | proposed), the features with queued work (`queued_list`, what
-    /codoc:sync implements), features with unsent edits, open proposals, and
-    citations that do not resolve to code."""
+    realizing | reported | proposed), the queued items left to build
+    (`queued_list`, what /codoc:sync implements), the items this turn reported
+    with codoc_reflect (`reported_list`: they settle when your turn ends, so
+    there is nothing to wait for), features with unsent edits, open proposals,
+    and citations that do not resolve to code."""
     cd, err = _need_dir()
     return err or tools.read_status(cd)
 
@@ -75,8 +81,9 @@ def codoc_reflect(ops: list[dict], rationale: str = "", caused_by: str | None = 
     unchanged (lands on the trunk when it only rewords a little and nobody has
     pending edits there, else as one plan); or `add_node` / `move_node` /
     `retire_node` (always a plan; accepting it takes the words, since the code is
-    already written). Pass the directive id from realize.md as
-    `caused_by` so the change is attributed to the request and closes it."""
+    already written). `rationale` is one plain line saying what the edits change
+    in the tree; it is the note on any plan they open. Pass the directive id from
+    realize.md as `caused_by`: that reports the item, which settles when your turn ends."""
     cd, err = _need_dir()
     return err or tools.reflect(cd, ops=ops, rationale=rationale, caused_by=caused_by, root_dir=_root(cd))
 
@@ -111,7 +118,8 @@ def codoc_write_block(content: dict, bid: str | None = None, kind: str | None = 
 @mcp.tool
 def codoc_realize_progress(done: int, total: int, current: str = "") -> dict:
     """Report progress through the realize queue so the editor shows
-    'implementing n of m' and knows the pass is alive."""
+    'implementing n of m' and knows the pass is alive. Returns the items this
+    turn reported (`reported`), which settle when your turn ends."""
     cd, err = _need_dir()
     return err or tools.realize_progress(cd, done=done, total=total, current=current)
 
@@ -144,6 +152,16 @@ def main() -> None:
         tools.agent_client()       # a CODOC_AGENT that cannot name an inbox file refuses to start
     except ValueError as e:
         raise SystemExit(str(e)) from None
+
+    # Claude Code stops a stdio server with SIGINT and then SIGTERM about 100 ms
+    # later, before the event loop has unwound, and SIGTERM's default skips
+    # atexit. Close the session log first so it gets its `closed` trailer and
+    # a fold may archive it.
+    def stop(*_):
+        client.release()
+        sys.exit(0)
+    signal.signal(signal.SIGINT, stop)
+    signal.signal(signal.SIGTERM, stop)
     mcp.run()
 
 

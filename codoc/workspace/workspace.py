@@ -34,12 +34,14 @@ from codoc.workspace.roles import SUGGEST, Roles, deleted_ops, is_comment_op, ow
 
 
 class Workspace:
-    def __init__(self, codoc_dir: str | Path, *, node: str = "local", roles: Roles | None = None,
+    def __init__(self, codoc_dir: str | Path, *, roles: Roles | None = None,
                  session: str | None = None, readonly: bool = False) -> None:
         self.codoc_dir = Path(codoc_dir)
-        self.node = node
+        self.session = session or new_session_id()
         self.roles = roles or Roles.load(self.codoc_dir)
-        self.clock = Clock(node)
+        # The clock's node is the session id: unique per writer, and it names
+        # no machine in a tracked log.
+        self.clock = Clock(self.session)
         self.store = Store(policy=self.roles.policy)
         self.problems: list[L.LogProblem] = []
         self.torn: list[L.SessionFile] = []
@@ -53,11 +55,10 @@ class Workspace:
         self._sent_text: dict[str, str] = {}      # cid → the insert's text as the client counted it
         self.rebuild()
         self.readonly = readonly
-        self.session = session or new_session_id()
         self.seq = 0
         # A read-only open (an MCP read, `codoc status`) replays the logs and
         # writes nothing: no session file, and `submit` refuses.
-        self.writer = None if readonly else L.SessionWriter(self.codoc_dir, self.session, node, self.clock.tick())
+        self.writer = None if readonly else L.SessionWriter(self.codoc_dir, self.session, self.clock.tick())
 
     # ── replay ─────────────────────────────────────────────────────────────
     def rebuild(self) -> None:
@@ -277,7 +278,7 @@ class Workspace:
             return out
         if need_plan:
             out.plan = self.open_plan(actor=actor, kind="edit", target=fid,
-                                      note="the document has pending intent" if held else note or "a larger repair")
+                                      note=note or ("the document has pending intent" if held else "a larger repair"))
             out.ops.append(store.by_id[store.plans[out.plan].opened_by])
         for ing in computed:
             out.ops += self.commit_ingest(ing, actor=actor, plan=out.plan, batch=out.plan, base=base,
@@ -374,6 +375,7 @@ class Workspace:
         the client did not choose. No line can block the next: a submission
         that raises is acked with the error and left behind."""
         out: list[Op] = []
+        was = dict(self._inbox_offsets)
         for client in L.clients(self.codoc_dir):
             actor = identity(client, self.codoc_dir) if callable(identity) else identity.get(client)
             if actor is None:
@@ -391,7 +393,8 @@ class Workspace:
                 out.extend(got.ops)
             if lines:
                 self._inbox_offsets[client] = lines[-1].end
-        L.write_offsets(self.codoc_dir, self._inbox_offsets)
+        if self._inbox_offsets != was:
+            L.write_offsets(self.codoc_dir, self._inbox_offsets)
         return out
 
     def apply_submissions(self, client: str, actor: str, subs: list[L.Submission],
@@ -579,9 +582,9 @@ class Workspace:
         if self.writer is None:
             return self.session
         self.writer.close()
-        self.session = new_session_id()
+        self.session = self.clock.node = new_session_id()
         self.seq = 0
-        self.writer = L.SessionWriter(self.codoc_dir, self.session, self.node, self.clock.tick())
+        self.writer = L.SessionWriter(self.codoc_dir, self.session, self.clock.tick())
         return self.session
 
     def close(self) -> None:

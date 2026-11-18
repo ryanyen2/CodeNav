@@ -167,6 +167,27 @@ def test_a_person_who_only_deleted_words_has_something_to_hand_off(tmp_path):
     assert 'removed: "once"' in directive(s, "h1")
 
 
+def test_a_verdicts_removal_is_nobodys_unsent_edit(tmp_path):
+    """Accepting a plan's strike or rejecting its words kills characters as
+    the person who answered, but that answers the plan: the feature stays
+    synced, before and after a fold, and a later hand-off asks no removal."""
+    from tests.helpers import fold
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed_loop(ws)
+    for verdict, words in ((K.PLAN_ACCEPT, "Retries twice."), (K.PLAN_REJECT, "Retries three times.")):
+        pid = ws.amend("h1", rewrites=[("p1", "text", words, None)], actor="loop", structural=True).plan
+        ws.submit([{"kind": verdict, "target": {"pid": pid}, "payload": {}}], actor="human:local")
+        assert phase(ws.store, "h1") == "synced", verdict
+    assert description(ws.store, "h1") == "Retries twice."
+    ws.close()
+    fold(cd)
+    ws = Workspace(cd)
+    assert phase(ws.store, "h1") == "synced"
+    ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {}}], actor="human:local")
+    assert "removed:" not in directive(ws.store, "h1")
+
+
 def test_ink_keeps_unsent_words_apart_from_sent_neighbours():
     m, s = Mint(), Store()
     heading(m, s, "h1", "Client", actor="loop")

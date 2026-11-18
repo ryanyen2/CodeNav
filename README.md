@@ -64,6 +64,11 @@ codoc init                            # index, bootstrap the tree, install the C
 codoc watch                           # the daemon: the only process that applies edits
 ```
 
+The Claude Code hooks, the MCP server and the permission for its tools are set
+up per machine and are not tracked (`.claude/settings.local.json` and Claude
+Code's local MCP scope). After cloning a repository that already has a tree,
+each person runs `codoc install-hooks` once.
+
 ```bash
 codoc status                          # where things stand
 codoc sync                            # one pass without the daemon

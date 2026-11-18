@@ -141,6 +141,9 @@ def changed_logs(root: str | Path, base: str, change: str = "AM") -> list[Path]:
     moved into ``archive/`` is removed. Anything outside ``.codoc/log/`` is not
     this validator's business."""
     root = Path(root)
+    if subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"],
+                      capture_output=True, timeout=30).returncode != 0:
+        raise ValueError(f"the base {base} does not exist in this repository; pass --base <branch>")
     run = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "--no-renames", f"--diff-filter={change}", f"{base}...HEAD"],
                          capture_output=True, text=True, timeout=30)
     if run.returncode != 0:     # a shallow clone or an unrelated base: checking nothing must not pass

@@ -194,7 +194,7 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
     return out
 
 
-def write_snapshot(codoc_dir: str | Path, store: Store, clock: Clock, *, node: str = "local") -> Path | None:
+def write_snapshot(codoc_dir: str | Path, store: Store, clock: Clock) -> Path | None:
     """Write ``log/snapshot-<hlc>.jsonl`` folding the settled prefix of the log
     and archive the session files it covers whole. None when nothing is settled
     enough to fold."""
@@ -212,7 +212,7 @@ def write_snapshot(codoc_dir: str | Path, store: Store, clock: Clock, *, node: s
     session = f"snap-{stamp.split('-')[0]}"
     ops = snapshot_ops(folded, session, clock)
     path = d / f"{L.SNAPSHOT_PREFIX}{stamp}.jsonl"
-    header = {"header": 1, "session": session, "opened": stamp, "node": node, "frontier": frontier,
+    header = {"header": 1, "session": session, "opened": stamp, "frontier": frontier,
               "snapshot": True}
     atomic_write(path, "".join([json.dumps(header) + "\n"] + [json.dumps(o, ensure_ascii=False) + "\n" for o in ops]))
     archive = d / L.ARCHIVE_DIR

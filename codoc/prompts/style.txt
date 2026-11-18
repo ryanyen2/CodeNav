@@ -46,6 +46,7 @@ Check the shape before writing bullets:
 - No judgement of the code (clean, careful, sophisticated). No summary sentence at the end.
 - No hedges: presumably, likely, appears to, is designed to.
 - No invented history: no "was added after", no "the team chose".
+- Say what the code does, not what changed in it: no "now", "no longer", "updated to", "changed to". The reader sees the code as it is.
 - No em dash or en dash. No rhetorical question. No analogy.
 - Do not start with "This feature", "This module", "It" or the title restated.
 

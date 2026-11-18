@@ -62,9 +62,15 @@ A package imports only packages to its left in this order: `calculus`, `index`,
 
 ## 2. The coding agent
 
-`codoc init` and `codoc install-hooks` write the files in `codoc/claude/plugin/` into the
-repository: Claude Code hooks, the MCP registration in `.mcp.json`, the `codoc-intent`
-skill, and the `/codoc:sync`, `/codoc:plan` and `/codoc:ask` commands.
+`codoc init` and `codoc install-hooks` install the files in `codoc/claude/plugin/`. The
+hooks name this machine's interpreter, so they go in the untracked
+`.claude/settings.local.json`, with the permission rule `mcp__codoc__*` (without it a
+headless `claude -p` is denied every codoc tool). The MCP server is registered at Claude
+Code's local scope with `claude mcp add --scope local`; when `claude` is not on PATH the
+install prints that command to run later. The `codoc-intent` skill and the `/codoc:sync`,
+`/codoc:plan` and `/codoc:ask` commands are copied into `.claude/`. Codoc's own entries in a
+tracked `.claude/settings.json` or `.mcp.json`, where an older install put them, are
+removed. Each person runs `codoc install-hooks` once after cloning.
 
 **Hooks** (`claude/hook.py`, events `session-start`, `user-prompt`, `pre-tool`,
 `post-tool`, `stop`, `session-end`):
@@ -103,16 +109,18 @@ wrote the op: an agent's `codoc_reflect`, the pass after a Claude Code epoch clo
 the pass over a commit whose `Codoc-Handoff` trailer names the hand-off, read when
 `HEAD` moves over it while on the branch its `Codoc-Base` trailer names. While an epoch
 is open the build is in progress, so the feature stays
-queued until the epoch closes.
+queued until the epoch closes; `codoc_status` lists an item the epoch's `cited` names
+under `reported_list`, and its state is `reported` when every queued item is.
 Code written by hand settles with `codoc done`.
 
 | tool | does |
 |---|---|
-| `codoc_context`, `codoc_tree`, `codoc_status`, `codoc_history` | Read: the features around some files, the tree, the queue and phases, one feature's ops and attribution. |
+| `codoc_context` | Read: with `files`, the features bound in them, one hop along the code graph, their parents and children; with `feature_id`, that feature, the features under it and the features owning a symbol their code calls, imports or inherits from. |
+| `codoc_tree`, `codoc_status`, `codoc_history` | Read: the tree, the queue and phases, one feature's ops and attribution. |
 | `codoc_reflect` | Tree edits. `attach`, `detach` and a rewording `amend` land on the trunk (an `amend` through the machine gate); anything else becomes one plan. |
 | `codoc_propose` | Tree edits as one plan. |
 | `codoc_write_block` | Content for a kind block ([kinds.md](kinds.md#4-how-content-becomes-ops)). |
-| `codoc_realize_progress` | Renews the realizing lease with "implementing n of m". |
+| `codoc_realize_progress` | Renews the realizing lease with "implementing n of m", as the MCP server's own lease (`CODOC_REALIZE_OWNER`), so the agent's status does not read it as another pass. |
 | `codoc_walkthrough`, `codoc_walkthrough_read`, `codoc_walkthrough_clear` | The `/codoc:ask` overlay in `ask.json`. |
 
 Every edit is compiled against the current tree before anything is written; if one is

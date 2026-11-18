@@ -26,6 +26,11 @@ def seeded(tmp_path):
     return root, cd
 
 
+def test_version():
+    r = runner.invoke(app, ["--version"])
+    assert r.exit_code == 0 and r.output.startswith("codoc "), r.output
+
+
 def test_status_handoff_history_and_verdicts_via_cli(tmp_path):
     root, cd = seeded(tmp_path)
     r = runner.invoke(app, ["status", "--root", str(root)])
@@ -48,6 +53,8 @@ def test_status_handoff_history_and_verdicts_via_cli(tmp_path):
     assert st.plans[res["plan_id"]].status == "open"
     assert "HTTP/2" in tools.description(st, client_id)          # live shows the proposal
     assert "HTTP/2" not in tools.description(st, client_id, "rejected")
+    r = runner.invoke(app, ["status", "--root", str(root)])          # what `codoc reject` needs
+    assert f"plan    {res['plan_id']}  agent:claude-code  http2" in r.output, r.output
     r = runner.invoke(app, ["reject", res["plan_id"], "--root", str(root)])
     assert r.exit_code == 0 and "rejected" in r.output
     assert "HTTP/2" not in tools.description(client.read(cd).store, client_id)

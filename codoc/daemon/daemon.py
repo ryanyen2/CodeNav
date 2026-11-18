@@ -26,6 +26,7 @@ wires it to ``watchfiles``.
 """
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import dataclass, field
 from functools import cached_property
@@ -58,7 +59,7 @@ class Daemon:
                  changeset=None, propose=None, printer=print, after_batch=None) -> None:
         self.root = Path(root_dir)
         self.codoc_dir = Path(codoc_dir or self.root / CODOC_DIR)
-        self.ws = Workspace(self.codoc_dir, node=_node_name())
+        self.ws = Workspace(self.codoc_dir)
         # A torn last line (a crash mid-write) is cut so every later rebuild
         # agrees with this one; every other log problem is reported.
         for f in self.ws.torn:
@@ -228,6 +229,7 @@ class Daemon:
 
     def run(self, *, debounce_ms: int = DEBOUNCE_MS) -> None:  # pragma: no cover - blocking loop
         import atexit
+        import signal
         import watchfiles
         if daemon_running(self.codoc_dir):
             self.say("A codoc daemon is already watching this repo.")
@@ -235,6 +237,9 @@ class Daemon:
         self.start()
         atexit.register(clear_pidfile, self.codoc_dir)
         atexit.register(self.ws.close)
+        # The hub stops its daemon with SIGTERM, whose default skips atexit:
+        # the session log would never get its `closed` trailer.
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
         self.process_batch([])   # absorb anything that queued while we were down
         self.say(f"codoc watching {self.root} (session {self.ws.session})")
         for changes in watchfiles.watch(str(self.root), debounce=debounce_ms, watch_filter=_filter(self.codoc_dir, self.code_path)):
@@ -249,11 +254,6 @@ class Daemon:
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
-
-def _node_name() -> str:
-    import socket
-    return (socket.gethostname() or "local").split(".")[0][:24]
-
 
 def _stale(codoc_dir: Path, now: float) -> bool:
     try:
@@ -277,7 +277,10 @@ def _filter(codoc_dir: Path, code_path):
     act = (codoc_dir / ACTIVITY).resolve()
 
     def keep(_change, path: str) -> bool:
+        # In the inbox only a client's `<client>.jsonl`: the acks, offsets.json
+        # and atomic_write's tmp files are this daemon's own writes, and waking
+        # on them made every batch start the next.
         rp = Path(path).resolve()
-        return (rp == act or (inbox in rp.parents and not rp.name.endswith(".ack.jsonl"))
+        return (rp == act or (rp.parent == inbox and rp.suffix == ".jsonl" and not rp.name.endswith(".ack.jsonl"))
                 or code_path(path) is not None)
     return keep

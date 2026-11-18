@@ -9,7 +9,7 @@ Layout under ``<repo>/.codoc``:
     inbox/<client>.ack.jsonl     daemon → client acknowledgements; ignored
 
 A session log is written by exactly one daemon and only appended to. Its first
-line is a header ``{"header": 1, "session": …, "opened": <hlc>, "node": …}``;
+line is a header ``{"header": 1, "session": …, "opened": <hlc>}``;
 every later line is one op as recorded (canonical payload, inverse, conflict).
 
 ``read_session`` validates before returning anything: header present, ids of
@@ -215,11 +215,11 @@ class SessionWriter:
     write nothing, which would otherwise leave a header-only file for git to
     carry."""
 
-    def __init__(self, codoc_dir: str | Path, session: str, node: str, opened: str) -> None:
+    def __init__(self, codoc_dir: str | Path, session: str, opened: str) -> None:
         self.dir = log_dir(codoc_dir)
         self.path = self.dir / f"{session}.jsonl"
         self.session = session
-        self._header = {"header": 1, "session": session, "opened": opened, "node": node}
+        self._header = {"header": 1, "session": session, "opened": opened}
         self._fh = None
 
     def _open(self):

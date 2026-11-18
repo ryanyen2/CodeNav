@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from codoc.calculus import block_md
 from codoc.calculus.derive import block_spec, block_written_by, kind_words, markdown, phase
-from codoc.calculus.doc import BUILTIN, PROSE, SOURCE, parent_of
+from codoc.calculus.doc import BUILTIN, HEADING, PROSE, SOURCE, parent_of
 from codoc.calculus.store import Store
 from codoc.index.graph import Graph
 
@@ -102,6 +102,24 @@ def select_context(store: Store, graph: Graph, files: set[str], changed_symbols:
     all_titles = [feature_entry(store, h.id, full=False) for h in headings]
     context = _graph_context(store, graph, changed_symbols or seed_symbols, seed_features, recent_ops)
     return subtree, all_titles, context
+
+
+def feature_context(store: Store, graph: Graph, fid: str, *, recent_ops: int = 5) -> tuple[list[dict], list[dict], dict]:
+    """What an agent building ``fid`` reads, as ``select_context`` returns it:
+    the feature and every feature under it, then each feature owning a symbol
+    their code calls, imports or inherits from, so a change to a shared symbol
+    is made knowing what its owner says."""
+    in_range = [b.id for b in store.feature_range(fid) if b.kind == HEADING]
+    symbols = {b.symbol for b in store.bindings.values() if b.feature in in_range}
+    used: list[str] = []
+    for sym in sorted(symbols):
+        for dst in graph.neighbors(sym, kinds={"call", "import", "type_ref", "inherit"}, direction="out"):
+            f = owner_of(store, dst)
+            if f and f not in in_range and f not in used:
+                used.append(f)
+    return ([feature_entry(store, f) for f in in_range + used],
+            [feature_entry(store, h.id, full=False) for h in store.headings()],
+            _graph_context(store, graph, symbols, set(in_range), recent_ops))
 
 
 def _graph_context(store: Store, graph: Graph, symbols: set[str], seed_features: set[str], recent_ops: int) -> dict:

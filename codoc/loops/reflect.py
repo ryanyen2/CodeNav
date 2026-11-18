@@ -14,7 +14,7 @@ Given a change set from the index, the pass:
    |---|---|
    | ``attach`` | on the trunk (attribution, not intent); under the node's plan when the node is new in this answer |
    | ``add_node``, ``move_node``, ``retire_node`` | as a plan |
-   | ``amend`` | on the trunk when every part is a small rewording and the feature has nothing pending; otherwise as ONE plan for the whole amend |
+   | ``amend`` | on the trunk when every part is a small rewording and the feature has nothing pending; otherwise as ONE plan for the whole amend; dropped when it adds, removes or re-kinds a block while a loop plan on the feature is open |
 
 4. covers what the model left unplaced: a chunk lands with the feature that
    owns most of its graph neighbours, else in a plan for a node named after
@@ -37,7 +37,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from codoc.calculus import ops as K
-from codoc.calculus.derive import HELD, LOOP, phase
+from codoc.calculus.derive import HELD, LOOP, open_plans_on, phase
 from codoc.calculus.ingest import Ingest
 from codoc.calculus.ops import Op, covered
 from codoc.calculus.store import Store
@@ -336,6 +336,12 @@ def _land(p: _Pass, change: Change) -> bool:
         p.res.auto[change.kind] += landed
         return landed > 0
     if change.kind == "amend":
+        if change.structural and any(p.store.plans[pid].actor == LOOP for pid in open_plans_on(p.store, fid)):
+            # The model reads the description without the loop's open plan, so
+            # a block that plan adds or strikes it would add or strike again.
+            # A rewording of a block holding the plan's words is refused anyway.
+            p.res.refused.append((fid, "open_plan"))
+            return False
         done = p.ws.amend(fid, rewrites=[(r.bid, r.path, r.new_md, None) for r in change.rewrites],
                           bodies=change.bodies, strikes=change.strikes, actor=LOOP, note=change.note,
                           caused_by=cause, structural=change.structural)

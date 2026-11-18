@@ -34,13 +34,13 @@ from codoc.calculus.derive import (
 from codoc.calculus.doc import HEADING, fold_tree
 from codoc.calculus.ids import new_plan_id
 from codoc.daemon import client
-from codoc.daemon.epoch import note_cited
+from codoc.daemon.epoch import note_cited, read_activity
 from codoc.daemon.publish import read_status as published_status
-from codoc.daemon.publish import realizing_is_fresh, write_realizing
+from codoc.daemon.publish import REALIZE_OWNER_ENV, realizing_is_fresh, write_realizing
 from codoc.doclang import detect_prose_language, workspace_doc_language
 from codoc.index.graph import Graph
 from codoc.llm.prompt import titles_outline
-from codoc.loops.context import description_blocks, select_context, written_by
+from codoc.loops.context import description_blocks, feature_context, select_context, written_by
 from codoc.calculus.block_md import BlockSpec
 from codoc.calculus.ingest import block_bodies, concat_bodies
 from codoc.loops.edits import PLAN_KIND, Change, Compiler, delete_open
@@ -87,20 +87,24 @@ def _lang(text: str, default) -> dict:
 
 def read_context(codoc_dir: str, *, files: list[str] | None = None, feature_id: str | None = None,
                  include_bindings: bool = True) -> dict:
+    """``files``: the features bound in them and their neighbours
+    (``select_context``). ``feature_id``: that feature, the features under it
+    and the features owning what its code calls (``feature_context``), then
+    any the files add."""
     ws, graph = _open(codoc_dir)
     store = ws.store
-    file_set = set(files or [])
-    symbols: set[str] = set()
-    if feature_id:
-        if feature_id not in store.blocks or store.blocks[feature_id].kind != HEADING:
-            return _err(f"unknown feature_id {feature_id!r}")
-        for b in store.bindings.values():
-            if b.feature == feature_id:
-                file_set.add(b.file)
-                symbols.add(b.symbol)
-    if not file_set and not symbols:
+    if not files and not feature_id:
         return _err("pass files=[...] and/or feature_id")
-    subtree, all_titles, ctx = select_context(store, graph, file_set, symbols)
+    if feature_id:
+        b = store.blocks.get(feature_id)
+        if b is None or not b.live or b.kind != HEADING:
+            return _err(f"unknown feature_id {feature_id!r}")
+        subtree, all_titles, ctx = feature_context(store, graph, feature_id)
+        if files:
+            have = {e["id"] for e in subtree}
+            subtree += [e for e in select_context(store, graph, set(files))[0] if e["id"] not in have]
+    else:
+        subtree, all_titles, ctx = select_context(store, graph, set(files))
     default = workspace_doc_language(codoc_dir)
     for row in subtree:
         row.update(_lang(" ".join(b["text"] for b in row.get("blocks", [])) or row["title"], default))
@@ -158,20 +162,30 @@ def _find(nodes, fid):
 
 
 def read_status(codoc_dir: str) -> dict:
+    """``queued_list`` is what is left to build; ``reported_list`` is what this
+    turn's calls cited (``epoch.note_cited``), which settles when the turn
+    ends. State ``reported`` says every queued item is reported."""
     ws, _ = _open(codoc_dir)
     store = ws.store
     heads = store.headings()
     phases = {h.id: phase(store, h.id) for h in heads}
-    q = queued(store)
+    cited = set(read_activity(codoc_dir).get("cited") or [])
+    items: dict[bool, list] = {False: [], True: []}
+    for f in queued(store):
+        did = (store.watermarks(f).handoffs or [""])[-1]
+        items[did in cited].append({"feature_id": f, "title": title(store, f, "rejected"), "directive": f"d:{did}"})
+    todo, reported = items[False], items[True]
     state = published_status(codoc_dir).get("state", "synced")
     if state == "realizing" and not realizing_is_fresh(codoc_dir):
         # The lease lapsed, or it is the lease of the pass this agent belongs to:
         # either way no other pass is working the queue.
-        state = "queued" if q else "synced"
+        state = "queued" if todo or reported else "synced"
+    if state == "queued" and not todo:
+        state = "reported"
     dead = [{"block": bid, "symbol": m.attrs.get("symbol")} for bid, m in dead_cites(store)]
     edited = [f for f, p in phases.items() if p == "edited"]
-    return {"ok": True, "state": state, "features": len(heads), "queued": len(q),
-            "queued_list": [{"feature_id": f, "title": title(store, f, "rejected")} for f in q[:20]],
+    return {"ok": True, "state": state, "features": len(heads), "queued": len(todo), "queued_list": todo[:20],
+            "reported": len(reported), "reported_list": reported[:20],
             "edited": len(edited), "edited_list": [{"feature_id": f, "title": title(store, f)} for f in edited[:20]],
             "proposals": len(open_plans(store)),
             "dead_cites": len(dead), "dead_cite_list": dead[:20],
@@ -387,11 +401,14 @@ def write_block(codoc_dir: str, *, content: dict, bid: str | None = None, kind: 
 
 
 def realize_progress(codoc_dir: str, *, done: int, total: int, current: str = "") -> dict:
-    """Renew the realizing lease so the editor shows 'implementing n of m'."""
+    """Renew the realizing lease so the editor shows 'implementing n of m'.
+    The lease is this server's own (the realize pass's that started the agent,
+    else this process's), so this agent's status does not read it as another
+    pass. Returns the items this turn has reported."""
     shown = min(done + 1, total)
-    write_realizing(codoc_dir, pending=max(0, total - done),
+    write_realizing(codoc_dir, pending=max(0, total - done), owner=os.environ.setdefault(REALIZE_OWNER_ENV, f"mcp-{os.getpid()}"),
                     detail=f"implementing {shown} of {total}" + (f": {current}" if current else ""))
-    return {"ok": True}
+    return {"ok": True, "reported": [f"d:{d}" for d in read_activity(codoc_dir).get("cited") or []]}
 
 
 # ── walkthrough ──────────────────────────────────────────────────────────────

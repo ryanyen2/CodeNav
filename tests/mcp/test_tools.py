@@ -33,14 +33,15 @@ def test_an_agents_rewrite_of_a_queued_feature_is_a_plan(tmp_path):
     ws.close()
     r = tools.reflect(str(cd), ops=[{"kind": "amend", "feature_id": "h1",
                                      "blocks": [{"id": "p1", "text": "Completely different words, nothing kept."}]}],
-                      root_dir=str(tmp_path))
+                      rationale="rewrites the retry paragraph", root_dir=str(tmp_path))
     client.release(cd)
     assert r["ok"], r
     st = Workspace(cd, readonly=True).store
     trunk = [s for s in st.blocks["p1"].text().segs if s.live and s.plan is None and s.actor.startswith("agent:")]
     assert not trunk, [s.to_json() for s in st.blocks["p1"].text().segs]
     assert markdown(st.blocks["p1"].text(), "rejected", st) == "Retries once."
-    assert [p.actor for p in st.plans.values() if p.status == "open"] == ["agent:claude-code"]
+    assert [(p.actor, p.note) for p in st.plans.values() if p.status == "open"] == [
+        ("agent:claude-code", "rewrites the retry paragraph")]
 
 
 def test_an_agents_amend_does_not_drop_a_mark_the_person_placed(tmp_path):
@@ -287,6 +288,59 @@ def test_only_a_call_whose_ops_landed_cites_its_handoff(tmp_path):
     finally:
         client.release(cd)
     assert read_activity(str(cd))["cited"] == [ho.id]
+
+
+def test_status_lists_an_item_reported_this_turn_as_settling_when_the_turn_ends(tmp_path, monkeypatch):
+    """A hand-off settles when the agent's turn ends, not when its citing
+    reflect lands. Until then the agent's status lists the item as reported,
+    and the lease its own progress calls hold does not read as another pass."""
+    from codoc.daemon.epoch import write_activity
+    from codoc.daemon.publish import REALIZE_OWNER_ENV
+    monkeypatch.setenv(REALIZE_OWNER_ENV, "")
+    monkeypatch.delenv(REALIZE_OWNER_ENV)             # an interactive session; restored after the test
+    cd, ws = workspace(tmp_path)
+    ho = handoff(ws, "h1", actor=H)
+    publish(cd, ws.store, root_dir=str(tmp_path))
+    ws.close()
+    write_activity(str(cd), {"epoch": {"id": "ep", "open": True}, "cited": []})
+    item = {"feature_id": "h1", "title": "Client", "directive": f"d:{ho.id}"}
+    try:
+        tools.realize_progress(str(cd), done=0, total=1, current="Client")
+        st = tools.read_status(str(cd))
+        assert (st["state"], st["queued_list"], st["reported_list"]) == ("queued", [item], [])
+        assert tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::retry"]}],
+                             caused_by=item["directive"], root_dir=str(tmp_path))["ok"]
+        st = tools.read_status(str(cd))
+        assert (st["state"], st["queued"], st["reported_list"]) == ("reported", 0, [item])
+        assert tools.realize_progress(str(cd), done=1, total=1)["reported"] == [item["directive"]]
+    finally:
+        client.release(cd)
+
+
+def test_context_for_a_feature_is_its_range_and_the_features_its_code_calls(tmp_path):
+    """An agent about to build a feature reads it, the features under it, and
+    each feature owning a symbol their code calls. A feature that only shares
+    a file with it, or calls into it, is not part of that."""
+    from codoc.index.graph import Graph
+    from codoc.workspace.layout import GRAPH_CACHE
+    cd, ws = workspace(tmp_path)
+
+    def feature(bid, text, level, after, symbol):
+        ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": bid}, "payload": {"kind": "heading", "level": level, "after": after}},
+                   {"kind": K.TEXT_INSERT, "target": {"bid": bid, "path": "text"}, "payload": {"after": START, "text": text}},
+                   {"kind": K.BIND_ATTACH, "target": {"fid": bid}, "payload": {"symbol": symbol}}], actor="loop")
+    feature("h1a", "Sending one", 2, "p1", "c.py::send_one")
+    feature("h2", "Server", 1, "h1a", "c.py::serve")
+    feature("h3", "Retry policy", 1, "h2", "r.py::retry")
+    calls = [("c.py::send_one", "r.py::retry"), ("c.py::serve", "c.py::send")]
+    (cd / GRAPH_CACHE).parent.mkdir(exist_ok=True)
+    (cd / GRAPH_CACHE).write_text(Graph([{"src_symbol": s, "dst_name": d, "dst_symbol": d, "kind": "call",
+                                          "src_file": s.split("::")[0], "internal": True} for s, d in calls]).dumps())
+    ws.close()
+    ctx = tools.read_context(str(cd), feature_id="h1")
+    assert [e["id"] for e in ctx["subtree"]] == ["h1", "h1a", "h3"]
+    assert ctx["subtree"][0]["blocks"] == [{"id": "p1", "text": "Retries once."}]
+    assert not tools.read_context(str(cd), feature_id="p1")["ok"]
 
 
 def test_the_agent_is_claude_code_unless_codoc_agent_names_another(monkeypatch):

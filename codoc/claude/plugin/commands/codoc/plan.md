@@ -16,7 +16,7 @@ person accepts the plan.
 
 ## 2. Propose
 
-One call: `codoc_propose(ops=[…], note="<why, in one line>")`.
+One call: `codoc_propose(ops=[…], note="<what the plan changes, in one plain line>")`.
 
 | to | edit |
 |---|---|

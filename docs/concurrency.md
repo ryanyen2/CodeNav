@@ -66,7 +66,7 @@ One process applies ops at a time. It is called the applier.
 A session file:
 
 ```
-{"header": 1, "session": "s-3f9a…", "opened": <HLC>, "node": "<host>"}
+{"header": 1, "session": "s-3f9a…", "opened": <HLC>}
 {"id": "s-3f9a…:1", "at": <HLC>, "actor": …, "kind": …, "target": …, "payload": …, …}
 …
 {"closed": 1}
@@ -75,7 +75,8 @@ A session file:
 - One op per line, as recorded: canonical payload, inverse, conflict.
 - The file is created by the session's first op. A session that writes nothing leaves no file.
 - Each op is flushed when written and the file is synced once per batch.
-- The `closed` line is written when the writer is done with the file.
+- The `closed` line is written when the writer is done with the file: on rotation, at
+  exit, and when the daemon or the MCP server is stopped by a signal.
 
 A file is checked when it is read:
 
@@ -92,6 +93,7 @@ A partial read is never used: it would put the store in a state no log describes
 ## 3. Clock
 
 `HLC := "<wall ms, 20 digits>-<logical, 20 digits>-<node>"`. String order is the total order.
+The node is the writer's session id, which is unique per writer and names no machine.
 
 - `tick`: when the wall clock is ahead of the last stamp, take it with logical 0;
   otherwise keep the wall part and add 1 to the logical part.
@@ -184,7 +186,10 @@ the op conflicts `bad_anchor`.
 newest 2000 lines when a session opens, and `offsets.json` keeps the applier from
 re-reading lines it has drained.
 
-**The daemon's batch.** File events are debounced (600 ms). For each batch the daemon does, in order:
+**The daemon's batch.** File events are debounced (600 ms). A batch starts on a change to
+a code file the index reads, to `activity.json`, or to a client's `inbox/<client>.jsonl`,
+never on a file the daemon writes itself (acks, `offsets.json`), so a batch does not start
+the next. For each batch the daemon does, in order:
 
 1. If `HEAD` moved: rebuild the store from the log files now on disk and start a new
    session. Note the hand-offs that the commits in `old..new` name in a `Codoc-Handoff`

@@ -197,8 +197,8 @@ def _nudge_if_queue_grew(codoc_dir: str) -> None:
         f"codoc: the realize queue grew: {n} change(s) now queued in "
         ".codoc/realize.md (the user accepted or added tree edits while you "
         "work). Read the file and implement each item, then codoc_reflect with "
-        "caused_by=<its d-id>; the citation marks it done. Never delete the "
-        "queue files."
+        "caused_by=<its d-id>; that reports it. Never delete the queue files. "
+        "It settles when your turn ends."
     )
     out = {"hookSpecificOutput": {"hookEventName": "PostToolUse",
                                   "additionalContext": msg}}
@@ -237,8 +237,8 @@ def handle_user_prompt(payload: dict[str, Any], codoc_dir: str) -> None:
         f"codoc: {count} from accepted tree edits are queued in .codoc/realize.md. "
         "Run /codoc:sync to implement them: read the file, apply each directive "
         "(never touching .codoc/), and call codoc_reflect with caused_by=<the "
-        "item's d-id> to bind the code. That citation marks the item done; never "
-        "delete the queue files yourself."
+        "item's d-id> to bind the code. That citation reports the item; never "
+        "delete the queue files yourself. It settles when your turn ends."
     )
     out = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": msg}}
     print(json.dumps(out, ensure_ascii=False))

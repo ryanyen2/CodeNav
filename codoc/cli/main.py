@@ -67,15 +67,22 @@ def _write_gitignore(cd: Path) -> None:
         "*\n!.gitignore\n!config.json\n!tree.codoc\n!log/\n!log/**\n!media/\n!media/**\n", encoding="utf-8")
 
 
-@app.callback()
-def _main(version: bool = typer.Option(False, "--version", is_eager=True, help="Show the version and exit.")) -> None:
-    if version:
+def _version(show: bool) -> None:
+    # An option callback, so it runs while the options are parsed, before a
+    # group with no command says "Missing command".
+    if show:
         from importlib.metadata import PackageNotFoundError, version as v
         try:
             typer.echo(f"codoc {v('codoc')}")
         except PackageNotFoundError:
             typer.echo("codoc (not installed as a package)")
         raise typer.Exit()
+
+
+@app.callback()
+def _main(version: bool = typer.Option(False, "--version", is_eager=True, callback=_version,
+                                       help="Show the version and exit.")) -> None:
+    pass
 
 
 @app.command()
@@ -119,8 +126,8 @@ def init(root: str = ROOT,
     if hooks:
         try:
             from codoc.claude.install_hooks import install_hooks
-            cmds = install_hooks(root)
-            typer.echo(f"  ✓ hooks, MCP server and {', '.join(cmds)} installed")
+            cmds = install_hooks(root, say=lambda m: typer.echo(f"  ⚠ {m}", err=True))
+            typer.echo(f"  ✓ hooks, MCP server and {', '.join(cmds)} installed for this machine")
         except Exception as exc:  # noqa: BLE001
             typer.echo(f"  ⚠ could not install hooks: {exc}", err=True)
 
@@ -170,6 +177,8 @@ def watch(root: str = ROOT,
 @app.command()
 def status(root: str = ROOT):
     """Where the tree and the code stand."""
+    from codoc.calculus.derive import open_plans
+    from codoc.daemon import client
     from codoc.mcp.tools import read_status
     cd = _require(root)
     st = read_status(str(cd))
@@ -177,8 +186,13 @@ def status(root: str = ROOT):
                f"{st['edited']} edited  ·  {st['proposals']} proposal(s)")
     for q in st["queued_list"]:
         typer.echo(f"  queued  {q['feature_id']}  {q['title']}")
+    for q in st["reported_list"]:          # cited this turn; settles when the turn ends
+        typer.echo(f"  reported  {q['feature_id']}  {q['title']}")
     for e in st["edited_list"]:
         typer.echo(f"  edited  {e['feature_id']}  {e['title']}")
+    # The id is what `codoc accept` and `codoc reject` take.
+    for p in open_plans(client.read(cd).store):
+        typer.echo(f"  plan    {p.id}  {p.actor}  {(p.note or p.kind).splitlines()[0]}")
     if st["dead_cites"]:
         typer.echo(f"  {st['dead_cites']} citation(s) no longer resolve to code")
 
@@ -441,10 +455,11 @@ def realize(root: str = ROOT, engine: str = typer.Option("auto", "--engine", hel
 
 @app.command(name="install-hooks")
 def install_hooks_cmd(root: str = ROOT):
-    """(Re)install the Claude Code hooks, the /codoc:* commands and the MCP registration."""
+    """Install the Claude Code hooks, the /codoc:* commands and the MCP server for this
+    machine. Run once after cloning: the hooks and the server are not tracked."""
     from codoc.claude.install_hooks import install_hooks
-    cmds = install_hooks(root)
-    typer.echo(f"✓ installed {', '.join(cmds)} and the codoc MCP server")
+    cmds = install_hooks(root, say=lambda m: typer.echo(f"⚠ {m}", err=True))
+    typer.echo(f"✓ installed {', '.join(cmds)} and the codoc hooks")
 
 
 @app.command()

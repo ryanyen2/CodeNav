@@ -207,7 +207,9 @@ class Compiler:
         if (raw.get("title") or "").strip():
             change.rewrites.append(Rewrite(fid, "text", one_line(raw["title"])))
         body = {b.id: b for b in self.store.feature_body(fid)[1:] if b.kind in PROSE or b.kind in SOURCE}
-        last = fid
+        # A new block follows the block the entry before it names; with none
+        # named it goes at the end of the feature's own body.
+        last = self.store.feature_body(fid)[-1].id
         for entry in raw.get("blocks") or []:
             bid, text = entry.get("id"), entry.get("text") or ""
             specs = block_md.parse(text, headings=False, absolute=True)

@@ -308,12 +308,13 @@ def test_a_removed_session_file_is_reported(tmp_path):
 
 
 def test_a_base_git_cannot_diff_against_fails_the_check(tmp_path):
-    """A shallow clone or an unrelated base would check nothing; that is not a pass."""
+    """A missing base (no `origin` remote) would check nothing; that is not a
+    pass, and the message says what to do."""
     import pytest
     from codoc.workspace.validate import changed_logs
     _git_workspace(tmp_path)
-    with pytest.raises(ValueError, match="cannot diff"):
-        changed_logs(tmp_path, "no-such-base")
+    with pytest.raises(ValueError, match="does not exist in this repository; pass --base <branch>"):
+        changed_logs(tmp_path, "origin/main")
 
 
 def test_a_session_file_that_rewrites_its_merge_base_is_reported(tmp_path):

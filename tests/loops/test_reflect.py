@@ -281,3 +281,24 @@ def test_amend_lands_one_plan_when_the_second_block_flips_the_gate(tmp_path):
     assert len(plans) == 1, [pl.id for pl in plans]
     assert all(o.plan == plans[0].id for o in res.ops if o.kind.startswith("text.")), [(o.kind, o.plan) for o in res.ops]
     ws.close()
+
+
+def test_the_loop_does_not_stack_a_second_plan_on_a_feature_it_already_asked_about(tmp_path):
+    """The model reads a description without an open plan's words, so the next
+    pass over the same code proposes the same new block again. While the
+    loop's own plan on a feature is open, an amend there that adds or strikes
+    a block waits for that verdict; a rewording still lands."""
+    ws = Workspace(tmp_path / ".codoc")
+    seed_loop(ws)
+    add = lambda c, s, t, **kw: [{"kind": "amend", "feature_id": "h1", "blocks": [{"text": "- Gives up on `None`."}],
+                                  "rationale": "adds a bullet on `None`"}]
+    first = reflect(ws, ChangeSet(modified=[chunk("c.py", "c.py::send", "f2", "t1")]), Graph(), propose=add)
+    again = reflect(ws, ChangeSet(modified=[chunk("c.py", "c.py::send", "f3", "t1")]), Graph(), propose=add)
+    assert len(first.plans) == 1 and again.plans == [] and again.refused == [("h1", "open_plan")]
+    assert [p.id for p in ws.store.open_plans.values()] == first.plans
+    assert ws.store.plans[first.plans[0]].note == "adds a bullet on `None`"
+    reword = lambda c, s, t, **kw: [{"kind": "amend", "feature_id": "h1", "blocks": [{"id": "p1", "text": "Retries twice before giving up."}]}]
+    assert reflect(ws, ChangeSet(modified=[chunk("c.py", "c.py::send", "f5", "t1")]), Graph(), propose=reword).plans == []
+    assert T(ws.store, "p1") == "Retries twice before giving up."
+    ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": first.plans[0]}, "payload": {}}], actor=H)
+    assert len(reflect(ws, ChangeSet(modified=[chunk("c.py", "c.py::send", "f4", "t1")]), Graph(), propose=add).plans) == 1

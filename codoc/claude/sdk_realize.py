@@ -196,9 +196,9 @@ async def _run(root_dir: str, codoc_dir: str, *, permission_mode: str,
     options = ClaudeAgentOptions(
         cwd=root_dir,
         permission_mode=permission_mode,
-        # Load the repo's .mcp.json (codoc MCP server), .claude/settings.json
-        # (the codoc hooks) and commands (/codoc:sync). The SDK loads no
-        # filesystem settings unless asked.
+        # Load the codoc MCP server (registered at local scope for this path),
+        # the hooks in .claude/settings.local.json and the /codoc:sync command.
+        # The SDK loads no filesystem settings unless asked.
         setting_sources=["user", "project", "local"],
     )
 

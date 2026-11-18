@@ -409,3 +409,46 @@ def test_a_citing_attach_settles_nothing_while_an_agent_epoch_is_open_and_settle
     assert "closed" in d.process_batch([str(act)])
     assert queued(d.ws.store) == []
     assert [o.caused_by for o in d.ws.store.ops if o.kind == K.FEATURE_REALIZED] == [ho.id]
+
+
+def test_a_batch_does_not_wake_the_daemon_for_what_it_wrote(tmp_path):
+    """The daemon writes acks, offsets.json and atomic_write's tmp files into
+    the inbox. Waking on them made every batch start the next, forever; and a
+    drain with nothing new rewrites nothing."""
+    from codoc.daemon.daemon import _filter
+    d, _ = make(tmp_path, [])
+    inbox = L.inbox_dir(d.codoc_dir)
+    keep = _filter(d.codoc_dir, d.code_path)
+    t = d.ws.store.blocks["p1"].text()
+    L.submit(d.codoc_dir, "ide", [Submission(cid="w1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                                             payload={"after": list(t.last_live_ref()), "text": " Typed."})])
+    assert keep(None, str(inbox / "ide.jsonl"))
+
+    def stamps():
+        return {p: p.stat().st_mtime_ns for p in d.codoc_dir.rglob("*") if p.is_file()}
+    was = stamps()
+    assert "1 client op" in d.process_batch([str(inbox / "ide.jsonl")])
+    now = stamps()
+    written = [p for p in now if was.get(p) != now[p]] + [inbox / ".offsets.json.x1.tmp"]
+    assert (inbox / "offsets.json") in written and not [p for p in written if keep(None, str(p))]
+    assert d.process_batch([]) == "no-op" and stamps() == now
+
+
+def test_no_log_names_the_machine(tmp_path, monkeypatch):
+    """A tracked log's clock node is its writer's session id, for the daemon,
+    a daemonless writer and a rotated session alike: never the hostname."""
+    import socket
+    from codoc.daemon import client
+    from codoc.workspace.clock import parse
+    monkeypatch.setattr(socket, "gethostname", lambda: "alices-laptop.local")
+    d, _ = make(tmp_path, [])
+    d.ws.rotate_session()
+    handoff(d.ws, "h1", actor="human:local")
+    client.write(d.codoc_dir, client="cli", bodies=[{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {}}])
+    client.release(d.codoc_dir)
+    d.ws.close()
+    files = [L.read_session(p) for p in L.list_sessions(d.codoc_dir)]
+    assert len(files) == 3
+    for f in files:
+        assert "alices-laptop" not in f.path.read_text()
+        assert {parse(o.at)[2] for o in f.ops} == {f.session}

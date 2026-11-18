@@ -356,18 +356,25 @@ def editors(store: Store, fid: str) -> list[str]:
     wrote and not what they removed. It is pending intent all the same
     (emptying a title by deleting characters flags the feature, and the
     directive carries it as a `removed:` line); otherwise the person would be
-    told there is nothing to hand off while there is."""
+    told there is nothing to hand off while there is. A removal a verdict made
+    answered a plan and is nobody's edit."""
     w = store.watermarks(fid)
     out = {c.actor for c in ink(store, fid) if c.stage == "unsent"}
-    for b in prose_blocks(store, fid):
-        for f in b.layout.text:
-            for sg in b.text(f).segs:
-                if sg.dead and is_human(sg.dead_actor) and not in_frontier(sg.dead, w.handoff) \
-                        and not in_frontier(sg.dead, w.realized):
-                    out.add(sg.dead_actor)
+    kills = [(sg.dead, sg.dead_actor) for b in prose_blocks(store, fid) for f in b.layout.text
+             for sg in b.text(f).segs if sg.dead and is_human(sg.dead_actor)
+             and not in_frontier(sg.dead, w.handoff) and not in_frontier(sg.dead, w.realized)]
+    if kills:
+        verdicts = verdict_ops(store)
+        out.update(actor for op, actor in kills if op not in verdicts)
     out.update(b.dead_actor for b in removed_blocks(store, fid)
                if not in_frontier(b.dead, w.handoff) and not in_frontier(b.dead, w.realized))
     return sorted(out)
+
+
+def verdict_ops(store: Store) -> set[str]:
+    """The ops that decided a plan. Read from the plans, which a fold keeps,
+    so a character a verdict killed is known as one after the fold too."""
+    return {p.verdict for p in store.plans.values() if p.verdict}
 
 
 def removed_blocks(store: Store, fid: str) -> list[Block]:

@@ -201,6 +201,21 @@ def test_amend_that_only_rewords_is_not_structural():
     assert not change.structural and not change.bodies and [r.new_md for r in change.rewrites] == ["Writes through a temporary file."]
 
 
+def test_a_new_block_that_follows_no_named_block_goes_at_the_end_of_the_body():
+    """A new block lands after the block the entry before it names, else at
+    the end of the feature's own body, never above its lead sentence."""
+    s, m, fid, (para, b1, b2, table) = _seeded()
+    child = Compiler(s).compile({"kind": "add_node", "parent_id": fid, "title": "Child", "description": "C."})
+    land(s, m, child)
+    land(s, m, Compiler(s).compile({"kind": "amend", "feature_id": fid, "blocks": [{"text": "- Last."}]}))
+    land(s, m, Compiler(s).compile({"kind": "amend", "feature_id": fid, "blocks": [
+        {"id": b1, "text": "- Writes in place."}, {"text": "- After the first item."}]}))
+    assert [b.id for b in s.feature_body(fid)[1:]][:2] == [para, b1]
+    assert description(s, fid).splitlines()[-1] == "- Last."
+    assert "- Writes in place.\n- After the first item.\n- A missing file" in description(s, fid)
+    assert s.feature_of(s.feature_body(fid)[-1].id) == fid
+
+
 def test_an_indented_new_item_nests_under_the_item_before_it():
     s, m, fid, (_para, b1, _b2, _table) = _seeded()
     change = Compiler(s).compile({"kind": "amend", "feature_id": fid, "blocks": [
