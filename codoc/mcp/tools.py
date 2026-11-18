@@ -216,25 +216,28 @@ def _compile(store, ops: list[dict]) -> tuple[list[Change], str | None]:
     return changes, None
 
 
-def _cite(codoc_dir: str, caused_by: str | None) -> str | None:
+def _handoff(caused_by: str | None) -> str | None:
     """The hand-off op id a call cites. The queue shows a hand-off as
     ``⟨d:<op id>⟩`` and tells the agent to pass that ``d:`` id; ops cite the op
-    id itself. The id is recorded on the open epoch, where the Stop hook reads
-    what this turn reported."""
-    if not caused_by:
-        return caused_by
-    did = caused_by.removeprefix("d:")
-    try:
-        note_cited(codoc_dir, did)
-    except OSError:          # a lock timeout: at worst the Stop hook asks once more
-        pass
-    return did
+    id itself."""
+    return caused_by.removeprefix("d:") if caused_by else caused_by
+
+
+def _cite(codoc_dir: str, did: str | None, results: list[dict]) -> None:
+    """Record on the open epoch, where the Stop hook reads what this turn
+    reported, that the call cited ``did``, once an op of it landed, applied
+    or planned: ``results`` are the call's acks and plan results."""
+    if did and any(r.get("ops") and not r.get("conflict") for r in results):
+        try:
+            note_cited(codoc_dir, did)
+        except OSError:          # a lock timeout: at worst the Stop hook asks once more
+            pass
 
 
 def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "", caused_by: str | None = None,
             root_dir: str | None = None) -> dict:
     """What the agent did to the code, as tree edits (see the module table)."""
-    caused_by = _cite(codoc_dir, caused_by)
+    caused_by = _handoff(caused_by)
     ws, _ = _open(codoc_dir)
     changes, err = _compile(ws.store, ops)
     if err:
@@ -257,21 +260,23 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "", caused_by: 
     if planned:
         out["planned"] = _write_plans(codoc_dir, ws.store, planned, note=rationale, caused_by=caused_by,
                                       root_dir=root_dir, build=False)
+    _cite(codoc_dir, caused_by, [*out["applied"], *out["amended"], out["planned"] or {}])
     return out
 
 
 def propose(codoc_dir: str, *, ops: list[dict], note: str = "", caused_by: str | None = None,
             root_dir: str | None = None) -> dict:
     """A plan of tree edits, drawn in place for the person to accept or reject."""
-    caused_by = _cite(codoc_dir, caused_by)
+    caused_by = _handoff(caused_by)
     ws, _ = _open(codoc_dir)
     changes, err = _compile(ws.store, ops)
     if err:
         return _err(err)
     if not changes:
         return _err("no ops")
-    return _write_plans(codoc_dir, ws.store, changes, note=note, caused_by=caused_by, root_dir=root_dir,
-                        build=True)
+    out = _write_plans(codoc_dir, ws.store, changes, note=note, caused_by=caused_by, root_dir=root_dir, build=True)
+    _cite(codoc_dir, caused_by, [out])
+    return out
 
 
 def _write_plans(codoc_dir: str, store, changes: list[Change], *, note: str, caused_by: str | None,
@@ -342,7 +347,7 @@ def write_block(codoc_dir: str, *, content: dict, bid: str | None = None, kind: 
     when the agent is proposing rather than reflecting."""
     from codoc.kinds import get, kinds
     from codoc.kinds.write import plan_write
-    caused_by = _cite(codoc_dir, caused_by)
+    caused_by = _handoff(caused_by)
     ws, _ = _open(codoc_dir)
     store = ws.store
     if not isinstance(content, dict):
@@ -362,6 +367,7 @@ def write_block(codoc_dir: str, *, content: dict, bid: str | None = None, kind: 
         refused = [a["conflict"] for a in added if a.get("conflict")]
         if refused:
             return _err(f"block.add refused: {refused[0]}")
+        _cite(codoc_dir, caused_by, added)
         return {"ok": True, "bid": bid, "applied": added, "ingested": []}
     else:
         current = store.blocks.get(bid)
@@ -376,6 +382,7 @@ def write_block(codoc_dir: str, *, content: dict, bid: str | None = None, kind: 
     for f, base, new_md in p.ingests:
         results["ingested"].append({"field": f, **client.ingest(codoc_dir, client=agent_client(), bid=bid, path=f, base_text=base,
                                                                  new_md=new_md, plan=plan, caused_by=caused_by, root_dir=root_dir)})
+    _cite(codoc_dir, caused_by, [*results["applied"], *results["ingested"]])
     return results
 
 

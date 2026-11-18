@@ -78,7 +78,8 @@ skill, and the `/codoc:sync`, `/codoc:plan` and `/codoc:ask` commands.
 - At `stop`, when the turn's MCP calls cite some queued items but not all, block the stop
   once and name the rest, so an item built but not reported is reported or explained. A
   turn that never touched the queue just ends. The MCP server records each hand-off a
-  call cites in the epoch's `cited` list (`epoch.note_cited`), daemon or not, and the
+  call cites in the epoch's `cited` list (`epoch.note_cited`), daemon or not, once an op
+  of the call has landed (applied or planned), so a call that errored cites nothing. The
   epoch's open resets it. The hooks read and write `activity.json` outside the lock, so a
   hook write can drop a citation; then the stop is blocked once more than it should be,
   and `stop_hook_active` ends it.
@@ -97,10 +98,11 @@ skill, and the `/codoc:sync`, `/codoc:plan` and `/codoc:ask` commands.
 end of each batch and after each reflect pass, a daemonless writer after it applies, or
 the process the Stop hook starts when no daemon runs) writes `feature.realized` for each
 queued feature once an applied binding op cites its latest hand-off in `caused_by`
-(`loops/realize.py`, `settle`). It does not matter who wrote the op: an agent's
-`codoc_reflect`, the pass after a Claude Code epoch closes, or the pass over a commit
-whose `Codoc-Handoff` trailer names the hand-off, read when `HEAD` moves forward on the
-branch it was on. While an epoch is open the build is in progress, so the feature stays
+(`loops/realize.py`, `settle`), whichever feature the op binds. It does not matter who
+wrote the op: an agent's `codoc_reflect`, the pass after a Claude Code epoch closes, or
+the pass over a commit whose `Codoc-Handoff` trailer names the hand-off, read when
+`HEAD` moves over it while on the branch its `Codoc-Base` trailer names. While an epoch
+is open the build is in progress, so the feature stays
 queued until the epoch closes.
 Code written by hand settles with `codoc done`.
 
@@ -133,7 +135,7 @@ and no session is live.
 | `push.py` | The SSE channel: `projection`, `status`, this viewer's `acks`. |
 | `auth.py`, `github_auth.py` | Sessions, and collaborator permission to role, written to `config.json`. Re-checked on a cadence. |
 | `ratelimit.py` | Requests per login. |
-| `worker.py` | Each hand-off with no realization and no pull request is built on its own worktree and branch, and the worker opens the pull request. The commit names the hand-off in a `Codoc-Handoff` trailer, so the daemon's pass over the merged commit cites it. |
+| `worker.py` | Each hand-off with no realization and no pull request is built on its own worktree and branch, and the worker opens the pull request. The commit names the hand-off in a `Codoc-Handoff` trailer and the branch the pull request targets in a `Codoc-Base` trailer, so the pass of a daemon on that branch over the merged commit cites it. |
 | `realize_agent.py`, `sandbox.py`, `consult.py` | The sandboxed agent the worker runs: no shell, paths confined to the worktree, edits confined to the feature's bound files, secrets unreadable, tokens scrubbed, a scope check after the run, an allowlist for Consult URLs. |
 | `static.py`, `tunnel.py` | Where the bundle is; a Cloudflare tunnel. |
 

@@ -187,19 +187,17 @@ def test_marking_done_with_nothing_handed_off_is_refused_not_a_silent_success(tm
     assert op.conflict is not None, op.payload
 
 
-def test_only_an_accepted_bind_on_the_feature_settles_its_handoff(tmp_path):
-    """A citing bind op settles the hand-off only when it binds that feature
-    and, under a plan, once a verdict accepted it: an open plan may still be
-    rejected, and a rejected one was undone."""
+def test_only_an_accepted_bind_settles_its_handoff(tmp_path):
+    """A citing bind op under a plan settles the hand-off once a verdict
+    accepted it: an open plan may still be rejected, and a rejected one was
+    undone."""
     ws = Workspace(tmp_path / ".codoc"); seed(ws)
-    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "h2"}, "payload": {"kind": "heading", "after": "p1"}}], actor=H)
     ho = handoff(ws, "h1", actor=H)
 
     def bind(fid, sym, plan=None):
         ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": fid}, "payload": {"symbol": sym}}],
                   actor="agent:claude-code", plan=plan, caused_by=ho.id)
 
-    bind("h2", "c.py::other")
     a = ws.open_plan(actor="agent:claude-code", target="h1")
     bind("h1", "c.py::retry", plan=a)
     assert settle(ws) == []
@@ -213,14 +211,10 @@ def test_only_an_accepted_bind_on_the_feature_settles_its_handoff(tmp_path):
 
 def test_a_request_built_as_a_sub_feature_settles_once_its_node_is_accepted(tmp_path):
     """The agent may build the request as a new node under the feature: an
-    accepted add_node in its range whose bindings cite the hand-off settles it.
-    A bind on a feature outside the range citing it does not."""
+    accepted add_node whose bindings cite the hand-off settles it."""
     ws = Workspace(tmp_path / ".codoc"); seed(ws)
-    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "h2"}, "payload": {"kind": "heading", "after": "p1"}}], actor=H)
     ho = handoff(ws, "h1", actor=H)
     agent = "agent:claude-code"
-    ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h2"}, "payload": {"symbol": "c.py::other"}}],
-              actor=agent, caused_by=ho.id)
     pid = ws.open_plan(actor=agent, kind="add_node", target="h1")
     ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "n1"}, "payload": {"kind": "heading", "under": "h1"}},
                {"kind": K.BIND_ATTACH, "target": {"fid": "n1"}, "payload": {"symbol": "c.py::retry"}}],
@@ -229,3 +223,16 @@ def test_a_request_built_as_a_sub_feature_settles_once_its_node_is_accepted(tmp_
     ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor=H)
     done = settle(ws)
     assert len(done) == 1 and done[0].target["fid"] == "h1" and queued(ws.store) == []
+
+
+def test_a_request_that_changed_a_symbol_another_feature_owns_settles(tmp_path):
+    """realize.txt tells the agent to change a shared symbol another feature
+    owns and attach it there. That bind, citing the hand-off, settles it."""
+    ws = Workspace(tmp_path / ".codoc"); seed(ws)
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "h2"}, "payload": {"kind": "heading", "after": "p1"}},
+               {"kind": K.BIND_ATTACH, "target": {"fid": "h2"}, "payload": {"symbol": "c.py::RETRIES"}}], actor=H)
+    ho = handoff(ws, "h1", actor=H)
+    ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h2"}, "payload": {"symbol": "c.py::RETRIES", "fingerprint": "b"}}],
+              actor="agent:claude-code", caused_by=ho.id)
+    done = settle(ws)
+    assert [o.target["fid"] for o in done] == ["h1"] and queued(ws.store) == []

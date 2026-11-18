@@ -10,8 +10,9 @@ secrets unreadable, GitHub tokens scrubbed from its environment), and only the
 orchestrator, which holds the token, opens the PR.
 
 Nothing is written to the store here. The commit names the hand-off in a
-`Codoc-Handoff` trailer. When the PR merges and a daemon sees HEAD move over
-that commit, its reflect pass cites the hand-off in `caused_by`, and the
+`Codoc-Handoff` trailer and the branch the PR targets in a `Codoc-Base`
+trailer. When a daemon on that branch sees HEAD move over the commit (the PR
+merged and pulled), its reflect pass cites the hand-off in `caused_by`, and the
 hand-off settles on those binding ops (`loops.realize.settle`). The
 worker's own ledger (`cache/hub-prs.json`, ignored) records which hand-off ids
 already have a PR, so a queue that stays queued does not open a second one.
@@ -26,7 +27,7 @@ from pathlib import Path
 
 from codoc.calculus.derive import title
 from codoc.daemon import client
-from codoc.index.git import HANDOFF_TRAILER
+from codoc.index.git import BASE_TRAILER, HANDOFF_TRAILER
 from codoc.loops.realize import directive, queued
 from codoc.serve.realize_agent import make_sandboxed_agent
 from codoc.serve.sandbox import out_of_scope_changes
@@ -139,8 +140,10 @@ def realize_one(req: Request, worktree: str, *, run, agent, base: str = "main", 
         return Result(False, branch, "the agent wrote outside the feature's bindings", bad)
     if not changed:
         return Result(False, branch, "no changes produced")
+    # One paragraph: git reads trailers from the message's last paragraph only.
+    trailers = f"{HANDOFF_TRAILER}: {req.handoff}\n{BASE_TRAILER}: {base}"
     if run(["git", "add", "-A"], cwd=worktree) or run(["git", "commit", "-m", f"codoc: {req.title}",
-                                                        "-m", f"{HANDOFF_TRAILER}: {req.handoff}"], cwd=worktree):
+                                                        "-m", trailers], cwd=worktree):
         return Result(False, branch, "git refused to commit the agent's work", transient=True)
     return _publish(req, worktree, branch, base, run)
 

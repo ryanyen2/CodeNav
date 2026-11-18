@@ -1,6 +1,9 @@
 """The daemon's per-batch routing with injected index and LLM."""
 import json
+import os
 import shutil
+
+import pytest
 
 from codoc.calculus import ops as K
 from codoc.calculus.doc import PARAGRAPH
@@ -245,14 +248,32 @@ def test_head_change_rebuilds_from_the_logs_on_disk(tmp_path):
     assert "rotated" in note and T(d.ws.store, "p1").endswith(" From a peer.")
 
 
-def test_checking_out_a_pull_request_branch_settles_nothing_and_merging_it_does(tmp_path, monkeypatch):
-    """A `Codoc-Handoff` trailer counts only when HEAD moves forward on the
-    branch it was on. A maintainer who checks out a hub pull request's branch to
-    review it, then goes back, has merged nothing."""
+LANDS = {
+    # the pull request's branch, checked out to review it: nothing merged
+    "checkout the PR branch": ([["checkout", "-q", "codoc/pr"]], False),
+    # a local branch that pulls the PR again as the hub pushes to it
+    "re-pull the PR branch": ([["checkout", "-qb", "review"], ["merge", "-q", "--ff-only", "codoc/pr"]], False),
+    "detached HEAD": ([["checkout", "-q", "--detach"], ["merge", "-q", "--ff-only", "codoc/pr"]], False),
+    # `git pull --rebase` on the base with an unpushed commit: the new HEAD does not descend from the old
+    "rebase pull on the base": ([["commit", "-qam", "local", "--allow-empty"], ["rebase", "-q", "codoc/pr"]], True),
+    "merge on the base": ([["merge", "-q", "--no-ff", "--no-edit", "codoc/pr"]], True),
+    "switch from a feature branch to a base that has the merge":
+        ([["checkout", "-qb", "feat"], ["commit", "-q", "--allow-empty", "-m", "feat"],
+          ["branch", "-f", "main", "codoc/pr"], ["checkout", "-q", "main"]], True),
+}
+
+
+@pytest.mark.parametrize("case", LANDS)
+def test_a_handoff_trailer_counts_on_the_branch_its_base_trailer_names(tmp_path, monkeypatch, case):
+    """A commit names its hand-off in `Codoc-Handoff` and the branch it must
+    land on in `Codoc-Base`. The daemon counts it from the commits HEAD moved
+    over only while HEAD is on that branch, whatever the move (a merge, a
+    rebase, a checkout)."""
     import subprocess
-    from codoc.index.git import HANDOFF_TRAILER
+    from codoc.index.git import BASE_TRAILER, HANDOFF_TRAILER
     from codoc.loops.realize import queued
-    for k, v in {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t",
+    for k, v in {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t",
+                 "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t",
                  "GIT_COMMITTER_EMAIL": "t@example.com"}.items():
         monkeypatch.setenv(k, v)
     root = tmp_path / "repo"
@@ -265,23 +286,21 @@ def test_checking_out_a_pull_request_branch_settles_nothing_and_merging_it_does(
     (root / "c.py").write_text("def send(): ...\n")
     git("add", "-A")
     git("commit", "-qm", "init")
-    fps = iter(["f2", "f3", "f4"])
+    fps = (f"f{i}" for i in range(2, 20))
     d = Daemon(root, changeset=lambda *a: ChangeSet(modified=[ChunkRef("c.py", "c.py::send", next(fps), "t1")]),
                propose=lambda *a, **k: [], printer=lambda *_: None)
     seed_loop(d.ws)
     ho = handoff(d.ws, "h1", actor="human:local")
     git("checkout", "-qb", "codoc/pr")
     (root / "c.py").write_text("def send(): retry()\n")
-    git("commit", "-qam", "codoc: Client", "-m", f"{HANDOFF_TRAILER}: {ho.id}")
+    git("commit", "-qam", "codoc: Client", "-m", f"{HANDOFF_TRAILER}: {ho.id}\n{BASE_TRAILER}: main")
     git("checkout", "-q", "main")
-    for step in (["checkout", "-q", "codoc/pr"], ["checkout", "-q", "main"]):
+    steps, lands = LANDS[case]
+    for step in steps:
         git(*step)
         d.process_batch([str(root / "c.py")])
-        assert queued(d.ws.store) == ["h1"], step
-    git("merge", "-q", "--ff-only", "codoc/pr")
-    d.process_batch([str(root / "c.py")])
-    assert queued(d.ws.store) == []
-    assert [o.caused_by for o in d.ws.store.ops if o.kind == K.FEATURE_REALIZED] == [ho.id]
+    assert queued(d.ws.store) == ([] if lands else ["h1"])
+    assert [o.caused_by for o in d.ws.store.ops if o.kind == K.FEATURE_REALIZED] == ([ho.id] if lands else [])
 
 
 def test_an_inbox_file_no_actor_owns_is_named_once(tmp_path):

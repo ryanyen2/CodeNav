@@ -32,7 +32,8 @@ How each tree edit lands:
 
 When the pass runs because an agent session closed, every op it writes on a queued
 feature carries `caused_by` the feature's latest hand-off. When it runs over commits whose
-`Codoc-Handoff` trailer names a hand-off, the ops on that hand-off's feature carry it. A
+`Codoc-Handoff` trailer names a hand-off and whose `Codoc-Base` trailer names the branch
+`HEAD` is on, the ops on that hand-off's feature carry it. A
 pass caused by a hand edit cites nothing.
 
 ### Document to code: realize
@@ -50,12 +51,15 @@ pass caused by a hand edit cites nothing.
    agent that runs the MCP server can do this. Claude Code's hooks also keep the agent
    epoch open in `.codoc/activity.json` while a turn runs, and the daemon reflects the
    held files with `caused_by` when the epoch closes. A commit whose `Codoc-Handoff`
-   trailer names the hand-off (the hub's pull requests carry one) is reflected with
-   `caused_by` when the daemon sees `HEAD` move forward over it on the same branch (a
-   merge or a pull, not a checkout of the pull request's branch).
-6. The applier writes `feature.realized` as `loop` once a binding op on the feature, or a
-   heading in its range, citing the latest hand-off has landed, whoever wrote it (under a plan, once accepted), and no
-   agent epoch is open; a Claude Code turn
+   trailer names the hand-off and whose `Codoc-Base` trailer names a branch (the hub's
+   pull requests carry both, the base being the branch the pull request targets) is
+   reflected with `caused_by` when `HEAD` moves over it while `HEAD` is on that branch:
+   a merge, a pull with or without rebase, or a checkout of the base. A checkout or a
+   pull of the pull request's own branch, or a detached `HEAD`, counts nothing.
+6. The applier writes `feature.realized` as `loop` once a binding op citing the latest
+   hand-off has landed, whoever wrote it (under a plan, once accepted), and no agent epoch
+   is open. The op may bind any feature: the request's own, a new node built under it,
+   or the feature that owns a shared symbol the request changed. A Claude Code turn
    settles when it ends, in the daemon's batch that sees the epoch close or, with no
    daemon, in a process the Stop hook starts
    ([concurrency.md](concurrency.md#1-processes)). When the build moved
@@ -157,8 +161,9 @@ over existing features, stored in `.codoc/ask.json`. It writes no op.
   plan of theirs in the drain; their comments stay untagged.
 - With GitHub configured, the worker builds each hand-off that has no realization and no
   pull request yet, on its own worktree, with a sandboxed agent, and opens a pull request.
-  Its commit names the hand-off in a `Codoc-Handoff` trailer, so the hand-off settles
-  when a daemon reflects the merged commit.
+  Its commit names the hand-off in a `Codoc-Handoff` trailer and the branch the pull
+  request targets in a `Codoc-Base` trailer, so the hand-off settles when a daemon on
+  that branch reflects the merged commit.
 - A pull request carries its author's session logs. `codoc validate-logs` checks them
   before a merge ([concurrency.md](concurrency.md#7-roles-and-authority)).
 

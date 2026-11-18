@@ -267,6 +267,28 @@ def test_the_queues_d_id_settles_the_handoff(tmp_path):
     assert queued(Workspace(cd, readonly=True).store) == []
 
 
+def test_only_a_call_whose_ops_landed_cites_its_handoff(tmp_path):
+    """The Stop hook asks about each queued item no call of the turn cited. A
+    call that errored reported nothing, so it cites nothing."""
+    from codoc.daemon.epoch import read_activity, write_activity
+    cd, ws = workspace(tmp_path)
+    ho = handoff(ws, "h1", actor=H)
+    ws.close()
+    write_activity(str(cd), {"epoch": {"id": "ep", "open": True}, "cited": []})
+    cite, root = f"d:{ho.id}", str(tmp_path)
+    try:
+        assert not tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "nope", "bindings": ["c.py::x"]}],
+                                 caused_by=cite, root_dir=root)["ok"]
+        assert not tools.propose(str(cd), ops=[], caused_by=cite, root_dir=root)["ok"]
+        assert not tools.write_block(str(cd), content={}, kind="nope", feature_id="h1", caused_by=cite, root_dir=root)["ok"]
+        assert read_activity(str(cd))["cited"] == []
+        assert tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::retry"]}],
+                             caused_by=cite, root_dir=root)["ok"]
+    finally:
+        client.release(cd)
+    assert read_activity(str(cd))["cited"] == [ho.id]
+
+
 def test_the_agent_is_claude_code_unless_codoc_agent_names_another(monkeypatch):
     from codoc.workspace import log as L
     monkeypatch.delenv("CODOC_AGENT", raising=False)

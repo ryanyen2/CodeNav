@@ -187,10 +187,11 @@ re-reading lines it has drained.
 **The daemon's batch.** File events are debounced (600 ms). For each batch the daemon does, in order:
 
 1. If `HEAD` moved: rebuild the store from the log files now on disk and start a new
-   session. If it moved forward on the branch it was on (a commit, a pull, a merge: the
-   same branch name, and the old commit an ancestor of the new), note the hand-offs the
-   new commits name in a `Codoc-Handoff` trailer. A checkout of another branch, such as a
-   hub pull request's to review it, notes none.
+   session. Note the hand-offs that the commits in `old..new` name in a `Codoc-Handoff`
+   trailer, each from a commit whose `Codoc-Base` trailer names the branch `HEAD` is on
+   now. The commit and the branch are read in one git call. A merge, a pull with or
+   without rebase, and a checkout of the base count the commit; a checkout or a pull of
+   a hub pull request's own branch, and a detached `HEAD`, note none.
 2. Reload the roles from `config.json`, then drain every inbox from its saved offset.
    This runs on every batch, including the first one at startup and `codoc sync`, so
    submissions written while no daemon ran are applied.
@@ -465,7 +466,7 @@ changed nothing is not recorded.
 | `kill` | `bid`, `path`, `segments`; `by`, `actor`, `at` when it put back another op's kill | The characters die, by the op that recorded the step unless `by` says otherwise. | They live again, those still dead by that killer. |
 | `revive` | `bid`, `path`, `segments`, `by`, `actor`, `at` | The characters `by` had killed live again. | They die again, by `by`, with its actor and clock. |
 | `mark` | `bid`, `path`, `mark` (with its `actor`, `op`, `at`), `on`, `segments` | That mark was added (`on`) or removed; `segments` are the characters it covered. | Removed: every mark equal to it but for its range whose first character is one of `segments`, in every field holding them. Added: one piece per field holding any of `segments`, from the first of them to the last. |
-| `set` | `bid`, `from`, `to`; for `kind`, `bindings`, `detached`, `attached` | `kind`, `level`, `rank` with `ranked_by`, or content fields went from `from` to `to`. A content field missing from one side was absent there. A `kind` change is a feature leaving or coming back as `block.set` has it: leaving, its bindings came off (`detached`); coming back, it took back `bindings`, what the plan's op detached (`attached`). | `from` again; for `rank`, only while `ranked_by` is still the one in `to`. For `kind`, the same rule the other way: the code bound since comes off, or `detached` comes back. |
+| `set` | `bid`, `from`, `to`; for `kind`, `bindings`, `detached`, `attached` | `kind`, `level`, `rank` with `ranked_by`, or content fields went from `from` to `to`. A content field missing from one side was absent there. A `kind` change is a feature leaving or coming back as `block.set` has it: leaving, its bindings came off (`detached`); coming back, it took back `bindings`, what the plan's op detached (`attached`). | `from` again; for `rank`, only while `ranked_by` is still the one in `to`. For `kind`, the same rule the other way: the code bound since comes off, or `detached` comes back. On a block that has died since, it is kept on the block as a delete keeps it (recorded as `attached`), and the block's restore re-attaches it. |
 | `void` | `bid`, `op`, `to` | The move `op` could not be put back, and `to` is the place it found the block, kept in the block's `void`. | It is dropped from `void`. |
 | `kill_block` | `bid`, `in`? | The block died by the op that recorded the step, while in feature `in`. | It lives again, if that op is still its killer. |
 | `bind` | `symbol`, `from`, `to` | The binding went from `from` to `to`; `null` is unbound. A `to` that is not a live heading now is `null`. | `from` again, unless it is not a live heading now. |
@@ -571,13 +572,16 @@ removed. The paragraph reads `Retries once.`
 - `feature.realized` moves the `realized` frontier. It conflicts `nothing_queued` when no
   hand-off is waiting.
 - The applier writes `feature.realized` as `loop`, and only on evidence: a feature
-  settles once an applied binding op on it, or on a heading in its range (the request
-  built as a sub-feature), since its latest hand-off cites that hand-off in `caused_by`.
+  settles once an applied binding op since its latest hand-off cites that hand-off in
+  `caused_by`. The op may bind any feature: the request built as a sub-feature binds the
+  new node, and a request that changed a symbol another feature owns binds that owner.
   An op under a plan counts once a verdict accepted it: an open plan may
   still be rejected. Only the record decides, never the actor or the timing. The
   op may be an agent's `codoc_reflect` (any agent), the reflect pass that ran because a
   Claude Code session closed (it cites every queued hand-off), or the pass over commits
-  whose `Codoc-Handoff` trailer names the hand-off (the hub's pull requests). The daemon
+  whose `Codoc-Handoff` trailer names the hand-off and whose `Codoc-Base` trailer names
+  the branch `HEAD` is on (the hub's pull requests, once merged into the branch they
+  target). The daemon
   checks at the end of every batch and after every reflect pass; a daemonless writer
   checks after it applies.
 - Nothing settles while an agent epoch is open (`activity.json`): the build is in

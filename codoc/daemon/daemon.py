@@ -4,8 +4,9 @@
 Per debounced batch of filesystem events it does, in order:
 
 1. rotate the session log if ``HEAD`` moved (a commit, a checkout), noting
-   the hand-offs the new commits name in a ``Codoc-Handoff`` trailer when
-   ``HEAD`` moved forward on the branch it was on;
+   the hand-offs the commits it moved over name in a ``Codoc-Handoff``
+   trailer, each from a commit whose ``Codoc-Base`` names the branch ``HEAD``
+   is on;
 2. drain every client inbox into ops, warning once about an inbox file whose
    name maps to no actor;
 3. read the agent epoch (``activity.json``): while an interactive session is
@@ -33,7 +34,7 @@ from pathlib import Path, PurePosixPath
 from codoc.daemon.epoch import EPOCH_STALE_SECONDS, close_epoch, epoch_alive, epoch_touched_files, read_epoch
 from codoc.daemon.pidfile import clear_pidfile, daemon_running, write_pidfile
 from codoc.daemon.publish import Publisher, realizing_is_fresh
-from codoc.index.git import handoffs_landed, head_branch, head_sha
+from codoc.index.git import handoffs_landed, head, head_sha
 from codoc.index.graph import Graph
 from codoc.index.lang import detect_language
 from codoc.loops import realize as R
@@ -50,7 +51,6 @@ class DaemonState:
     epoch_id: str = ""
     suppressed: set[str] = field(default_factory=set)
     head: str = ""
-    branch: str = ""
 
 
 class Daemon:
@@ -67,7 +67,7 @@ class Daemon:
         for p in self.ws.problems:
             printer(f"▸ log problem: {p.path}:{p.line}: {p.reason}")
         self.graph = Graph.load(self.codoc_dir / GRAPH_CACHE)
-        self.state = DaemonState(head=head_sha(self.root), branch=head_branch(self.root))
+        self.state = DaemonState(head=head_sha(self.root))
         self.say = printer
         self.after_batch = after_batch       # called with the daemon after every watched batch
         self._reflect = reflect
@@ -123,25 +123,24 @@ class Daemon:
         rebuilt = False
         # 1. HEAD moved → the set of logs on disk may have changed (a checkout,
         # a pull): rebuild from them, then start a new session file.
-        sha, branch = head_sha(self.root), head_branch(self.root)
+        sha, branch = head(self.root)
         landed: frozenset[str] = frozenset()
         if sha != self.state.head:
-            # A trailer counts only when HEAD moved forward on the branch it was
-            # on (a commit, a pull, a merge). Checking out a hub pull request's
-            # branch to review it merges nothing.
+            # A trailer counts from the commits HEAD moved over when HEAD is on
+            # the branch the commit's `Codoc-Base` names (a merge, a pull with or
+            # without rebase, a checkout of the base). Checking out or pulling a
+            # hub pull request's own branch merges nothing.
             # ponytail: the trailer is read when the batch that sees HEAD move
             # reflects the merged files; a merge whose files were reflected in an
-            # earlier batch (a conflicted merge committed later), or that no batch
-            # saw on the same branch, cites nothing, and `codoc done` settles it.
-            if branch and branch == self.state.branch:
-                landed = handoffs_landed(self.root, self.state.head, sha)
+            # earlier batch (a conflicted merge committed later) cites nothing,
+            # and `codoc done` settles it.
+            landed = handoffs_landed(self.root, self.state.head, sha, branch)
             self.state.head = sha
             self.ws.rebuild()
             self.ws.rotate_session()
             self.publisher.invalidate()      # a different set of logs is a different tree
             rebuilt = True
             notes.append("session rotated (HEAD moved)")
-        self.state.branch = branch
         # 2. Client ops, under the roles the tracked config names right now
         # (the hub adds a login's role when they sign in). Every batch drains:
         # the drain reads each inbox from its saved offset, so this is cheap,

@@ -593,3 +593,29 @@ def test_a_folded_store_goes_on_as_the_unfolded_one(seed):
         assert a.conflict == b.conflict and f.state_fingerprint() == s.state_fingerprint(), (seed, step, op.kind)
         assert _code_on_live_headings(s), (seed, step)
     assert replay(f).state_fingerprint() == f.state_fingerprint(), seed
+
+
+def test_a_fold_carries_the_code_a_reopen_kept_on_a_dead_heading():
+    """A reject took code off a block a plan made a heading, the block died as
+    prose, and a reopen made it a heading while dead, which keeps that code on
+    the block. The plan is then accepted and the log folded. The delete's undo
+    re-attaches the code on the folded store as on the unfolded one."""
+    clock = Clock()
+    m, s = Mint("s", "human:a", clock), Store()
+    heading(m, s, "h1", "Root")
+    paragraph(m, s, "x", "would be a feature", after="h1")
+    apply(s, m.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit", "target": "h1"}, actor=AGENT))
+    apply(s, m.op(K.BLOCK_SET, {"bid": "x", "path": "kind"}, {"value": HEADING, "level": 2}, actor=AGENT, plan="P"))
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "x"}, {"symbol": "a"}))
+    rej = apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {}))
+    dele = apply(s, m.op(K.BLOCK_DELETE, {"bid": "x"}, {}))
+    invert(s, m, rej)
+    assert apply(s, m.op(K.PLAN_ACCEPT, {"pid": "P"}, {})).conflict is None and settled_prefix(s) == len(s.ops)
+    f = Store()
+    for d in snapshot_ops(s, "snap", clock):
+        assert replay_recorded(f, Op.from_json(d)).conflict is None
+    assert f.state_fingerprint() == s.state_fingerprint() and s.bindings == {}
+    (inv,) = dele.inverse
+    undo = m.op(inv["kind"], inv["target"], inv["payload"])
+    assert apply(f, Op.from_json(copy.deepcopy(undo.to_json()))).conflict is None and apply(s, undo).conflict is None
+    assert s.bindings["a"].feature == "x" and f.state_fingerprint() == s.state_fingerprint()

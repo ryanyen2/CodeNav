@@ -3,8 +3,8 @@ realize, and what recent commits said about a file.
 
 ``head_sha`` anchors a hand-off to the commit the work starts from, so a reader
 can later diff what the agent did. ``handoffs_landed`` reads the hand-off ids
-commits name in a trailer, so a merged pull request cites its hand-off by
-identity. ``commit_rationales`` gives a bootstrap pass
+commits name in a trailer, so a pull request merged into the branch it names
+cites its hand-off by identity. ``commit_rationales`` gives a bootstrap pass
 the commit messages, where a repository routinely records why a change was made: code says
 what a program does, and a model asked for the reason with only code in front
 of it invents one.
@@ -46,36 +46,48 @@ def _git(root_dir: str | Path, *args: str) -> str:
     return (proc.stdout or "").strip()
 
 
-def head_sha(root_dir: str | Path) -> str:
-    """The full commit sha at ``HEAD``, or ``""`` when there isn't one (no git,
-    not a repo, a repo with zero commits): all mean there is no "before" to
-    diff against."""
-    sha = _git(root_dir, "rev-parse", "HEAD")
+def head(root_dir: str | Path) -> tuple[str, str]:
+    """The full commit sha at ``HEAD`` and the branch it is on, from one git
+    call, so a checkout between two calls cannot pair one commit with another
+    branch. The branch is ``""`` when ``HEAD`` is detached; both are ``""``
+    when there is no commit (no git, not a repo, zero commits)."""
+    sha, _, branch = _git(root_dir, "rev-parse", "HEAD", "--abbrev-ref", "HEAD").partition("\n")
     # rev-parse on an unborn branch prints the ref name back rather than failing on
     # some git versions; a sha is 40 lowercase hex and nothing else.
     if len(sha) == 40 and all(c in "0123456789abcdef" for c in sha):
-        return sha
-    return ""
+        return sha, "" if branch == "HEAD" else branch
+    return "", ""
 
 
-def head_branch(root_dir: str | Path) -> str:
-    """The branch ``HEAD`` is on, or ``""`` when it is detached or there is no repository."""
-    return _git(root_dir, "symbolic-ref", "-q", "--short", "HEAD")
+def head_sha(root_dir: str | Path) -> str:
+    """The commit a hand-off starts from, or ``""`` when there is no "before"
+    to diff against."""
+    return head(root_dir)[0]
 
 
-# The trailer a commit names the hand-off it realizes by: the hub worker writes
-# it on every commit it builds, and anyone may write it on their own.
+# The trailers a commit names the hand-off it realizes by, and the branch it
+# realizes it on: the hub worker writes both on every commit it builds, the base
+# being the branch its pull request targets, and anyone may write them by hand.
 HANDOFF_TRAILER = "Codoc-Handoff"
+BASE_TRAILER = "Codoc-Base"
 
 
-def handoffs_landed(root_dir: str | Path, old: str, new: str) -> frozenset[str]:
+def handoffs_landed(root_dir: str | Path, old: str, new: str, branch: str) -> frozenset[str]:
     """The hand-off op ids that the commits in ``old..new`` name in a
-    ``Codoc-Handoff`` trailer, as git parses trailers, when ``new`` descends
-    from ``old``. The caller checks that the branch stayed the same."""
-    if not old or not new or _git(root_dir, "merge-base", old, new) != old:
+    ``Codoc-Handoff`` trailer, as git parses trailers, from each commit whose
+    ``Codoc-Base`` trailer names ``branch``, the branch ``HEAD`` is on now. So
+    a merge, a rebase pull or a checkout of the base counts the commit, and a
+    checkout or pull of the pull request's own branch does not. A detached
+    ``HEAD`` counts nothing."""
+    if not old or not new or not branch:
         return frozenset()
-    out = _git(root_dir, "log", f"--format=%(trailers:key={HANDOFF_TRAILER},valueonly)", f"{old}..{new}")
-    return frozenset(line.strip() for line in out.splitlines() if line.strip())
+    out = _git(root_dir, "log", f"--format=%x1e%(trailers:key={HANDOFF_TRAILER},key={BASE_TRAILER})", f"{old}..{new}")
+    found: set[str] = set()
+    for commit in out.split("\x1e"):
+        pairs = [(k.strip().lower(), v.strip()) for k, _, v in (line.partition(":") for line in commit.splitlines())]
+        if (BASE_TRAILER.lower(), branch) in pairs:
+            found.update(v for k, v in pairs if k == HANDOFF_TRAILER.lower() and v)
+    return frozenset(found)
 
 
 # ── commit messages ──────────────────────────────────────────────────────────

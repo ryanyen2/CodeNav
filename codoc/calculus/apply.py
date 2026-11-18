@@ -487,8 +487,8 @@ def _h_block_set(store: Store, op: Op, touched: set[str]):
         b.level = level_for(value, op.payload.get("level") or keep)
         canonical.update({"prev": prev_kind, "prev_level": prev_level, "level": b.level, "_structural": True})
         back: dict = {"value": prev_kind, "level": prev_level}
-        # The undo carries what this change took off, as `block.restore` does,
-        # and counts only what the block recorded losing, so no payload, a
+        # The undo carries what this change took off and counts only what the
+        # block recorded losing, as `block.restore` does, so no payload, a
         # plan's included, binds code the block never had.
         known = {e["symbol"] for e in b.detached if e.get("set")}
         detached, _ = _refeature(store, b, prev_kind, [e for e in op.payload.get("bindings") or []
@@ -722,12 +722,18 @@ def _refeature(store: Store, b: Block, prev_kind: str, entries: list[dict], touc
     come off, for the record to keep. A live block made a heading takes back
     ``entries``, what the record of the change it undoes kept: only this
     block's, each whose symbol nobody owns now, plan or not. Returns
-    (detached, attached)."""
+    (detached, attached). A dead block made a heading (a reopen) owns no code,
+    so it keeps what it would take back, as a delete keeps what it detached,
+    and its restore re-attaches it."""
     if prev_kind == HEADING and b.kind != HEADING:
         return _unbind(store, b.id, touched), []
-    if b.kind == HEADING and prev_kind != HEADING and b.live:
+    if b.kind == HEADING and prev_kind != HEADING:
         back = [e for e in entries or [] if e.get("fid") == b.id and e["symbol"] not in store.bindings]
-        _reattach(store, back, touched)
+        if b.live:
+            _reattach(store, back, touched)
+        else:
+            kept = {e["symbol"] for e in b.detached if not e.get("set")}
+            b.detached = [*b.detached, *(e for e in back if e["symbol"] not in kept)]
         return [], back
     return [], []
 
@@ -749,7 +755,7 @@ def _h_block_delete(store: Store, op: Op, touched: set[str]):
     touched.update(ids)
     detached = _detach_dead(store, [i for i in killed if store.blocks[i].kind == HEADING], touched)
     canonical = {"ids": ids, "killed": killed, "detached": detached}
-    return canonical, [body(K.BLOCK_RESTORE, dict(op.target), {"ids": killed, "by": op.id, "bindings": detached})]
+    return canonical, [body(K.BLOCK_RESTORE, dict(op.target), {"ids": killed, "by": op.id})]
 
 
 def _h_block_restore(store: Store, op: Op, touched: set[str]):
@@ -765,13 +771,12 @@ def _h_block_restore(store: Store, op: Op, touched: set[str]):
             b.revive()
             revived.append(i)
         touched.add(i)
-    alive = set(revived)
-    _reattach(store, [e for e in op.payload.get("bindings") or [] if e.get("fid") in alive], touched)
+    # What each block kept when it died (or a reopen made it a dead heading);
+    # never a payload, so no restore binds code the block never had.
+    _reattach(store, [e for i in revived for e in store.blocks[i].detached if not e.get("set")], touched)
     canonical = {"ids": ids, "revived": revived}
     if by:
         canonical["by"] = by
-    if op.payload.get("bindings"):
-        canonical["bindings"] = op.payload["bindings"]
     return canonical, [body(K.BLOCK_DELETE, dict(op.target), {"ids": revived})]
 
 

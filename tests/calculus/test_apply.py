@@ -487,3 +487,24 @@ def test_a_rejected_plan_that_made_a_heading_takes_the_code_bound_to_it():
     invert(s, m, rej)
     assert s.blocks["p1"].kind == HEADING and s.bindings["f.py::retry"].feature == "p1"
     assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+def test_a_reopen_that_makes_a_dead_block_a_heading_gives_its_code_back_on_restore():
+    """The reject took the code off the block the plan made a heading, then the
+    block was deleted as prose. The reopen makes it a heading while it is dead,
+    and a dead heading owns no code, so the block keeps what it would re-attach
+    as a delete keeps what it detached. Restoring the block re-attaches it."""
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Root")
+    paragraph(m, s, "x", "would be a feature", after="h1")
+    ag = Mint("a", "agent:x")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit", "target": "h1"}))
+    apply(s, ag.op(K.BLOCK_SET, {"bid": "x", "path": "kind"}, {"value": HEADING, "level": 2}, plan="P"))
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "x"}, {"symbol": "c.py::S"}))
+    rej = apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {}))
+    dele = apply(s, m.op(K.BLOCK_DELETE, {"bid": "x"}, {}))
+    (reo,) = invert(s, m, rej)
+    assert reo.conflict is None and s.blocks["x"].kind == HEADING and not s.blocks["x"].live and s.bindings == {}
+    (res,) = invert(s, m, dele)
+    assert res.conflict is None and s.blocks["x"].live and s.bindings["c.py::S"].feature == "x"
+    assert replay(s).state_fingerprint() == s.state_fingerprint()

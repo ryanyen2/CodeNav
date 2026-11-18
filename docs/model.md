@@ -85,7 +85,7 @@ Op         := { id, at, actor,              set by the applier; actor from the c
 | `dead` | The op that killed the block. Absent while it is live. |
 | `dead_actor`, `dead_at` | Who killed it and when. |
 | `dead_in` | The feature whose description it was removed from, read when it died. A block that dies with its heading records that heading; a block merged into its neighbour, or added by a plan that was rejected, records none, since no words were removed. `removed:` and the `edited` phase read it, so where the dead block sits later does not matter. |
-| `detached` | On a dead heading: the bindings it owned when it died. A heading made into another kind records them on its `block.set`, and adds an entry marked `set` here for each symbol, which a delete and a restore leave alone and which only grows. |
+| `detached` | On a dead heading: the bindings it owned when it died, or that a reopen gave it back while dead. A restore re-attaches them. A heading made into another kind records them on its `block.set`, and adds an entry marked `set` here for each symbol, which a delete and a restore leave alone and which only grows. |
 | `void` | `{move: [rank, level, ranked_by]}`: moves of rejected plans that could not be put back, since the block had been ranked again, each with the place it found the block. An undo that would restore `ranked_by` to one of them goes on to its place ([concurrency.md](concurrency.md#9-plans-and-verdicts)). |
 
 ### Block kinds
@@ -312,8 +312,8 @@ Target `{bid, path}`; `path` defaults to `text`.
 | `block.split` | `bid`, `path` | `at: CharRef \| START`, `new: BlockId` | `new_first`, `rank`, `bid`, `path` | `block.merge {into: bid, bid: new}`, with `rejoin` for a heading |
 | `block.merge` | `into`, `bid`, `path` | none | `at` (the seam), `order`, `rank` of the dead block | `block.split {at, new: bid, rank, new_takes}` |
 | `block.move` | `bid` | `after: BlockId \| START` and `level_delta`, or `under: BlockId \| START` | `after`, `level_delta`, `range`, `prev: [[id, rank, level, ranked_by]]` | `block.move {restore: prev}` |
-| `block.delete` | `bid` | none, or `ids` | `ids`, `killed`, `detached` | `block.restore {ids: killed, by: this op, bindings: detached}` |
-| `block.restore` | | `ids`, `by?`, `bindings?` | `revived` | `block.delete {ids: revived}` |
+| `block.delete` | `bid` | none, or `ids` | `ids`, `killed`, `detached` | `block.restore {ids: killed, by: this op}` |
+| `block.restore` | | `ids`, `by?` | `revived` | `block.delete {ids: revived}` |
 
 - **add.** Text fields start empty. `after` may name a dead block. `level` is clamped to
   1..6 for a heading or list item (1 when not given) and is 0 for any other kind.
@@ -361,7 +361,8 @@ Target `{bid, path}`; `path` defaults to `text`.
   `detached`, and recorded. A gesture that deletes a subtree sends one `block.delete` per
   heading, and one that promotes children sends `block.set(level)` per child, in one batch.
 - **restore.** Revives the named blocks (with `by`, only those that op killed) and
-  re-attaches each recorded binding whose symbol has no owner now.
+  re-attaches each binding a revived block kept as `detached` (not marked `set`) whose
+  symbol has no owner now. It reads the block, never the payload.
 
 ### Binding ops
 
