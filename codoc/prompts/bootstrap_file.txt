@@ -45,7 +45,6 @@ Three sources count, and nothing else:
 3. the commit messages below, where one states a reason.
 
 - A source states a reason for a fact you write: add it to that fact as a clause (", because …"). The reader sees the code, not the source, so never name it.
-- No source states one: write what the code does and stop.
 - The code chose between two workable options and a source says which and why: that goes directly after the opening sentence.
 
 ## Output
@@ -56,8 +55,8 @@ a literal).
 
 <solution>
 {"ops": [
-  {"id": "n1", "kind": "add_node", "title": "HTTP transport adapter", "description": "Sends a prepared request over a pooled connection and returns the response.\n\n- One pool per `(host, proxy)` pair, so a second request to the same host skips TCP and TLS setup.\n- Retries are off by default (`max_retries=0`). When on, only connection errors are retried, never a response.\n- TLS verification uses the `certifi` bundle unless `verify` is a path.", "bindings": ["adapters.py::HTTPAdapter", "adapters.py::HTTPAdapter.send"], "rationale": "the file's main class"},
-  {"id": "n2", "kind": "add_node", "parent_id": "n1", "title": "Proxy connection setup", "description": "Picks the connection pool for a request that goes through a proxy.\n\n| proxy scheme | pool |\n|---|---|\n| `socks*` | a `SOCKSProxyManager`, created once per proxy URL |\n| `http`, `https` | urllib3's `proxy_from_url`, with the proxy auth headers attached |\n| none | the adapter's own pool manager |", "bindings": ["adapters.py::HTTPAdapter.proxy_manager_for"], "rationale": "separable: proxy handling"}
+  {"id": "n1", "kind": "add_node", "title": "HTTP transport adapter", "description": "`HTTPAdapter.send(request)` sends a prepared request over a pooled connection and returns a `Response`.\n\n- One pool per `(host, proxy)` pair, reused by every later request to that host.\n- Retries are off by default (`max_retries=0`). When on, only connection errors are retried, never a response.\n- TLS verification uses the `certifi` bundle unless `verify` is a path.", "bindings": ["adapters.py::HTTPAdapter", "adapters.py::HTTPAdapter.send"], "rationale": "the file's main class"},
+  {"id": "n2", "kind": "add_node", "parent_id": "n1", "title": "Proxy connection setup", "description": "`proxy_manager_for(proxy)` returns the connection pool for a request that goes through `proxy`.\n\n| proxy scheme | pool |\n|---|---|\n| `socks*` | a `SOCKSProxyManager`, created once per proxy URL |\n| `http`, `https` | urllib3's `proxy_from_url`, with the proxy auth headers attached |\n| none | the adapter's own pool manager |", "bindings": ["adapters.py::HTTPAdapter.proxy_manager_for"], "rationale": "separable: proxy handling"}
 ]}
 </solution>
 
@@ -96,5 +95,8 @@ For naming only. Do not bind to them.
 Each entry has the commit's `subject` and, when the author wrote one, `why`
 (the opening of its message). Use an entry only for a claim its text makes.
 Ignore entries that describe the edit without giving a reason.
+
+Before you answer, reread each `because`, `so that` and `to` clause you wrote. Keep it only
+if a comment above, the brief or a commit gives that reason; otherwise cut the clause.
 
 Return this file's features, inside solution tags.

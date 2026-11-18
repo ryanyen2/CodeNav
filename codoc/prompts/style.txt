@@ -9,7 +9,7 @@ shape:
 
 | block | use it for | do not use it for |
 |---|---|---|
-| one plain sentence | the first line, always: what goes in and what comes out, who calls it, or when it runs. Something the title does not already say. | a lead-in to the list below it, or the title in other words |
+| one plain sentence | the first line, always: the main symbol in backticks, what it takes, and what it returns or changes, in under about 150 characters | a lead-in to the list below it, or a definition of the title ("Writes data to a file" under "File storage") |
 | `- ` bullets | separate facts: rules, limits, defaults, failure behaviour, what must stay true | one idea chopped into pieces |
 | `1. ` numbered list | steps whose order matters | facts that could be reordered |
 | table | three or more parallel cases: input and outcome, setting and default | two items, or anything with one column of real content |
@@ -32,17 +32,17 @@ Check the shape before writing bullets:
 - Say the actual number, name or condition. `MAX_RETRIES = 3`, not "a configurable limit".
 - Identifiers, literals, file names and settings go in backticks.
 - Say which way a choice went. "Months line up on the payment date, weeks on the posting date" is checkable; "the alignment is configurable" is not.
-- Give a reason only when the code, a comment, the brief or a commit states one, and only for the fact it explains. Write it as a clause of that fact: "A hyphen at a line end is dropped, because the typesetter added it."
+- A reason is a `because`, `so that` or `to` clause, or a `so` clause about what someone gains (a caller, a handler, a log, a server). Write one only when a comment, the brief or a commit says it, in that source's terms, as a clause of the fact it explains: "A hyphen at a line end is dropped, because the typesetter added it." A reason you worked out yourself, however likely, is left out: "Keeps the request on the error", not "…, so a handler can retry it".
+- Write `only`, `every`, `all`, `always` or `never` only when you saw every case in the code.
 - State the reason itself. Never say where a claim came from: no docstring, comment, header comment, note, brief or commit, and not "the code marks" or "per the function's notes". Write "…, because it runs before a URL is logged", not "…, as the class docstring says".
 - A reason that restates the fact ("kept for backwards compatibility" on a compatibility shim) or only says a source said so is no reason: leave it out.
-- No reason available: state what the code does and stop. Do not guess one.
 - Write about the code, not about your input. Never mention chunks, what you were or were not shown, or source that was cut off. Long chunks are shortened before you see them; describe what is there and leave out what is not.
 - Nest a bullet one level only when it qualifies the bullet above it.
 
 ### Words
 
 - Plain verbs: reads, writes, sends, drops, keeps, retries, refuses.
-- No filler: leverage, robust, seamless, ensure, utilize, comprehensive, crucial, key, powerful, elegant, simply, in order to, under the hood, at its core, it is worth noting.
+- No filler: leverage, robust, seamless, ensure, utilize, comprehensive, crucial, key, core, powerful, elegant, simply, in order to, under the hood, at its core, it is worth noting.
 - No judgement of the code (clean, careful, sophisticated). No summary sentence at the end.
 - No hedges: presumably, likely, appears to, is designed to.
 - No invented history: no "was added after", no "the team chose".
@@ -66,15 +66,15 @@ Weak:
 
 As a sketch:
 
-    Sends a prepared request over a pooled connection and returns the response.
+    `HTTPAdapter.send(request)` sends a prepared request over a pooled connection and returns a `Response`.
 
-    - One pool per `(host, proxy)` pair, so a second request to the same host skips TCP and TLS setup.
+    - One pool per `(host, proxy)` pair, reused by every later request to that host.
     - Retries are off by default (`max_retries=0`). When on, only connection errors are retried, never a response.
     - TLS verification uses the `certifi` bundle unless `verify` is a path.
 
 Where order matters:
 
-    Turns a scanned page into reading-order text.
+    `page_text(page)` turns a scanned page into reading-order text.
 
     1. Drop running headers and page numbers: a line near the top or bottom that repeats on at least 60% of pages.
     2. Join words split across lines.
@@ -85,7 +85,7 @@ Where order matters:
 
 Where the cases are parallel:
 
-    Decides what happens to a response by status.
+    `handle(response)` decides what happens to a response by its status.
 
     | status | action |
     |---|---|
@@ -95,7 +95,7 @@ Where the cases are parallel:
 
 Where sibling symbols do the same kind of thing (not one bullet each):
 
-    Infers the Vega-Lite type of a column from its dtype.
+    `infer_type(column)` returns the Vega-Lite type for a column's dtype.
 
     | dtype | type |
     |---|---|
