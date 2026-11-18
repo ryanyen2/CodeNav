@@ -11,7 +11,8 @@ files a merge would add or change, against the tracked role table.
 Five refusals, and nothing else:
 
 - an op recorded as a **success** whose `(actor, kind)` the table would refuse,
-  which is the forged verdict;
+  which is the forged verdict (a withdrawal of the actor's own empty plan is
+  judged on the plan as it stood at the op's clock);
 - an op in a session file carrying a field only a snapshot writes
   (`ops.SNAPSHOT_ONLY`), which would let it claim another actor's words;
 - a **snapshot** file, which claims a whole state rather than a sequence of ops
@@ -34,7 +35,7 @@ from __future__ import annotations
 
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from codoc.calculus import ops as K
@@ -67,19 +68,26 @@ def validate_logs(paths, *, roles: Roles, store: Store | None = None, now_ms: in
     request is recognised; without one only the plans these files open count."""
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
     out: list[Finding] = []
+    files = []
     for p in map(Path, paths):
         if p.name.startswith(L.SNAPSHOT_PREFIX):
             out.append(Finding(str(p), 0, "a snapshot states a whole state; only the workspace that folds its own log may write one"))
             continue
-        f = L.read_session(p)
+        files.append((p, L.read_session(p)))
+    # A plan's past is read from everything known, the workspace's log and
+    # every file under check, by clock.
+    theirs = [o for _, f in files for o in f.ops]
+    known = [*(store.ops if store else []), *theirs]
+    view = _policy_view(store, theirs)
+    turns = sorted((o.at, o.kind, str(o.target.get("pid"))) for o in known if o.kind in K.TURNS and o.conflict is None)
+    for p, f in files:
         out.extend(Finding(str(p), pr.line, pr.reason) for pr in f.problems)
-        view = _policy_view(store, f.ops)
-        turns = sorted((o.at, o.kind, str(o.target.get("pid"))) for o in [*(store.ops if store else []), *f.ops]
-                       if o.kind in _TURNS and o.conflict is None)
         for i, op in enumerate(f.ops, start=2):        # line 1 is the header
+            if op.kind == K.PLAN_REJECT:
+                _as_it_stood(view, op, known, turns)
             if op.conflict is None and (why := roles.policy(view, op)):
                 out.append(Finding(str(p), i, f"recorded as applied, but the roles table refuses it: {why}"))
-            if op.conflict is None and op.plan and op.kind not in _TURNS and _decided(turns, op.plan, op.at):
+            if op.conflict is None and op.plan and op.kind not in K.TURNS and _last_turn(turns, op.plan, op.at) in DECIDED:
                 out.append(Finding(str(p), i, f"recorded as applied under plan {op.plan} after its verdict"))
             if forged := [k for k in K.SNAPSHOT_ONLY.get(op.kind, ()) if k in op.payload]:
                 out.append(Finding(str(p), i, f"{op.kind} carries {', '.join(forged)}, which only a snapshot writes"))
@@ -146,18 +154,30 @@ def _policy_view(store: Store | None, ops: list[Op]) -> Store:
     return view
 
 
-_TURNS = (K.PLAN_ACCEPT, K.PLAN_REJECT, K.PLAN_REOPEN)
+DECIDED = {K.PLAN_ACCEPT: "accepted", K.PLAN_REJECT: "rejected"}
 
 
-def _decided(turns: list[tuple[str, str, str]], pid: str, at: str) -> bool:
-    """Whether plan ``pid``'s latest verdict or reopen before clock ``at`` is a verdict."""
+def _last_turn(turns: list[tuple[str, str, str]], pid: str, at: str) -> str | None:
+    """The kind of plan ``pid``'s latest verdict or reopen before clock ``at``."""
     last = None
     for when, kind, p in turns:
         if when >= at:
             break
         if p == pid:
             last = kind
-    return last in (K.PLAN_ACCEPT, K.PLAN_REJECT)
+    return last
+
+
+def _as_it_stood(view: Store, op: Op, known: list[Op], turns) -> None:
+    """Put the plan ``op`` rejects into ``view`` as it stood at ``op``'s clock,
+    which is what a withdrawal is judged on (`roles._withdrawing_own_empty_plan`):
+    open unless a verdict came first, holding the applied ops tagged with it
+    before then. By the end the plan is rejected, by this op if it is honest;
+    a plan these files open comes into the view with no ops at all."""
+    pid = str(op.target.get("pid") or "")
+    if (plan := view.plans.get(pid)) is not None:
+        view.plans[pid] = replace(plan, status=DECIDED.get(_last_turn(turns, pid, op.at) or "", "open"),
+                                  ops=[o.id for o in known if o.plan == pid and o.conflict is None and o.at < op.at])
 
 
 def _ms(stamp: str) -> int:

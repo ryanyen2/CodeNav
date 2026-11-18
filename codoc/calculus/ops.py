@@ -65,8 +65,11 @@ PLANNABLE = frozenset({TEXT_INSERT, TEXT_DELETE, TEXT_RESTORE, TEXT_MARK,
 # denies it to every ``agent:*`` actor.
 VERDICTS = frozenset({PLAN_ACCEPT, PLAN_REJECT, PLAN_REOPEN, FEATURE_HANDOFF, FEATURE_REALIZED})
 
+# A plan's verdicts and their undo: the ops that turn a plan's status.
+TURNS = frozenset({PLAN_ACCEPT, PLAN_REJECT, PLAN_REOPEN})
+
 # Ops that change the set of plans or a plan's status, whatever blocks they touch.
-PLAN_KINDS = frozenset({PLAN_OPEN, PLAN_ACCEPT, PLAN_REJECT, PLAN_REOPEN})
+PLAN_KINDS = TURNS | {PLAN_OPEN}
 
 STRUCTURAL = frozenset({BLOCK_ADD, BLOCK_SPLIT, BLOCK_MERGE, BLOCK_MOVE, BLOCK_DELETE, BLOCK_RESTORE})
 

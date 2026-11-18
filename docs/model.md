@@ -399,7 +399,8 @@ op's clock. `bind.attach` does not: a relocation is not drift.
   caller that needs all or nothing checks its bodies before submitting.
 - Undo submits the recorded inverses of a batch, newest op first, as new ops by the
   person. The log keeps both. The inverse of an inverse is the original. An inverse
-  carries no plan tag and no `caused_by`.
+  carries no plan tag and no `caused_by`. The ops a snapshot writes have none
+  ([concurrency.md](concurrency.md#12-snapshots)).
 
 ### Conflict codes
 

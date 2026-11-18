@@ -220,7 +220,8 @@ Each op replays as its record says:
 
 - An op recorded with a conflict is recorded again with that conflict and applied not at all.
 - An op recorded as applied is applied from its canonical payload, with the authority
-  check off.
+  check off. Its inverse is computed again, never read from the record; an op recorded
+  without one gets none.
 - An op recorded as applied that conflicts now is stored with the new conflict and
   reported as a problem. `codoc rebuild` and the daemon print the problems.
 - The clock observes every `at`.
@@ -272,7 +273,7 @@ rebuilds. `codoc validate-logs` checks the session files a merge would add or ch
 
 | finding | why |
 |---|---|
-| An op recorded as applied that the role table would refuse. | A forged or unauthorised write. |
+| An op recorded as applied that the role table would refuse. A withdrawal of the actor's own empty plan is judged on the plan as it stood at the op's clock: open, with no applied op tagged with it before, read from the store and every file under check. | A forged or unauthorised write. |
 | A snapshot file. | It states a whole state; only the workspace that folds its own log may write one. |
 | An op carrying a field only a snapshot writes (`ops.SNAPSHOT_ONLY`: a block's texts and death, a plan's ops, a folded verdict's `verdict`). | It would claim another actor's words or a decision nobody made. |
 | A stamp more than 24 hours ahead of this machine's clock. | It would pull every clock that observes it into the future. |
@@ -384,7 +385,7 @@ What each tagged op becomes:
 | `text.delete`, `text.restore` | Act on the plan's own words only. | Stay. | A delete's words come back; a restore's go back to dead by the delete it undid. |
 | `block.add`, `block.split` | The block exists. | Stays. | The block dies if it holds no live text. |
 | `block.set` | Applied. | Stays. | The previous value returns, or the field is absent again. |
-| `block.move` | Applied. | Stays. | The previous ranks and levels return, unless someone other than the verdict re-ranked the block since. |
+| `block.move` | Applied. | Stays. | The previous ranks and levels return, unless an op that is not the plan's own re-ranked the block since. |
 | `bind.attach` | Applied. | Stays. | The symbol returns to the owner it displaced, or is unbound, unless someone re-bound it since. |
 
 `plan.accept`, in order:
@@ -435,8 +436,12 @@ same `subset`, or `plan.reject`. A redo is therefore judged against the plan as 
 then, so words the plan gained or took back after the reopen, and a paragraph written
 under a heading a delete plan removes, are decided with the rest.
 
-A move a plan made is put back unless an op other than a verdict or a reopen of that
-plan re-ranked the block since. The re-rank a reopen did is the plan's own.
+A move a plan made is put back unless an op that is not the plan's own re-ranked the
+block after that move. The plan's own are its tagged moves, its verdicts and its
+reopens. The store keeps each block's re-ranks in apply order, so a move someone made
+between two of the plan's moves stands. A reopen undoing a `set` step that moved a
+block asks the same of the time since the verdict: a move made since stands, and so it
+does when the verdict is redone.
 
 A reader finds the trunk marks a verdict removed or added as its `mark` steps: `on` true
 for added, false for removed, each with the placer's `op`. The proposal records it
@@ -446,8 +451,10 @@ steps are the ones it undid, so there `on` true means it removed that mark.
 **A folded verdict is not reopened.** The undo of a verdict a snapshot folded conflicts
 `verdict_folded` and changes nothing. The fold archived the verdict's steps and the
 plan's ops, and any verdict after the reopen, its redo included, would have to judge
-those ops. A plan whose verdict or reopen comes after the cut is not folded (section 12),
-so this happens only to an undo taken before `codoc snapshot` and sent after it.
+those ops. A plan whose verdict or reopen comes after the cut is not folded, and the
+verdict a fold writes carries no inverse (section 12), so this happens only to an undo
+taken before `codoc snapshot` and sent after it, a branch forked before the fold
+included.
 
 - **The applier never adds a hand-off to a verdict; the sender does.** The editor's
   Accept and `codoc accept` send `feature.handoff` in the same batch for the features
@@ -598,6 +605,13 @@ store as the folded ops left it:
 A feature with a realization and no hand-off (the person undid the hand-off) gets a
 stand-in hand-off before the realization and a restore that removes it afterwards, since
 `feature.realized` needs a hand-off to settle.
+
+None of these ops carries an inverse, and replay gives them none (section 6). They
+re-express state and are nobody's gesture, so an undo never takes the fold's batch for
+the person's last change: a re-emitted verdict's reopen would conflict `verdict_folded`
+every time, and a re-emitted hand-off would be taken back. A `block.add` keeps what it
+restored in its record, so a second fold, which replays the first one's records, keeps
+it too.
 
 **The archive.** A session file moves to `log/archive/` when it is valid, its writer
 closed it, and every op in it is inside the frontier. Older snapshots move there too. A

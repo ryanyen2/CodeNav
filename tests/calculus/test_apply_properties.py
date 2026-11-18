@@ -194,6 +194,41 @@ def test_reject_undoes_split_and_set_and_respects_later_human_move():
     assert [x.id for x in s3.ordered()] == ["h1", "a", "b", "c"]
 
 
+def _four() -> tuple[Mint, Store]:
+    m, s = Mint("s", "human:a"), Store()
+    heading(m, s, "h1", "Top")
+    for x, a in (("a", "h1"), ("b", "a"), ("c", "b"), ("d", "c")):
+        paragraph(m, s, x, x, after=a)
+    return m, s
+
+
+def test_a_move_made_between_two_plan_moves_stands_on_reject():
+    """The plan moves a, B moves a, the plan moves a again. The reject puts
+    back the plan's second move, to where B left a, and not its first, which
+    B's move came after."""
+    m, s = _four()
+    ag, b = Mint("g", "agent:x"), Mint("B", "human:b")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "pm"}, {"kind": "move"}))
+    apply(s, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "b"}, plan="pm"))
+    apply(s, b.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "d"}))
+    apply(s, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "c"}, plan="pm"))
+    apply(s, m.op(K.PLAN_REJECT, {"pid": "pm"}, {}))
+    assert [x.id for x in s.ordered()] == ["h1", "b", "c", "d", "a"]
+
+
+def test_a_move_made_after_a_reject_survives_its_undo_and_redo():
+    m, s = _four()
+    ag, b = Mint("g", "agent:x"), Mint("B", "human:b")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "pm"}, {"kind": "move"}))
+    apply(s, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "c"}, plan="pm"))
+    rj = apply(s, m.op(K.PLAN_REJECT, {"pid": "pm"}, {}))
+    apply(s, b.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "d"}))
+    (ro,) = invert(s, m, rj)
+    assert ro.conflict is None and [x.id for x in s.ordered()] == ["h1", "b", "c", "d", "a"]
+    (rd,) = invert(s, m, ro)
+    assert rd.conflict is None and [x.id for x in s.ordered()] == ["h1", "b", "c", "d", "a"]
+
+
 # ── refusals ───────────────────────────────────────────────────
 
 def test_refusals():
@@ -231,7 +266,6 @@ def test_replay_with_policy_keeps_forged_writes_out():
 # ── the fuzz properties ──────────────────────────────────────────────
 
 AGENT = "agent:x"
-VERDICT_KINDS = (K.PLAN_ACCEPT, K.PLAN_REJECT, K.PLAN_REOPEN)
 
 
 def plan_op(rng: random.Random, m: Mint, s: Store, step: int, undos: bool) -> Op:
@@ -240,7 +274,7 @@ def plan_op(rng: random.Random, m: Mint, s: Store, step: int, undos: bool) -> Op
     With ``undos``, also reopen a verdict or redo one through the inverses
     recorded on the log."""
     if undos and rng.random() < 0.15:
-        last = {o.target["pid"]: o for o in s.ops if o.kind in VERDICT_KINDS and o.conflict is None}
+        last = {o.target["pid"]: o for o in s.ops if o.kind in K.TURNS and o.conflict is None and o.inverse}
         if last:
             (inv,) = rng.choice(list(last.values())).inverse
             return m.op(inv["kind"], inv["target"], inv["payload"])
@@ -437,7 +471,7 @@ def test_a_verdict_then_its_reopen_is_the_document_before_it_fuzzed():
             if not s.ordered():
                 break
             op = random_op(rng, m, s, step, plans=True, undos=True)
-            before = copy.deepcopy(s.state_fingerprint()) if op.kind in VERDICT_KINDS else None
+            before = copy.deepcopy(s.state_fingerprint()) if op.kind in K.TURNS else None
             done = apply(s, op)
             if before is None or done.conflict is not None:
                 continue
@@ -473,7 +507,7 @@ def test_a_fold_then_the_rest_of_the_log_replays_to_the_live_store(seed):
     folds = 0
     for cut in [*range(len(s.ops) // 4, len(s.ops), 2), settled_prefix(s)]:
         prefix = state_at(s, cut)
-        if prefix.open_plans or any(o.kind in VERDICT_KINDS and o.target.get("pid") in prefix.plans for o in s.ops[cut:]):
+        if prefix.open_plans or any(o.kind in K.TURNS and o.target.get("pid") in prefix.plans for o in s.ops[cut:]):
             assert cut != settled_prefix(s), cut
             continue
         folded = Store()
@@ -484,3 +518,52 @@ def test_a_fold_then_the_rest_of_the_log_replays_to_the_live_store(seed):
         assert folded.state_fingerprint() == s.state_fingerprint(), (seed, cut)
         folds += 1
     assert folds > 2, seed
+
+
+def _fold_soup_op(rng: random.Random, m: Mint, s: Store, step: int) -> Op:
+    """`random_op`, plus plans on any heading, so a fold can stop part way,
+    and moves under them, so "their move stands" meets a fold."""
+    if not s.open_plans and rng.random() < 0.3:
+        target = rng.choice(s.headings()).id
+        return m.op(K.PLAN_OPEN, {"pid": f"Q{step}"}, {"kind": "edit", "target": target}, actor=AGENT)
+    if s.open_plans and rng.random() < 0.1:
+        blocks = s.ordered()
+        b = rng.choice(blocks)
+        others = [x.id for x in blocks if x.id != b.id]
+        return m.op(K.BLOCK_MOVE, {"bid": b.id}, {"after": rng.choice(others) if others else START},
+                    actor=AGENT, plan=rng.choice(sorted(s.open_plans)))
+    return random_op(rng, m, s, step, plans=True, undos=True)
+
+
+@pytest.mark.parametrize("seed", [5, 14, 20, 32])
+def test_a_folded_store_goes_on_as_the_unfolded_one(seed):
+    """Fold at `settled_prefix` mid-run, then send the same ops to the folded
+    store and to the unfolded one: each applies or conflicts alike and leaves
+    the same state. Undo reads only the folded store's inverses, and a fold's
+    ops have none. The folded log rebuilt from its records, which is what the
+    next fold replays, is the folded store."""
+    rng, clock = random.Random(seed), Clock()
+    m, s = Mint(f"s{seed}", "human:a", clock), Store()
+    heading(m, s, "h1", "Root")
+    paragraph(m, s, "p1", "seed text here", after="h1")
+    heading(m, s, "h2", "Second", after="p1")
+    paragraph(m, s, "p2", "more words", after="h2")
+    step, cut = 0, 0
+    while step < 150 or cut <= len(s.ops) // 3:
+        assert step < 400 and s.ordered(), seed
+        apply(s, _fold_soup_op(rng, m, s, step))
+        step += 1
+        cut = settled_prefix(s) if step >= 150 else 0
+    f = Store()
+    for d in snapshot_ops(state_at(s, cut), "snap", clock):
+        assert replay_recorded(f, Op.from_json(d)).inverse == []
+    for o in s.ops[cut:]:
+        replay_recorded(f, Op.from_json(copy.deepcopy(o.to_json())))
+    for step in range(step, step + 150):
+        if not f.ordered():
+            break
+        op = _fold_soup_op(rng, m, f, step)
+        a = apply(f, Op.from_json(copy.deepcopy(op.to_json())))
+        b = apply(s, op)
+        assert a.conflict == b.conflict and f.state_fingerprint() == s.state_fingerprint(), (seed, step, op.kind)
+    assert replay(f).state_fingerprint() == f.state_fingerprint(), seed

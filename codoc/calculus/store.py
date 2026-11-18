@@ -11,8 +11,9 @@ mutation that changes them:
 - ``mark_index``      placing op → the ``(block, field)`` holding its marks
 - ``order``           ``(rank, id)`` sorted, live and dead: a dead block keeps its
                       rank so "after a deleted block" still names a place
-- ``rank_head``       block → pos of its last re-rank (a plan's move is not
-                      undone over a later re-rank by someone else)
+- ``reranks``         block → positions of the ops that re-ranked it, in apply
+                      order (a plan's move is not undone over a re-rank by
+                      someone else since)
 - ``ops_by_block``    block → positions of the ops recorded against it (the
                       canonical holders of an applied op; the client's hint
                       for a conflicted one), so every "ops on this feature"
@@ -35,7 +36,7 @@ from codoc.calculus import rank as R
 from codoc.calculus.doc import HEADING, Block
 from codoc.calculus.ids import CharRef, OpId
 from codoc.calculus.ops import Op, frontier_union
-from codoc.calculus.text import AnchorError, Text
+from codoc.calculus.text import AnchorError, Mark, Text
 
 
 @dataclass
@@ -128,7 +129,7 @@ class Store:
         self.mark_index: dict[OpId, set[tuple[str, str]]] = {}
         self.block_head: dict[str, int] = {}
         self.ops_by_block: dict[str, list[int]] = {}
-        self.rank_head: dict[str, int] = {}
+        self.reranks: dict[str, list[int]] = {}
         self.structural_head: int = 0
         self.plans_head: int = 0
         self.policy: Policy | None = policy
@@ -157,7 +158,6 @@ class Store:
         bisect.insort(self.order, (block.rank, block.id))
         if block.dead_in:                    # a snapshot restoring a removed block
             self.removed.setdefault(block.dead_in, set()).add(block.id)
-        self.rank_head[block.id] = self.pos + 1
 
     def set_rank(self, bid: str, rank: str) -> str:
         """Re-rank a block. A rank already held by another block is not
@@ -174,7 +174,9 @@ class Store:
             rank = R.between(lo, rank)
         b.rank = rank
         bisect.insort(self.order, (rank, bid))
-        self.rank_head[bid] = self.pos + 1
+        seen = self.reranks.setdefault(bid, [])
+        if not seen or seen[-1] != self.pos:        # the op being applied is recorded at `pos`
+            seen.append(self.pos)
         return rank
 
     def rank_after(self, after: str | None) -> str:
@@ -340,8 +342,11 @@ class Store:
         """Every ``(block, field)`` holding characters minted by ``op``."""
         return [(self.blocks[b], p) for b, p in sorted(self.char_index.get(op, ())) if b in self.blocks]
 
-    def mark_holders(self, op: OpId) -> list[tuple[Block, str]]:
-        return [(self.blocks[b], p) for b, p in sorted(self.mark_index.get(op, ())) if b in self.blocks]
+    def placed_by(self, op: OpId) -> list[tuple[Block, str, Mark]]:
+        """Every piece of every mark ``op`` placed, with the block and field
+        holding it, wherever a split or a merge has taken it since."""
+        return [(self.blocks[b], p, m) for b, p in sorted(self.mark_index.get(op, ())) if b in self.blocks
+                for m in self.blocks[b].text(p).marks if m.op == op]
 
     def locate_char(self, ref: CharRef, hint: tuple[str, str] | None = None) -> tuple[Block, str]:
         """The block and field holding ``ref`` (live or dead). A live holder is

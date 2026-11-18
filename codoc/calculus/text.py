@@ -511,9 +511,6 @@ class Text:
                 added.extend(pieces)
         return removed, added
 
-    def marks_of(self, op: OpId) -> list[Mark]:
-        return [m for m in self.marks if m.op == op]
-
     def proposals(self, plan: str | None = None, kind: str | None = None) -> list[Mark]:
         """The proposal records here: every ``suggest_del`` and ``suggest_mark``,
         or only one plan's, or only one of the two kinds. A verdict acts on

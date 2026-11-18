@@ -42,7 +42,6 @@ from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
 from codoc.calculus.text import START, Mark, Segment, Text
 
-VERDICTS = frozenset({K.PLAN_ACCEPT, K.PLAN_REJECT, K.PLAN_REOPEN})
 WHOLE_OP = -1          # a character range standing for "everything this op minted"
 
 
@@ -100,7 +99,7 @@ def history_window(store: Store, limit: int = 200) -> dict:
         if o.kind in (K.BLOCK_DELETE, K.BLOCK_RESTORE):
             key = "killed" if o.kind == K.BLOCK_DELETE else "revived"
             return [(i, f) for i in p.get(key, []) for f in _fields(store, i)]
-        if o.kind in VERDICTS:
+        if o.kind in K.TURNS:
             out: list[tuple[str, str]] = []
             for st in p.get("steps") or []:
                 if st["do"] in ("kill", "revive"):
@@ -153,7 +152,7 @@ def history_window(store: Store, limit: int = 200) -> dict:
             else:
                 tail = into.split(START if at == END else at)
                 dead.segs, dead.marks = tail.segs, tail.marks
-        elif o.kind in VERDICTS:
+        elif o.kind in K.TURNS:
             for st, undo in _unapplied(o):
                 if st["do"] in ("kill", "revive"):
                     segs = _segs(st["segments"])
@@ -222,7 +221,7 @@ def _liveness(o: Op) -> tuple[list[str], list[str]]:
         return [str(o.target.get("bid"))], []
     if o.kind == K.BLOCK_SPLIT and p.get("new_takes"):
         return [], [str(p.get("new"))]              # a merge's inverse brings the dead block back
-    if o.kind in VERDICTS:
+    if o.kind in K.TURNS:
         blocks = [str(st["bid"]) for st in p.get("steps") or [] if st["do"] == "kill_block"]
         return ([], blocks) if o.kind == K.PLAN_REOPEN else (blocks, [])
     return [], []
@@ -257,7 +256,7 @@ def _shape_rows(o: Op) -> list[tuple[str, dict]]:
         return [(str(o.target["bid"]), {"kind": str(p.get("prev")), "level": int(p.get("prev_level") or 0)})]
     if o.kind == K.BLOCK_SET and o.target.get("path") == "level":
         return [(str(o.target["bid"]), {"level": int(p.get("prev") or 0)})]
-    if o.kind in VERDICTS:
+    if o.kind in K.TURNS:
         return _set_rows(o, ("kind", "level"))
     return []
 
@@ -266,7 +265,7 @@ def _rank_rows(o: Op) -> list[tuple[str, str]]:
     """(block, the rank it held before ``o``). A move records what it
     displaced as ``prev`` (or, when it is itself a restore, in its inverse); a
     verdict records it in its ``set`` steps."""
-    if o.kind in VERDICTS:
+    if o.kind in K.TURNS:
         return [(b, str(row["rank"])) for b, row in _set_rows(o, ("rank",))]
     if o.kind == K.BLOCK_MOVE:
         rows = o.payload.get("prev")

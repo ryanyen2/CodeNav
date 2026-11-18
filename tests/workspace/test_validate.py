@@ -123,6 +123,40 @@ def test_a_withdraw_carrying_forged_steps_does_nothing_on_rebuild(tmp_path):
     assert len(found) == 1 and "only a snapshot writes" in found[0].reason, found
 
 
+def test_a_withdrawal_is_judged_against_the_plan_as_it_stood_then(tmp_path):
+    """Taking back your own plan is allowed while it is open and nothing has
+    been written into it, so that is what the door asks, as of the reject's
+    clock. Asked of the end state, the plan is rejected by then and an
+    honest withdrawal is reported; asked of the plans the files open, a
+    forged reject of a plan with words in it passes."""
+    cd = tmp_path / "a" / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    pid = ws.open_plan(actor="agent:x", kind="edit", target="p1")
+    assert ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": pid}, "payload": {}}], actor="agent:x")[0].conflict is None
+    ws.close()
+    path = L.list_sessions(cd)[0]
+    for store in (None, Workspace(cd, readonly=True).store):
+        assert validate_logs([path], roles=Roles.load(cd), store=store) == []
+
+    cd = tmp_path / "b" / ".codoc"
+    ws = Workspace(cd)
+    write_roles(cd, {"human:gh:bob": "suggest"})
+    ws.roles = Roles.load(cd)
+    ws.store.policy = ws.roles.policy
+    seed(ws)
+    own = ws.open_plan(actor="human:gh:bob", kind="edit", target="p1")
+    ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                "payload": {"after": "START", "text": "Mine. "}}], actor="human:gh:bob", plan=own)
+    bad = ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": own}, "payload": {}}], actor="human:gh:bob")[0]
+    assert bad.conflict == "authority"
+    ws.close()
+    path = L.list_sessions(cd)[0]
+    _forge(path, bad.id)
+    for store in (None, Workspace(cd, readonly=True).store):
+        found = validate_logs([path], roles=Roles.load(cd), store=store)
+        assert len(found) == 1 and "refuses it" in found[0].reason, (store is None, found)
+
+
 def test_a_snapshot_and_a_far_future_stamp_are_refused(tmp_path):
     cd = tmp_path / ".codoc"
     ws = Workspace(cd)

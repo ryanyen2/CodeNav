@@ -122,6 +122,11 @@ def replay_recorded(store: Store, op: Op) -> Op:
     restored must not succeed on the second reading. Rebuild and the
     snapshot's fold both replay through this function, which keeps
     `replay(log) == store` (I6) true of a folded log too.
+
+    The inverse is computed again, never read from the record, since undo
+    sends it as the person's own op. A record that has none gets none: the
+    ops a fold writes re-express state, are nobody's gesture, and carry no
+    inverse, so undo never takes one of them for the person's last change.
     """
     wire = Op(id=op.id, at=op.at, actor=op.actor, batch=op.batch, kind=op.kind,
               target=dict(op.target), payload=dict(op.payload), base=dict(op.base),
@@ -132,9 +137,12 @@ def replay_recorded(store: Store, op: Op) -> Op:
         return wire
     policy, store.policy = store.policy, None
     try:
-        return apply(store, wire)
+        got = apply(store, wire)
     finally:
         store.policy = policy
+    if got is wire and not op.inverse:
+        got.inverse = []
+    return got
 
 
 # ── text ─────────────────────────────────────────────────────────────────────
@@ -366,8 +374,7 @@ def _whole_mark_off(store: Store, op: Op, kind: str, attrs: dict, touched: set[s
     every piece of it, in every field that holds one now. Only one placement
     makes marks of that kind, attrs and placer, so these are its pieces."""
     placer = str(op.payload["op"])
-    gone = [(b, f, m) for b, f in store.mark_holders(placer) for m in b.text(f).marks
-            if m.op == placer and m.kind == kind and m.attrs == attrs]
+    gone = [(b, f, m) for b, f, m in store.placed_by(placer) if m.kind == kind and m.attrs == attrs]
     if not gone:
         raise MarkError(f"no {kind} mark placed by {placer}")
     for b, f, m in gone:
@@ -453,10 +460,8 @@ def _h_block_add(store: Store, op: Op, touched: set[str]):
                  "content": {k: v for k, v in content.items() if not isinstance(v, Text)}}
     if kind not in BUILTIN:
         canonical["layout"] = layout.to_json()
-    if op.payload.get("texts"):
-        canonical["texts"] = op.payload["texts"]
-    if block.dead:
-        canonical["dead"] = block.dead
+    # What a snapshot restored stays in the record, which the next fold replays.
+    canonical.update({k: op.payload[k] for k in K.SNAPSHOT_ONLY[K.BLOCK_ADD] if op.payload.get(k)})
     return canonical, [body(K.BLOCK_DELETE, {"bid": bid}, {"ids": [bid]})]
 
 
@@ -867,7 +872,6 @@ def _closure(plan_ops: list[Op], subset: list[OpId]) -> list[OpId]:
 # identity, wherever they are now.
 
 _SHAPE = ("kind", "level", "rank")      # block attributes a `set` step changes; any other key is a content field
-_VERDICTS = (K.PLAN_ACCEPT, K.PLAN_REJECT, K.PLAN_REOPEN)
 
 
 def _seglist(v) -> list[tuple[str, int, int]]:
@@ -934,6 +938,8 @@ def _step(store: Store, me: Op, s: dict, touched: set[str], undo_of: str | None)
         b = store.blocks[s["bid"]]
         frm, to = dict(s.get("from") or {}), dict(s.get("to") or {})
         want, keys = (to if fwd else frm), list(dict.fromkeys([*frm, *to]))
+        if not fwd and "rank" in keys and _reranked_since(store, b.id, store.position[undo_of], me.target["pid"]):
+            return []           # a move made since the verdict stands, as it does against a reject
         was = _read(b, keys)
         for k in keys:
             if k == "rank":
@@ -1002,15 +1008,17 @@ def _holders_of(store: Store, segs) -> list[tuple[Block, str]]:
     return list(seen.values())
 
 
-def _reranked_since(store: Store, bid: str, pos: int, pid: str | None) -> bool:
-    """Whether an op after position ``pos`` re-ranked ``bid``, other than a
-    verdict or a reopen of plan ``pid`` (the verdict being applied included):
-    those put the plan's own move back and forth."""
-    last = store.rank_head.get(bid, 0) - 1
-    if last <= pos or last >= store.pos:
-        return False
-    o = store.ops[last]
-    return not (o.kind in _VERDICTS and o.target.get("pid") == pid)
+def _reranked_since(store: Store, bid: str, pos: int, pid: str) -> bool:
+    """Whether an op after position ``pos`` re-ranked ``bid``, other than plan
+    ``pid``'s own: its tagged moves, its verdicts and its reopens (the op being
+    applied included), which move the plan's own proposal back and forth."""
+    for q in reversed(store.reranks.get(bid, ())):
+        if q <= pos:
+            return False
+        o = store.ops[q] if q < store.pos else None
+        if o is not None and o.plan != pid and not (o.kind in K.TURNS and o.target.get("pid") == pid):
+            return True
+    return False
 
 
 def _undo_steps(store: Store, o: Op) -> list[dict]:
@@ -1037,8 +1045,7 @@ def _undo_steps(store: Store, o: Op) -> list[dict]:
         # A plan's mark toggle never touched the trunk: it is a record beside
         # it, found by the op that placed it, so a merge, a split or another
         # plan moving the trunk's marks cannot hide it.
-        return [_mark_step(b, f, m, False)
-                for b, f in store.mark_holders(o.id) for m in b.text(f).proposals(o.plan) if m.op == o.id]
+        return [_mark_step(b, f, m, False) for b, f, m in store.placed_by(o.id) if m in b.text(f).proposals(o.plan)]
     if o.kind in (K.BLOCK_ADD, K.BLOCK_SPLIT):
         b = store.blocks.get(t["bid"] if o.kind == K.BLOCK_ADD else p["new"])
         if b is not None and b.live and all(b.content[f].live_len() == 0 for f in b.layout.text):
@@ -1144,7 +1151,7 @@ def _verdict(store: Store, op: Op, touched: set[str], accept: bool):
         raise Conflict("no_feature", plan.target)
     strike = [(b, f, m) for o in every if o.id in take and o.kind == K.TEXT_MARK
               and o.payload.get("kind") == SUGGEST_DEL and o.payload.get("on", True)
-              for b, f in store.mark_holders(o.id) for m in b.text(f).marks_of(o.id)]
+              for b, f, m in store.placed_by(o.id)]
     steps: list[dict] = []
     for o in reversed(every):
         if o.id not in take:

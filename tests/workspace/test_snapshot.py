@@ -1,17 +1,22 @@
 """Snapshots: a fold keeps every view of the document, and work in flight
 stays in the log."""
 from codoc.calculus import ops as K
+from codoc.calculus.apply import apply, replay_recorded
 from codoc.calculus.derive import accept_handoffs, phase
 from codoc.calculus.doc import HEADING, PARAGRAPH
 from codoc.calculus.ids import START
+from codoc.calculus.ops import Op
+from codoc.calculus.store import Store
 from codoc.calculus.text import BOLD, SUGGEST_DEL
 from codoc.index.graph import Graph
 from codoc.loops.bootstrap import bootstrap
 from codoc.loops.realize import directive
 from codoc.workspace import Roles, Workspace
 from codoc.workspace import log as L
-from codoc.workspace.snapshot import write_snapshot
-from tests.helpers import ROWS, H, T, fake_file, fake_org, fold, ins, kind_block, mark, refs, seed, ws_paragraph
+from codoc.workspace.snapshot import snapshot_ops, state_at, write_snapshot
+from tests.helpers import (
+    ROWS, Clock, H, Mint, T, fake_file, fake_org, fold, heading, ins, kind_block, mark, paragraph, refs, seed, ws_paragraph,
+)
 
 
 def test_snapshot_keeps_the_fingerprint_when_a_dead_block_exists(tmp_path):
@@ -85,6 +90,47 @@ def test_a_plan_that_asks_for_a_build_still_does_after_a_fold(tmp_path):
     ws2 = Workspace(cd, readonly=True)
     assert ws2.store.plans["pb"].build
     assert accept_handoffs(ws2.store, ws2.store.plans["pb"]) == ["h1"]
+
+
+def test_the_ops_a_fold_writes_record_no_inverse(tmp_path):
+    """A fold re-expresses state; its ops are nobody's gesture. With an
+    inverse, the fold's batch is the person's next undo: a reopen of the
+    folded verdict that conflicts `verdict_folded` every time, and a hand-off
+    taken back."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    pid = ws.open_plan(actor="agent:x", kind="edit", target="p1")
+    ins(ws, "p1", list(refs(ws, "p1")[-1]), " Twice.", actor="agent:x", plan=pid)
+    ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}},
+               {"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {}}], actor=H)
+    ws.close()
+    fold(cd)
+    folded = [o for o in Workspace(cd, readonly=True).store.ops if o.batch.startswith("snap-")]
+    assert {K.BLOCK_ADD, K.BIND_ATTACH, K.PLAN_OPEN, K.PLAN_ACCEPT, K.FEATURE_HANDOFF} <= {o.kind for o in folded}
+    assert [o for o in folded if o.inverse] == []
+
+
+def test_a_second_fold_keeps_what_only_a_fold_writes():
+    """A fold's `block.add` restores a dead block's killer, actor, clock and
+    feature, a dead heading's bindings, that the feature had code and when
+    the code moved. The record it leaves keeps them, since the next fold
+    replays exactly those records."""
+    clock = Clock()
+    m, s = Mint("s", H, clock), Store()
+    heading(m, s, "h1", "One")
+    heading(m, s, "h2", "Two", after="h1")
+    paragraph(m, s, "p2", "body", after="h2")
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h2"}, {"file": "f.py", "symbol": "x", "fingerprint": "a"}))
+    apply(s, m.op(K.BIND_REFRESH, {"fid": "h2"}, {"file": "f.py", "symbol": "x", "fingerprint": "b"}))
+    apply(s, m.op(K.BLOCK_DELETE, {"bid": "h2"}, {}))
+    f = Store()
+    for d in snapshot_ops(s, "snap", clock):
+        replay_recorded(f, Op.from_json(d))
+    apply(f, m.op(K.TEXT_INSERT, {"bid": "h1", "path": "text"}, {"after": START, "text": "Later "}))
+    again = state_at(f, len(f.ops) - 1)          # a second fold, stopping before the newer op
+    assert again.state_fingerprint() == s.state_fingerprint()
+    assert again.blocks["p2"].dead_in == "h2" and again.blocks["h2"].detached
+    assert "h2" in again.bound_once and again.watermarks("h2").code_at == s.watermarks("h2").code_at != ""
 
 
 def test_a_verdict_after_a_snapshot_still_acts_on_the_plans_archived_ops(tmp_path):

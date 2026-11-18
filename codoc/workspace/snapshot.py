@@ -8,7 +8,9 @@ branch forked before the fold still finds it), with its full Text (segments,
 actors, clocks, marks) as ``texts``; one ``bind.attach`` per binding; one
 ``plan.open`` per plan with its status restored by a verdict; one
 ``feature.handoff`` (with the words the person asked for) and one
-``feature.realized`` per watermark.
+``feature.realized`` per watermark. None carries an inverse, and replay
+gives a record without one none: they re-express state and are nobody's
+gesture, so no undo picks the fold's batch.
 
 **The fold stops at the first op of open work.** A verdict on an open plan
 undoes the plan's own ops by identity, so those ops stay in the log. The fold
@@ -78,8 +80,7 @@ def settled_prefix(store: Store) -> int:
             op.payload.get("bid"), op.payload.get("new"), op.id}), len(store.ops))
         # A plan answered or reopened after the cut was in flight across it: a
         # verdict there judges the plan's ops, so they stay, from its opening.
-        late = {str(op.target.get("pid")) for op in store.ops[cut:]
-                if op.kind in (K.PLAN_ACCEPT, K.PLAN_REJECT, K.PLAN_REOPEN) and op.conflict is None} - live
+        late = {str(op.target.get("pid")) for op in store.ops[cut:] if op.kind in K.TURNS and op.conflict is None} - live
         if not late:
             return cut
         for pid in late:
