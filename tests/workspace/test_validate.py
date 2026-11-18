@@ -228,6 +228,28 @@ def test_the_door_accepts_a_contributors_own_words_delete_and_their_own_comment(
     assert validate_logs([session], roles=roles, store=Workspace(cd, readonly=True).store) == []
 
 
+def test_a_session_file_that_rewrites_its_merge_base_is_reported(tmp_path):
+    """A pull request may only append to a session file. One that edits a
+    recorded answer is reported, and the base version is the record."""
+    import subprocess
+    from codoc.workspace.validate import base_records
+    git = lambda *a: subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True)  # noqa: E731
+    git("init", "-q"); git("config", "user.email", "t@t"); git("config", "user.name", "t")
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    ins = ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                      "payload": {"after": "START", "text": "Mine. "}}], actor=H)[0]
+    ws.close()
+    git("add", "-A"); git("commit", "-q", "-m", "base")
+    (session,) = L.list_sessions(cd)
+    lines = session.read_text().splitlines()            # the PR rewrites a recorded answer in place
+    lines = [json.dumps({**json.loads(x), "conflict": "malformed"}) if json.loads(x).get("id") == ins.id else x for x in lines]
+    session.write_text("\n".join(lines) + "\n")
+    recorded, found = base_records(tmp_path, "HEAD", [session], L.list_sessions(cd))
+    assert len(found) == 1 and "only appended to" in found[0].reason
+    assert next(o for o in recorded if o.id == ins.id).conflict is None     # the base's answer is the record
+
+
 def test_a_backdated_withdrawal_of_a_plan_with_words_is_refused(tmp_path):
     """A pull request adds Bob's reject of his accepted plan, stamped between
     its open and his insert. Judged on the writers' own records, the plan had

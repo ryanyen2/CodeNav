@@ -371,7 +371,7 @@ def validate_logs_cmd(paths: list[str] = typer.Argument(None, help="Log files to
     this before merging one.
     """
     from codoc.workspace import log as L
-    from codoc.workspace.validate import changed_logs, validate_logs
+    from codoc.workspace.validate import base_records, changed_logs, validate_logs
     from codoc.workspace import Roles, Workspace
     cd = _require(root)
     files = [Path(p) for p in paths] if paths else changed_logs(root, base)
@@ -379,8 +379,8 @@ def validate_logs_cmd(paths: list[str] = typer.Argument(None, help="Log files to
         typer.echo("no session logs to check")
         return
     ws = Workspace(cd, readonly=True)
-    recorded = [op for p in L.list_sessions(cd) for op in L.read_session(p).ops]
-    findings = validate_logs(files, roles=Roles.load(cd), store=ws.store, recorded=recorded)
+    recorded, rewritten = base_records(root, base, files, L.list_sessions(cd))
+    findings = rewritten + validate_logs(files, roles=Roles.load(cd), store=ws.store, recorded=recorded)
     for f in findings:
         typer.echo(f"  ✗ {f}")
     typer.echo(f"{'✗' if findings else '✓'} {len(files)} log file(s), {len(findings)} finding(s)")

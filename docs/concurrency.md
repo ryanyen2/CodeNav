@@ -273,7 +273,8 @@ rebuilds. `codoc validate-logs` checks the session files a merge would add or ch
 
 | finding | why |
 |---|---|
-| An op recorded as applied that the role table would refuse. A withdrawal of the actor's own empty plan is judged on the plan as it stood at the op's clock: open, with no applied op tagged with it before, read from the store and every file under check. | A forged or unauthorised write. |
+| An op recorded as applied that the role table would refuse. A withdrawal of the actor's own empty plan is judged on every op tagged with that plan that a writer recorded as applied, at any clock, read from the merge base's session files and the files under check. | A forged or unauthorised write; the applier refuses every tagged op after a withdrawal, so a backdated reject gains nothing. |
+| A session file whose merge-base version is not a prefix of it. | A session file is only appended to; one that edits a recorded answer forges it. The base version is the record. |
 | A snapshot file. | It states a whole state; only the workspace that folds its own log may write one. |
 | An op carrying a field only a snapshot writes (`ops.SNAPSHOT_ONLY`: a block's texts and death, a plan's ops, a folded verdict's `verdict`). | It would claim another actor's words or a decision nobody made. |
 | A stamp more than 24 hours ahead of this machine's clock. | It would pull every clock that observes it into the future. |
@@ -282,6 +283,11 @@ rebuilds. `codoc validate-logs` checks the session files a merge would add or ch
 
 A verdict's `steps` need no finding: replay computes them again from the plan and
 never reads the recorded ones (section 9).
+
+What the door cannot check is who wrote an op: an op's actor is whatever the file
+says, and nothing signs it. A pull request can claim any actor, so the role table
+guards only what that actor may write. Trust in a merged log comes from who may push to
+the repository; on the hub, the server assigns each signed-in person's actor itself.
 
 `codoc rebuild` prints, per actor, how many applied ops in the local store the table
 would refuse today. That is a signal and changes nothing.

@@ -43,12 +43,16 @@ let pendingUndo: 'undo' | 'redo' | null = null;
  *  newest 200, so a batch can be answered and never show up there. */
 const inFlight = new Map<string, Set<string>>();
 
-/** Undo submissions waiting for an ack: client id → the undo batch, what it undoes, and the
- *  newest history position when it was sent. */
-const undoing = new Map<string, { batch: string; what: string; pos: number }>();
-/** Undo batches the daemon refused → the history position they were sent at. The next undo
- *  moves past them, until someone else changes the document since, which may make them possible. */
-const refusedUndo = new Map<string, number>();
+/** An undo sent and not yet answered: its batch, what it undoes, the newest history
+ *  position when it was sent, and the blocks the undone batch touched. */
+type Undoing = { batch: string; what: string; pos: number; blocks: Set<string> };
+const undoing = new Map<string, Undoing>();
+/** Undo batches the daemon refused. The next undo moves past them. One is offered again
+ *  only when it can now succeed: its refusal was not final, and someone else has since
+ *  changed a block it touches. */
+const refusedUndo = new Map<string, Undoing & { conflict: string }>();
+/** Refusals no later change answers: the undo can never apply. */
+const FINAL = new Set(['authority', 'verdict_folded', 'not_current_verdict', 'plan_not_open']);
 /** Why an undo was refused, in the person's words; any other code is shown as it is. */
 const WHY_NOT: Record<string, string> = {
     verdict_folded: 'it is in a snapshot now',
@@ -67,7 +71,7 @@ function retire(acks: Ack[]): void {
         if (!u) continue;
         undoing.delete(a.cid);
         if (a.conflict && !refusedUndo.has(u.batch)) {
-            refusedUndo.set(u.batch, u.pos);
+            refusedUndo.set(u.batch, { ...u, conflict: a.conflict });
             notify(`Could not ${u.what}: ${WHY_NOT[a.conflict] ?? a.conflict}.`);
         }
     }
@@ -312,8 +316,9 @@ function applyUndo(w: HistoryWindow): void {
     for (const e of w.ops) inFlight.delete(e.batch);
     if (inFlight.size) return;                    // something sent is still unanswered; its ack asks again
     const redo = pendingUndo === 'redo';
-    for (const [b, pos] of refusedUndo) {
-        if (w.ops.some(e => e.actor !== actor && e.pos > pos)) refusedUndo.delete(b);
+    for (const [b, r] of refusedUndo) {
+        const changed = w.ops.some(e => e.actor !== actor && e.pos > r.pos && Object.keys(e.blocks).some(x => r.blocks.has(x)));
+        if (!FINAL.has(r.conflict) && changed) refusedUndo.delete(b);
     }
     const next = nextUndo(w, actor, redo, new Set(refusedUndo.keys()));
     pendingUndo = null;
@@ -321,12 +326,14 @@ function applyUndo(w: HistoryWindow): void {
     const subs = next.ops.map(op => ({ cid: newCid(), batch: next.batch, ...op }));
     // What the person did in the original batch, by its op kinds, for the notice if the daemon refuses.
     const original = next.batch.replace(/^(u-)+/, '');
-    const kinds = new Set(w.ops.filter(e => e.batch === original).map(e => e.kind));
+    const entries = w.ops.filter(e => e.batch === original || e.batch === next.batch.slice(2));
+    const kinds = new Set(entries.filter(e => e.batch === original).map(e => e.kind));
+    const blocks = new Set(entries.flatMap(e => Object.keys(e.blocks)));
     const did = kinds.has('plan.accept') ? 'accepting the proposal' : kinds.has('plan.reject') ? 'rejecting the proposal'
         : kinds.has('feature.handoff') ? 'the hand-off' : 'the edit';
     const what = `${redo ? 'redo' : 'undo'} ${did}`;
     const pos = Math.max(0, ...w.ops.map(e => e.pos));
-    for (const s of subs) undoing.set(s.cid, { batch: next.batch, what, pos });
+    for (const s of subs) undoing.set(s.cid, { batch: next.batch, what, pos, blocks });
     submit(subs);
 }
 

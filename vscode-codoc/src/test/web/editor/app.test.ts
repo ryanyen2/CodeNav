@@ -49,12 +49,39 @@ describe('the page', () => {
         post({ kind: 'history', history: w });                          // the refused undo is not in the window
         expect(undoSubs().map(s => s.batch)).toEqual(['u-b-old']);
         post({ kind: 'acks', acks: undoSubs().map(s => ({ cid: s.cid, op: 's:9', conflict: null })) });
-        // Someone else changes the document: the refused undo may work now, so it is offered again.
+        // A snapshot refusal is final: someone else writing does not make it possible.
         posted.length = 0;
         cmdZ();
         post({ kind: 'history', history: { ...w, head: 3, ops: [...w.ops, { ...mine(2, 'b-theirs', 'text.insert'), actor: 'human:bob' }] } });
-        expect(undoSubs().map(s => s.batch)).toEqual(['u-b-verdict']);
+        expect(undoSubs().map(s => s.batch)).toEqual(['u-b-old']);
         post({ kind: 'acks', acks: undoSubs().map(s => ({ cid: s.cid, op: 's:10', conflict: null })) });
+    });
+
+    it('offers a refused undo again only once someone else changed a block it touches', () => {
+        const op = (pos: number, batch: string, actor: string, bid: string): HistoryWindow['ops'][number] => ({ pos, id: `t:${pos}`,
+            at: String(pos), actor, kind: 'text.insert', batch, batch_first: pos, plan: null, caused_by: null,
+            blocks: { [bid]: { text: 'x' } }, inverse: [{ kind: 'text.delete', target: { bid, path: 'text' }, payload: {} }] });
+        const undoSubs = () => posted.filter(m => m.kind === 'submit').flatMap(m => (m as { subs: Submission[] }).subs);
+        const cmdZ = () => document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true }));
+        const base = [op(0, 'e-old', 'human:local', 'q'), op(1, 'e-mine', 'human:local', 'p')];
+        posted.length = 0;
+        cmdZ();
+        post({ kind: 'history', history: { start: 0, head: 2, before: {}, ops: base } });
+        const first = undoSubs();
+        expect(first.map(s => s.batch)).toEqual(['u-e-mine']);
+        post({ kind: 'acks', acks: first.map(s => ({ cid: s.cid, op: null, conflict: 'dead_block' })) });
+        // Bob writes in another block: nothing changed for this undo, so it is still skipped.
+        posted.length = 0;
+        cmdZ();
+        post({ kind: 'history', history: { start: 0, head: 3, before: {}, ops: [...base, op(2, 'b1', 'human:bob', 'r')] } });
+        expect(undoSubs().map(s => s.batch)).toEqual(['u-e-old']);
+        post({ kind: 'acks', acks: undoSubs().map(s => ({ cid: s.cid, op: 't:9', conflict: null })) });
+        // Bob brings back the block it touches: the undo may apply now, so it is offered again.
+        posted.length = 0;
+        cmdZ();
+        post({ kind: 'history', history: { start: 0, head: 4, before: {}, ops: [...base, op(2, 'b1', 'human:bob', 'r'), op(3, 'b2', 'human:bob', 'p')] } });
+        expect(undoSubs().map(s => s.batch)).toEqual(['u-e-mine']);
+        post({ kind: 'acks', acks: undoSubs().map(s => ({ cid: s.cid, op: 't:10', conflict: null })) });
     });
 
     it('answers an undo even when the batch it sent never appears in the history window', async () => {

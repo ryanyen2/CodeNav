@@ -12,7 +12,7 @@ Five refusals, and nothing else:
 
 - an op recorded as a **success** whose `(actor, kind)` the table would refuse,
   which is the forged verdict (a withdrawal of the actor's own empty plan is
-  judged on the plan as it stood at the op's clock);
+  judged on every op tagged with that plan a writer recorded as applied);
 - an op in a session file carrying a field only a snapshot writes
   (`ops.SNAPSHOT_ONLY`), which would let it claim another actor's words;
 - a **snapshot** file, which claims a whole state rather than a sequence of ops
@@ -99,6 +99,34 @@ def validate_logs(paths, *, roles: Roles, store: Store | None = None, recorded: 
             if ahead > skew_ms:
                 out.append(Finding(str(p), i, f"stamped {ahead // 3_600_000}h ahead of this clock"))
     return out
+
+
+def base_records(root: str | Path, base: str, under_check: list[Path], local: list[Path]) -> tuple[list[Op], list[Finding]]:
+    """The workspace's ops as their writers recorded them, and the files that
+    rewrite that record. A session file is only ever appended to, so a file
+    under check that does not start with its ``base`` version rewrote history
+    (a recorded answer edited is a capability forged). For a file under check
+    the base version's ops are the record; the lines it appends are checked as
+    a stranger's. Any other local file is the record as it is."""
+    import tempfile
+    root, checked = Path(root), {p.resolve() for p in under_check}
+    ops: list[Op] = []
+    findings: list[Finding] = []
+    for p in local:
+        if p.resolve() not in checked:
+            ops.extend(L.read_session(p).ops)
+            continue
+        rel = p.resolve().relative_to(root.resolve()).as_posix()
+        shown = subprocess.run(["git", "-C", str(root), "show", f"{base}:{rel}"], capture_output=True, text=True)
+        if shown.returncode != 0:
+            continue                    # new in this merge: all of it is checked as a stranger's
+        if not p.read_text(encoding="utf-8").startswith(shown.stdout):
+            findings.append(Finding(str(p), 0, f"rewrites lines {base} already has; a session file is only appended to"))
+        with tempfile.TemporaryDirectory() as d:
+            q = Path(d) / p.name
+            q.write_text(shown.stdout, encoding="utf-8")
+            ops.extend(L.read_session(q).ops)
+    return ops, findings
 
 
 def changed_logs(root: str | Path, base: str) -> list[Path]:
