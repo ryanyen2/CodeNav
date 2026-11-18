@@ -542,9 +542,10 @@ def _h_block_split(store: Store, op: Op, touched: set[str]):
     if existing is not None:
         # A merge's inverse: the merged block comes back as it was, with its
         # own kind and level (a numbered item merged into a bullet stays numbered).
+        # It comes back at its own place: a dead block keeps its rank, and a
+        # verdict that moved it since (a rejected plan's move put back) stands.
         existing.revive()
         existing.content[path] = new_text
-        store.set_rank(new, rank, existing.ranked_by)     # put back where it was, not ranked anew
         nb = existing
     else:
         nb = Block(new, new_kind, rank, new_level, ranked_by=op.id)
@@ -617,7 +618,8 @@ def _h_block_move(store: Store, op: Op, touched: set[str]):
             if b.kind == HEADING:
                 b.level = clamp_level(l)
             touched.add(i)
-        return {"restore": [list(x) for x in rows]}, [body(K.BLOCK_MOVE, dict(op.target), {"restore": prev})]
+        # `prev` as a plain move records it, so a verdict can put a plan's restore back too.
+        return {"restore": [list(x) for x in rows], "prev": prev}, [body(K.BLOCK_MOVE, dict(op.target), {"restore": prev})]
     bid = op.target["bid"]
     b = store.blocks.get(bid)
     if b is None or not b.live:

@@ -274,7 +274,8 @@ rebuilds. `codoc validate-logs` checks the session files a merge would add or ch
 | finding | why |
 |---|---|
 | An op recorded as applied that the role table would refuse. A withdrawal of the actor's own empty plan is judged on every op tagged with that plan that a writer recorded as applied, at any clock, read from the merge base's session files and the files under check. | A forged or unauthorised write; the applier refuses every tagged op after a withdrawal, so a backdated reject gains nothing. |
-| A session file whose merge-base version is not a prefix of it. | A session file is only appended to; one that edits a recorded answer forges it. The base version is the record. |
+| A session file whose merge-base version, up to its last whole line, is not a prefix of it. | A session file is only appended to; one that edits a recorded answer forges it. The base version is the record. A torn last line does not count, since a daemon that starts cuts it. |
+| A session file the merge removes, or moves (into `archive/` too). | Replay would lose the answers it records, a verdict among them. Only a fold archives files, and a snapshot file is already a finding. |
 | A snapshot file. | It states a whole state; only the workspace that folds its own log may write one. |
 | An op carrying a field only a snapshot writes (`ops.SNAPSHOT_ONLY`: a block's texts and death, a plan's ops, a folded verdict's `verdict`). | It would claim another actor's words or a decision nobody made. |
 | A stamp more than 24 hours ahead of this machine's clock. | It would pull every clock that observes it into the future. |

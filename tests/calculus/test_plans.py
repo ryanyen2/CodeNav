@@ -320,6 +320,31 @@ def test_two_rejected_plans_that_moved_one_block_leave_it_where_neither_put_it()
     assert replay(s).state_fingerprint() == s.state_fingerprint()
 
 
+def test_a_plans_restore_form_move_is_put_back_by_a_reject():
+    m, s, ag = Mint(), Store(), Mint("a", "agent:x")
+    heading(m, s, "h1", "Top")
+    paragraph(m, s, "b", "b", after="h1"); paragraph(m, s, "c", "c", after="b")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "move"}))
+    apply(s, ag.op(K.BLOCK_MOVE, {}, {"restore": [["c", "0", 0]]}, plan="P"))
+    assert [x.id for x in s.ordered()][0] == "c"
+    apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {}))
+    assert [x.id for x in s.ordered()] == ["h1", "b", "c"]
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+def test_undoing_a_merge_after_a_reject_brings_the_block_back_where_the_reject_put_it():
+    m, s, ag = Mint(), Store(), Mint("a", "agent:x")
+    heading(m, s, "h1", "Top")
+    paragraph(m, s, "a", "a", after="h1"); paragraph(m, s, "b", "b", after="a"); paragraph(m, s, "c", "c", after="b")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "move"}))
+    apply(s, ag.op(K.BLOCK_MOVE, {"bid": "c"}, {"after": "a"}, plan="P"))
+    merged = apply(s, m.op(K.BLOCK_MERGE, {"into": "a", "bid": "c"}, {}))
+    apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {}))
+    invert(s, m, merged)
+    assert [x.id for x in s.ordered()] == ["h1", "a", "b", "c"]
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
 def _abc():
     m, s, ag, b = Mint(), Store(), Mint("a", "agent:x"), Mint("b", "human:b")
     heading(m, s, "h1", "Top")

@@ -84,6 +84,25 @@ describe('the page', () => {
         post({ kind: 'acks', acks: undoSubs().map(s => ({ cid: s.cid, op: 't:10', conflict: null })) });
     });
 
+    it('offers a refused undo of a kind change again once someone else changed the structure', () => {
+        const op = (pos: number, batch: string, actor: string, kind: string, bid: string): HistoryWindow['ops'][number] => ({ pos, id: `k:${pos}`,
+            at: String(pos), actor, kind, batch, batch_first: pos, plan: null, caused_by: null, blocks: {},
+            inverse: [{ kind: kind === 'block.set' ? 'block.set' : 'block.delete', target: { bid }, payload: {} }] });
+        const undoSubs = () => posted.filter(m => m.kind === 'submit').flatMap(m => (m as { subs: Submission[] }).subs);
+        const cmdZ = () => document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true }));
+        const base = [op(0, 'k-old', 'human:local', 'block.add', 'q'), op(1, 'k-mine', 'human:local', 'block.set', 'p')];
+        posted.length = 0;
+        cmdZ();
+        post({ kind: 'history', history: { start: 0, head: 2, before: {}, ops: base } });
+        post({ kind: 'acks', acks: undoSubs().map(s => ({ cid: s.cid, op: null, conflict: 'dead_block' })) });
+        // Bob restores a block (block.set's history entry names no blocks): the kind change may apply now.
+        posted.length = 0;
+        cmdZ();
+        post({ kind: 'history', history: { start: 0, head: 3, before: {}, ops: [...base, op(2, 'k-bob', 'human:bob', 'block.restore', 'p')] } });
+        expect(undoSubs().map(s => s.batch)).toEqual(['u-k-mine']);
+        post({ kind: 'acks', acks: undoSubs().map(s => ({ cid: s.cid, op: 'k:9', conflict: null })) });
+    });
+
     it('answers an undo even when the batch it sent never appears in the history window', async () => {
         posted.length = 0;
         const pm = document.querySelector('#app .ProseMirror') as HTMLElement;

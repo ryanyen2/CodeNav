@@ -107,9 +107,16 @@ def base_records(root: str | Path, base: str, under_check: list[Path], local: li
     under check that does not start with its ``base`` version rewrote history
     (a recorded answer edited is a capability forged). For a file under check
     the base version's ops are the record; the lines it appends are checked as
-    a stranger's. Any other local file is the record as it is."""
+    a stranger's. Any other local file is the record as it is.
+
+    The base is the merge base of ``base`` and HEAD, which the merge's diff is
+    against: a branch that forked before ``base`` grew a file holds a shorter
+    copy of it. Only whole lines count, since a daemon that starts cuts a torn
+    last line the base committed."""
     import tempfile
     root, checked = Path(root), {p.resolve() for p in under_check}
+    fork = subprocess.run(["git", "-C", str(root), "merge-base", base, "HEAD"], capture_output=True, text=True)
+    at = fork.stdout.strip() if fork.returncode == 0 else base
     ops: list[Op] = []
     findings: list[Finding] = []
     for p in local:
@@ -117,24 +124,27 @@ def base_records(root: str | Path, base: str, under_check: list[Path], local: li
             ops.extend(L.read_session(p).ops)
             continue
         rel = p.resolve().relative_to(root.resolve()).as_posix()
-        shown = subprocess.run(["git", "-C", str(root), "show", f"{base}:{rel}"], capture_output=True, text=True)
+        shown = subprocess.run(["git", "-C", str(root), "show", f"{at}:{rel}"], capture_output=True, text=True)
         if shown.returncode != 0:
             continue                    # new in this merge: all of it is checked as a stranger's
-        if not p.read_text(encoding="utf-8").startswith(shown.stdout):
+        whole = shown.stdout[: shown.stdout.rfind("\n") + 1]
+        if not p.read_text(encoding="utf-8").startswith(whole):
             findings.append(Finding(str(p), 0, f"rewrites lines {base} already has; a session file is only appended to"))
         with tempfile.TemporaryDirectory() as d:
             q = Path(d) / p.name
-            q.write_text(shown.stdout, encoding="utf-8")
+            q.write_text(whole, encoding="utf-8")
             ops.extend(L.read_session(q).ops)
     return ops, findings
 
 
-def changed_logs(root: str | Path, base: str) -> list[Path]:
-    """The log files a merge of ``base..HEAD`` would add or change. Anything
-    outside ``.codoc/log/`` is not this validator's business."""
+def changed_logs(root: str | Path, base: str, change: str = "AM") -> list[Path]:
+    """The log files a merge of ``base...HEAD`` would add or change, or with
+    ``change="D"`` remove. A rename counts as a removal and an add, so a file
+    moved into ``archive/`` is removed. Anything outside ``.codoc/log/`` is not
+    this validator's business."""
     root = Path(root)
     try:
-        raw = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "--diff-filter=AM", f"{base}...HEAD"],
+        raw = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "--no-renames", f"--diff-filter={change}", f"{base}...HEAD"],
                              capture_output=True, text=True, timeout=30, check=True).stdout
     except (subprocess.SubprocessError, OSError):
         return []
