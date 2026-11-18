@@ -10,7 +10,9 @@ It does two things:
    running, so the daemon holds its reflect pass until the turn ends) and the
    files the turn touched, which that pass reflects.
 2. Tells the session when hand-offs are queued in ``.codoc/realize.md``, at
-   each user prompt and mid-turn when the queue grows.
+   each user prompt and mid-turn when the queue grows, and, when a turn ends
+   having reported some queued items but not all, asks it once to report or
+   explain the rest.
 
 It never raises and always exits 0: a hook that fails blocks the agent. It
 never opens the workspace; it reads published files only.
@@ -19,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -27,6 +30,7 @@ from typing import Any
 
 from codoc.daemon.epoch import read_activity as _read_activity
 from codoc.daemon.epoch import write_activity as _write_activity
+from codoc.workspace import log as L
 from codoc.workspace.layout import REALIZE
 from codoc.workspace.layout import find_codoc_dir as _find_codoc_dir
 
@@ -228,11 +232,53 @@ def handle_user_prompt(payload: dict[str, Any], codoc_dir: str) -> None:
     print(json.dumps(out, ensure_ascii=False))
 
 
+def _uncited(codoc_dir: str) -> list[str]:
+    """Queued items no agent submission cites, when at least one queued item
+    is cited: the agent worked the queue and left some items unreported. A
+    turn that never touched the queue is not asked about it."""
+    try:
+        text = (Path(codoc_dir) / REALIZE).read_text(encoding="utf-8")
+    except OSError:
+        return []
+    queued = re.findall(r"^### ⟨d:([^⟩]+)⟩", text, re.M)
+    cited: set[str] = set()
+    for f in L.inbox_dir(codoc_dir).glob("agent-*.jsonl"):
+        if f.name.endswith(".ack.jsonl"):
+            continue
+        for line in f.read_text(encoding="utf-8").splitlines():
+            try:
+                c = json.loads(line).get("caused_by")
+            except (ValueError, AttributeError):
+                continue
+            if isinstance(c, str):
+                cited.add(c.removeprefix("d:"))
+    if not cited.intersection(queued):
+        return []
+    return [d for d in queued if d not in cited]
+
+
+def handle_turn_stop(payload: dict[str, Any], codoc_dir: str) -> None:
+    """End of a turn. Settling waits for the epoch to close, so an item the
+    agent built but did not report with ``codoc_reflect`` would stay queued
+    with nothing to say why. Ask once (``stop_hook_active`` is set on the
+    retry), keeping the epoch open while the agent answers."""
+    if not payload.get("stop_hook_active"):
+        left = _uncited(codoc_dir)
+        if left:
+            ids = ", ".join(f"d:{d}" for d in left)
+            print(json.dumps({"decision": "block", "reason": (
+                f"codoc: {len(left)} queued item(s) in .codoc/realize.md have no codoc_reflect "
+                f"citing them: {ids}. For each one you built, call codoc_reflect with that id as "
+                "caused_by; for one you did not build, say why.")}, ensure_ascii=False))
+            return
+    handle_stop(payload, codoc_dir)
+
+
 # ─── Entrypoint ──────────────────────────────────────────────────────────────
 
 _HANDLERS = {
     "session-start": handle_session_start,
-    "stop": handle_stop,
+    "stop": handle_turn_stop,
     "session-end": handle_stop,
     "pre-tool": handle_pre_tool,
     "post-tool": handle_post_tool,

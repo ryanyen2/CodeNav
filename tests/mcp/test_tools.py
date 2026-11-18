@@ -251,6 +251,22 @@ def test_codoc_agent_names_the_actor_and_its_citing_attach_settles_the_handoff(t
     assert [o.caused_by for o in st.ops if o.kind == K.FEATURE_REALIZED] == [ho.id]
 
 
+def test_the_queues_d_id_settles_the_handoff(tmp_path):
+    """realize.md shows a hand-off as ⟨d:<op id>⟩ and the agent is told to pass
+    that id as caused_by; it must cite the hand-off the same as the bare id."""
+    from codoc.loops.realize import queued
+    cd, ws = workspace(tmp_path)
+    ho = handoff(ws, "h1", actor=H)
+    ws.close()
+    try:
+        r = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::retry"]}],
+                          caused_by=f"d:{ho.id}", root_dir=str(tmp_path))
+    finally:
+        client.release(cd)
+    assert r["ok"], r
+    assert queued(Workspace(cd, readonly=True).store) == []
+
+
 def test_the_agent_is_claude_code_unless_codoc_agent_names_another(monkeypatch):
     from codoc.workspace import log as L
     monkeypatch.delenv("CODOC_AGENT", raising=False)

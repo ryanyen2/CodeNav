@@ -216,9 +216,16 @@ def _compile(store, ops: list[dict]) -> tuple[list[Change], str | None]:
     return changes, None
 
 
+def handoff_id(caused_by: str | None) -> str | None:
+    """The queue shows a hand-off as ``⟨d:<op id>⟩`` and tells the agent to pass
+    that ``d:`` id; ops cite the op id itself."""
+    return caused_by.removeprefix("d:") if caused_by else caused_by
+
+
 def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "", caused_by: str | None = None,
             root_dir: str | None = None) -> dict:
     """What the agent did to the code, as tree edits (see the module table)."""
+    caused_by = handoff_id(caused_by)
     ws, _ = _open(codoc_dir)
     changes, err = _compile(ws.store, ops)
     if err:
@@ -247,6 +254,7 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "", caused_by: 
 def propose(codoc_dir: str, *, ops: list[dict], note: str = "", caused_by: str | None = None,
             root_dir: str | None = None) -> dict:
     """A plan of tree edits, drawn in place for the person to accept or reject."""
+    caused_by = handoff_id(caused_by)
     ws, _ = _open(codoc_dir)
     changes, err = _compile(ws.store, ops)
     if err:
@@ -325,6 +333,7 @@ def write_block(codoc_dir: str, *, content: dict, bid: str | None = None, kind: 
     when the agent is proposing rather than reflecting."""
     from codoc.kinds import get, kinds
     from codoc.kinds.write import plan_write
+    caused_by = handoff_id(caused_by)
     ws, _ = _open(codoc_dir)
     store = ws.store
     if not isinstance(content, dict):

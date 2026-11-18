@@ -75,6 +75,10 @@ skill, and the `/codoc:sync`, `/codoc:plan` and `/codoc:ask` commands.
   the file: the editor and the hub learn that a feature is being built from its
   `realizing` phase in the projection.
 - Tell the session when hand-offs are queued in `realize.md`.
+- At `stop`, when the turn's `codoc_reflect` calls cite some queued items but not all (read
+  from the agent's inbox file), block the stop once and name the rest, so an item built but
+  not reported is reported or explained. A turn that never touched the queue just ends.
+- The MCP tools take a hand-off as the queue shows it (`d:<op id>`) or as the op id.
 - Never raise and never open the workspace; they read published files only.
 
 **MCP tools.** Reads replay the logs into a read-only workspace. Writes go through
