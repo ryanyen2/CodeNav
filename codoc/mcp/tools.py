@@ -34,6 +34,7 @@ from codoc.calculus.derive import (
 from codoc.calculus.doc import HEADING, fold_tree
 from codoc.calculus.ids import new_plan_id
 from codoc.daemon import client
+from codoc.daemon.epoch import note_cited
 from codoc.daemon.publish import read_status as published_status
 from codoc.daemon.publish import realizing_is_fresh, write_realizing
 from codoc.doclang import detect_prose_language, workspace_doc_language
@@ -215,16 +216,25 @@ def _compile(store, ops: list[dict]) -> tuple[list[Change], str | None]:
     return changes, None
 
 
-def handoff_id(caused_by: str | None) -> str | None:
-    """The queue shows a hand-off as ``⟨d:<op id>⟩`` and tells the agent to pass
-    that ``d:`` id; ops cite the op id itself."""
-    return caused_by.removeprefix("d:") if caused_by else caused_by
+def _cite(codoc_dir: str, caused_by: str | None) -> str | None:
+    """The hand-off op id a call cites. The queue shows a hand-off as
+    ``⟨d:<op id>⟩`` and tells the agent to pass that ``d:`` id; ops cite the op
+    id itself. The id is recorded on the open epoch, where the Stop hook reads
+    what this turn reported."""
+    if not caused_by:
+        return caused_by
+    did = caused_by.removeprefix("d:")
+    try:
+        note_cited(codoc_dir, did)
+    except OSError:          # a lock timeout: at worst the Stop hook asks once more
+        pass
+    return did
 
 
 def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "", caused_by: str | None = None,
             root_dir: str | None = None) -> dict:
     """What the agent did to the code, as tree edits (see the module table)."""
-    caused_by = handoff_id(caused_by)
+    caused_by = _cite(codoc_dir, caused_by)
     ws, _ = _open(codoc_dir)
     changes, err = _compile(ws.store, ops)
     if err:
@@ -253,7 +263,7 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "", caused_by: 
 def propose(codoc_dir: str, *, ops: list[dict], note: str = "", caused_by: str | None = None,
             root_dir: str | None = None) -> dict:
     """A plan of tree edits, drawn in place for the person to accept or reject."""
-    caused_by = handoff_id(caused_by)
+    caused_by = _cite(codoc_dir, caused_by)
     ws, _ = _open(codoc_dir)
     changes, err = _compile(ws.store, ops)
     if err:
@@ -332,7 +342,7 @@ def write_block(codoc_dir: str, *, content: dict, bid: str | None = None, kind: 
     when the agent is proposing rather than reflecting."""
     from codoc.kinds import get, kinds
     from codoc.kinds.write import plan_write
-    caused_by = handoff_id(caused_by)
+    caused_by = _cite(codoc_dir, caused_by)
     ws, _ = _open(codoc_dir)
     store = ws.store
     if not isinstance(content, dict):

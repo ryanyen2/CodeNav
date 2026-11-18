@@ -41,7 +41,7 @@ A package imports only packages to its left in this order: `calculus`, `index`,
 | `app.py`, `runner.py`, `schema.py`, `reader.py` | The cocoindex app and the LanceDB chunk table. |
 | `changes.py` | The change set of one index update. |
 | `extract.py`, `graph.py`, `flows.py` | The dependency graph over chunks, cached as JSON. |
-| `git.py` | `HEAD` and what recent commits said about a file. |
+| `git.py` | `HEAD` (commit and branch), the hand-offs commit trailers name, and what recent commits said about a file. |
 | **`doclang.py`** | The authoring language: tags, detection, character budgets. |
 | **`llm/`** | `provider.py` (which model, `complete()`), `prompt.py` (templates in `codoc/prompts/`, JSON out), `passes.py` (one function per prompt). |
 | **`kinds/`** | The kind registry, the shipped kinds, `write.py` (content to ops), `lift.py` (the lift pass), `fetch_guard.py`. See [kinds.md](kinds.md). |
@@ -71,13 +71,20 @@ skill, and the `/codoc:sync`, `/codoc:plan` and `/codoc:ask` commands.
 
 - Open the agent epoch in `activity.json` while a turn runs and record the files it
   touched. The daemon holds those files and reflects them when the epoch closes, or after
-  900 seconds of silence, citing every queued hand-off in `caused_by`. Nothing else reads
-  the file: the editor and the hub learn that a feature is being built from its
+  900 seconds of silence, citing every queued hand-off in `caused_by`. The editor and the
+  hub do not read the file: they learn that a feature is being built from its
   `realizing` phase in the projection.
 - Tell the session when hand-offs are queued in `realize.md`.
-- At `stop`, when the turn's `codoc_reflect` calls cite some queued items but not all (read
-  from the agent's inbox file), block the stop once and name the rest, so an item built but
-  not reported is reported or explained. A turn that never touched the queue just ends.
+- At `stop`, when the turn's MCP calls cite some queued items but not all, block the stop
+  once and name the rest, so an item built but not reported is reported or explained. A
+  turn that never touched the queue just ends. The MCP server records each hand-off a
+  call cites in the epoch's `cited` list (`epoch.note_cited`), daemon or not, and the
+  epoch's open resets it. The hooks read and write `activity.json` outside the lock, so a
+  hook write can drop a citation; then the stop is blocked once more than it should be,
+  and `stop_hook_active` ends it.
+- At `stop` with no daemon alive and something queued, start a detached
+  `python -m codoc.daemon.client` that settles what the epoch held back and exits
+  ([concurrency.md](concurrency.md#1-processes)).
 - The MCP tools take a hand-off as the queue shows it (`d:<op id>`) or as the op id.
 - Never raise and never open the workspace; they read published files only.
 
@@ -87,12 +94,14 @@ skill, and the `/codoc:sync`, `/codoc:plan` and `/codoc:ask` commands.
 (Cursor, Codex) sets `CODOC_AGENT` in the server's environment.
 
 **How a hand-off settles.** When no agent epoch is open, the applier (the daemon at the
-end of each batch and after each reflect pass, or a daemonless writer after it applies)
-writes `feature.realized` for each queued feature once an applied binding op cites its
-latest hand-off in `caused_by` (`loops/realize.py`, `settle`). It does not matter who
-wrote the op: an agent's `codoc_reflect`, the pass after a Claude Code epoch closes, or
-the pass over a commit whose `Codoc-Handoff` trailer names the hand-off. While an epoch
-is open the build is in progress, so the feature stays queued until the epoch closes.
+end of each batch and after each reflect pass, a daemonless writer after it applies, or
+the process the Stop hook starts when no daemon runs) writes `feature.realized` for each
+queued feature once an applied binding op cites its latest hand-off in `caused_by`
+(`loops/realize.py`, `settle`). It does not matter who wrote the op: an agent's
+`codoc_reflect`, the pass after a Claude Code epoch closes, or the pass over a commit
+whose `Codoc-Handoff` trailer names the hand-off, read when `HEAD` moves forward on the
+branch it was on. While an epoch is open the build is in progress, so the feature stays
+queued until the epoch closes.
 Code written by hand settles with `codoc done`.
 
 | tool | does |

@@ -424,7 +424,7 @@ def test_a_heading_made_prose_leaves_as_a_delete_does():
     invert(s, m, sk)
     assert s.blocks["h1"].kind == HEADING and s.bindings["g"].fingerprint == "x"
     assert replay(s).state_fingerprint() == s.state_fingerprint()
-    # Under a plan: the reject re-binds; a forged `bindings` in a plan attaches nothing.
+    # Under a plan: the reject re-binds; a `bindings` in the payload attaches nothing.
     ag = Mint("a", "agent:x")
     apply(s, ag.op(K.PLAN_OPEN, {"pid": "pl"}, {"kind": "edit"}))
     assert apply(s, ag.op(K.BLOCK_SET, {"bid": "h1", "path": "kind"}, {"value": PARAGRAPH}, plan="pl")).conflict is None
@@ -436,3 +436,54 @@ def test_a_heading_made_prose_leaves_as_a_delete_does():
     forged = [{"fid": "p1", "feature": "p1", "symbol": "y"}]
     apply(s, ag.op(K.BLOCK_SET, {"bid": "p1", "path": "kind"}, {"value": HEADING, "bindings": forged}, plan="p2"))
     assert "y" not in s.bindings
+
+
+def test_a_suggesters_undo_of_a_heading_made_prose_brings_its_code_back():
+    """The drain tags a suggester's ⌘Z with their plan. The undo re-attaches
+    what the change it undoes detached, plan or not, as `block.restore` does:
+    only this block's, each symbol nobody owns now. That is no more than a
+    `bind.attach` in the same plan could do, and a reject takes both back."""
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Client")
+    heading(m, s, "h2", "Server", after="h1")
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"symbol": "c.py::send"}))
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h2"}, {"symbol": "s.py::serve"}))
+    bob = Mint("b", "human:gh:bob")
+    apply(s, bob.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit", "target": "h1"}))
+    sk = apply(s, bob.op(K.BLOCK_SET, {"bid": "h1", "path": "kind"}, {"value": PARAGRAPH}, plan="P"))
+    (inv,) = sk.inverse
+    owned = {"fid": "h1", "feature": "h1", "symbol": "s.py::serve"}
+    undo = apply(s, bob.op(inv["kind"], inv["target"], {**inv["payload"], "bindings": [*inv["payload"]["bindings"], owned]},
+                           plan="P"))
+    assert undo.conflict is None and s.blocks["h1"].kind == HEADING
+    assert s.bindings["c.py::send"].feature == "h1" and s.bindings["s.py::serve"].feature == "h2"
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+    assert apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {})).conflict is None
+    assert s.blocks["h1"].kind == HEADING and s.bindings["c.py::send"].feature == "h1"
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+def test_a_rejected_plan_that_made_a_heading_takes_the_code_bound_to_it():
+    """A plan makes a paragraph a heading and code is bound to it. The reject's
+    `set` step ends the feature as `block.set` does and records what it
+    detached; a fold carries it; the reopen re-attaches it."""
+    from codoc.calculus.apply import replay_recorded
+    from codoc.workspace.snapshot import snapshot_ops
+    from tests.helpers import Clock
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Root")
+    paragraph(m, s, "p1", "Retry policy", after="h1")
+    ag = Mint("a", "agent:x")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit", "target": "h1"}))
+    apply(s, ag.op(K.BLOCK_SET, {"bid": "p1", "path": "kind"}, {"value": HEADING, "level": 2}, plan="P"))
+    assert apply(s, m.op(K.BIND_ATTACH, {"fid": "p1"}, {"symbol": "f.py::retry"}, actor="loop")).conflict is None
+    rej = apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {}))
+    assert s.blocks["p1"].kind == PARAGRAPH and s.bindings == {}
+    assert [e["symbol"] for st in rej.payload["steps"] for e in st.get("detached", [])] == ["f.py::retry"]
+    f = Store()
+    for d in snapshot_ops(s, "snap", Clock()):
+        assert replay_recorded(f, Op.from_json(d)).conflict is None
+    assert f.state_fingerprint() == s.state_fingerprint()
+    invert(s, m, rej)
+    assert s.blocks["p1"].kind == HEADING and s.bindings["f.py::retry"].feature == "p1"
+    assert replay(s).state_fingerprint() == s.state_fingerprint()

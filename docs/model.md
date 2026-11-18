@@ -85,7 +85,7 @@ Op         := { id, at, actor,              set by the applier; actor from the c
 | `dead` | The op that killed the block. Absent while it is live. |
 | `dead_actor`, `dead_at` | Who killed it and when. |
 | `dead_in` | The feature whose description it was removed from, read when it died. A block that dies with its heading records that heading; a block merged into its neighbour, or added by a plan that was rejected, records none, since no words were removed. `removed:` and the `edited` phase read it, so where the dead block sits later does not matter. |
-| `detached` | On a dead heading: the bindings it owned when it died. A heading made into another kind records them on its `block.set` instead. |
+| `detached` | On a dead heading: the bindings it owned when it died. A heading made into another kind records them on its `block.set`, and adds an entry marked `set` here for each symbol, which a delete and a restore leave alone and which only grows. |
 | `void` | `{move: [rank, level, ranked_by]}`: moves of rejected plans that could not be put back, since the block had been ranked again, each with the place it found the block. An undo that would restore `ranked_by` to one of them goes on to its place ([concurrency.md](concurrency.md#9-plans-and-verdicts)). |
 
 ### Block kinds
@@ -351,10 +351,11 @@ Target `{bid, path}`; `path` defaults to `text`.
   computed at apply and gets fresh ranks after the anchor. `level_delta` applies to the
   headings in the range, clamped.
 - **set.** A `kind` change away from heading ends the feature as a delete does: its
-  bindings are removed in the same op and recorded as `detached`. Its inverse carries them
-  as `bindings` and re-attaches each whose symbol has no owner now. A plan's `block.set`
-  never re-attaches from its payload; rejecting the plan puts the detached bindings back
-  as `bind` steps.
+  bindings are removed in the same op and recorded as `detached`, and the block keeps each
+  symbol as a `detached` entry marked `set`. Its inverse carries them as `bindings` and
+  re-attaches each whose symbol the block marked and nobody owns now, under a plan too
+  (a suggester's ⌘Z), so no payload binds code the block never had. A verdict's `set`
+  step that changes `kind` follows the same rule ([concurrency.md](concurrency.md#9-plans-and-verdicts)).
 - **delete.** A heading dies with its `body`; any other block dies alone. Descendant
   headings survive. The bindings of a killed heading are removed, kept on the block as
   `detached`, and recorded. A gesture that deletes a subtree sends one `block.delete` per

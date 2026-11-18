@@ -137,6 +137,8 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
         if b.detached:
             # What this dead heading owned: the phantom's settle asks whether
             # the agent removed exactly these, and the undo re-attaches them.
+            # Entries marked `set` are what a kind change took off, which
+            # only its undo may re-attach.
             payload["detached"] = [dict(e) for e in b.detached]
         if b.id in store.bound_once:
             # That this feature ever had code is state, not history: the reflect

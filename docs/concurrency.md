@@ -14,7 +14,7 @@ One process applies ops at a time. It is called the applier.
 | the daemon (`codoc watch`) | | It is the applier. It also runs the loop. |
 | the editor host | `ide` | Appends submissions to its inbox file. |
 | the CLI | `cli` | Inbox when a daemon is alive; applies directly when none is. |
-| the MCP server (the coding agent) | `mcp` | Same as the CLI. |
+| the MCP server (the coding agent) | `agent-<CODOC_AGENT>` | Same as the CLI. |
 | the hub, per signed-in user | `hub-<login>` | Appends submissions to that user's inbox file. |
 
 - A daemon is alive when `.codoc/watch.pid` names a running process. A second daemon
@@ -40,6 +40,12 @@ One process applies ops at a time. It is called the applier.
 - A long-lived writer with no daemon (the MCP server) keeps one store and one session
   file across calls. Its reads also rebuild when another process's log file changed.
   When a daemon appears, it closes its session and submits through the inbox.
+- With no daemon, every MCP write of a Claude Code turn lands while the turn's agent
+  epoch is open, so none settles, and nothing applies after the Stop hook closes the
+  epoch. So the Stop hook, when something is queued and no daemon is alive, starts a
+  detached `python -m codoc.daemon.client <.codoc>`. It takes the lock, settles
+  (section 10) unless the next turn has reopened the epoch, publishes, and exits. The
+  hook does not wait for it.
 
 ## 2. Files
 
@@ -111,9 +117,12 @@ The inbox file name decides the actor:
 | inbox file | actor |
 |---|---|
 | `ide.jsonl`, `cli.jsonl` | the local person: `human:<git config user.email>` (section 5) |
-| `mcp.jsonl` | `agent:claude-code` |
+| `agent-<name>.jsonl` | `agent:<name>`; the MCP server writes `agent-<CODOC_AGENT>`, `agent-claude-code` when unset |
 | `hub-<login>.jsonl` | `human:gh:<login>` |
-| any other name | ignored; nothing is applied |
+| any other name | not drained; the daemon logs one warning naming the file |
+
+An `mcp.jsonl` was written by an MCP server from before the `agent-<name>` inboxes. Its
+lines are never applied; restart the agent so it runs the current server.
 
 The `gh:` prefix keeps a GitHub login named `local` or `import` from arriving as the
 maintainer's identity.
@@ -177,8 +186,11 @@ re-reading lines it has drained.
 
 **The daemon's batch.** File events are debounced (600 ms). For each batch the daemon does, in order:
 
-1. If `HEAD` moved: note the hand-offs the new commits name in a `Codoc-Handoff`
-   trailer, rebuild the store from the log files now on disk and start a new session.
+1. If `HEAD` moved: rebuild the store from the log files now on disk and start a new
+   session. If it moved forward on the branch it was on (a commit, a pull, a merge: the
+   same branch name, and the old commit an ancestor of the new), note the hand-offs the
+   new commits name in a `Codoc-Handoff` trailer. A checkout of another branch, such as a
+   hub pull request's to review it, notes none.
 2. Reload the roles from `config.json`, then drain every inbox from its saved offset.
    This runs on every batch, including the first one at startup and `codoc sync`, so
    submissions written while no daemon ran are applied.
@@ -419,7 +431,7 @@ What each tagged op becomes:
 | `text.mark` of any other kind | A `suggest_mark` record. The document's marks are unchanged. | The toggle is applied to the document under the proposer's actor and op. The record is removed. | The record is removed. |
 | `text.delete`, `text.restore` | Act on the plan's own words only. | Stay. | A delete's words come back; a restore's go back to dead by the delete it undid. |
 | `block.add`, `block.split` | The block exists. | Stays. | The block dies if it holds no live text. |
-| `block.set` | Applied. | Stays. | The previous value returns, or the field is absent again. |
+| `block.set` | Applied. | Stays. | The previous value returns, or the field is absent again. A heading the plan made prose takes back the code it lost; a block the plan made a heading loses the code bound to it since. |
 | `block.move` | Applied. | Stays. | Each block's previous rank, level and `ranked_by` return, while the move is still the op that ranked it. Otherwise the later move stands. |
 | `bind.attach` | Applied. | Stays. | The symbol returns to the owner it displaced, or is unbound, unless someone re-bound it since. |
 
@@ -453,10 +465,10 @@ changed nothing is not recorded.
 | `kill` | `bid`, `path`, `segments`; `by`, `actor`, `at` when it put back another op's kill | The characters die, by the op that recorded the step unless `by` says otherwise. | They live again, those still dead by that killer. |
 | `revive` | `bid`, `path`, `segments`, `by`, `actor`, `at` | The characters `by` had killed live again. | They die again, by `by`, with its actor and clock. |
 | `mark` | `bid`, `path`, `mark` (with its `actor`, `op`, `at`), `on`, `segments` | That mark was added (`on`) or removed; `segments` are the characters it covered. | Removed: every mark equal to it but for its range whose first character is one of `segments`, in every field holding them. Added: one piece per field holding any of `segments`, from the first of them to the last. |
-| `set` | `bid`, `from`, `to` | `kind`, `level`, `rank` with `ranked_by`, or content fields went from `from` to `to`. A content field missing from one side was absent there. | `from` again; for `rank`, only while `ranked_by` is still the one in `to`. |
+| `set` | `bid`, `from`, `to`; for `kind`, `bindings`, `detached`, `attached` | `kind`, `level`, `rank` with `ranked_by`, or content fields went from `from` to `to`. A content field missing from one side was absent there. A `kind` change is a feature leaving or coming back as `block.set` has it: leaving, its bindings came off (`detached`); coming back, it took back `bindings`, what the plan's op detached (`attached`). | `from` again; for `rank`, only while `ranked_by` is still the one in `to`. For `kind`, the same rule the other way: the code bound since comes off, or `detached` comes back. |
 | `void` | `bid`, `op`, `to` | The move `op` could not be put back, and `to` is the place it found the block, kept in the block's `void`. | It is dropped from `void`. |
 | `kill_block` | `bid`, `in`? | The block died by the op that recorded the step, while in feature `in`. | It lives again, if that op is still its killer. |
-| `bind` | `symbol`, `from`, `to` | The binding went from `from` to `to`; `null` is unbound. | `from` again, unless its heading is dead. |
+| `bind` | `symbol`, `from`, `to` | The binding went from `from` to `to`; `null` is unbound. A `to` that is not a live heading now is `null`. | `from` again, unless it is not a live heading now. |
 | `detach` | `fid`, `bindings` | The dead heading's bindings were removed and kept on it. | Each is re-attached unless the symbol has an owner now. |
 
 A `mark` step finds its mark by the characters it covered, so a split that cut the mark
@@ -559,8 +571,10 @@ removed. The paragraph reads `Retries once.`
 - `feature.realized` moves the `realized` frontier. It conflicts `nothing_queued` when no
   hand-off is waiting.
 - The applier writes `feature.realized` as `loop`, and only on evidence: a feature
-  settles once an applied binding op since its latest hand-off cites that hand-off in
-  `caused_by`. Only the recorded `caused_by` decides, never the actor or the timing. The
+  settles once an applied binding op on it, or on a heading in its range (the request
+  built as a sub-feature), since its latest hand-off cites that hand-off in `caused_by`.
+  An op under a plan counts once a verdict accepted it: an open plan may
+  still be rejected. Only the record decides, never the actor or the timing. The
   op may be an agent's `codoc_reflect` (any agent), the reflect pass that ran because a
   Claude Code session closed (it cites every queued hand-off), or the pass over commits
   whose `Codoc-Handoff` trailer names the hand-off (the hub's pull requests). The daemon
@@ -568,7 +582,9 @@ removed. The paragraph reads `Retries once.`
   checks after it applies.
 - Nothing settles while an agent epoch is open (`activity.json`): the build is in
   progress, so the feature stays queued and the agent's amends land as plans. The batch
-  that sees the epoch close runs the same check, so a Claude Code turn settles at its end.
+  that sees the epoch close runs the same check, so a Claude Code turn settles at its end;
+  with no daemon, the Stop hook starts a process that takes `applier.lock`, runs the check
+  once and exits (`client.settle_closed_epoch`).
 - A deleted heading with a hand-off waiting settles when a pass that cited it saw every
   symbol the heading owned removed from the code. If the hand-off did not set
   `delete_code`, it settles on that pass alone.

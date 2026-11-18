@@ -460,7 +460,9 @@ def test_a_verdict_then_its_reopen_is_the_document_before_it_fuzzed():
     """Undoing a verdict straight after it gives back the exact state before
     it, tombstones included, and redoing it gives a reader what the verdict
     did. The plans insert, take back and give back their own words and change
-    kinds, levels and fields: the cases whose order a record by category lost."""
+    kinds, levels and fields: the cases whose order a record by category lost.
+    Headings made prose and back with code bound between are the case where a
+    feature leaves and comes back."""
     for seed in range(6):
         rng = random.Random(seed)
         m, s = Mint(), Store()
@@ -470,7 +472,7 @@ def test_a_verdict_then_its_reopen_is_the_document_before_it_fuzzed():
         for step in range(200):
             if not s.ordered():
                 break
-            op = random_op(rng, m, s, step, plans=True, undos=True)
+            op = _fold_soup_op(rng, m, s, step) if seed % 2 else random_op(rng, m, s, step, plans=True, undos=True)
             before = copy.deepcopy(s.state_fingerprint()) if op.kind in K.TURNS else None
             done = apply(s, op)
             if before is None or done.conflict is not None:
@@ -522,17 +524,38 @@ def test_a_fold_then_the_rest_of_the_log_replays_to_the_live_store(seed):
 
 def _fold_soup_op(rng: random.Random, m: Mint, s: Store, step: int) -> Op:
     """`random_op`, plus plans on any heading, so a fold can stop part way,
-    and moves under them, so "their move stands" meets a fold."""
+    and moves under them, so "their move stands" meets a fold. Headings are
+    made prose and back and code is bound, on the trunk and in plans, and the
+    newest op is undone under its own plan as the drain tags a suggester's
+    ⌘Z, so a feature leaving and coming back meets a verdict and a fold."""
     if not s.open_plans and rng.random() < 0.3:
         target = rng.choice(s.headings()).id
         return m.op(K.PLAN_OPEN, {"pid": f"Q{step}"}, {"kind": "edit", "target": target}, actor=AGENT)
-    if s.open_plans and rng.random() < 0.1:
-        blocks = s.ordered()
+    blocks = s.ordered()
+    plan = rng.choice(sorted(s.open_plans)) if s.open_plans and rng.random() < 0.5 else None
+    who = {"actor": AGENT, "plan": plan} if plan else {}
+    r = rng.random()
+    if plan and r < 0.1:
         b = rng.choice(blocks)
         others = [x.id for x in blocks if x.id != b.id]
-        return m.op(K.BLOCK_MOVE, {"bid": b.id}, {"after": rng.choice(others) if others else START},
-                    actor=AGENT, plan=rng.choice(sorted(s.open_plans)))
+        return m.op(K.BLOCK_MOVE, {"bid": b.id}, {"after": rng.choice(others) if others else START}, **who)
+    flip = [x for x in blocks if x.kind in (HEADING, PARAGRAPH) and x.id != "h1"]   # h1 stays the root
+    if r < 0.2 and flip:
+        b = rng.choice(flip)
+        return m.op(K.BLOCK_SET, {"bid": b.id, "path": "kind"},
+                    {"value": PARAGRAPH if b.kind == HEADING else HEADING, "level": 2}, **who)
+    if r < 0.3:
+        return m.op(K.BIND_ATTACH, {"fid": rng.choice(s.headings()).id}, {"symbol": rng.choice("abcd")}, **who)
+    if r < 0.35:
+        last = next((o for o in reversed(s.ops) if o.conflict is None and o.kind not in K.PLAN_KINDS), None)
+        if last is not None and last.inverse and (not last.plan or last.plan in s.open_plans):
+            inv = last.inverse[0]
+            return m.op(inv["kind"], inv["target"], inv["payload"], actor=last.actor, plan=last.plan)
     return random_op(rng, m, s, step, plans=True, undos=True)
+
+
+def _code_on_live_headings(s: Store) -> bool:
+    return all(s.blocks[b.feature].live and s.blocks[b.feature].kind == HEADING for b in s.bindings.values())
 
 
 @pytest.mark.parametrize("seed", [5, 14, 20, 32])
@@ -552,11 +575,13 @@ def test_a_folded_store_goes_on_as_the_unfolded_one(seed):
     while step < 150 or cut <= len(s.ops) // 3:
         assert step < 400 and s.ordered(), seed
         apply(s, _fold_soup_op(rng, m, s, step))
+        assert _code_on_live_headings(s), (seed, step)
         step += 1
         cut = settled_prefix(s) if step >= 150 else 0
     f = Store()
     for d in snapshot_ops(state_at(s, cut), "snap", clock):
-        assert replay_recorded(f, Op.from_json(d)).inverse == []
+        got = replay_recorded(f, Op.from_json(d))
+        assert got.conflict is None and got.inverse == [], (d["kind"], got.conflict)
     for o in s.ops[cut:]:
         replay_recorded(f, Op.from_json(copy.deepcopy(o.to_json())))
     for step in range(step, step + 150):
@@ -566,4 +591,5 @@ def test_a_folded_store_goes_on_as_the_unfolded_one(seed):
         a = apply(f, Op.from_json(copy.deepcopy(op.to_json())))
         b = apply(s, op)
         assert a.conflict == b.conflict and f.state_fingerprint() == s.state_fingerprint(), (seed, step, op.kind)
+        assert _code_on_live_headings(s), (seed, step)
     assert replay(f).state_fingerprint() == f.state_fingerprint(), seed

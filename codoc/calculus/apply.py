@@ -487,16 +487,16 @@ def _h_block_set(store: Store, op: Op, touched: set[str]):
         b.level = level_for(value, op.payload.get("level") or keep)
         canonical.update({"prev": prev_kind, "prev_level": prev_level, "level": b.level, "_structural": True})
         back: dict = {"value": prev_kind, "level": prev_level}
-        # A feature leaves as it does by `block.delete`: its bindings come off
-        # in this op, and the undo that makes it a heading again puts them back.
-        # A plan's set never re-attaches (a suggester could name any symbol);
-        # its reject puts back what it detached (`_undo_steps`).
-        if prev_kind == HEADING and value != HEADING:
-            if detached := _unbind(store, bid, touched):
-                canonical["detached"] = back["bindings"] = detached
-        elif value == HEADING and prev_kind != HEADING and op.payload.get("bindings") and not op.plan:
-            _reattach(store, [e for e in op.payload["bindings"]
-                              if isinstance(e, dict) and e.get("fid") == bid and "symbol" in e], touched)
+        # The undo carries what this change took off, as `block.restore` does,
+        # and counts only what the block recorded losing, so no payload, a
+        # plan's included, binds code the block never had.
+        known = {e["symbol"] for e in b.detached if e.get("set")}
+        detached, _ = _refeature(store, b, prev_kind, [e for e in op.payload.get("bindings") or []
+                                                      if isinstance(e, dict) and e.get("symbol") in known], touched)
+        if detached:
+            canonical["detached"] = back["bindings"] = detached
+            b.detached = [*b.detached, *({**e, "set": True} for e in detached if e["symbol"] not in known)]
+        elif op.payload.get("bindings"):
             canonical["bindings"] = op.payload["bindings"]
         inverse = [body(K.BLOCK_SET, {"bid": bid, "path": "kind"}, back)]
     elif path == "level":
@@ -679,12 +679,14 @@ def _unvoid(b: Block, rank: str, level: int, ranked_by: str) -> tuple[str, int, 
 def _detach_dead(store: Store, fids: list[str], touched: set[str]) -> list[dict]:
     """A dead heading owns no code: drop its bindings, remember them
     ON THE BLOCK (the deleted heading's settle and the undo both read them there, so a
-    fold may take this op away), and return them for the inverse."""
+    fold may take this op away), and return them for the inverse. What a kind
+    change recorded there (`set`) stays."""
     out = []
     for fid in fids:
         mine = _unbind(store, fid, touched)
         if mine:
-            store.blocks[fid].detached = mine
+            b = store.blocks[fid]
+            b.detached = [*mine, *(e for e in b.detached if e.get("set"))]
         out.extend(mine)
     return out
 
@@ -702,15 +704,32 @@ def _unbind(store: Store, fid: str, touched: set[str]) -> list[dict]:
 
 def _reattach(store: Store, entries: list[dict], touched: set[str]) -> None:
     """Re-attach what a delete detached, unless the symbol has an owner now
-    (their attach stands)."""
+    (their attach stands) or the block is no longer a heading."""
     for e in entries:
         key = e["symbol"]
         owner = store.blocks.get(e["fid"])
-        if key not in store.bindings and owner is not None:
+        if owner is None or owner.kind != HEADING:
+            continue
+        if key not in store.bindings:
             store.bindings[key] = Binding(e["fid"], key, e.get("fingerprint", ""), e.get("types_hash", ""))
             touched.add(e["fid"])
-        if owner is not None:
-            owner.detached = [d for d in owner.detached if d["symbol"] != key]
+        owner.detached = [d for d in owner.detached if d["symbol"] != key or d.get("set")]
+
+
+def _refeature(store: Store, b: Block, prev_kind: str, entries: list[dict], touched: set[str]) -> tuple[list[dict], list[dict]]:
+    """The one rule for a kind change, by `block.set` or a verdict's `set`
+    step. A heading made another kind leaves as a delete does: its bindings
+    come off, for the record to keep. A live block made a heading takes back
+    ``entries``, what the record of the change it undoes kept: only this
+    block's, each whose symbol nobody owns now, plan or not. Returns
+    (detached, attached)."""
+    if prev_kind == HEADING and b.kind != HEADING:
+        return _unbind(store, b.id, touched), []
+    if b.kind == HEADING and prev_kind != HEADING and b.live:
+        back = [e for e in entries or [] if e.get("fid") == b.id and e["symbol"] not in store.bindings]
+        _reattach(store, back, touched)
+        return [], back
+    return [], []
 
 
 def _h_block_delete(store: Store, op: Op, touched: set[str]):
@@ -998,7 +1017,16 @@ def _step(store: Store, me: Op, s: dict, touched: set[str], undo_of: str | None)
         if now == was:
             return []
         touched.add(b.id)
-        return [{**s, "from": was, "to": now} if fwd else {**s, "from": now, "to": was}]
+        out = {k: v for k, v in s.items() if k not in ("detached", "attached")}
+        out.update({"from": was, "to": now} if fwd else {"from": now, "to": was})
+        if "kind" in keys:
+            # A feature leaves or comes back as `block.set` has it. Undoing a
+            # plan's op takes back what its record kept (`bindings`); a reopen
+            # takes back what this step recorded as `detached`.
+            detached, attached = _refeature(store, b, was["kind"], s.get("bindings") if fwd else s.get("detached"),
+                                            touched)
+            out.update({k: v for k, v in (("detached", detached), ("attached", attached)) if v})
+        return [out]
     if do == "void":
         b, move = store.blocks[s["bid"]], str(s["op"])
         if fwd == (move in b.void):
@@ -1026,8 +1054,12 @@ def _step(store: Store, me: Op, s: dict, touched: set[str], undo_of: str | None)
         key = str(s["symbol"])
         want = s.get("to") if fwd else s.get("from")
         owner = store.blocks.get(want["feature"]) if want else None
-        if want and not fwd and (owner is None or not owner.live):
-            return []           # a dead heading owns no code, whatever the verdict undid
+        if want and (owner is None or not owner.live or owner.kind != HEADING):
+            # Only a live heading owns code: a reject leaves the symbol unbound,
+            # and a reopen leaves it where it is.
+            if not fwd:
+                return []
+            want = None
         cur = store.bindings.get(key)
         if want:
             store.bindings[key] = Binding(want["feature"], key, want.get("fingerprint", ""), want.get("types_hash", ""))
@@ -1099,11 +1131,10 @@ def _undo_steps(store: Store, o: Op) -> list[dict]:
             to = {"level": p["prev"]}
         else:
             to = {} if o.inverse[0]["payload"].get("unset") else {path: p["prev"]}
-        # A heading the plan made prose took its bindings off; they come back
-        # with it unless someone bound the symbol since (their attach stands).
-        back = [{"do": "bind", "symbol": e["symbol"], "from": None, "to": {k: v for k, v in e.items() if k != "fid"}}
-                for e in p.get("detached") or [] if e["symbol"] not in store.bindings]
-        return [{"do": "set", "bid": b.id, "from": _read(b, list(to) or [path]), "to": to}, *back]
+        step = {"do": "set", "bid": b.id, "from": _read(b, list(to) or [path]), "to": to}
+        if p.get("detached"):
+            step["bindings"] = p["detached"]      # a heading the plan made prose takes its code back
+        return [step]
     if o.kind == K.BLOCK_MOVE:
         out = []
         for bid, *was in p.get("prev", []):

@@ -13,8 +13,8 @@ A person's edits are already ops on the trunk; nothing here infers them.
   prompt the realizing session or ``codoc realize`` reads. Regenerable; the
   log is the truth.
 - ``settle``: record ``feature.realized`` for each queued feature once a
-  binding op citing its latest hand-off in ``caused_by`` has landed, from any
-  writer, and for each phantom whose code a citing reflect pass saw go. Every
+  binding op on it citing its latest hand-off in ``caused_by`` has landed, from
+  any writer (under a plan, once accepted), and for each phantom whose code a citing reflect pass saw go. Every
   applier runs it after applying (the daemon, a daemonless writer), never the
   agent; the owner may also write it by hand (``codoc done``) for a request
   whose implementation moved no bound symbol.
@@ -28,7 +28,7 @@ from codoc.calculus import ops as K
 from codoc.calculus.derive import (
     description, ink, kind_words, live_spans, prose_blocks, removed_blocks, text_string, title,
 )
-from codoc.calculus.doc import BUILTIN
+from codoc.calculus.doc import BUILTIN, HEADING
 from codoc.calculus.ids import OpId, is_human
 from codoc.calculus.ops import Op, covered, in_frontier
 from codoc.calculus.store import Store, Watermarks, file_of
@@ -75,9 +75,11 @@ def write_queue(codoc_dir: str | Path, store: Store, root_dir: str = ".", doc_la
 
 def settle(ws: Workspace, res=None, *, sha: str = "") -> list[Op]:
     """Record ``feature.realized`` for each queued feature once an applied
-    binding op since its latest hand-off cites that hand-off in ``caused_by``,
-    whoever wrote it: an agent's ``codoc_reflect``, or a reflect pass that
-    cited it. A phantom has no bindings left to cite, so it settles on the
+    binding op on that feature or a heading in its range (a request built as
+    a sub-feature) since its latest hand-off cites that hand-off in
+    ``caused_by``, whoever wrote it: an agent's ``codoc_reflect``, or a
+    reflect pass that cited it. An op under a plan counts once a verdict
+    accepted it. A phantom has no bindings left to cite, so it settles on the
     reflect pass ``res`` that cited it, when that pass saw its code go."""
     out = []
     store = ws.store
@@ -86,8 +88,10 @@ def settle(ws: Workspace, res=None, *, sha: str = "") -> list[Op]:
         if not w.handoffs:
             continue
         did = w.handoffs[-1]
+        mine = {b.id for b in store.feature_range(fid) if b.kind == HEADING}
         cites = [o for o in store.ops[store.position.get(did, 0):]
-                 if o.caused_by == did and o.kind.startswith("bind.") and o.conflict is None]
+                 if o.caused_by == did and o.kind.startswith("bind.") and o.conflict is None
+                 and o.target.get("fid") in mine and _taken(store, o)]
         if not cites and not (res and res.caused.get(fid) == did and _phantom_done(store, fid, did, res.removed)):
             continue
         out.extend(ws.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": fid},
@@ -95,6 +99,17 @@ def settle(ws: Workspace, res=None, *, sha: str = "") -> list[Op]:
                                            "files": sorted({file_of(o.payload["symbol"]) for o in cites})}}],
                              actor="loop", caused_by=did))
     return out
+
+
+def _taken(store: Store, o: Op) -> bool:
+    """A plan's op is evidence only once a verdict accepted it: an open plan
+    may still be rejected, and a rejected one, or an op a subset accept left
+    out, was undone."""
+    if not o.plan:
+        return True
+    plan = store.plans.get(o.plan)
+    verdict = store.by_id.get(plan.verdict) if plan and plan.status == "accepted" else None
+    return verdict is not None and o.id in (verdict.payload.get("accepted") or [])
 
 
 def _phantom_done(store: Store, fid: str, did: str, removed: set[str]) -> bool:
@@ -110,7 +125,7 @@ def _phantom_done(store: Store, fid: str, did: str, removed: set[str]) -> bool:
         return False
     if not ho.payload.get("delete_code"):
         return True
-    owned = {e["symbol"] for e in b.detached}
+    owned = {e["symbol"] for e in b.detached if not e.get("set")}     # `set`: a kind change's, not the delete's
     return bool(owned) and owned <= removed
 
 

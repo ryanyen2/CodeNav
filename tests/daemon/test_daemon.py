@@ -245,6 +245,58 @@ def test_head_change_rebuilds_from_the_logs_on_disk(tmp_path):
     assert "rotated" in note and T(d.ws.store, "p1").endswith(" From a peer.")
 
 
+def test_checking_out_a_pull_request_branch_settles_nothing_and_merging_it_does(tmp_path, monkeypatch):
+    """A `Codoc-Handoff` trailer counts only when HEAD moves forward on the
+    branch it was on. A maintainer who checks out a hub pull request's branch to
+    review it, then goes back, has merged nothing."""
+    import subprocess
+    from codoc.index.git import HANDOFF_TRAILER
+    from codoc.loops.realize import queued
+    for k, v in {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t",
+                 "GIT_COMMITTER_EMAIL": "t@example.com"}.items():
+        monkeypatch.setenv(k, v)
+    root = tmp_path / "repo"
+    (root / ".codoc").mkdir(parents=True)
+
+    def git(*argv):
+        subprocess.run(["git", *argv], cwd=root, check=True, capture_output=True)
+    git("init", "-q", "-b", "main")
+    (root / ".gitignore").write_text(".codoc/\n")
+    (root / "c.py").write_text("def send(): ...\n")
+    git("add", "-A")
+    git("commit", "-qm", "init")
+    fps = iter(["f2", "f3", "f4"])
+    d = Daemon(root, changeset=lambda *a: ChangeSet(modified=[ChunkRef("c.py", "c.py::send", next(fps), "t1")]),
+               propose=lambda *a, **k: [], printer=lambda *_: None)
+    seed_loop(d.ws)
+    ho = handoff(d.ws, "h1", actor="human:local")
+    git("checkout", "-qb", "codoc/pr")
+    (root / "c.py").write_text("def send(): retry()\n")
+    git("commit", "-qam", "codoc: Client", "-m", f"{HANDOFF_TRAILER}: {ho.id}")
+    git("checkout", "-q", "main")
+    for step in (["checkout", "-q", "codoc/pr"], ["checkout", "-q", "main"]):
+        git(*step)
+        d.process_batch([str(root / "c.py")])
+        assert queued(d.ws.store) == ["h1"], step
+    git("merge", "-q", "--ff-only", "codoc/pr")
+    d.process_batch([str(root / "c.py")])
+    assert queued(d.ws.store) == []
+    assert [o.caused_by for o in d.ws.store.ops if o.kind == K.FEATURE_REALIZED] == [ho.id]
+
+
+def test_an_inbox_file_no_actor_owns_is_named_once(tmp_path):
+    """An older MCP server wrote `mcp.jsonl`, which maps to no actor and is
+    never drained. The daemon says so once, naming the file."""
+    d, _ = make(tmp_path, [])
+    said: list[str] = []
+    d.say = said.append
+    L.submit(d.codoc_dir, "mcp", [Submission(cid="m1", kind=K.BIND_ATTACH, target={"fid": "h1"},
+                                             payload={"symbol": "c.py::a"})])
+    for _ in range(2):
+        assert "client op" not in d.process_batch([str(L.inbox_dir(d.codoc_dir) / "mcp.jsonl")])
+    assert len(said) == 1 and "inbox/mcp.jsonl" in said[0] and "MCP server" in said[0]
+
+
 def test_a_plan_on_a_deleted_heading_is_not_offered(tmp_path):
     root = tmp_path / "repo"
     (root / ".codoc").mkdir(parents=True)

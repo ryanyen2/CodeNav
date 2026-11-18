@@ -8,7 +8,8 @@ It does two things:
 
 1. Keeps ``.codoc/activity.json``: the agent epoch (open while a turn is
    running, so the daemon holds its reflect pass until the turn ends) and the
-   files the turn touched, which that pass reflects.
+   files the turn touched, which that pass reflects. With no daemon, the close
+   starts a detached process that settles what the turn built.
 2. Tells the session when hand-offs are queued in ``.codoc/realize.md``, at
    each user prompt and mid-turn when the queue grows, and, when a turn ends
    having reported some queued items but not all, asks it once to report or
@@ -26,11 +27,12 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from subprocess import DEVNULL, Popen
 from typing import Any
 
 from codoc.daemon.epoch import read_activity as _read_activity
 from codoc.daemon.epoch import write_activity as _write_activity
-from codoc.workspace import log as L
+from codoc.daemon.pidfile import daemon_running
 from codoc.workspace.layout import REALIZE
 from codoc.workspace.layout import find_codoc_dir as _find_codoc_dir
 
@@ -100,6 +102,7 @@ def _reopen_epoch_if_needed(payload: dict[str, Any], codoc_dir: str) -> None:
     ep.setdefault("started_at", _now_iso())
     data["epoch"] = ep
     data["touched"] = []
+    data["cited"] = []
     _write_activity(codoc_dir, data)
 
 
@@ -114,16 +117,25 @@ def handle_stop(payload: dict[str, Any], codoc_dir: str) -> None:
     Only the session that opened the current epoch may close it. ``SessionEnd``
     can fire long after the final turn, and by then a newer session may own
     activity.json; closing it would wipe that session's state. A stale close
-    skipped here is harmless: the daemon closes an epoch that goes silent."""
+    skipped here is harmless: the daemon closes an epoch that goes silent.
+
+    With no daemon, nothing applies after the close, and every MCP write of the
+    turn landed while the epoch was open, so nothing settled. When something
+    is queued, start a detached process that settles once and exits
+    (``client.settle_closed_epoch``). The hook does not wait for it."""
     data = _read_activity(codoc_dir)
     ep = data.get("epoch") or {}
     sid = payload.get("session_id")
     if sid and ep.get("id") and ep["id"] != f"ep-{sid}":
         return
+    was_open = ep.get("open")
     ep["open"] = False
     ep["ended_at"] = _now_iso()
     data["epoch"] = ep
     _write_activity(codoc_dir, data)
+    if was_open and _queue_size(codoc_dir) and not daemon_running(codoc_dir):
+        Popen([sys.executable, "-m", "codoc.daemon.client", str(Path(codoc_dir).resolve())],
+              stdin=DEVNULL, stdout=DEVNULL, stderr=DEVNULL, start_new_session=True)
 
 
 def _handle_tool(payload: dict[str, Any], codoc_dir: str, phase: str) -> None:
@@ -233,25 +245,17 @@ def handle_user_prompt(payload: dict[str, Any], codoc_dir: str) -> None:
 
 
 def _uncited(codoc_dir: str) -> list[str]:
-    """Queued items no agent submission cites, when at least one queued item
-    is cited: the agent worked the queue and left some items unreported. A
-    turn that never touched the queue is not asked about it."""
+    """Queued items this turn's MCP calls did not cite, when they cited at
+    least one: the agent worked the queue and left some items unreported. A
+    turn that never touched the queue is not asked about it. The MCP server
+    records each citation on the open epoch (``epoch.note_cited``), with or
+    without a daemon, and the epoch's open resets the list."""
     try:
         text = (Path(codoc_dir) / REALIZE).read_text(encoding="utf-8")
     except OSError:
         return []
     queued = re.findall(r"^### ⟨d:([^⟩]+)⟩", text, re.M)
-    cited: set[str] = set()
-    for f in L.inbox_dir(codoc_dir).glob("agent-*.jsonl"):
-        if f.name.endswith(".ack.jsonl"):
-            continue
-        for line in f.read_text(encoding="utf-8").splitlines():
-            try:
-                c = json.loads(line).get("caused_by")
-            except (ValueError, AttributeError):
-                continue
-            if isinstance(c, str):
-                cited.add(c.removeprefix("d:"))
+    cited = set(_read_activity(codoc_dir).get("cited") or [])
     if not cited.intersection(queued):
         return []
     return [d for d in queued if d not in cited]

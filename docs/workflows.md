@@ -51,10 +51,14 @@ pass caused by a hand edit cites nothing.
    epoch open in `.codoc/activity.json` while a turn runs, and the daemon reflects the
    held files with `caused_by` when the epoch closes. A commit whose `Codoc-Handoff`
    trailer names the hand-off (the hub's pull requests carry one) is reflected with
-   `caused_by` when the daemon sees `HEAD` move over it.
-6. The applier writes `feature.realized` as `loop` once a binding op citing the latest
-   hand-off has landed, whoever wrote it, and no agent epoch is open; a Claude Code turn
-   settles when it ends ([concurrency.md](concurrency.md#10-hand-off-and-realization)). When the build moved
+   `caused_by` when the daemon sees `HEAD` move forward over it on the same branch (a
+   merge or a pull, not a checkout of the pull request's branch).
+6. The applier writes `feature.realized` as `loop` once a binding op on the feature, or a
+   heading in its range, citing the latest hand-off has landed, whoever wrote it (under a plan, once accepted), and no
+   agent epoch is open; a Claude Code turn
+   settles when it ends, in the daemon's batch that sees the epoch close or, with no
+   daemon, in a process the Stop hook starts
+   ([concurrency.md](concurrency.md#1-processes)). When the build moved
    no bound symbol, or the code was written by hand, the person runs `codoc done`.
 
 No op touches a source file (I7). A hand-off is the only gesture that turns words into a

@@ -181,6 +181,22 @@ def _send(codoc_dir: Path, client: str, subs: list[Submission], root_dir: str | 
              "ops": [o.id for o in a.ops]} for s, a in zip(subs, got)]
 
 
+def settle_closed_epoch(codoc_dir: str | Path) -> None:
+    """Settle what an agent epoch held back, once, when no daemon owns the
+    checkout. Every MCP write of a Claude Code turn lands while its epoch is
+    open, so ``_send`` settles nothing, and with no daemon nothing applies after
+    the Stop hook closes it. The hook starts this in a detached process
+    (``python -m codoc.daemon.client <codoc_dir>``). An epoch the next turn has
+    already reopened is left to that turn's own close."""
+    codoc_dir = Path(codoc_dir)
+    try:
+        with applying(codoc_dir) as ws:
+            if not epoch_alive(codoc_dir) and settle(ws, sha=_HEAD.get(codoc_dir, "")):
+                publish(codoc_dir, ws.store, root_dir=str(codoc_dir.parent))
+    except DaemonRunning:
+        pass                     # the daemon's batch that sees the epoch close settles it
+
+
 def wait_for_acks(codoc_dir: Path, client: str, cids: list[str], wait_s: float) -> list[dict]:
     path = L.inbox_dir(codoc_dir) / f"{client}.ack.jsonl"
     deadline = time.time() + wait_s
@@ -261,3 +277,6 @@ def amend(codoc_dir: str | Path, *, client: str, fid: str, rewrites: list[dict],
         "note": note}, caused_by, root_dir, wait_s)
 
 
+if __name__ == "__main__":
+    import sys
+    settle_closed_epoch(sys.argv[1])

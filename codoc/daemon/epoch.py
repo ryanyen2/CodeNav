@@ -1,5 +1,5 @@
 """The agent epoch: ``.codoc/activity.json``, written by the coding agent's
-hooks and read by the daemon.
+hooks and its MCP server, read by the daemon and the Stop hook.
 
 An epoch is one agent session's hold on the code. While it is open the daemon
 does not reflect code changes, since the agent is mid-edit; when it closes, the
@@ -10,10 +10,13 @@ Schema (version 1)::
     {
       "version": 1,
       "epoch": {"id": "ep-<session_id>", "open": true, "started_at": "<iso>", "ended_at": null},
-      "touched": ["src/theme.py"]
+      "touched": ["src/theme.py"],
+      "cited": ["s-3f9a:12"]
     }
 
-``touched`` is the repo-relative files the turn's tools read or wrote. ``open``
+``touched`` is the repo-relative files the turn's tools read or wrote.
+``cited`` is the hand-offs the turn's MCP calls cited in ``caused_by``. Both
+reset when the epoch opens. ``open``
 is a lease, not a flag: a session that is hard-killed never runs the hook that
 would clear it, so a reader trusts it only while the file keeps being written
 (``epoch_alive``, ``EPOCH_STALE_SECONDS``).
@@ -96,6 +99,19 @@ def write_activity(codoc_dir: str | Path, data: dict) -> None:
     invocations and the realize runner share."""
     with _lock(codoc_dir):
         write_json(activity_path(codoc_dir), data)
+
+
+def note_cited(codoc_dir: str | Path, handoff: str) -> None:
+    """Record on the open epoch that this turn cited ``handoff``, for the Stop
+    hook. Read and write happen under the lock, so this never drops a hook's
+    write; a hook reads outside it, so a hook write that races this one can
+    drop the citation. Then the Stop hook asks about that item once more than
+    it should, and ``stop_hook_active`` stops it from asking again."""
+    with _lock(codoc_dir):
+        data = read_activity(codoc_dir)
+        cited = list(data.get("cited") or [])
+        if (data.get("epoch") or {}).get("open") and handoff not in cited:
+            write_json(activity_path(codoc_dir), {**data, "cited": [*cited, handoff]})
 
 
 def close_epoch(codoc_dir: str | Path, expected_id: str, *,

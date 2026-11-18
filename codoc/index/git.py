@@ -1,4 +1,4 @@
-"""What git knows about the code: the commit at HEAD, the hand-offs new commits
+"""What git knows about the code: the commit and branch at HEAD, the hand-offs new commits
 realize, and what recent commits said about a file.
 
 ``head_sha`` anchors a hand-off to the commit the work starts from, so a reader
@@ -58,6 +58,11 @@ def head_sha(root_dir: str | Path) -> str:
     return ""
 
 
+def head_branch(root_dir: str | Path) -> str:
+    """The branch ``HEAD`` is on, or ``""`` when it is detached or there is no repository."""
+    return _git(root_dir, "symbolic-ref", "-q", "--short", "HEAD")
+
+
 # The trailer a commit names the hand-off it realizes by: the hub worker writes
 # it on every commit it builds, and anyone may write it on their own.
 HANDOFF_TRAILER = "Codoc-Handoff"
@@ -65,8 +70,9 @@ HANDOFF_TRAILER = "Codoc-Handoff"
 
 def handoffs_landed(root_dir: str | Path, old: str, new: str) -> frozenset[str]:
     """The hand-off op ids that the commits in ``old..new`` name in a
-    ``Codoc-Handoff`` trailer, as git parses trailers."""
-    if not old or not new:
+    ``Codoc-Handoff`` trailer, as git parses trailers, when ``new`` descends
+    from ``old``. The caller checks that the branch stayed the same."""
+    if not old or not new or _git(root_dir, "merge-base", old, new) != old:
         return frozenset()
     out = _git(root_dir, "log", f"--format=%(trailers:key={HANDOFF_TRAILER},valueonly)", f"{old}..{new}")
     return frozenset(line.strip() for line in out.splitlines() if line.strip())

@@ -4,8 +4,10 @@
 Per debounced batch of filesystem events it does, in order:
 
 1. rotate the session log if ``HEAD`` moved (a commit, a checkout), noting
-   the hand-offs the new commits name in a ``Codoc-Handoff`` trailer;
-2. drain every client inbox into ops;
+   the hand-offs the new commits name in a ``Codoc-Handoff`` trailer when
+   ``HEAD`` moved forward on the branch it was on;
+2. drain every client inbox into ops, warning once about an inbox file whose
+   name maps to no actor;
 3. read the agent epoch (``activity.json``): while an interactive session is
    open, code changes accumulate instead of triggering a reflect pass, since the
    agent owns those files; when the epoch closes, one scoped reflect pass runs
@@ -31,7 +33,7 @@ from pathlib import Path, PurePosixPath
 from codoc.daemon.epoch import EPOCH_STALE_SECONDS, close_epoch, epoch_alive, epoch_touched_files, read_epoch
 from codoc.daemon.pidfile import clear_pidfile, daemon_running, write_pidfile
 from codoc.daemon.publish import Publisher, realizing_is_fresh
-from codoc.index.git import handoffs_landed, head_sha
+from codoc.index.git import handoffs_landed, head_branch, head_sha
 from codoc.index.graph import Graph
 from codoc.index.lang import detect_language
 from codoc.loops import realize as R
@@ -48,6 +50,7 @@ class DaemonState:
     epoch_id: str = ""
     suppressed: set[str] = field(default_factory=set)
     head: str = ""
+    branch: str = ""
 
 
 class Daemon:
@@ -64,14 +67,24 @@ class Daemon:
         for p in self.ws.problems:
             printer(f"▸ log problem: {p.path}:{p.line}: {p.reason}")
         self.graph = Graph.load(self.codoc_dir / GRAPH_CACHE)
-        self.state = DaemonState(head=head_sha(self.root))
+        self.state = DaemonState(head=head_sha(self.root), branch=head_branch(self.root))
         self.say = printer
         self.after_batch = after_batch       # called with the daemon after every watched batch
         self._reflect = reflect
         self._changeset = changeset
         self._propose = propose
-        self.identity = L.actor_for          # inbox file name → actor (ide/cli, agent-<name>, hub-<login>)
+        self._unknown: set[str] = set()
         self.publisher = Publisher(self.codoc_dir, str(self.root))
+
+    def identity(self, client: str, codoc_dir: Path) -> str | None:
+        """The actor an inbox file writes as (``L.actor_for``). A file whose
+        name maps to no actor is never drained, so say so once."""
+        actor = L.actor_for(client, codoc_dir)
+        if actor is None and client not in self._unknown:
+            self._unknown.add(client)
+            self.say(f"▸ not draining {L.inbox_dir(codoc_dir) / client}.jsonl: no actor has that name. "
+                     "An older codoc MCP server wrote it; restart the agent so it runs the current one.")
+        return actor
 
     # ── routing ────────────────────────────────────────────────────────────
     @cached_property
@@ -110,20 +123,25 @@ class Daemon:
         rebuilt = False
         # 1. HEAD moved → the set of logs on disk may have changed (a checkout,
         # a pull): rebuild from them, then start a new session file.
-        sha = head_sha(self.root)
+        sha, branch = head_sha(self.root), head_branch(self.root)
         landed: frozenset[str] = frozenset()
         if sha != self.state.head:
+            # A trailer counts only when HEAD moved forward on the branch it was
+            # on (a commit, a pull, a merge). Checking out a hub pull request's
+            # branch to review it merges nothing.
             # ponytail: the trailer is read when the batch that sees HEAD move
             # reflects the merged files; a merge whose files were reflected in an
-            # earlier batch (a conflicted merge committed later) cites nothing,
-            # and `codoc done` settles it.
-            landed = handoffs_landed(self.root, self.state.head, sha)
+            # earlier batch (a conflicted merge committed later), or that no batch
+            # saw on the same branch, cites nothing, and `codoc done` settles it.
+            if branch and branch == self.state.branch:
+                landed = handoffs_landed(self.root, self.state.head, sha)
             self.state.head = sha
             self.ws.rebuild()
             self.ws.rotate_session()
             self.publisher.invalidate()      # a different set of logs is a different tree
             rebuilt = True
             notes.append("session rotated (HEAD moved)")
+        self.state.branch = branch
         # 2. Client ops, under the roles the tracked config names right now
         # (the hub adds a login's role when they sign in). Every batch drains:
         # the drain reads each inbox from its saved offset, so this is cheap,
