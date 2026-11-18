@@ -11,9 +11,6 @@ mutation that changes them:
 - ``mark_index``      placing op → the ``(block, field)`` holding its marks
 - ``order``           ``(rank, id)`` sorted, live and dead: a dead block keeps its
                       rank so "after a deleted block" still names a place
-- ``reranks``         block → positions of the ops that re-ranked it, in apply
-                      order (a plan's move is not undone over a re-rank by
-                      someone else since)
 - ``ops_by_block``    block → positions of the ops recorded against it (the
                       canonical holders of an applied op; the client's hint
                       for a conflicted one), so every "ops on this feature"
@@ -129,7 +126,6 @@ class Store:
         self.mark_index: dict[OpId, set[tuple[str, str]]] = {}
         self.block_head: dict[str, int] = {}
         self.ops_by_block: dict[str, list[int]] = {}
-        self.reranks: dict[str, list[int]] = {}
         self.structural_head: int = 0
         self.plans_head: int = 0
         self.policy: Policy | None = policy
@@ -174,9 +170,6 @@ class Store:
             rank = R.between(lo, rank)
         b.rank = rank
         bisect.insort(self.order, (rank, bid))
-        seen = self.reranks.setdefault(bid, [])
-        if not seen or seen[-1] != self.pos:        # the op being applied is recorded at `pos`
-            seen.append(self.pos)
         return rank
 
     def rank_after(self, after: str | None) -> str:

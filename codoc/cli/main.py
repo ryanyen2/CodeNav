@@ -370,6 +370,7 @@ def validate_logs_cmd(paths: list[str] = typer.Argument(None, help="Log files to
     forged success in a stranger's log lands on every clone that rebuilds. Run
     this before merging one.
     """
+    from codoc.workspace import log as L
     from codoc.workspace.validate import changed_logs, validate_logs
     from codoc.workspace import Roles, Workspace
     cd = _require(root)
@@ -378,7 +379,8 @@ def validate_logs_cmd(paths: list[str] = typer.Argument(None, help="Log files to
         typer.echo("no session logs to check")
         return
     ws = Workspace(cd, readonly=True)
-    findings = validate_logs(files, roles=Roles.load(cd), store=ws.store)
+    recorded = [op for p in L.list_sessions(cd) for op in L.read_session(p).ops]
+    findings = validate_logs(files, roles=Roles.load(cd), store=ws.store, recorded=recorded)
     for f in findings:
         typer.echo(f"  ✗ {f}")
     typer.echo(f"{'✗' if findings else '✓'} {len(files)} log file(s), {len(findings)} finding(s)")

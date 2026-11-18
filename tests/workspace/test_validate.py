@@ -226,3 +226,33 @@ def test_the_door_accepts_a_contributors_own_words_delete_and_their_own_comment(
     ws.close()
     roles = Roles(table={"human:gh:alice": "suggest", H: "owner"}, default="suggest")
     assert validate_logs([session], roles=roles, store=Workspace(cd, readonly=True).store) == []
+
+
+def test_a_backdated_withdrawal_of_a_plan_with_words_is_refused(tmp_path):
+    """A pull request adds Bob's reject of his accepted plan, stamped between
+    its open and his insert. Judged on the writers' own records, the plan had
+    words, so the reject is no withdrawal and his role refuses it."""
+    from codoc.workspace.clock import fmt, parse
+    bob = "human:gh:bob"
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    write_roles(cd, {bob: "suggest"})
+    ws.roles = Roles.load(cd)
+    ws.store.policy = ws.roles.policy
+    seed(ws)
+    pid = ws.open_plan(actor=bob, kind="edit", target="p1")
+    ins = ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                      "payload": {"after": "START", "text": "Mine. "}}], actor=bob, plan=pid)[0]
+    ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor=H)
+    opened = ws.store.by_id[ws.store.plans[pid].opened_by]
+    ws.close()
+    w, lg, _ = parse(opened.at)
+    at = fmt(w, lg + 1, "evil")
+    assert opened.at < at < ins.at
+    path = L.log_dir(cd) / "evil01.jsonl"
+    path.write_text(json.dumps({"header": 1, "session": "evil01", "opened": at, "node": "evil"}) + "\n" +
+                    json.dumps({"id": "evil01:1", "at": at, "actor": bob, "batch": "x", "kind": K.PLAN_REJECT,
+                                "target": {"pid": pid}, "payload": {}}) + "\n")
+    recorded = [o for p in L.list_sessions(cd) for o in L.read_session(p).ops]
+    found = validate_logs([path], roles=Roles.load(cd), store=Workspace(cd, readonly=True).store, recorded=recorded)
+    assert len(found) == 1 and "refuses it" in found[0].reason, found

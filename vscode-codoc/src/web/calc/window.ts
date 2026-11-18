@@ -80,15 +80,15 @@ function depth(batch: string): number {
 }
 
 /** The ops to submit for the viewer's next undo (`redo=false`) or redo, with
- *  the batch id they go under; null when there is nothing to invert. A
- *  snapshot fold (`snap-*`) is not a gesture and is never offered; neither is
- *  a batch with no inverse, nor one whose undo batch is in `refused`. */
+ *  the batch id they go under; null when there is nothing to invert. A batch
+ *  with no inverse is never offered (a snapshot fold's ops have none), nor one
+ *  whose undo batch is in `refused`. */
 export function nextUndo(w: HistoryWindow, actor: string, redo = false, refused: ReadonlySet<string> = new Set()): { batch: string; ops: OpBody[] } | null {
     const batches = new Map<string, WindowEntry[]>();
     for (const e of w.ops) if (e.actor === actor) (batches.get(e.batch) ?? batches.set(e.batch, []).get(e.batch)!).push(e);
     const undone = new Set([...batches.keys()].filter(b => b.startsWith('u-')).map(b => b.slice(2)));
     const candidates = [...batches.entries()]
-        .filter(([b]) => (depth(b) % 2 === 1) === redo && !undone.has(b) && !refused.has(`u-${b}`) && !b.slice(depth(b) * 2).startsWith('snap-'))
+        .filter(([b]) => (depth(b) % 2 === 1) === redo && !undone.has(b) && !refused.has(`u-${b}`))
         .sort((a, b) => b[1][b[1].length - 1].pos - a[1][a[1].length - 1].pos);
     for (const [batch, entries] of candidates) {
         // A batch that began before the window is only half here; undoing that

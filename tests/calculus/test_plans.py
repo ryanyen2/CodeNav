@@ -291,6 +291,49 @@ def test_a_reject_after_a_reopen_of_a_reject_puts_the_move_back():
     assert [b.id for b in s.ordered()] == ["h1", "a", "b", "c"]
 
 
+def test_a_move_made_and_undone_since_the_verdict_does_not_stop_the_reopen():
+    """Someone drags the block and takes it back with Cmd-Z: nothing moved, so
+    the reopen puts the plan's move back and the accept keeps it."""
+    m, s, ag, b = Mint(), Store(), Mint("a", "agent:x"), Mint("b", "human:b")
+    heading(m, s, "h1", "Top")
+    paragraph(m, s, "a", "a", after="h1"); paragraph(m, s, "b", "b", after="a"); paragraph(m, s, "c", "c", after="b")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "M"}, {"kind": "move"}))
+    apply(s, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "c"}, plan="M"))
+    rej = apply(s, m.op(K.PLAN_REJECT, {"pid": "M"}, {}))
+    invert(s, b, apply(s, b.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "b"})))
+    assert [x.id for x in s.ordered()] == ["h1", "a", "b", "c"]
+    invert(s, m, rej)
+    assert apply(s, m.op(K.PLAN_ACCEPT, {"pid": "M"}, {})).conflict is None
+    assert [x.id for x in s.ordered()] == ["h1", "b", "c", "a"]
+
+
+def test_two_rejected_plans_that_moved_one_block_leave_it_where_neither_put_it():
+    m, s, ag = Mint(), Store(), Mint("a", "agent:x")
+    heading(m, s, "h1", "Top")
+    paragraph(m, s, "a", "a", after="h1"); paragraph(m, s, "b", "b", after="a"); paragraph(m, s, "c", "c", after="b")
+    for pid, after in (("P", "c"), ("Q", "b")):
+        apply(s, ag.op(K.PLAN_OPEN, {"pid": pid}, {"kind": "move"}))
+        apply(s, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": after}, plan=pid))
+    for pid in ("P", "Q"):
+        assert apply(s, m.op(K.PLAN_REJECT, {"pid": pid}, {})).conflict is None
+    assert [x.id for x in s.ordered()] == ["h1", "a", "b", "c"]
+
+
+def test_a_rejected_kind_change_leaves_a_paragraph_with_no_level():
+    """P makes a paragraph a bullet, Q sets its level; rejecting both gives the
+    paragraph back with level 0, the same in a rebuild."""
+    m, s, ag = Mint(), Store(), Mint("a", "agent:x")
+    heading(m, s, "h1", "Top"); paragraph(m, s, "p", "words", after="h1")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit"}))
+    apply(s, ag.op(K.BLOCK_SET, {"bid": "p", "path": "kind"}, {"value": "bullet"}, plan="P"))
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "Q"}, {"kind": "edit"}))
+    apply(s, ag.op(K.BLOCK_SET, {"bid": "p", "path": "level"}, {"value": 3}, plan="Q"))
+    for pid in ("P", "Q"):
+        apply(s, m.op(K.PLAN_REJECT, {"pid": pid}, {}))
+    assert (s.blocks["p"].kind, s.blocks["p"].level) == (PARAGRAPH, 0)
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
 def test_a_reopen_of_a_verdict_that_is_not_the_plans_current_one_is_refused():
     m, s, ag, other = Mint(), Store(), Mint("a", "agent:x"), Mint("b", "human:b")
     heading(m, s, "h1", "Top")

@@ -61,11 +61,14 @@ class Finding:
         return f"{where}: {self.reason}"
 
 
-def validate_logs(paths, *, roles: Roles, store: Store | None = None, now_ms: int | None = None,
-                  skew_ms: int = FUTURE_SKEW_MS) -> list[Finding]:
+def validate_logs(paths, *, roles: Roles, store: Store | None = None, recorded: list[Op] | None = None,
+                  now_ms: int | None = None, skew_ms: int = FUTURE_SKEW_MS) -> list[Finding]:
     """What is wrong with these log files, read as a stranger's. ``store`` is
     the workspace's own, so a suggester's op on a plan opened before the pull
-    request is recognised; without one only the plans these files open count."""
+    request is recognised; without one only the plans these files open count.
+    ``recorded`` is the workspace's ops as its session files record them (each
+    writer's own answer); a replayed store's answers follow the merge order,
+    which a forger chooses. Without it the store's ops stand in."""
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
     out: list[Finding] = []
     files = []
@@ -77,7 +80,8 @@ def validate_logs(paths, *, roles: Roles, store: Store | None = None, now_ms: in
     # A plan's past is read from everything known, the workspace's log and
     # every file under check, by clock.
     theirs = [o for _, f in files for o in f.ops]
-    known = [*(store.ops if store else []), *theirs]
+    ours = recorded if recorded is not None else (store.ops if store else [])
+    known = list({o.id: o for o in [*ours, *theirs]}.values())
     view = _policy_view(store, theirs)
     turns = sorted((o.at, o.kind, str(o.target.get("pid"))) for o in known if o.kind in K.TURNS and o.conflict is None)
     for p, f in files:
@@ -169,15 +173,17 @@ def _last_turn(turns: list[tuple[str, str, str]], pid: str, at: str) -> str | No
 
 
 def _as_it_stood(view: Store, op: Op, known: list[Op], turns) -> None:
-    """Put the plan ``op`` rejects into ``view`` as it stood at ``op``'s clock,
-    which is what a withdrawal is judged on (`roles._withdrawing_own_empty_plan`):
-    open unless a verdict came first, holding the applied ops tagged with it
-    before then. By the end the plan is rejected, by this op if it is honest;
-    a plan these files open comes into the view with no ops at all."""
+    """Put the plan ``op`` rejects into ``view`` as a withdrawal is judged on it
+    (`roles._withdrawing_own_empty_plan`): open unless a verdict came before
+    ``op``'s clock, and holding every op tagged with it that a writer recorded
+    as applied, at any clock. The applier refuses every tagged op after a
+    withdrawal, so an applied one anywhere means the plan was not empty, and a
+    forger who backdates the reject gains nothing."""
     pid = str(op.target.get("pid") or "")
     if (plan := view.plans.get(pid)) is not None:
         view.plans[pid] = replace(plan, status=DECIDED.get(_last_turn(turns, pid, op.at) or "", "open"),
-                                  ops=[o.id for o in known if o.plan == pid and o.conflict is None and o.at < op.at])
+                                  ops=[o.id for o in known if o.plan == pid and o.conflict is None
+                                       and o.kind not in K.TURNS])
 
 
 def _ms(stamp: str) -> int:

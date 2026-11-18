@@ -385,7 +385,7 @@ What each tagged op becomes:
 | `text.delete`, `text.restore` | Act on the plan's own words only. | Stay. | A delete's words come back; a restore's go back to dead by the delete it undid. |
 | `block.add`, `block.split` | The block exists. | Stays. | The block dies if it holds no live text. |
 | `block.set` | Applied. | Stays. | The previous value returns, or the field is absent again. |
-| `block.move` | Applied. | Stays. | The previous ranks and levels return, unless an op that is not the plan's own re-ranked the block since. |
+| `block.move` | Applied. | Stays. | The previous ranks and levels return, unless the block no longer has the rank the move gave it (someone moved it since). |
 | `bind.attach` | Applied. | Stays. | The symbol returns to the owner it displaced, or is unbound, unless someone re-bound it since. |
 
 `plan.accept`, in order:
@@ -436,12 +436,13 @@ same `subset`, or `plan.reject`. A redo is therefore judged against the plan as 
 then, so words the plan gained or took back after the reopen, and a paragraph written
 under a heading a delete plan removes, are decided with the rest.
 
-A move a plan made is put back unless an op that is not the plan's own re-ranked the
-block after that move. The plan's own are its tagged moves, its verdicts and its
-reopens. The store keeps each block's re-ranks in apply order, so a move someone made
-between two of the plan's moves stands. A reopen undoing a `set` step that moved a
-block asks the same of the time since the verdict: a move made since stands, and so it
-does when the verdict is redone.
+A move a plan made is put back only while the block is still where that move put it:
+the move records the ranks it gave, and a block with another rank has been moved since
+by someone else, whose move stands. A drag undone with ⌘Z leaves the rank as it was,
+so it does not count. Of two plans that moved the same block, the move put back skips
+past the ranks a rejected plan gave it, so both rejected leave the block where neither
+put it. A reopen undoing a `set` step that moved a block asks the same of the rank the
+step set: a move made since stands, and so it does when the verdict is redone.
 
 A reader finds the trunk marks a verdict removed or added as its `mark` steps: `on` true
 for added, false for removed, each with the placer's `op`. The proposal records it

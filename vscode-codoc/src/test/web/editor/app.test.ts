@@ -49,6 +49,12 @@ describe('the page', () => {
         post({ kind: 'history', history: w });                          // the refused undo is not in the window
         expect(undoSubs().map(s => s.batch)).toEqual(['u-b-old']);
         post({ kind: 'acks', acks: undoSubs().map(s => ({ cid: s.cid, op: 's:9', conflict: null })) });
+        // Someone else changes the document: the refused undo may work now, so it is offered again.
+        posted.length = 0;
+        cmdZ();
+        post({ kind: 'history', history: { ...w, head: 3, ops: [...w.ops, { ...mine(2, 'b-theirs', 'text.insert'), actor: 'human:bob' }] } });
+        expect(undoSubs().map(s => s.batch)).toEqual(['u-b-verdict']);
+        post({ kind: 'acks', acks: undoSubs().map(s => ({ cid: s.cid, op: 's:10', conflict: null })) });
     });
 
     it('answers an undo even when the batch it sent never appears in the history window', async () => {

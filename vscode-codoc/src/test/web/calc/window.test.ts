@@ -27,10 +27,10 @@ describe('undo over the window', () => {
         const w: HistoryWindow = { start: 10, head: 12, before: {}, ops: [e(10, 'human:local', 'b1', { p: 'a' }), e(11, 'human:local', 'b1', { p: 'ab' })] };
         expect(nextUndo(w, 'human:local')).toBeNull();
     });
-    it('skips a snapshot fold, a batch with no inverse, and a batch whose undo was refused', () => {
+    it('skips a batch with no inverse (a snapshot fold has none) and a batch whose undo was refused', () => {
         const w: HistoryWindow = { start: 0, head: 4, before: {}, ops: [
             e(0, 'human:local', 'b1', { p: 'a' }), e(1, 'human:local', 'b2', { p: 'ab' }),
-            e(2, 'human:local', 'n1', { p: 'ab' }, []), e(3, 'human:local', 'snap-1', { p: 'ab' }),
+            e(2, 'human:local', 'n1', { p: 'ab' }, []), e(3, 'human:local', 'snap-1', { p: 'ab' }, []),
         ] };
         expect(nextUndo(w, 'human:local')!.batch).toBe('u-b2');
         expect(nextUndo(w, 'human:local', false, new Set(['u-b2']))!.batch).toBe('u-b1');

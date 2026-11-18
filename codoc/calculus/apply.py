@@ -638,7 +638,10 @@ def _h_block_move(store: Store, op: Op, touched: set[str]):
         if x.kind == HEADING and delta:
             x.level = clamp_level(x.level + delta)
         touched.add(i)
-    canonical = {"after": after, "level_delta": delta, "range": ids, "prev": prev}
+    # The ranks it gave: a verdict undoing this move leaves a block whose rank
+    # is no longer one of these, since someone else has moved it since.
+    canonical = {"after": after, "level_delta": delta, "range": ids, "prev": prev,
+                 "ranks": [store.blocks[i].rank for i in ids]}
     return canonical, [body(K.BLOCK_MOVE, {"bid": bid}, {"restore": prev})]
 
 
@@ -938,8 +941,8 @@ def _step(store: Store, me: Op, s: dict, touched: set[str], undo_of: str | None)
         b = store.blocks[s["bid"]]
         frm, to = dict(s.get("from") or {}), dict(s.get("to") or {})
         want, keys = (to if fwd else frm), list(dict.fromkeys([*frm, *to]))
-        if not fwd and "rank" in keys and _reranked_since(store, b.id, store.position[undo_of], me.target["pid"]):
-            return []           # a move made since the verdict stands, as it does against a reject
+        if not fwd and "rank" in to and b.rank != to["rank"]:
+            return []           # moved since the verdict: that move stands, as it does against a reject
         was = _read(b, keys)
         for k in keys:
             if k == "rank":
@@ -951,6 +954,8 @@ def _step(store: Store, me: Op, s: dict, touched: set[str], undo_of: str | None)
                 b.content[k] = want[k]
             else:
                 b.content.pop(k, None)
+        if "kind" in keys or "level" in keys:
+            b.level = level_for(b.kind, b.level)     # a paragraph has no level, as block.set gives it
         now = _read(b, keys)
         if now == was:
             return []
@@ -1008,17 +1013,19 @@ def _holders_of(store: Store, segs) -> list[tuple[Block, str]]:
     return list(seen.values())
 
 
-def _reranked_since(store: Store, bid: str, pos: int, pid: str) -> bool:
-    """Whether an op after position ``pos`` re-ranked ``bid``, other than plan
-    ``pid``'s own: its tagged moves, its verdicts and its reopens (the op being
-    applied included), which move the plan's own proposal back and forth."""
-    for q in reversed(store.reranks.get(bid, ())):
-        if q <= pos:
-            return False
-        o = store.ops[q] if q < store.pos else None
-        if o is not None and o.plan != pid and not (o.kind in K.TURNS and o.target.get("pid") == pid):
-            return True
-    return False
+def _before_rejected_moves(store: Store, bid: str, rank: str, level: int) -> tuple[str, int]:
+    """Where ``bid`` was before any rejected plan moved it to ``rank``: two plans
+    that both moved it and are both rejected leave it where neither put it,
+    whichever was rejected first."""
+    seen: set[str] = set()
+    while True:
+        o = next((x for x in reversed(store.ops) if x.kind == K.BLOCK_MOVE and x.plan and x.conflict is None
+                  and x.id not in seen and getattr(store.plans.get(x.plan), "status", "") == "rejected"
+                  and dict(zip(x.payload.get("range", []), x.payload.get("ranks", []))).get(bid) == rank), None)
+        if o is None:
+            return rank, level
+        seen.add(o.id)
+        rank, level = next((r, lv) for i, r, lv in o.payload["prev"] if i == bid)
 
 
 def _undo_steps(store: Store, o: Op) -> list[dict]:
@@ -1063,11 +1070,12 @@ def _undo_steps(store: Store, o: Op) -> list[dict]:
             to = {} if o.inverse[0]["payload"].get("unset") else {path: p["prev"]}
         return [{"do": "set", "bid": b.id, "from": _read(b, list(to) or [path]), "to": to}]
     if o.kind == K.BLOCK_MOVE:
-        out = []
+        out, gave = [], dict(zip(p.get("range", []), p.get("ranks", [])))
         for bid, rank, level in p.get("prev", []):
             b = store.blocks.get(bid)
-            if b is None or _reranked_since(store, bid, store.position[o.id], o.plan):
-                continue
+            if b is None or (bid in gave and b.rank != gave[bid]):
+                continue            # moved since by someone else, or undone and moved again: that move stands
+            rank, level = _before_rejected_moves(store, bid, rank, level)
             to = {"rank": rank, **({"level": level} if b.kind == HEADING else {})}
             out.append({"do": "set", "bid": bid, "from": _read(b, list(to)), "to": to})
         return out
