@@ -1,6 +1,6 @@
 """Blocks and the heading fold.
 
-    Block := { id, kind, rank, level, content, layout, dead? }
+    Block := { id, kind, rank, ranked_by, level, content, layout, dead?, void? }
 
 Kinds, by what their content is:
 
@@ -148,6 +148,12 @@ class Block:
     # Fixed by the kind for a builtin kind; for any other kind, what its
     # `block.add` recorded.
     layout: Layout = OPAQUE
+    # The op that last set `rank`. A verdict puts a plan's move back only while
+    # that move is still this, since a rank string can be handed out again.
+    ranked_by: OpId = ""
+    # Rejected plans' moves that could not be put back, each with the place it
+    # found the block in: an undo that comes back to one goes on to that place.
+    void: dict = field(default_factory=dict)      # move op -> [rank, level, ranked_by]
 
     def __post_init__(self) -> None:
         self.layout = BUILTIN.get(self.kind) or self.layout
@@ -170,8 +176,10 @@ class Block:
 
     def to_json(self) -> dict:
         content = {k: (v.to_json() if isinstance(v, Text) else v) for k, v in self.content.items()}
-        d = {"id": self.id, "kind": self.kind, "rank": self.rank, "level": self.level, "content": content,
-             **layout_entry(self.kind, self.layout)}
+        d = {"id": self.id, "kind": self.kind, "rank": self.rank, "ranked_by": self.ranked_by, "level": self.level,
+             "content": content, **layout_entry(self.kind, self.layout)}
+        if self.void:
+            d["void"] = {k: list(v) for k, v in self.void.items()}
         if self.dead:
             d["dead"] = self.dead
             if self.dead_actor:

@@ -122,8 +122,12 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
     for b in store.all_blocks():
         texts = {f: b.text(f).to_json() for f in b.layout.text}
         content = {k: v for k, v in b.content.items() if k not in b.layout.text}
-        payload = {"kind": b.kind, "level": b.level, "after": prev, "rank": b.rank,
+        # `ranked_by` and `void` are how a verdict judges a move, and the
+        # moves they name are what this fold takes away.
+        payload = {"kind": b.kind, "level": b.level, "after": prev, "rank": b.rank, "ranked_by": b.ranked_by,
                    "content": content, "texts": texts, **layout_entry(b.kind, b.layout)}
+        if b.void:
+            payload["void"] = {k: list(v) for k, v in b.void.items()}
         if not b.live:
             payload["dead"] = b.dead      # the killer keeps its name, so an undo still matches
             if b.dead_actor:

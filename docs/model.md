@@ -23,7 +23,7 @@ Frontier   := { Session: seq }              a set of ops: every op of each sessi
 Rank       := base-62 fraction, as a string
 
 Doc        := Block[]                       sorted by (rank, id); live and dead
-Block      := { id, kind, rank, level, content, dead?, dead_actor?, dead_at?, dead_in?, detached? }
+Block      := { id, kind, rank, ranked_by, level, content, dead?, dead_actor?, dead_at?, dead_in?, detached?, void? }
 content    := { field: Text | JSON }        which fields are Text is fixed by the kind
 Text       := { segs: Seg[], marks: Mark[] }       segs in document order, live and dead
 Seg        := { op, k0, chars, actor, at, plan?, dead?, dead_actor?, dead_at? }
@@ -79,12 +79,14 @@ Op         := { id, at, actor,              set by the applier; actor from the c
 | `kind` | What the block is: a heading, prose, a source kind or a plugin kind. |
 | `layout` | `{text: [field, …], flow, export}`: which content fields are `Text`, whether the block is in the reading flow, whether the export writes it. Fixed by the kind for the builtin kinds (heading, prose, source); recorded by `block.add` for any other kind. |
 | `rank` | Order key. A dead block keeps its rank, so "after a deleted block" still names a place. |
+| `ranked_by` | The op that last set `rank`: the `block.add` or `block.split` that made the block, a `block.move`, a move's `restore`, or a verdict's or reopen's `set` step. A rank string can be handed out again, so whether a block has been moved since is asked of this, never of the rank. |
 | `level` | Outline depth of a heading, indent depth of a list item, both 1..6. 0 for any other kind. |
 | `content` | A field named in `layout.text` is a `Text` edited by text ops. Any other field is a JSON value replaced whole by `block.set`. |
 | `dead` | The op that killed the block. Absent while it is live. |
 | `dead_actor`, `dead_at` | Who killed it and when. |
 | `dead_in` | The feature whose description it was removed from, read when it died. A block that dies with its heading records that heading; a block merged into its neighbour, or added by a plan that was rejected, records none, since no words were removed. `removed:` and the `edited` phase read it, so where the dead block sits later does not matter. |
 | `detached` | On a dead heading: the bindings it owned when it died. |
+| `void` | `{move: [rank, level, ranked_by]}`: moves of rejected plans that could not be put back, since the block had been ranked again, each with the place it found the block. An undo that would restore `ranked_by` to one of them goes on to its place ([concurrency.md](concurrency.md#9-plans-and-verdicts)). |
 
 ### Block kinds
 
@@ -307,7 +309,7 @@ Target `{bid, path}`; `path` defaults to `text`.
 | `block.set` | `bid`, `path` | `value`, or `unset: true` to remove a non-Text field; with `path = kind`, optional `level` | `prev`; for `kind` also `prev_level`, `level` | `block.set` to the previous value, or `unset` when the field was absent |
 | `block.split` | `bid`, `path` | `at: CharRef \| START`, `new: BlockId` | `new_first`, `rank`, `bid`, `path` | `block.merge {into: bid, bid: new}`, with `rejoin` for a heading |
 | `block.merge` | `into`, `bid`, `path` | none | `at` (the seam), `order`, `rank` of the dead block | `block.split {at, new: bid, rank, new_takes}` |
-| `block.move` | `bid` | `after: BlockId \| START` and `level_delta`, or `under: BlockId \| START` | `after`, `level_delta`, `range`, `prev: [[id, rank, level]]` | `block.move {restore: prev}` |
+| `block.move` | `bid` | `after: BlockId \| START` and `level_delta`, or `under: BlockId \| START` | `after`, `level_delta`, `range`, `prev: [[id, rank, level, ranked_by]]` | `block.move {restore: prev}` |
 | `block.delete` | `bid` | none, or `ids` | `ids`, `killed`, `detached` | `block.restore {ids: killed, by: this op, bindings: detached}` |
 | `block.restore` | | `ids`, `by?`, `bindings?` | `revived` | `block.delete {ids: revived}` |
 
@@ -331,7 +333,7 @@ Target `{bid, path}`; `path` defaults to `text`.
   takes the given `level`, or 1, or 0 when the new kind has no level.
 - **set `level`.** Only a heading or a list item, clamped to 1..6. It changes the named
   block and no other (I3).
-- **set, any other path.** Replaces a non-Text field. `id`, `rank` and `dead` are reserved.
+- **set, any other path.** Replaces a non-Text field. `id`, `rank`, `ranked_by` and `dead` are reserved.
 - **split.** Only a heading or a prose block; a newline in a source or plugin field is
   content, not a block boundary. The head keeps everything up to and including `at`;
   `START` makes an empty head. The original id stays with the half that has live text, and with the head when
@@ -426,7 +428,7 @@ Codes are stable identifiers. A conflicted op changes nothing.
 | `suggest_needs_plan` | mark | A proposal kind with no open plan. |
 | `mark_partial` | mark | Turning off part of a whole mark. |
 | `duplicate_block` | add, split | The block id exists. |
-| `reserved_path`, `text_field` | set | `path` is `id`, `rank` or `dead`; or it is a Text field. |
+| `reserved_path`, `text_field` | set | `path` is `id`, `rank`, `ranked_by` or `dead`; or it is a Text field. |
 | `kind_incompatible` | set kind, merge | One of the two kinds is not a heading or a prose kind. |
 | `not_splittable` | split | The block is a source or plugin kind. |
 | `newline_in_line` | insert | A newline into a heading or prose block. A line break there is `block.split`. |

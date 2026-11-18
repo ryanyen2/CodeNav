@@ -39,7 +39,7 @@ from codoc.calculus.text import (
     PROPOSALS, SUGGEST_DEL, SUGGEST_MARK, WHOLE, AnchorError, Mark, MarkError, Text, nfc, struck_chars,
 )
 
-RESERVED_PATHS = frozenset({"id", "rank", "dead", LAYOUT_KEY})   # LAYOUT_KEY: the fence's own key for the layout
+RESERVED_PATHS = frozenset({"id", "rank", "ranked_by", "dead", LAYOUT_KEY})   # LAYOUT_KEY: the fence's own key for the layout
 
 
 class Conflict(Exception):
@@ -442,7 +442,8 @@ def _h_block_add(store: Store, op: Op, touched: set[str]):
     rank = op.payload.get("rank") or store.rank_after(anchor)
     if op.payload.get("bound_once"):
         store.bound_once.add(bid)        # a snapshot restoring a feature that once had code
-    block = Block(bid, kind, rank, level, content, layout=layout)
+    block = Block(bid, kind, rank, level, content, layout=layout, ranked_by=op.payload.get("ranked_by") or op.id,
+                  void={str(k): list(v) for k, v in (op.payload.get("void") or {}).items()})
     if op.payload.get("dead"):               # a snapshot restoring a block with its killer
         block.kill(op.payload["dead"], op.payload.get("dead_actor", ""), op.payload.get("dead_at", ""),
                    op.payload.get("dead_in", ""))
@@ -543,10 +544,10 @@ def _h_block_split(store: Store, op: Op, touched: set[str]):
         # own kind and level (a numbered item merged into a bullet stays numbered).
         existing.revive()
         existing.content[path] = new_text
-        store.set_rank(new, rank)
+        store.set_rank(new, rank, existing.ranked_by)     # put back where it was, not ranked anew
         nb = existing
     else:
-        nb = Block(new, new_kind, rank, new_level)
+        nb = Block(new, new_kind, rank, new_level, ranked_by=op.id)
         nb.content[path] = new_text
         store.add_block(nb)
     store.index_text(b.id, path, keep_text)
@@ -603,14 +604,16 @@ def _h_block_merge(store: Store, op: Op, touched: set[str]):
 
 def _h_block_move(store: Store, op: Op, touched: set[str]):
     if "restore" in op.payload:
-        rows = [(str(i), str(r), int(l)) for i, r, l in op.payload["restore"]]
-        for i, _, _ in rows:
+        # [id, rank, level, ranked_by]; a row without the last is ranked by this op.
+        rows = [(str(i), str(r), int(l), str(rb[0]) if rb else op.id) for i, r, l, *rb in op.payload["restore"]]
+        for i, *_ in rows:
             if i not in store.blocks:
                 raise Conflict("no_block", i)
-        prev = [[i, store.blocks[i].rank, store.blocks[i].level] for i, _, _ in rows]
-        for i, r, l in rows:
+        prev = [_place(store.blocks[i]) for i, *_ in rows]
+        for i, *row in rows:
             b = store.blocks[i]
-            store.set_rank(i, r)
+            r, l, rb = _unvoid(b, *row)
+            store.set_rank(i, r, rb)
             if b.kind == HEADING:
                 b.level = clamp_level(l)
             touched.add(i)
@@ -630,19 +633,30 @@ def _h_block_move(store: Store, op: Op, touched: set[str]):
     anchor = _after(store, after)
     if anchor in ids:
         raise Conflict("bad_target", str(after))
-    prev = [[i, store.blocks[i].rank, store.blocks[i].level] for i in ids]
-    ranks = store.ranks_after(anchor, len(ids), set(ids))
-    for i, r in zip(ids, ranks):
+    prev = [_place(store.blocks[i]) for i in ids]
+    for i, r in zip(ids, store.ranks_after(anchor, len(ids), set(ids))):
         x = store.blocks[i]
-        store.set_rank(i, r)
+        store.set_rank(i, r, op.id)
         if x.kind == HEADING and delta:
             x.level = clamp_level(x.level + delta)
         touched.add(i)
-    # The ranks it gave: a verdict undoing this move leaves a block whose rank
-    # is no longer one of these, since someone else has moved it since.
-    canonical = {"after": after, "level_delta": delta, "range": ids, "prev": prev,
-                 "ranks": [store.blocks[i].rank for i in ids]}
+    canonical = {"after": after, "level_delta": delta, "range": ids, "prev": prev}
     return canonical, [body(K.BLOCK_MOVE, {"bid": bid}, {"restore": prev})]
+
+
+def _place(b: Block) -> list:
+    """Where a block is, as a move's ``prev`` and ``restore`` rows name it."""
+    return [b.id, b.rank, b.level, b.ranked_by]
+
+
+def _unvoid(b: Block, rank: str, level: int, ranked_by: str) -> tuple[str, int, str]:
+    """The place an undo gives the block: past every rejected plan's move it
+    would bring back, to the place that move found the block."""
+    seen: set[str] = set()
+    while ranked_by in b.void and ranked_by not in seen:     # seen: a forged restore can make a cycle
+        seen.add(ranked_by)
+        rank, level, ranked_by = b.void[ranked_by]
+    return rank, level, ranked_by
 
 
 def _detach_dead(store: Store, fids: list[str], touched: set[str]) -> list[dict]:
@@ -866,7 +880,8 @@ def _closure(plan_ops: list[Op], subset: list[OpId]) -> list[OpId]:
 #   kill        bid path segments [by actor at]   killed by the op that records the step, or as `by` (a kill of that op's put back)
 #   revive      bid path segments by actor at     characters `by` had killed, brought back
 #   mark        bid path mark on segments         that mark added (on) or removed, over these characters
-#   set         bid from to                       kind, level, rank or content fields; a field missing from one side was absent there
+#   set         bid from to                       kind, level, rank with ranked_by, or content fields; a field missing from one side was absent there
+#   void        bid op to                         a move that could not be put back; `to` is the place it found the block
 #   kill_block  bid [in]                          the block killed by the op that records the step, while in feature `in`
 #   bind        file symbol from to               the binding replaced; null is unbound
 #   detach      fid bindings                      a dead heading's bindings, removed and kept on it
@@ -874,7 +889,7 @@ def _closure(plan_ops: list[Op], subset: list[OpId]) -> list[OpId]:
 # `bid` and `path` say where a step took effect; its characters are found by
 # identity, wherever they are now.
 
-_SHAPE = ("kind", "level", "rank")      # block attributes a `set` step changes; any other key is a content field
+_SHAPE = ("kind", "level", "rank", "ranked_by")      # block attributes a `set` step changes; any other key is a content field
 
 
 def _seglist(v) -> list[tuple[str, int, int]]:
@@ -941,13 +956,14 @@ def _step(store: Store, me: Op, s: dict, touched: set[str], undo_of: str | None)
         b = store.blocks[s["bid"]]
         frm, to = dict(s.get("from") or {}), dict(s.get("to") or {})
         want, keys = (to if fwd else frm), list(dict.fromkeys([*frm, *to]))
-        if not fwd and "rank" in to and b.rank != to["rank"]:
-            return []           # moved since the verdict: that move stands, as it does against a reject
+        if not fwd and "rank" in to and b.ranked_by != to["ranked_by"]:
+            return []           # ranked since the verdict: that move stands, as it does against a reject
         was = _read(b, keys)
         for k in keys:
             if k == "rank":
-                if want[k] != b.rank:
-                    store.set_rank(b.id, want[k])
+                store.set_rank(b.id, want[k], want["ranked_by"])
+            elif k == "ranked_by":
+                continue        # set with the rank
             elif k in _SHAPE:
                 setattr(b, k, want[k])
             elif k in want:
@@ -961,6 +977,16 @@ def _step(store: Store, me: Op, s: dict, touched: set[str], undo_of: str | None)
             return []
         touched.add(b.id)
         return [{**s, "from": was, "to": now} if fwd else {**s, "from": now, "to": was}]
+    if do == "void":
+        b, move = store.blocks[s["bid"]], str(s["op"])
+        if fwd == (move in b.void):
+            return []
+        if fwd:
+            b.void[move] = list(s["to"])
+        else:
+            del b.void[move]
+        touched.add(b.id)
+        return [dict(s)]
     if do == "kill_block":
         b = store.blocks[s["bid"]]
         if fwd and b.live:
@@ -1000,8 +1026,7 @@ def _step(store: Store, me: Op, s: dict, touched: set[str], undo_of: str | None)
 
 
 def _read(b: Block, keys) -> dict:
-    return {k: (b.rank if k == "rank" else getattr(b, k) if k in _SHAPE else b.content[k])
-            for k in keys if k in _SHAPE or k in b.content}
+    return {k: (getattr(b, k) if k in _SHAPE else b.content[k]) for k in keys if k in _SHAPE or k in b.content}
 
 
 def _holders_of(store: Store, segs) -> list[tuple[Block, str]]:
@@ -1013,31 +1038,16 @@ def _holders_of(store: Store, segs) -> list[tuple[Block, str]]:
     return list(seen.values())
 
 
-def _before_rejected_moves(store: Store, bid: str, rank: str, level: int) -> tuple[str, int]:
-    """Where ``bid`` was before any rejected plan moved it to ``rank``: two plans
-    that both moved it and are both rejected leave it where neither put it,
-    whichever was rejected first."""
-    seen: set[str] = set()
-    while True:
-        o = next((x for x in reversed(store.ops) if x.kind == K.BLOCK_MOVE and x.plan and x.conflict is None
-                  and x.id not in seen and getattr(store.plans.get(x.plan), "status", "") == "rejected"
-                  and dict(zip(x.payload.get("range", []), x.payload.get("ranks", []))).get(bid) == rank), None)
-        if o is None:
-            return rank, level
-        seen.add(o.id)
-        rank, level = next((r, lv) for i, r, lv in o.payload["prev"] if i == bid)
-
-
 def _undo_steps(store: Store, o: Op) -> list[dict]:
     """What undoes one plan op, read from the op and the store as they are
     now. An insert's characters die. A delete's come back and a restore's go
     back to dead by the delete it undid, so a plan that typed, took back and
     gave back the same words is undone one op at a time. A mark record is
     dropped. A block the plan created dies if it is now empty. A set goes back
-    to the previous value, absent included. A move is put back unless someone
-    else re-ranked the block since (their move stands), and a binding goes
-    back to the owner it displaced unless someone re-bound it since (their
-    attach stands)."""
+    to the previous value, absent included. A move is put back while it is
+    still the op that ranked the block; otherwise the later move stands and
+    this one's place is void. A binding goes back to the owner it displaced
+    unless someone re-bound it since (their attach stands)."""
     p, t = o.payload, o.target
     if o.kind == K.TEXT_INSERT:
         return [{"do": "kill", "bid": p["bid"], "path": p["path"], "segments": [[o.id, 0, len(p["text"])]]}]
@@ -1070,13 +1080,14 @@ def _undo_steps(store: Store, o: Op) -> list[dict]:
             to = {} if o.inverse[0]["payload"].get("unset") else {path: p["prev"]}
         return [{"do": "set", "bid": b.id, "from": _read(b, list(to) or [path]), "to": to}]
     if o.kind == K.BLOCK_MOVE:
-        out, gave = [], dict(zip(p.get("range", []), p.get("ranks", [])))
-        for bid, rank, level in p.get("prev", []):
-            b = store.blocks.get(bid)
-            if b is None or (bid in gave and b.rank != gave[bid]):
-                continue            # moved since by someone else, or undone and moved again: that move stands
-            rank, level = _before_rejected_moves(store, bid, rank, level)
-            to = {"rank": rank, **({"level": level} if b.kind == HEADING else {})}
+        out = []
+        for bid, *was in p.get("prev", []):
+            b = store.blocks[bid]
+            if b.ranked_by != o.id:
+                out.append({"do": "void", "bid": bid, "op": o.id, "to": was})
+                continue
+            rank, level, by = _unvoid(b, *was)
+            to = {"rank": rank, "ranked_by": by, **({"level": level} if b.kind == HEADING else {})}
             out.append({"do": "set", "bid": bid, "from": _read(b, list(to)), "to": to})
         return out
     if o.kind == K.BIND_ATTACH:

@@ -155,12 +155,14 @@ class Store:
         if block.dead_in:                    # a snapshot restoring a removed block
             self.removed.setdefault(block.dead_in, set()).add(block.id)
 
-    def set_rank(self, bid: str, rank: str) -> str:
-        """Re-rank a block. A rank already held by another block is not
-        reused: the nearest free rank below it is taken, since a rank is derived
-        and the position is the intent (a restored rank may have been handed
-        out again meanwhile). Returns the rank actually set."""
+    def set_rank(self, bid: str, rank: str, by: OpId) -> str:
+        """Re-rank a block, recording ``by`` as the op that ranked it. A rank
+        already held by another block is not reused: the nearest free rank
+        below it is taken, since a rank is derived and the position is the
+        intent (a restored rank may have been handed out again meanwhile).
+        Returns the rank actually set."""
         b = self.blocks[bid]
+        b.ranked_by = by
         i = bisect.bisect_left(self.order, (b.rank, bid))
         if i < len(self.order) and self.order[i] == (b.rank, bid):
             del self.order[i]

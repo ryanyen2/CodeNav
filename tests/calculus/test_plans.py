@@ -317,6 +317,84 @@ def test_two_rejected_plans_that_moved_one_block_leave_it_where_neither_put_it()
     for pid in ("P", "Q"):
         assert apply(s, m.op(K.PLAN_REJECT, {"pid": pid}, {})).conflict is None
     assert [x.id for x in s.ordered()] == ["h1", "a", "b", "c"]
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+def _abc():
+    m, s, ag, b = Mint(), Store(), Mint("a", "agent:x"), Mint("b", "human:b")
+    heading(m, s, "h1", "Top")
+    paragraph(m, s, "a", "a", after="h1"); paragraph(m, s, "b", "b", after="a"); paragraph(m, s, "c", "c", after="b")
+    return m, s, ag, b
+
+
+def test_a_plans_two_moves_are_undone_when_its_first_moves_rank_was_handed_out_again():
+    """A block added in the gap P's first move used gets that move's rank, and
+    undoing P's second move cannot give it back. P's first move is still the
+    one that ranked the block, so the reject undoes it too."""
+    m, s, ag, b = _abc()
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "move"}))
+    apply(s, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "b"}, plan="P"))
+    apply(s, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "c"}, plan="P"))
+    paragraph(b, s, "y", "y", after="b")
+    apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {}))
+    assert [x.id for x in s.ordered()] == ["h1", "a", "b", "y", "c"]
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+def test_a_rejected_plans_old_move_to_the_same_place_does_not_undo_a_persons_move():
+    """Q moved a after b and was rejected. The person then moves a after b
+    themselves, to the same rank. Rejecting P, which moved a after c, gives a
+    back to the person's place."""
+    m, s, ag, b = _abc()
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "Q"}, {"kind": "move"}))
+    apply(s, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "b"}, plan="Q"))
+    apply(s, m.op(K.PLAN_REJECT, {"pid": "Q"}, {}))
+    apply(s, b.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "b"}))
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "move"}))
+    apply(s, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "c"}, plan="P"))
+    apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {}))
+    assert [x.id for x in s.ordered()] == ["h1", "b", "a", "c"]
+
+
+def test_a_reopen_redoes_both_moves_when_the_first_moves_rank_was_handed_out_again():
+    m, s, ag, b = _abc()
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "move"}))
+    apply(s, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "b"}, plan="P"))
+    apply(s, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "c"}, plan="P"))
+    rej = apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {}))
+    paragraph(b, s, "y", "y", after="b")
+    (ro,) = invert(s, m, rej)
+    assert ro.conflict is None and [x.id for x in s.ordered()] == ["h1", "b", "y", "c", "a"]
+    assert apply(s, m.op(K.PLAN_ACCEPT, {"pid": "P"}, {})).conflict is None
+    assert [x.id for x in s.ordered()] == ["h1", "b", "y", "c", "a"]
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+def test_a_persons_move_to_where_the_plan_put_the_block_stands_on_reject():
+    """Merged from two clones: P moved a after b, and the person did too. The
+    person's move gave the same rank, and it still stands."""
+    m, s, ag, b = _abc()
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "move"}))
+    apply(s, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "b"}, plan="P"))
+    apply(s, b.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "b"}))
+    apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {}))
+    assert [x.id for x in s.ordered()] == ["h1", "b", "a", "c"]
+
+
+def test_undoing_a_move_back_to_a_rejected_plans_place_goes_to_where_the_block_was_before_it():
+    """P moved a after c, the person moved it after b, P was rejected and
+    the person's move stood. The person's undo does not bring back the place P
+    proposed and the owner turned down."""
+    m, s, ag, b = _abc()
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "move"}))
+    apply(s, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "c"}, plan="P"))
+    mv = apply(s, b.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "b"}))
+    apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {}))
+    (un,) = invert(s, b, mv)
+    assert un.conflict is None and [x.id for x in s.ordered()] == ["h1", "a", "b", "c"]
+    (re,) = invert(s, b, un)
+    assert re.conflict is None and [x.id for x in s.ordered()] == ["h1", "b", "a", "c"]
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
 
 
 def test_a_rejected_kind_change_leaves_a_paragraph_with_no_level():

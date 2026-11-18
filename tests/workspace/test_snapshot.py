@@ -36,6 +36,33 @@ def test_snapshot_keeps_the_fingerprint_when_a_dead_block_exists(tmp_path):
     assert ws2.store.state_fingerprint() == fp
 
 
+def test_a_reject_after_a_fold_moves_the_block_as_it_would_without_one(tmp_path):
+    """Q moved p1 after b and was rejected; the person moved p1 after b, to the
+    same rank; P moved it after c. Rejecting P gives the person's place back,
+    whether or not a fold took Q's move away in between."""
+    def run(cd, do_fold):
+        ws = Workspace(cd)
+        seed(ws, bind=False)
+        ws_paragraph(ws, "b", "b", after="p1"); ws_paragraph(ws, "c", "c", after="b")
+        move = lambda after, **kw: ws.submit(
+            [{"kind": K.BLOCK_MOVE, "target": {"bid": "p1"}, "payload": {"after": after}}], **kw)
+        q = ws.open_plan(actor="agent:x", kind="move")
+        move("b", actor="agent:x", plan=q)
+        ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": q}, "payload": {}}], actor=H)
+        move("b", actor=H)
+        if do_fold:
+            ws.close(); fold(cd); ws = Workspace(cd)
+        p = ws.open_plan(actor="agent:x", kind="move")
+        move("c", actor="agent:x", plan=p)
+        ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": p}, "payload": {}}], actor=H)
+        live = [x.id for x in ws.store.ordered()]
+        ws.close()
+        assert [x.id for x in Workspace(cd, readonly=True).store.ordered()] == live
+        return live
+
+    assert run(tmp_path / "a" / ".codoc", False) == run(tmp_path / "b" / ".codoc", True) == ["h1", "b", "p1", "c"]
+
+
 def test_snapshot_keeps_a_plugin_blocks_layout(tmp_path, monkeypatch):
     """A fold re-adds each block with the layout it was added with, so a clone
     without the kind's code rebuilds its Text fields from the snapshot."""

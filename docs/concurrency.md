@@ -391,7 +391,7 @@ What each tagged op becomes:
 | `text.delete`, `text.restore` | Act on the plan's own words only. | Stay. | A delete's words come back; a restore's go back to dead by the delete it undid. |
 | `block.add`, `block.split` | The block exists. | Stays. | The block dies if it holds no live text. |
 | `block.set` | Applied. | Stays. | The previous value returns, or the field is absent again. |
-| `block.move` | Applied. | Stays. | The previous ranks and levels return, unless the block no longer has the rank the move gave it (someone moved it since). |
+| `block.move` | Applied. | Stays. | Each block's previous rank, level and `ranked_by` return, while the move is still the op that ranked it. Otherwise the later move stands. |
 | `bind.attach` | Applied. | Stays. | The symbol returns to the owner it displaced, or is unbound, unless someone re-bound it since. |
 
 `plan.accept`, in order:
@@ -424,7 +424,8 @@ changed nothing is not recorded.
 | `kill` | `bid`, `path`, `segments`; `by`, `actor`, `at` when it put back another op's kill | The characters die, by the op that recorded the step unless `by` says otherwise. | They live again, those still dead by that killer. |
 | `revive` | `bid`, `path`, `segments`, `by`, `actor`, `at` | The characters `by` had killed live again. | They die again, by `by`, with its actor and clock. |
 | `mark` | `bid`, `path`, `mark` (with its `actor`, `op`, `at`), `on`, `segments` | That mark was added (`on`) or removed; `segments` are the characters it covered. | Removed: every mark equal to it but for its range whose first character is one of `segments`, in every field holding them. Added: one piece per field holding any of `segments`, from the first of them to the last. |
-| `set` | `bid`, `from`, `to` | `kind`, `level`, `rank` or content fields went from `from` to `to`. A content field missing from one side was absent there. | `from` again. |
+| `set` | `bid`, `from`, `to` | `kind`, `level`, `rank` with `ranked_by`, or content fields went from `from` to `to`. A content field missing from one side was absent there. | `from` again; for `rank`, only while `ranked_by` is still the one in `to`. |
+| `void` | `bid`, `op`, `to` | The move `op` could not be put back, and `to` is the place it found the block, kept in the block's `void`. | It is dropped from `void`. |
 | `kill_block` | `bid`, `in`? | The block died by the op that recorded the step, while in feature `in`. | It lives again, if that op is still its killer. |
 | `bind` | `file`, `symbol`, `from`, `to` | The binding went from `from` to `to`; `null` is unbound. | `from` again, unless its heading is dead. |
 | `detach` | `fid`, `bindings` | The dead heading's bindings were removed and kept on it. | Each is re-attached unless the symbol has an owner now. |
@@ -442,13 +443,24 @@ same `subset`, or `plan.reject`. A redo is therefore judged against the plan as 
 then, so words the plan gained or took back after the reopen, and a paragraph written
 under a heading a delete plan removes, are decided with the rest.
 
-A move a plan made is put back only while the block is still where that move put it:
-the move records the ranks it gave, and a block with another rank has been moved since
-by someone else, whose move stands. A drag undone with ⌘Z leaves the rank as it was,
-so it does not count. Of two plans that moved the same block, the move put back skips
-past the ranks a rejected plan gave it, so both rejected leave the block where neither
-put it. A reopen undoing a `set` step that moved a block asks the same of the rank the
+A move a plan made is put back only while it is still the op that ranked the block,
+the block's `ranked_by`. A rank string says nothing about who gave it: two blocks placed in
+the same gap at different times get the same one, and a rank already held is moved to a
+free one. Every rank write sets `ranked_by`, and a move records each block's previous
+rank, level and `ranked_by`, so undoing it, by ⌘Z or by a verdict, restores all three. A
+drag undone with ⌘Z therefore does not count as a move since. A plan that moved a block
+twice is undone newest first, and undoing the second move makes the first the block's
+`ranked_by` again, so the first is undone too; a move someone else made between the two
+stands. A reopen undoes a `set` step's rank only while `ranked_by` is still the one the
 step set: a move made since stands, and so it does when the verdict is redone.
+
+A rejected plan's move that cannot be put back is recorded as a `void` step: its place
+is kept in the block's `void`. Every undo of a move, a verdict's or a person's, that
+would give the block back a void move's place goes on to the place that move found the
+block. Of two plans P and Q that moved the same block, P first, rejecting P first finds
+Q's move on the block and voids P's; rejecting Q then puts the block back where it was
+before P. Both rejected leave it where neither put it. A reopen drops the void its verdict
+recorded. Nothing here reads the log, so a fold changes no later verdict.
 
 A reader finds the trunk marks a verdict removed or added as its `mark` steps: `on` true
 for added, false for removed, each with the placer's `op`. The proposal records it
@@ -602,7 +614,7 @@ store as the folded ops left it:
 
 | op | one per | carries | actor |
 |---|---|---|---|
-| `block.add` | block, live or dead | `rank`, `level`, the full Text of each Text field (segments with actors, clocks and killers; marks), other fields, `dead`, `dead_actor`, `dead_at`, `dead_in`, `detached`, `bound_once`, `code_at`, `realized_at` | `import` |
+| `block.add` | block, live or dead | `rank`, `level`, the full Text of each Text field (segments with actors, clocks and killers; marks), other fields, `dead`, `dead_actor`, `dead_at`, `dead_in`, `detached`, `bound_once`, `code_at`, `realized_at`, `ranked_by`, `void` | `import` |
 | `bind.attach` | binding | the hashes | `import` |
 | `plan.open` | plan | `kind`, `target`, `note`, `ops`, `opened_by`, `build` | the plan's actor |
 | `plan.accept` or `plan.reject` | plan | `verdict`, the op it folded; it sets the plan's status and verdict and does nothing else | the actor who decided |
