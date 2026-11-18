@@ -128,8 +128,9 @@ def init(root: str = ROOT,
             from codoc.claude.install_hooks import install_hooks
             cmds = install_hooks(root, say=lambda m: typer.echo(f"  ⚠ {m}", err=True))
             typer.echo(f"  ✓ hooks, MCP server and {', '.join(cmds)} installed for this machine")
-        except Exception as exc:  # noqa: BLE001
-            typer.echo(f"  ⚠ could not install hooks: {exc}", err=True)
+        except (Exception, SystemExit) as exc:  # noqa: BLE001
+            typer.echo(f"  ⚠ The document is built; only the install stopped: {exc}", err=True)
+            raise typer.Exit(1) from None
 
 
 def _bootstrap(root: str, cd: Path, *, organize: bool):

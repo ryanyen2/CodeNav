@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 import signal
-import sys
 
 from fastmcp import FastMCP
 
@@ -37,7 +36,7 @@ def codoc_context(files: list[str] | None = None, feature_id: str | None = None,
     and the PREFERRED read before editing or proposing. `files` (repo-relative):
     the features bound to them expanded one hop along call/import edges.
     `feature_id`: that feature, the features under it, and the features owning
-    code it calls. Each feature comes with its paragraphs BY BLOCK ID (an amend
+    code it calls or that calls it. Each feature comes with its paragraphs BY BLOCK ID (an amend
     names the paragraph it changes), plus a title outline and nearby graph edges."""
     cd, err = _need_dir()
     return err or tools.read_context(cd, files=files, feature_id=feature_id, include_bindings=include_bindings)
@@ -82,8 +81,10 @@ def codoc_reflect(ops: list[dict], rationale: str = "", caused_by: str | None = 
     pending edits there, else as one plan); or `add_node` / `move_node` /
     `retire_node` (always a plan; accepting it takes the words, since the code is
     already written). `rationale` is one plain line saying what the edits change
-    in the tree; it is the note on any plan they open. Pass the directive id from
-    realize.md as `caused_by`: that reports the item, which settles when your turn ends."""
+    in the document; it is the note on any plan they open. Describe the code as it
+    is, not what changed: no "now", "no longer" or "updated to", in the rationale or
+    in amended text. Pass the directive id from realize.md as `caused_by`: that
+    reports the item, which settles when your turn ends."""
     cd, err = _need_dir()
     return err or tools.reflect(cd, ops=ops, rationale=rationale, caused_by=caused_by, root_dir=_root(cd))
 
@@ -95,7 +96,10 @@ def codoc_propose(ops: list[dict], note: str = "", caused_by: str | None = None)
     (`description` is Markdown), `{"kind": "amend", "feature_id", "title"?, "blocks":
     [{"id", "text"} | {"id", "delete": true} | {"text"}]}` (a block you do not list is
     unchanged), `{"kind": "move_node", "feature_id", "parent_id"}`,
-    `{"kind": "retire_node", "feature_id"}`. Each removal is its own plan, and a
+    `{"kind": "retire_node", "feature_id"}`. `note` is one plain line saying what
+    the plan changes in the document, describing the code as it will be, not what
+    changes: no "now", "no longer" or "updated to", in the note or in amended text.
+    Each removal is its own plan, and a
     feature already proposed for removal is not proposed again. Accepting a plan
     from here queues the work for you; accepting a removal does not delete code."""
     cd, err = _need_dir()
@@ -156,10 +160,15 @@ def main() -> None:
     # Claude Code stops a stdio server with SIGINT and then SIGTERM about 100 ms
     # later, before the event loop has unwound, and SIGTERM's default skips
     # atexit. Close the session log first so it gets its `closed` trailer and
-    # a fold may archive it.
+    # a fold may archive it. A tool runs in a worker thread; `release` waits
+    # for the batch it is applying. The stop runs once, and `os._exit` skips
+    # interpreter shutdown, which aborts on stdin's buffer lock while FastMCP's
+    # reader thread is blocked reading it.
     def stop(*_):
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         client.release()
-        sys.exit(0)
+        os._exit(0)
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
     mcp.run()

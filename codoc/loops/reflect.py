@@ -14,7 +14,7 @@ Given a change set from the index, the pass:
    |---|---|
    | ``attach`` | on the trunk (attribution, not intent); under the node's plan when the node is new in this answer |
    | ``add_node``, ``move_node``, ``retire_node`` | as a plan |
-   | ``amend`` | on the trunk when every part is a small rewording and the feature has nothing pending; otherwise as ONE plan for the whole amend; dropped when it adds, removes or re-kinds a block while a loop plan on the feature is open |
+   | ``amend`` | on the trunk when every part is a small rewording and the feature has nothing pending; otherwise as ONE plan for the whole amend, the loop's open plan on the feature when it has one |
 
 4. covers what the model left unplaced: a chunk lands with the feature that
    owns most of its graph neighbours, else in a plan for a node named after
@@ -160,7 +160,7 @@ def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: s
     if not added_unbound and not modified_bound:
         return res
     changed_symbols = {c.symbol_path for c in cs.added + cs.modified + cs.removed}
-    subtree, all_titles, graph_ctx = select_context(store, graph, cs.touched_files(), changed_symbols)
+    subtree, all_titles, graph_ctx = select_context(store, graph, cs.touched_files(), changed_symbols, mode="loop")
     impacted = impacted_features(store, graph, changed_symbols)
     res.impacted = sorted(impacted)
     changes: dict = {
@@ -336,18 +336,15 @@ def _land(p: _Pass, change: Change) -> bool:
         p.res.auto[change.kind] += landed
         return landed > 0
     if change.kind == "amend":
-        if change.structural and any(p.store.plans[pid].actor == LOOP for pid in open_plans_on(p.store, fid)):
-            # The model reads the description without the loop's open plan, so
-            # a block that plan adds or strikes it would add or strike again.
-            # A rewording of a block holding the plan's words is refused anyway.
-            p.res.refused.append((fid, "open_plan"))
-            return False
+        # The model read the loop's open plan here (the ``loop`` read mode),
+        # so its repair adds to that plan rather than asking a second time.
+        own = next((pid for pid in open_plans_on(p.store, fid) if p.store.plans[pid].actor == LOOP), None)
         done = p.ws.amend(fid, rewrites=[(r.bid, r.path, r.new_md, None) for r in change.rewrites],
                           bodies=change.bodies, strikes=change.strikes, actor=LOOP, note=change.note,
-                          caused_by=cause, structural=change.structural)
+                          caused_by=cause, structural=change.structural, join=own)
         p.res.ops.extend(done.ops)
         p.res.refused.extend(done.refused)
-        if done.plan:
+        if done.plan and done.plan != own:
             p.res.plans.append(done.plan)
         return bool(done.ops)
     if change.kind == "retire_node" and delete_open(p.store, fid):

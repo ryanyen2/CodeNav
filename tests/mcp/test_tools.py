@@ -317,10 +317,11 @@ def test_status_lists_an_item_reported_this_turn_as_settling_when_the_turn_ends(
         client.release(cd)
 
 
-def test_context_for_a_feature_is_its_range_and_the_features_its_code_calls(tmp_path):
+def test_context_for_a_feature_is_its_range_and_the_features_one_call_away(tmp_path):
     """An agent about to build a feature reads it, the features under it, and
-    each feature owning a symbol their code calls. A feature that only shares
-    a file with it, or calls into it, is not part of that."""
+    each feature owning a symbol their code calls or that calls their code
+    (a caller breaks when the build changes a signature). A feature that only
+    shares a file with it is not part of that."""
     from codoc.index.graph import Graph
     from codoc.workspace.layout import GRAPH_CACHE
     cd, ws = workspace(tmp_path)
@@ -332,13 +333,14 @@ def test_context_for_a_feature_is_its_range_and_the_features_its_code_calls(tmp_
     feature("h1a", "Sending one", 2, "p1", "c.py::send_one")
     feature("h2", "Server", 1, "h1a", "c.py::serve")
     feature("h3", "Retry policy", 1, "h2", "r.py::retry")
+    feature("h4", "Logging", 1, "h3", "c.py::log")
     calls = [("c.py::send_one", "r.py::retry"), ("c.py::serve", "c.py::send")]
     (cd / GRAPH_CACHE).parent.mkdir(exist_ok=True)
     (cd / GRAPH_CACHE).write_text(Graph([{"src_symbol": s, "dst_name": d, "dst_symbol": d, "kind": "call",
                                           "src_file": s.split("::")[0], "internal": True} for s, d in calls]).dumps())
     ws.close()
     ctx = tools.read_context(str(cd), feature_id="h1")
-    assert [e["id"] for e in ctx["subtree"]] == ["h1", "h1a", "h3"]
+    assert [e["id"] for e in ctx["subtree"]] == ["h1", "h1a", "h2", "h3"]
     assert ctx["subtree"][0]["blocks"] == [{"id": "p1", "text": "Retries once."}]
     assert not tools.read_context(str(cd), feature_id="p1")["ok"]
 

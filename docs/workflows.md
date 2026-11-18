@@ -28,7 +28,7 @@ How each tree edit lands:
 |---|---|
 | `attach`, `detach` | Trunk. Under the node's plan when the node is new in the same answer. |
 | `add_node`, `move_node`, `retire_node` | A plan. `retire_node` is a `delete` plan. |
-| `amend` | Through `ingest` and the machine gate: the trunk when every block is a small rewording and the feature is not held, otherwise one plan for the whole amend. One that adds, removes or re-kinds a block is dropped while a plan of the loop's on that feature is open: the model reads the description without that plan and would propose the same block again. A new block follows the block the entry before it names, else ends the description. |
+| `amend` | Through `ingest` and the machine gate: the trunk when every block is a small rewording and the feature is not held, otherwise one plan for the whole amend. The model reads each feature in the `loop` mode, with the loop's own open plans taken, so it does not propose again what it already has; when the loop has an open plan on the feature, the amend's plan is that one, and a block holding its words is rewritten under it. A new block follows the block the entry before it names, else ends the description. |
 
 When the pass runs because an agent session closed, every op it writes on a queued
 feature carries `caused_by` the feature's latest hand-off. When it runs over commits whose

@@ -1,7 +1,10 @@
 """`codoc install-hooks` sets up this machine and writes nothing tracked."""
 import json
+import re
 import subprocess
 import sys
+
+import pytest
 
 from codoc.claude import install_hooks as I
 
@@ -46,11 +49,39 @@ def test_install_writes_local_settings_registers_locally_and_clears_the_tracked_
     assert calls[-1][:7] == ["claude", "mcp", "add", "--scope", "local", "codoc", "--"]
 
 
-def test_without_claude_on_path_install_says_what_to_run(tmp_path, monkeypatch):
+def test_without_claude_on_path_install_says_what_to_run_and_keeps_the_tracked_server(tmp_path, monkeypatch):
+    """Until the local registration succeeds, the tracked entry is the only one."""
     root = _repo(tmp_path, monkeypatch)
-    (root / ".mcp.json").write_text(json.dumps({"mcpServers": {"codoc": {"command": "/old/codoc-mcp"}}}))
+    mcp = json.dumps({"mcpServers": {"codoc": {"command": "/old/codoc-mcp"}}})
+    (root / ".mcp.json").write_text(mcp)
     monkeypatch.setattr(I, "find_claude", lambda: None)
     said = []
     I.install_hooks(str(root), say=said.append)
-    assert len(said) == 1 and "claude mcp add --scope local codoc --" in said[0]
-    assert not (root / ".mcp.json").exists()
+    assert "claude mcp add --scope local codoc --" in said[0] and ".mcp.json" in said[1]
+    assert (root / ".mcp.json").read_text() == mcp
+
+
+@pytest.mark.parametrize("path,text", [
+    (LOCAL, '{"permissions": {"allow": ["Bash(npm test)",]}}'),       # a trailing comma
+    (LOCAL, '{"permissions": []}'),
+    (LOCAL, '{"hooks": {"Stop": {}}}'),
+    (".claude/settings.json", '{"hooks": '),
+    (".mcp.json", '{"mcpServers": ["codoc"]}'),
+])
+def test_a_settings_file_that_does_not_fit_stops_the_install_and_is_left_alone(tmp_path, monkeypatch, path, text):
+    root = _repo(tmp_path, monkeypatch)
+    (root / path).write_text(text)
+    monkeypatch.setattr(I, "find_claude", lambda: None)
+    with pytest.raises(SystemExit, match=re.escape(str(root / path))):
+        I.install_hooks(str(root))
+    assert (root / path).read_text() == text
+    assert path == LOCAL or not (root / LOCAL).exists()
+
+
+def test_null_in_the_local_settings_is_absent(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    (root / LOCAL).write_text('{"hooks": null, "permissions": {"allow": null}, "env": {"X": "1"}}')
+    monkeypatch.setattr(I, "find_claude", lambda: None)
+    I.install_hooks(str(root))
+    local = json.loads((root / LOCAL).read_text())
+    assert local["env"] == {"X": "1"} and local["permissions"]["allow"] == ["mcp__codoc__*"] and local["hooks"]

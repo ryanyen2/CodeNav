@@ -244,7 +244,7 @@ class Workspace:
 
     def amend(self, fid: str, *, rewrites: list[tuple], bodies: list[dict] = (), strikes: list[str] = (),
               actor: str, note: str = "", caused_by: str | None = None, structural: bool = False,
-              whole: bool = False) -> "Amended":
+              whole: bool = False, join: str | None = None) -> "Amended":
         """A machine's repair of one feature, decided once for all of it.
 
         ``rewrites`` are ``(bid, path, new_md, base_text | None)``: new text
@@ -254,7 +254,10 @@ class Workspace:
         when it is all rewording, the feature has no pending intent, and every
         rewording passes ``must_propose``; otherwise it is ONE plan, so one
         repair gets one verdict. A rewrite ``plan_ingest`` refuses is left
-        out and reported; with ``whole``, nothing lands when one is refused."""
+        out and reported; with ``whole``, nothing lands when one is refused.
+        ``join`` is an open plan of the actor's on this feature: the plan, when
+        one is needed, is that one, and a field holding its words is rewritten
+        under it."""
         out = Amended()
         store = self.store
         held = fid in store.blocks and phase(store, fid) in HELD
@@ -266,6 +269,9 @@ class Workspace:
             if base_text is None:
                 base_text = block.text(path).live_text() if block is not None and path in block.layout.text else ""
             ing = self.plan_ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, trunk=not need_plan)
+            if join and ing.refused == "open_plan":
+                need_plan = True
+                ing = self.plan_ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, trunk=False, plan=join)
             if self.must_propose(bid, actor, ing):
                 need_plan = True
                 if ing.refused:
@@ -276,7 +282,9 @@ class Workspace:
                 computed.append(ing)
         if not (computed or bodies or strikes) or (whole and out.refused):
             return out
-        if need_plan:
+        if need_plan and join:
+            out.plan = join
+        elif need_plan:
             out.plan = self.open_plan(actor=actor, kind="edit", target=fid,
                                       note=note or ("the document has pending intent" if held else "a larger repair"))
             out.ops.append(store.by_id[store.plans[out.plan].opened_by])

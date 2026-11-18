@@ -89,7 +89,7 @@ def read_context(codoc_dir: str, *, files: list[str] | None = None, feature_id: 
                  include_bindings: bool = True) -> dict:
     """``files``: the features bound in them and their neighbours
     (``select_context``). ``feature_id``: that feature, the features under it
-    and the features owning what its code calls (``feature_context``), then
+    and the features one call away from its code (``feature_context``), then
     any the files add."""
     ws, graph = _open(codoc_dir)
     store = ws.store

@@ -188,3 +188,14 @@ def test_a_daemon_that_starts_before_the_lock_gets_a_message_not_a_traceback(tmp
                       ("translate", "Stop the daemon")):
         r = runner.invoke(app, [cmd, "--root", str(root)] + (["--to", "fr"] if cmd == "translate" else []))
         assert r.exit_code == 1 and says in r.output, (cmd, r.output, r.exception)
+
+
+def test_init_that_stops_at_the_install_says_the_document_is_built(tmp_path, monkeypatch):
+    from codoc.cli import main
+    root = tmp_path / "repo"
+    (root / ".claude").mkdir(parents=True)
+    (root / ".claude" / "settings.local.json").write_text('{"permissions": {"allow": ["x",]}}')
+    monkeypatch.setattr(main, "_bootstrap", lambda *a, **k: type("R", (), {"summary": lambda self: "built"})())
+    r = runner.invoke(app, ["init", "--root", str(root)])
+    assert r.exit_code == 1 and "The document is built; only the install stopped" in r.output, r.output
+    assert "settings.local.json does not parse" in r.output

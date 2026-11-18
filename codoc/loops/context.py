@@ -36,27 +36,28 @@ def written_by(store: Store, fid: str) -> str:
     return next((a for a in reversed(authors) if a), "")
 
 
-def description_blocks(store: Store, fid: str, kinds: frozenset = PROSE | SOURCE) -> list[dict]:
+def description_blocks(store: Store, fid: str, kinds: frozenset = PROSE | SOURCE, *, mode: str = "rejected") -> list[dict]:
     """The feature's description as ``[{id, text}]``, one entry per block, in
-    the ``rejected`` read mode. ``text`` is that block alone as Markdown
-    (``block_md.render_one``), which is what an amend names and rewrites."""
+    a read mode (``rejected``; the reflect pass reads ``loop``). ``text`` is
+    that block alone as Markdown (``block_md.render_one``), which is what an
+    amend names and rewrites."""
     out = []
     for b in store.feature_body(fid)[1:]:
-        if b.kind in kinds and (spec := block_spec(store, b, "rejected")) is not None:
+        if b.kind in kinds and (spec := block_spec(store, b, mode)) is not None:
             out.append({"id": b.id, "text": block_md.render_one(spec)})
     return out
 
 
-def feature_entry(store: Store, fid: str, *, full: bool = True) -> dict:
+def feature_entry(store: Store, fid: str, *, full: bool = True, mode: str = "rejected") -> dict:
     headings = store.headings()
     idx = next(i for i, h in enumerate(headings) if h.id == fid)
     entry = {
         "id": fid,
-        "title": markdown(store.blocks[fid].text(), "rejected", store),
+        "title": markdown(store.blocks[fid].text(), mode, store),
         "parent_id": parent_of(headings, idx),
     }
     if full:
-        entry["blocks"] = description_blocks(store, fid)
+        entry["blocks"] = description_blocks(store, fid, mode=mode)
         # An image, a link, a pdf: read, not amended, so not in `blocks`.
         if kinds := [w for b in store.feature_body(fid) if b.kind not in BUILTIN and b.layout.flow
                      if (w := kind_words(b, store))]:
@@ -71,8 +72,9 @@ def feature_entry(store: Store, fid: str, *, full: bool = True) -> dict:
 
 
 def select_context(store: Store, graph: Graph, files: set[str], changed_symbols: set[str] | None = None,
-                   *, hops: int = 1, recent_ops: int = 5) -> tuple[list[dict], list[dict], dict]:
-    """``(subtree, all_titles, context)`` as JSON-ready dicts."""
+                   *, hops: int = 1, recent_ops: int = 5, mode: str = "rejected") -> tuple[list[dict], list[dict], dict]:
+    """``(subtree, all_titles, context)`` as JSON-ready dicts, the features
+    read in ``mode``."""
     changed_symbols = set(changed_symbols or ())
     seed_bindings = [b for b in store.bindings.values() if b.file in files]
     seed_features = {b.feature for b in seed_bindings}
@@ -98,8 +100,8 @@ def select_context(store: Store, graph: Graph, files: set[str], changed_symbols:
     for h in headings:
         if phase(store, h.id) == "planned":
             ids.add(h.id)
-    subtree = [feature_entry(store, fid) for fid in sorted(ids) if fid in index]
-    all_titles = [feature_entry(store, h.id, full=False) for h in headings]
+    subtree = [feature_entry(store, fid, mode=mode) for fid in sorted(ids) if fid in index]
+    all_titles = [feature_entry(store, h.id, full=False, mode=mode) for h in headings]
     context = _graph_context(store, graph, changed_symbols or seed_symbols, seed_features, recent_ops)
     return subtree, all_titles, context
 
@@ -107,17 +109,18 @@ def select_context(store: Store, graph: Graph, files: set[str], changed_symbols:
 def feature_context(store: Store, graph: Graph, fid: str, *, recent_ops: int = 5) -> tuple[list[dict], list[dict], dict]:
     """What an agent building ``fid`` reads, as ``select_context`` returns it:
     the feature and every feature under it, then each feature owning a symbol
-    their code calls, imports or inherits from, so a change to a shared symbol
-    is made knowing what its owner says."""
+    one call, import or inheritance away from their code, either way: what it
+    uses, so a change to a shared symbol is made knowing what its owner says,
+    and what uses it, which a changed signature breaks."""
     in_range = [b.id for b in store.feature_range(fid) if b.kind == HEADING]
     symbols = {b.symbol for b in store.bindings.values() if b.feature in in_range}
-    used: list[str] = []
+    near: list[str] = []
     for sym in sorted(symbols):
-        for dst in graph.neighbors(sym, kinds={"call", "import", "type_ref", "inherit"}, direction="out"):
-            f = owner_of(store, dst)
-            if f and f not in in_range and f not in used:
-                used.append(f)
-    return ([feature_entry(store, f) for f in in_range + used],
+        for other in graph.neighbors(sym, kinds={"call", "import", "type_ref", "inherit"}):
+            f = owner_of(store, other)
+            if f and f not in in_range and f not in near:
+                near.append(f)
+    return ([feature_entry(store, f) for f in in_range + near],
             [feature_entry(store, h.id, full=False) for h in store.headings()],
             _graph_context(store, graph, symbols, set(in_range), recent_ops))
 

@@ -188,6 +188,37 @@ def test_a_verdicts_removal_is_nobodys_unsent_edit(tmp_path):
     assert "removed:" not in directive(ws.store, "h1")
 
 
+def test_a_suggesters_strike_the_owner_accepted_is_the_owners_request(tmp_path):
+    """Accepting a person's plan adopts it: its strike is pending intent, with
+    the one who accepted as its editor. Rejecting a person's plan takes back
+    only its own words, which the document never held."""
+    from codoc.calculus.derive import editors
+    from codoc.workspace import log as L
+    from tests.helpers import H, refs, sub, write_roles
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed_loop(ws); ws.close()
+    write_roles(cd, {"human:gh:bob": "suggest"})
+    ws = Workspace(cd)
+    r = refs(ws, "p1")                                   # "Retries once before giving up."
+
+    def bob(kind, payload):
+        L.submit(cd, "hub-bob", [sub(kind, kind, {"bid": "p1", "path": "text"}, payload)])
+        pid = ws.drain_inbox()[-1].plan
+        assert ws.store.plans[pid].actor == "human:gh:bob"
+        return pid
+
+    for kind, payload in ((K.TEXT_INSERT, {"after": list(r[-1]), "text": " Politely."}),
+                          (K.TEXT_DELETE, {"from": list(r[7]), "to": list(r[11])})):
+        pid = bob(kind, payload)
+        verdict = K.PLAN_REJECT if kind == K.TEXT_INSERT else K.PLAN_ACCEPT
+        ws.submit([{"kind": verdict, "target": {"pid": pid}, "payload": {}}], actor=H)
+    assert description(ws.store, "h1") == "Retries before giving up."
+    assert phase(ws.store, "h1") == "edited" and editors(ws.store, "h1") == [H]
+    ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {}}], actor=H)
+    assert directive(ws.store, "h1").count("removed:") == 1 and 'removed: " once"' in directive(ws.store, "h1")
+    ws.close()
+
+
 def test_ink_keeps_unsent_words_apart_from_sent_neighbours():
     m, s = Mint(), Store()
     heading(m, s, "h1", "Client", actor="loop")

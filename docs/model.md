@@ -592,8 +592,9 @@ Pure functions of the store. Nothing here writes.
 | mode | an open plan's inserted words | words under its `suggest_del` | its `suggest_mark` toggles | read by |
 |---|---|---|---|---|
 | `live` | shown | shown | not applied | the projection; the editor draws proposals over it |
-| `rejected` | hidden | shown | not applied | the export, the directive, every model and agent read, kind codecs |
+| `rejected` | hidden | shown | not applied | the export, the directive, every agent read and every model pass but reflect, kind codecs |
 | `accepted` | shown | removed | applied | nothing shipped |
+| `loop` | the loop's shown, others hidden | the loop's removed | the loop's applied | the reflect pass |
 
 A decided plan changes no mode: an accepted plan's words are ordinary text, and a
 rejected plan's words are dead.
@@ -615,7 +616,7 @@ rejected plan's words are dead.
 | `open_plans()` | Open plans whose target is null or live: the ones offered for a verdict. |
 | `phase(f)` | Below. |
 | `queued()` | Queued features in document order, then queued dead headings (a removal still waiting). |
-| `directive(f)` | The realize prompt item: title and `description` in `rejected` mode; `added:` from `sent` ink; `removed:` from characters a person killed inside `handoff` and outside `realized`, other than by a verdict (an accept of a plan opened with `build` counts); `Focus:` from a person's bold marks outside `realized`; `Consult:` from links; each kind block's `consult` and `lower`, or for an in-flow block of a kind this process has no code for, `<kind>: <words>` from its Text fields; `Author asked:` from the latest hand-off. For a dead heading: a removal item, which deletes code only when the hand-off set `delete_code`. |
+| `directive(f)` | The realize prompt item: title and `description` in `rejected` mode; `added:` from `sent` ink; `removed:` from characters a person killed inside `handoff` and outside `realized`, other than by a verdict (an accept of a person's plan or of a plan opened with `build` counts, except for the plan's own words it took back); `Focus:` from a person's bold marks outside `realized`; `Consult:` from links; each kind block's `consult` and `lower`, or for an in-flow block of a kind this process has no code for, `<kind>: <words>` from its Text fields; `Author asked:` from the latest hand-off. For a dead heading: a removal item, which deletes code only when the hand-off set `delete_code`. |
 | `history(f)` | Every op recorded against a block of `body(f)`, oldest first, conflicted ones included. Ops on blocks the feature no longer holds are left out. |
 | `history_window(n)` | The timeline: the applied ops among the last `n` (200 as published). Per op: `blocks`, the text of each Text field of each block it touched as it read right after the op (`{bid: {field: text}}`), its recorded inverse, the blocks it took off or put on the page, and the ranks, kinds and levels it displaced; plus what was true entering the window. Computed by un-applying the window backwards on clones of the live fields, by character identity. |
 | `dead_cites` | `cite` marks whose `symbol` no binding has. |
@@ -629,7 +630,7 @@ rejected plan's words are dead.
 
 | phase | holds when |
 |---|---|
-| `edited` | `ink(f)` has an `unsent` claim, or a person killed characters on the in-flow blocks of `body(f)` with an op outside both `handoff` and `realized` that is not a verdict (a plan's verdict answers it; the plan names its verdict, so a fold keeps this), or a person deleted a whole in-flow block of `body(f)` that held document words, with an op outside both. Changing a block's kind, level or place is layout and does not count. |
+| `edited` | `ink(f)` has an `unsent` claim, or a person killed characters on the in-flow blocks of `body(f)` with an op outside both `handoff` and `realized` that is not a verdict, or is the accept of a person's plan, which adopts its strikes as the request of the person who accepted (a machine's plan's verdict answers it, as does any verdict taking back the plan's own words; the plan names its verdict, so a fold keeps this), or a person deleted a whole in-flow block of `body(f)` that held document words, with an op outside both. Changing a block's kind, level or place is layout and does not count. |
 | `realizing` | `f` is queued and a realize pass holds the lease: `status.json` says `realizing` and was written within the last 300 seconds. The lease is the one input from outside the store. |
 | `queued` | `f` is queued and has at least one binding. |
 | `planned` | `f` is queued and has no binding. |

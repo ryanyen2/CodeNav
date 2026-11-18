@@ -70,7 +70,10 @@ Code's local scope with `claude mcp add --scope local`; when `claude` is not on 
 install prints that command to run later. The `codoc-intent` skill and the `/codoc:sync`,
 `/codoc:plan` and `/codoc:ask` commands are copied into `.claude/`. Codoc's own entries in a
 tracked `.claude/settings.json` or `.mcp.json`, where an older install put them, are
-removed. Each person runs `codoc install-hooks` once after cloning.
+removed, the server only once the local registration succeeds. A settings file that does
+not parse, or holds the wrong type where codoc writes, stops the install before it writes
+anything; a null counts as absent. Each person runs `codoc install-hooks` once after
+cloning.
 
 **Hooks** (`claude/hook.py`, events `session-start`, `user-prompt`, `pre-tool`,
 `post-tool`, `stop`, `session-end`):
@@ -115,7 +118,7 @@ Code written by hand settles with `codoc done`.
 
 | tool | does |
 |---|---|
-| `codoc_context` | Read: with `files`, the features bound in them, one hop along the code graph, their parents and children; with `feature_id`, that feature, the features under it and the features owning a symbol their code calls, imports or inherits from. |
+| `codoc_context` | Read: with `files`, the features bound in them, one hop along the code graph, their parents and children; with `feature_id`, that feature, the features under it and the features owning a symbol one call, import or inheritance away from their code, in either direction. |
 | `codoc_tree`, `codoc_status`, `codoc_history` | Read: the tree, the queue and phases, one feature's ops and attribution. |
 | `codoc_reflect` | Tree edits. `attach`, `detach` and a rewording `amend` land on the trunk (an `amend` through the machine gate); anything else becomes one plan. |
 | `codoc_propose` | Tree edits as one plan. |

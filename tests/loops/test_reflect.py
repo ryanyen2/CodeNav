@@ -283,22 +283,43 @@ def test_amend_lands_one_plan_when_the_second_block_flips_the_gate(tmp_path):
     ws.close()
 
 
-def test_the_loop_does_not_stack_a_second_plan_on_a_feature_it_already_asked_about(tmp_path):
-    """The model reads a description without an open plan's words, so the next
-    pass over the same code proposes the same new block again. While the
-    loop's own plan on a feature is open, an amend there that adds or strikes
-    a block waits for that verdict; a rewording still lands."""
+def test_the_loop_reads_its_own_open_plan_and_adds_to_it(tmp_path):
+    """The loop reads a feature with its own open plan's words, so the next
+    pass over the same code does not propose the same block again, and a
+    further repair there, a new block or a rewording of the plan's own words,
+    joins that plan: one verdict takes all of it. A rewording of the trunk's
+    words still lands on the trunk."""
+    from codoc.loops.context import description_blocks
     ws = Workspace(tmp_path / ".codoc")
     seed_loop(ws)
-    add = lambda c, s, t, **kw: [{"kind": "amend", "feature_id": "h1", "blocks": [{"text": "- Gives up on `None`."}],
-                                  "rationale": "adds a bullet on `None`"}]
-    first = reflect(ws, ChangeSet(modified=[chunk("c.py", "c.py::send", "f2", "t1")]), Graph(), propose=add)
-    again = reflect(ws, ChangeSet(modified=[chunk("c.py", "c.py::send", "f3", "t1")]), Graph(), propose=add)
-    assert len(first.plans) == 1 and again.plans == [] and again.refused == [("h1", "open_plan")]
-    assert [p.id for p in ws.store.open_plans.values()] == first.plans
-    assert ws.store.plans[first.plans[0]].note == "adds a bullet on `None`"
-    reword = lambda c, s, t, **kw: [{"kind": "amend", "feature_id": "h1", "blocks": [{"id": "p1", "text": "Retries twice before giving up."}]}]
-    assert reflect(ws, ChangeSet(modified=[chunk("c.py", "c.py::send", "f5", "t1")]), Graph(), propose=reword).plans == []
+    passes = iter(range(2, 99))
+
+    def run(edit):
+        """One pass; ``edit(shown)`` answers from the blocks the model was shown."""
+        def propose(c, subtree, t, **kw):
+            return edit({b["id"]: b["text"] for e in subtree if e["id"] == "h1" for b in e["blocks"]})
+        return reflect(ws, ChangeSet(modified=[chunk("c.py", "c.py::send", f"f{next(passes)}", "t1")]), Graph(),
+                       propose=propose)
+
+    def add(bullet):
+        return lambda shown: [] if f"- {bullet}" in shown.values() else [
+            {"kind": "amend", "feature_id": "h1", "blocks": [{"text": f"- {bullet}"}], "rationale": bullet}]
+
+    first = run(add("Gives up on `None`."))
+    pid = first.plans[0]
+    again = run(add("Gives up on `None`."))
+    assert len(first.plans) == 1 and again.plans == [] and not again.refused
+    later = run(add("Waits 2s between tries."))
+    bullet = next(b["id"] for b in description_blocks(ws.store, "h1", mode="loop") if "None" in b["text"])
+    reworded = run(lambda shown: [{"kind": "amend", "feature_id": "h1",
+                                   "blocks": [{"id": bullet, "text": "- Gives up on `None` or an empty reply."}]}])
+    trunk = run(lambda shown: [{"kind": "amend", "feature_id": "h1", "blocks": [{"id": "p1", "text": "Retries twice before giving up."}]}])
+    for res in (later, reworded, trunk):
+        assert res.plans == [] and not res.refused, (res.plans, res.refused)
+    assert [p.id for p in ws.store.open_plans.values()] == [pid]
+    assert {o.plan for o in later.ops + reworded.ops if o.kind.startswith(("block.", "text."))} == {pid}
+    assert ws.store.plans[pid].note == "Gives up on `None`."
     assert T(ws.store, "p1") == "Retries twice before giving up."
-    ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": first.plans[0]}, "payload": {}}], actor=H)
-    assert len(reflect(ws, ChangeSet(modified=[chunk("c.py", "c.py::send", "f4", "t1")]), Graph(), propose=add).plans) == 1
+    ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor=H)
+    assert description(ws.store, "h1").splitlines() == [
+        "Retries twice before giving up.", "", "- Gives up on `None` or an empty reply.", "- Waits 2s between tries."]

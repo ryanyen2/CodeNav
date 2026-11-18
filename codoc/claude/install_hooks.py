@@ -11,7 +11,10 @@ this project). The skill and the ``/codoc:*`` commands are copied into
 
 An older install wrote the hooks into the tracked ``.claude/settings.json`` and
 the server into the tracked ``.mcp.json``; codoc's own entries there are
-removed and everything else is left.
+removed (the server only once the local registration succeeds) and everything
+else is left. A file codoc edits that does not parse, or holds the wrong type
+where codoc writes, stops the install before anything is written; null counts
+as absent.
 
 Merging: for each hook event an entry whose command runs the codoc hook is
 replaced by the fresh one; other entries and other keys are untouched, so
@@ -60,27 +63,57 @@ def _resolve_hooks(hooks_data: dict) -> dict:
     return resolved
 
 
-def _is_codoc_hook(hook: dict) -> bool:
-    return any(m in hook.get("command", "") for m in _HOOK_MODULES)
+def _is_codoc_entry(entry) -> bool:
+    """An entry whose command runs the codoc hook. Anything else is the
+    person's and is kept as it is, whatever its shape."""
+    hooks = entry.get("hooks") if isinstance(entry, dict) else None
+    return isinstance(hooks, list) and any(
+        isinstance(h, dict) and isinstance(h.get("command"), str) and any(m in h["command"] for m in _HOOK_MODULES)
+        for h in hooks)
+
+
+def _stop(path: Path, why: str):
+    raise SystemExit(f"{path} {why}. codoc changed nothing: fix the file and run `codoc install-hooks` again.")
 
 
 def _read_json(path: Path) -> dict:
+    """The object in ``path``, or {} when there is no file. A file that does
+    not parse stops the install: rewriting it would lose what it holds, and
+    Claude Code keeps the person's permission approvals in settings.local.json."""
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return {}
-    return data if isinstance(data, dict) else {}
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        _stop(path, f"does not parse ({e})")
+    if not isinstance(data, dict):
+        _stop(path, f"holds a {type(data).__name__} where codoc expects an object")
+    return data
+
+
+def _field(data: dict, key: str, kind: type, path: Path):
+    """``data[key]``, or an empty ``kind`` when it is absent or null. Another
+    type stops the install."""
+    value = data.get(key)
+    if value is None:
+        return kind()
+    if not isinstance(value, kind):
+        _stop(path, f"holds a {type(value).__name__} at `{key}` where codoc expects a {kind.__name__}")
+    return value
 
 
 def _write_json(path: Path, data: dict) -> None:
     atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
-def _strip_hooks(hooks: dict) -> dict:
+def _strip_hooks(hooks: dict, path: Path) -> dict:
     """``hooks`` without codoc's entries, dropping an event they left empty."""
     out = {}
-    for event, entries in hooks.items():
-        kept = [e for e in entries if not any(_is_codoc_hook(h) for h in e.get("hooks", []))]
+    for event in hooks:
+        entries = _field(hooks, event, list, path)
+        kept = [e for e in entries if not _is_codoc_entry(e)]
         if kept or not entries:
             out[event] = kept
     return out
@@ -123,25 +156,14 @@ def _ignore_local_settings(root: Path) -> None:
     gi.write_text(text + ("\n" if text and not text.endswith("\n") else "") + LOCAL_SETTINGS + "\n", encoding="utf-8")
 
 
-def _remove_tracked_entries(root: Path) -> None:
-    """Take codoc's hooks out of ``.claude/settings.json`` and its server out
-    of ``.mcp.json``. A file left with nothing in it is removed."""
-    def save(path: Path, data: dict) -> None:
-        if data:
-            _write_json(path, data)
-        else:
-            path.unlink()
-
-    shared = root / ".claude" / "settings.json"
-    s = _read_json(shared)
-    if isinstance(s.get("hooks"), dict) and (hooks := _strip_hooks(s["hooks"])) != s["hooks"]:
-        save(shared, {**s, "hooks": hooks} if hooks else {k: v for k, v in s.items() if k != "hooks"})
-    mcp = root / ".mcp.json"
-    m = _read_json(mcp)
-    servers = m.get("mcpServers")
-    if isinstance(servers, dict) and "codoc" in servers:
-        servers = {k: v for k, v in servers.items() if k != "codoc"}
-        save(mcp, {**m, "mcpServers": servers} if servers else {k: v for k, v in m.items() if k != "mcpServers"})
+def _save_or_remove(path: Path, data: dict, key: str, value: dict) -> None:
+    """``data`` with ``key`` set to ``value``, or without it when ``value`` is
+    empty; a file left with nothing in it is removed."""
+    data = {**data, key: value} if value else {k: v for k, v in data.items() if k != key}
+    if data:
+        _write_json(path, data)
+    else:
+        path.unlink()
 
 
 def install_hooks(root_dir: str, *, say=lambda _msg: None) -> list[str]:
@@ -149,20 +171,28 @@ def install_hooks(root_dir: str, *, say=lambda _msg: None) -> list[str]:
     the commands into ``<root_dir>``. Safe to call again. ``say`` is told what
     could not be done. Returns the slash commands installed (``["/codoc:ask", …]``)."""
     root = Path(root_dir)
+    local, shared, mcp = root / LOCAL_SETTINGS, root / ".claude" / "settings.json", root / ".mcp.json"
+
+    # Every file codoc edits is read before any is written, so one that does
+    # not fit stops the install with nothing changed.
+    settings, tracked, mcp_json = _read_json(local), _read_json(shared), _read_json(mcp)
+    hooks = _strip_hooks(_field(settings, "hooks", dict, local), local)
+    perms = _field(settings, "permissions", dict, local)
+    allow = _field(perms, "allow", list, local)
+    tracked_hooks = _field(tracked, "hooks", dict, shared)
+    tracked_kept = _strip_hooks(tracked_hooks, shared)
+    servers = _field(mcp_json, "mcpServers", dict, mcp)
 
     # 1. Hooks and the MCP permission, in the untracked local settings.
-    local = root / LOCAL_SETTINGS
-    settings = _read_json(local)
-    hooks = _strip_hooks(settings.get("hooks", {}))
     for event, entries in _resolve_hooks(_load_plugin_hooks()).get("hooks", {}).items():
         hooks[event] = hooks.get(event, []) + entries
     settings["hooks"] = hooks
-    perms = settings.setdefault("permissions", {})
-    if MCP_ALLOW not in perms.setdefault("allow", []):
-        perms["allow"].append(MCP_ALLOW)
+    settings["permissions"] = {**perms, "allow": allow if MCP_ALLOW in allow else [*allow, MCP_ALLOW]}
     _write_json(local, settings)
     _ignore_local_settings(root)
-    _remove_tracked_entries(root)
+    # An older install's hooks in the tracked settings.json.
+    if tracked_kept != tracked_hooks:
+        _save_or_remove(shared, tracked, "hooks", tracked_kept)
 
     # 2. The skill.
     skill_src = _plugin_dir() / "skills" / "codoc-intent" / "SKILL.md"
@@ -191,7 +221,14 @@ def install_hooks(root_dir: str, *, say=lambda _msg: None) -> list[str]:
                 if installed.name not in shipped:
                     installed.unlink()
 
-    # 4. The MCP server, at the local scope.
-    if (why := install_mcp(root_dir)) is not None:
+    # 4. The MCP server, at the local scope. An older install's entry in the
+    #    tracked .mcp.json goes only once this one is registered.
+    if (why := install_mcp(root_dir)) is None:
+        if "codoc" in servers:
+            _save_or_remove(mcp, mcp_json, "mcpServers", {k: v for k, v in servers.items() if k != "codoc"})
+    else:
         say(why)
+        if "codoc" in servers:
+            say(f"Until then the codoc entry in the tracked {mcp} stays, holding this machine's path; "
+                "run `codoc install-hooks` again afterwards to remove it.")
     return sorted(installed_cmds)

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -54,6 +55,11 @@ def _actor(client: str, codoc_dir: Path) -> str:
     return actor
 
 
+# Held by an apply and by `release`. The MCP server applies in FastMCP's
+# worker threads and releases from its signal handler in the main thread, so a
+# stop waits for the batch in flight instead of closing the log under it.
+# Reentrant: `applying` releases a workspace when a daemon takes the checkout.
+_LOCK = threading.RLock()
 _OWNED: dict[Path, Workspace] = {}
 _SEEN: dict[Path, dict[str, int]] = {}      # log file → size, as this process last left it
 _HEAD: dict[Path, str] = {}                 # the HEAD sha this process last wrote under
@@ -111,7 +117,7 @@ def applying(codoc_dir: Path):
     one turn. Raises ``DaemonRunning`` when a daemon owns the checkout, asked
     under the lock: a daemon that started while this process waited for the
     lock rebuilt without what this process would apply now, and never reads it."""
-    with locked(codoc_dir / APPLIER_LOCK):
+    with _LOCK, locked(codoc_dir / APPLIER_LOCK):
         if daemon_running(codoc_dir):
             release(codoc_dir)
             raise DaemonRunning(str(codoc_dir))
@@ -124,12 +130,13 @@ def applying(codoc_dir: Path):
 
 def release(codoc_dir: Path | None = None) -> None:
     """Close the workspaces this process holds (at exit, or when a daemon
-    takes the checkout back)."""
-    for key in ([codoc_dir] if codoc_dir is not None else list(_OWNED)):
-        ws = _OWNED.pop(Path(key), None) if key is not None else None
-        _HEAD.pop(Path(key), None)
-        if ws is not None:
-            ws.close()
+    takes the checkout back), after any apply in flight."""
+    with _LOCK:
+        for key in ([codoc_dir] if codoc_dir is not None else list(_OWNED)):
+            ws = _OWNED.pop(Path(key), None)
+            _HEAD.pop(Path(key), None)
+            if ws is not None:
+                ws.close()
 
 
 atexit.register(release)

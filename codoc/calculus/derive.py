@@ -51,20 +51,24 @@ def live_spans(text: Text, kinds: frozenset | None = None) -> list[Span]:
 def _in_mode(text: Text, mode: str, store: Store | None) -> Text:
     """``text`` as it reads in a read mode. ``live``: the field as stored, an
     open plan's words included. ``rejected``: without any open plan's words.
-    ``accepted``: with every open plan taken. Returns ``text`` itself when the
-    mode changes nothing, else a clone."""
-    if mode == "live" or store is None or not (
-            any(s.live and s.plan for s in text.segs) if mode == "rejected" else text.proposals()):
+    ``accepted``: with every open plan taken. ``loop``: with the loop's own
+    open plans taken and every other open plan's words left out, which is what
+    the reflect pass reads, so it does not propose again what it already has.
+    Returns ``text`` itself when the mode changes nothing, else a clone."""
+    if mode == "live" or store is None:
+        return text
+    open_plans = store.open_plans
+    taken = (set(open_plans) if mode == "accepted" else
+             {pid for pid, p in open_plans.items() if p.actor == LOOP} if mode == "loop" else set())
+    if not (any(s.live and s.plan in open_plans and s.plan not in taken for s in text.segs)
+            or any(m.attrs.get("plan") in taken for m in text.proposals())):
         return text
     view = text.clone()
-    open_plans = store.open_plans
-    if mode == "rejected":
-        for s in view.segs:
-            if s.live and s.plan in open_plans:
-                s.dead = "view"
-        return view
+    for s in view.segs:
+        if s.live and s.plan in open_plans and s.plan not in taken:
+            s.dead = "view"
     for m in view.proposals():
-        if m.attrs.get("plan") not in open_plans:
+        if m.attrs.get("plan") not in taken:
             continue
         if m.kind == SUGGEST_DEL:
             view.kill(struck_chars(m), by="view")      # what accept would kill, not the whole range
@@ -357,24 +361,37 @@ def editors(store: Store, fid: str) -> list[str]:
     (emptying a title by deleting characters flags the feature, and the
     directive carries it as a `removed:` line); otherwise the person would be
     told there is nothing to hand off while there is. A removal a verdict made
-    answered a plan and is nobody's edit."""
+    is nobody's edit unless it accepted a person's plan (``answered``); then
+    its editor is the one who accepted, who killed the characters."""
     w = store.watermarks(fid)
     out = {c.actor for c in ink(store, fid) if c.stage == "unsent"}
-    kills = [(sg.dead, sg.dead_actor) for b in prose_blocks(store, fid) for f in b.layout.text
+    kills = [sg for b in prose_blocks(store, fid) for f in b.layout.text
              for sg in b.text(f).segs if sg.dead and is_human(sg.dead_actor)
              and not in_frontier(sg.dead, w.handoff) and not in_frontier(sg.dead, w.realized)]
     if kills:
         verdicts = verdict_ops(store)
-        out.update(actor for op, actor in kills if op not in verdicts)
+        out.update(sg.dead_actor for sg in kills if not answered(verdicts, sg))
     out.update(b.dead_actor for b in removed_blocks(store, fid)
                if not in_frontier(b.dead, w.handoff) and not in_frontier(b.dead, w.realized))
     return sorted(out)
 
 
-def verdict_ops(store: Store) -> set[str]:
-    """The ops that decided a plan. Read from the plans, which a fold keeps,
-    so a character a verdict killed is known as one after the fold too."""
-    return {p.verdict for p in store.plans.values() if p.verdict}
+def verdict_ops(store: Store) -> dict:
+    """The ops that decided a plan, each to its plan. Read from the plans,
+    which a fold keeps, so a character a verdict killed is known as one after
+    the fold too."""
+    return {p.verdict: p for p in store.plans.values() if p.verdict}
+
+
+def answered(verdicts: dict, sg, *, build: bool = False) -> bool:
+    """Whether a removed segment answered a plan and asks nothing: a verdict
+    killed it, and that verdict did not accept a person's plan (a person who
+    accepts a suggester's strike adopts it as their own request) nor, with
+    ``build``, a plan that asks for code. A plan's own words that its verdict
+    took back were never the document's."""
+    p = verdicts.get(sg.dead)
+    return p is not None and (p.status != "accepted" or sg.plan == p.id
+                              or not (is_human(p.actor) or build and p.build))
 
 
 def removed_blocks(store: Store, fid: str) -> list[Block]:

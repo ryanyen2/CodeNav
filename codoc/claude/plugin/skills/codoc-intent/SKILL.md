@@ -20,7 +20,7 @@ This repo has a codoc feature tree: an outline of what the code is for.
 | tool | returns | use it |
 |---|---|---|
 | `codoc_context(files=[…])` | the features bound to those files, one hop of related features, each with `blocks` (its description, block by block, with ids), `bindings`, and an outline of every title | before any write |
-| `codoc_context(feature_id=…)` | that feature, the features under it, and the features owning code it calls | before building one feature |
+| `codoc_context(feature_id=…)` | that feature, the features under it, and the features owning code it calls or that calls it | before building one feature |
 | `codoc_tree` | the whole tree and the open plans | tree-wide work only |
 | `codoc_status` | `state` (`synced`, `edited`, `queued`, `realizing`, `reported`, `proposed`), what is left to build (`queued_list`) and what you reported this turn (`reported_list`) | to decide what to do |
 | `codoc_history(feature_id)` | a feature's ops and who wrote which words | to see why it reads as it does |
@@ -61,7 +61,7 @@ One call with everything your change implies.
 
 1. `attach` the symbols you wrote or changed to the feature they belong to. Prefer an existing feature. `add_node` only when nothing covers the new code, and put related new symbols under one node.
 2. `amend` a block only when it says something the code does not do, or when you added a capability the description does not mention. Change that block. Leave the others as they are.
-3. `rationale` is one plain line saying what the edits change in the tree. It is the note on any plan they open.
+3. `rationale` is one plain line saying what the edits change in the tree. It is the note on any plan they open. Describe the code as it is, not what changed: no "now", "no longer" or "updated to", in the rationale or in amended text.
 4. When the work came from an item in `.codoc/realize.md`, pass its `d:…` id as `caused_by`. That reports the item and you are done with it. It settles when your turn ends; there is nothing to wait for.
 
 Where it lands:

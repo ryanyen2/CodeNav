@@ -26,7 +26,8 @@ from pathlib import Path
 from codoc import kinds as registry
 from codoc.calculus import ops as K
 from codoc.calculus.derive import (
-    description, ink, kind_words, live_spans, prose_blocks, removed_blocks, text_string, title,
+    answered, description, ink, kind_words, live_spans, prose_blocks, removed_blocks, text_string, title,
+    verdict_ops,
 )
 from codoc.calculus.doc import BUILTIN
 from codoc.calculus.ids import OpId, is_human
@@ -251,16 +252,16 @@ def _human_changes(store: Store, fid: str, w: Watermarks) -> list[str]:
     the request intact. That matters because the hand-off that renders it is
     usually given after the fold, and nothing at fold time could know. What a
     verdict removed answered a plan and asks nothing of the code, unless it
-    accepted a plan that asks for code (``_authored``)."""
+    accepted a person's plan or one that asks for code (``derive.answered``)."""
     out = []
-    verdicts = {p.verdict for p in store.plans.values() if p.verdict and not (p.build and p.status == "accepted")}
+    verdicts = verdict_ops(store)
     for c in ink(store, fid):
         if c.stage == "sent":
             out.append(f"added: \"{c.text}\"")
     for b in prose_blocks(store, fid):
         for f in b.layout.text:
             for s in b.text(f).segs:
-                if s.dead and is_human(s.dead_actor) and s.dead not in verdicts \
+                if s.dead and is_human(s.dead_actor) and not answered(verdicts, s, build=True) \
                         and not in_frontier(s.dead, w.realized) and in_frontier(s.dead, w.handoff):
                     out.append(f"removed: \"{s.chars}\"")
     for b in removed_blocks(store, fid):
