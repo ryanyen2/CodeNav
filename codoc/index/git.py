@@ -1,8 +1,10 @@
-"""What git knows about the code: the commit at HEAD, and what recent commits
-said about a file.
+"""What git knows about the code: the commit at HEAD, the hand-offs new commits
+realize, and what recent commits said about a file.
 
 ``head_sha`` anchors a hand-off to the commit the work starts from, so a reader
-can later diff what the agent did. ``commit_rationales`` gives a bootstrap pass
+can later diff what the agent did. ``handoffs_landed`` reads the hand-off ids
+commits name in a trailer, so a merged pull request cites its hand-off by
+identity. ``commit_rationales`` gives a bootstrap pass
 the commit messages, where a repository routinely records why a change was made: code says
 what a program does, and a model asked for the reason with only code in front
 of it invents one.
@@ -54,6 +56,20 @@ def head_sha(root_dir: str | Path) -> str:
     if len(sha) == 40 and all(c in "0123456789abcdef" for c in sha):
         return sha
     return ""
+
+
+# The trailer a commit names the hand-off it realizes by: the hub worker writes
+# it on every commit it builds, and anyone may write it on their own.
+HANDOFF_TRAILER = "Codoc-Handoff"
+
+
+def handoffs_landed(root_dir: str | Path, old: str, new: str) -> frozenset[str]:
+    """The hand-off op ids that the commits in ``old..new`` name in a
+    ``Codoc-Handoff`` trailer, as git parses trailers."""
+    if not old or not new:
+        return frozenset()
+    out = _git(root_dir, "log", f"--format=%(trailers:key={HANDOFF_TRAILER},valueonly)", f"{old}..{new}")
+    return frozenset(line.strip() for line in out.splitlines() if line.strip())
 
 
 # ── commit messages ──────────────────────────────────────────────────────────

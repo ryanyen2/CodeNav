@@ -19,10 +19,12 @@ import { NO_WATERMARKS, type Phase, type Projection, type Watermarks } from '../
 import { REPLACED } from './commands';
 import { sameStructure } from './guards';
 
-/** What the page is showing: the projection in hand, and whether the History stance is on. */
+/** What the page is showing: the projection in hand, whether the History stance is on,
+ *  and who the viewer is (only their own words are inked). */
 export interface Shown {
     projection: Projection;
     history: boolean;
+    viewer: () => string;
 }
 
 /** Transaction meta: redraw the decorations though the document did not change. */
@@ -191,6 +193,7 @@ export class Paints {
     /** Recompute the marked paints, clear the marks, and return the paints. */
     private refresh(doc: PMNode): Map<string, Paint[]> {
         const { projection, history } = this.shown;
+        const viewer = this.shown.viewer();
         if (this.all) {
             this.byBlock.clear();
             this.featureOf.clear();
@@ -202,14 +205,14 @@ export class Paints {
                 if (block.type.name === 'heading') fid = bid;
                 this.featureOf.set(bid, fid);
                 const pb = byId.get(bid);
-                if (pb) this.byBlock.set(bid, paintsFor(pb, projection, fid, this.watermarks(fid), history));
+                if (pb) this.byBlock.set(bid, paintsFor(pb, projection, fid, this.watermarks(fid), history, viewer));
             });
         } else {
             for (const bid of this.dirty) {
                 if (!this.featureOf.has(bid)) continue;
                 const fid = this.featureOf.get(bid) ?? null;
                 const pb = projection.blocks.find(b => b.id === bid);
-                if (pb) this.byBlock.set(bid, paintsFor(pb, projection, fid, this.watermarks(fid), history));
+                if (pb) this.byBlock.set(bid, paintsFor(pb, projection, fid, this.watermarks(fid), history, viewer));
                 else this.byBlock.delete(bid);
             }
         }

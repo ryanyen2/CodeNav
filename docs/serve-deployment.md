@@ -72,8 +72,10 @@ implemented by an agent under an enforced sandbox:
   environment, so only the orchestrator can authenticate;
 - a post-run gate: a write outside the scope aborts the pull request.
 
-The worker writes nothing to the tree. A request is realized when the code
-lands and the maintainer's daemon indexes it, exactly as for a local build.
+The worker writes nothing to the tree. Its commit names the hand-off in a
+`Codoc-Handoff` trailer; when the pull request merges and a daemon sees `HEAD`
+move over that commit, its pass over the merged code cites the hand-off, and
+the request settles on those binding ops.
 `.codoc/cache/hub-prs.json` (ignored) remembers which hand-offs already have a
 pull request, and which were refused (an agent that wrote outside the scope,
 or produced nothing) so the same request is not tried again and again; a git

@@ -19,20 +19,39 @@ whole; a partial read would put the store in a state no log describes.
 """
 from __future__ import annotations
 
+import functools
+import re
 import json
 import os
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from codoc.calculus.ops import Op
 from codoc.workspace.clock import is_valid
-from codoc.workspace.layout import ARCHIVE_DIR, INBOX_DIR, LOG_DIR, OFFSETS, SNAPSHOT_PREFIX, atomic_write
+from codoc.workspace.layout import ARCHIVE_DIR, CODOC_DIR, INBOX_DIR, LOG_DIR, OFFSETS, SNAPSHOT_PREFIX, atomic_write
 
 # Inbox file name → the actor the daemon stamps. Locally the file name is the
-# identity (any process that writes ide.jsonl is the person at the keyboard);
-# the hub writes one file per GitHub login, stamped from its session cookie.
-CLIENT_IDENTITY = {"ide": "human:local", "cli": "human:local", "mcp": "agent:claude-code"}
+# identity: any process that writes ide.jsonl or cli.jsonl is the person at the
+# keyboard (`local_actor`); the hub writes one file per GitHub login, stamped
+# from its session cookie.
+PERSON_CLIENTS = frozenset({"ide", "cli"})
+AGENT_CLIENT = re.compile(r"agent-[a-z0-9_-]+")
+LOCAL = "human:local"              # the person at the keyboard when git names nobody
 ACK_KEEP = 2000                    # ack lines kept when a session opens
+
+
+@functools.cache
+def local_actor(root: str | Path) -> str:
+    """The person at this machine: ``human:<git config user.email>`` in the
+    repository at ``root``, read once per process. ``human:local`` when there
+    is no git, no repository config naming one, or no email."""
+    try:
+        email = subprocess.run(["git", "-C", str(root), "config", "user.email"],
+                               capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        email = ""
+    return f"human:{email}" if email else LOCAL
 
 
 def hub_actor(login: str) -> str:
@@ -42,11 +61,13 @@ def hub_actor(login: str) -> str:
     return f"human:gh:{login}"
 
 
-def actor_for(client: str) -> str | None:
-    if client in CLIENT_IDENTITY:
-        return CLIENT_IDENTITY[client]
+def actor_for(client: str, codoc_dir: str | Path = CODOC_DIR) -> str | None:
+    if client in PERSON_CLIENTS:
+        return local_actor(Path(codoc_dir).parent)
     if client.startswith("hub-") and len(client) > 4:
         return hub_actor(client[4:])
+    if AGENT_CLIENT.fullmatch(client):            # an agent names itself in its inbox file: agent-<CODOC_AGENT>
+        return f"agent:{client[6:]}"
     return None
 
 

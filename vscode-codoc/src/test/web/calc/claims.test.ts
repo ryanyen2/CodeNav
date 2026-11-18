@@ -14,10 +14,16 @@ function paragraph(text: string, runs: Run[]): { b: ProjectedBlock; f: TextField
 describe('ink', () => {
     it('is unsent until the hand-off frontier and gone past the realized one', () => {
         const { b, f } = paragraph('abcdef', [run('s:1', 0, 2, 'human:a'), run('s:5', 2, 4, 'human:a'), run('s:9', 4, 6, 'loop')]);
-        expect(inkPaints(b, f, { s: 1 }, { s: 5 })).toEqual([{ bid: 'p', start: 2, end: 4, cls: 'ink-sent', title: 'yours, handed off' }]);
+        expect(inkPaints(b, f, { s: 1 }, { s: 5 }, 'human:a')).toEqual([{ bid: 'p', start: 2, end: 4, cls: 'ink-sent', title: 'yours, handed off' }]);
         // Nothing handed off: the person's two runs are unsent and join into
         // one paint. The loop's run is nobody's ink.
-        expect(inkPaints(b, f, {}, {}).map(p => [p.start, p.end, p.cls])).toEqual([[0, 4, 'ink-unsent']]);
+        expect(inkPaints(b, f, {}, {}, 'human:a').map(p => [p.start, p.end, p.cls])).toEqual([[0, 4, 'ink-unsent']]);
+    });
+
+    it("is the viewer's own words only: a teammate's unsent words are plain", () => {
+        const { b, f } = paragraph('mine theirs', [run('s:1', 0, 5, 'human:a@x.org'), run('t:1', 5, 11, 'human:bob@x.org')]);
+        expect(inkPaints(b, f, {}, {}, 'human:a@x.org').map(p => [p.start, p.end])).toEqual([[0, 5]]);
+        expect(inkPaints(b, f, {}, {}, 'human:bob@x.org').map(p => [p.start, p.end])).toEqual([[5, 11]]);
     });
 });
 
@@ -27,6 +33,11 @@ describe('plan paints', () => {
         f.suggest_del = [{ plan: 'pl', start: 5, end: 9 }];
         const paints = planPaints(b, f, [{ id: 'pl', actor: 'agent:x', kind: 'edit', target: 'p', note: 'n', status: 'open' }]);
         expect(paints.map(x => x.cls)).toEqual(['plan-open', 'plan-cut']);
+    });
+
+    it("an accepted plan's words are ordinary text", () => {
+        const { b, f } = paragraph('keep this maybe', [run('s:1', 0, 10, 'human:a'), run('a:1', 10, 15, 'agent:x', 'pl')]);
+        expect(planPaints(b, f, [])).toEqual([]);       // the projection lists only open plans
     });
 
     it('a proposed mark toggle is its own paint, not the mark itself', () => {

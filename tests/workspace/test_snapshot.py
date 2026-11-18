@@ -232,7 +232,7 @@ def test_a_phantom_with_delete_code_can_still_settle_after_a_fold(tmp_path):
     assert R.queued(ws.store) == ["h1"]
     cs = ChangeSet(removed=[ChunkRef("c.py", "c.py::send", "f1", "t1")])
     res = reflect(ws, cs, Graph(), propose=lambda *a, **k: [], under_epoch=True)
-    R.settle(ws, res, sha="abc", files=["c.py"])
+    R.settle(ws, res, sha="abc")
     assert R.queued(ws.store) == [], "the phantom's code went and it is still queued"
     ws.close()
 

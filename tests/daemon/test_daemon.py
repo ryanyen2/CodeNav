@@ -280,3 +280,61 @@ def test_rebuild_with_equal_pos_publishes_fresh_files(tmp_path):
     d.state.head = "other-branch"
     d.process_batch([])
     assert T(d.ws.store, "p1") == "Listens forever." and "Listens forever." in (d.codoc_dir / "tree.codoc").read_text()
+
+
+def test_an_agents_citing_binding_op_settles_its_handoff_with_no_epoch(tmp_path):
+    """Cursor or Codex write through the MCP tools and run no Claude Code hooks,
+    so no agent epoch ever closes. The binding op their `codoc_reflect` lands
+    with the hand-off as `caused_by` is the evidence, and the daemon settles on
+    it after the drain."""
+    from codoc.loops.realize import queued
+    d, calls = make(tmp_path, [])
+    ho = handoff(d.ws, "h1", actor="human:local")
+    L.submit(d.codoc_dir, "agent-cursor", [Submission(
+        cid="c1", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload={"file": "c.py", "symbol": "c.py::retry"},
+        caused_by=ho.id)])
+    d.process_batch([str(L.inbox_dir(d.codoc_dir) / "agent-cursor.jsonl")])
+    st = d.ws.store
+    assert queued(st) == [] and calls == [] and not d.state.epoch_open
+    attach = next(o for o in st.ops if o.kind == K.BIND_ATTACH and o.caused_by == ho.id)
+    realized = [o for o in st.ops if o.kind == K.FEATURE_REALIZED]
+    assert attach.actor == "agent:cursor"
+    assert [(o.actor, o.caused_by, o.payload["files"]) for o in realized] == [("loop", ho.id, ["c.py"])]
+
+
+def test_binding_ops_that_do_not_cite_the_latest_handoff_settle_nothing(tmp_path):
+    """Only an op's recorded `caused_by` decides: an attach that cites nothing,
+    or cites a hand-off the person has since superseded, is not evidence."""
+    from codoc.loops.realize import queued
+    d, _ = make(tmp_path, [])
+    old = handoff(d.ws, "h1", actor="human:local")
+    handoff(d.ws, "h1", actor="human:local", asked="and log each retry")
+    L.submit(d.codoc_dir, "agent-cursor", [
+        Submission(cid="c1", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload={"file": "c.py", "symbol": "c.py::a"}),
+        Submission(cid="c2", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload={"file": "c.py", "symbol": "c.py::b"},
+                   caused_by=old.id)])
+    assert "2 client op" in d.process_batch([str(L.inbox_dir(d.codoc_dir) / "agent-cursor.jsonl")])
+    assert queued(d.ws.store) == ["h1"]
+    assert not [o for o in d.ws.store.ops if o.kind == K.FEATURE_REALIZED]
+
+
+def test_a_citing_attach_settles_nothing_while_an_agent_epoch_is_open_and_settles_at_its_close(tmp_path):
+    """An open epoch is a build in progress: the hand-off stays queued, so the
+    agent's later amends still land as plans. The close runs the same scan."""
+    from codoc.loops.realize import queued
+    d, _ = make(tmp_path, [])
+    ho = handoff(d.ws, "h1", actor="human:local")
+    act = d.codoc_dir / "activity.json"
+    write_activity(d.codoc_dir, {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": []})
+    assert "opened" in d.process_batch([str(act)])
+    L.submit(d.codoc_dir, "agent-claude-code", [Submission(
+        cid="c1", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload={"file": "c.py", "symbol": "c.py::retry"},
+        caused_by=ho.id)])
+    d.process_batch([str(L.inbox_dir(d.codoc_dir) / "agent-claude-code.jsonl")])
+    assert queued(d.ws.store) == ["h1"]
+    data = read_activity(d.codoc_dir)
+    data["epoch"]["open"] = False
+    write_activity(d.codoc_dir, data)
+    assert "closed" in d.process_batch([str(act)])
+    assert queued(d.ws.store) == []
+    assert [o.caused_by for o in d.ws.store.ops if o.kind == K.FEATURE_REALIZED] == [ho.id]

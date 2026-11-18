@@ -31,8 +31,9 @@ How each tree edit lands:
 | `amend` | Through `ingest` and the machine gate: the trunk when every block is a small rewording and the feature is not held, otherwise one plan for the whole amend. |
 
 When the pass runs because an agent session closed, every op it writes on a queued
-feature carries `caused_by` the feature's latest hand-off. A pass caused by a hand edit
-cites nothing.
+feature carries `caused_by` the feature's latest hand-off. When it runs over commits whose
+`Codoc-Handoff` trailer names a hand-off, the ops on that hand-off's feature carry it. A
+pass caused by a hand edit cites nothing.
 
 ### Document to code: realize
 
@@ -44,12 +45,17 @@ cites nothing.
 4. A coding agent implements it: `/codoc:sync` in Claude Code, `codoc realize`
    (`--engine sdk` or `cli`), or `codoc watch --auto-realize`. On the hub, the worker
    opens a pull request (section 3.6).
-5. The agent's hooks keep the agent epoch open in `.codoc/activity.json` while a turn
-   runs. The daemon holds the changed files until the epoch closes, then reflects them
-   with `caused_by`.
-6. The daemon writes `feature.realized` as `loop` once any pass since the hand-off has
-   applied a binding op citing it ([concurrency.md](concurrency.md#10-hand-off-and-realization)).
-   When the build moved no bound symbol, the person runs `codoc done`.
+5. The build cites the hand-off in binding ops, in any of three ways. The agent's
+   `codoc_reflect` attaches what it wrote with `caused_by` the directive's `d:` id; any
+   agent that runs the MCP server can do this. Claude Code's hooks also keep the agent
+   epoch open in `.codoc/activity.json` while a turn runs, and the daemon reflects the
+   held files with `caused_by` when the epoch closes. A commit whose `Codoc-Handoff`
+   trailer names the hand-off (the hub's pull requests carry one) is reflected with
+   `caused_by` when the daemon sees `HEAD` move over it.
+6. The applier writes `feature.realized` as `loop` once a binding op citing the latest
+   hand-off has landed, whoever wrote it, and no agent epoch is open; a Claude Code turn
+   settles when it ends ([concurrency.md](concurrency.md#10-hand-off-and-realization)). When the build moved
+   no bound symbol, or the code was written by hand, the person runs `codoc done`.
 
 No op touches a source file (I7). A hand-off is the only gesture that turns words into a
 request.
@@ -105,8 +111,8 @@ Every chunk ends up bound.
 
 ### 3.2 Edit, hand off, review
 
-The person edits prose; ink appears. They hand off. The agent builds; the daemon reflects
-the session's changes and settles the hand-off. The feature's phase goes `edited`,
+The person edits prose; ink appears. They hand off. The agent builds, and the hand-off
+settles when a binding op citing it lands. The feature's phase goes `edited`,
 `queued`, `realizing`, `synced`. Afterwards `ground` shows, in the same paragraphs as the
 person's ink, the words the loop added (green) and removed (red) since the person last
 touched the feature.
@@ -147,7 +153,8 @@ over existing features, stored in `.codoc/ask.json`. It writes no op.
   plan of theirs in the drain; their comments stay untagged.
 - With GitHub configured, the worker builds each hand-off that has no realization and no
   pull request yet, on its own worktree, with a sandboxed agent, and opens a pull request.
-  The hand-off settles when the merged code is reflected.
+  Its commit names the hand-off in a `Codoc-Handoff` trailer, so the hand-off settles
+  when a daemon reflects the merged commit.
 - A pull request carries its author's session logs. `codoc validate-logs` checks them
   before a merge ([concurrency.md](concurrency.md#7-roles-and-authority)).
 

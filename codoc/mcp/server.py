@@ -140,6 +140,10 @@ def codoc_walkthrough_read() -> dict:
 
 
 def main() -> None:
+    try:
+        tools.agent_client()       # a CODOC_AGENT that cannot name an inbox file refuses to start
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
     mcp.run()
 
 

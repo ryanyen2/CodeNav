@@ -110,7 +110,7 @@ The inbox file name decides the actor:
 
 | inbox file | actor |
 |---|---|
-| `ide.jsonl`, `cli.jsonl` | `human:local` |
+| `ide.jsonl`, `cli.jsonl` | the local person: `human:<git config user.email>` (section 5) |
 | `mcp.jsonl` | `agent:claude-code` |
 | `hub-<login>.jsonl` | `human:gh:<login>` |
 | any other name | ignored; nothing is applied |
@@ -177,15 +177,18 @@ re-reading lines it has drained.
 
 **The daemon's batch.** File events are debounced (600 ms). For each batch the daemon does, in order:
 
-1. If `HEAD` moved: rebuild the store from the log files now on disk and start a new session.
+1. If `HEAD` moved: note the hand-offs the new commits name in a `Codoc-Handoff`
+   trailer, rebuild the store from the log files now on disk and start a new session.
 2. Reload the roles from `config.json`, then drain every inbox from its saved offset.
    This runs on every batch, including the first one at startup and `codoc sync`, so
    submissions written while no daemon ran are applied.
 3. Read the agent epoch from `activity.json`. While a coding agent's session is open,
    changed code files are held. When it closes, or after 900 seconds of silence, they
-   are released to step 4 and that pass may settle hand-offs (section 10).
-4. Reflect the changed code files that are not held: the loop's pass, which writes ops as `loop`.
-5. Publish the derived files.
+   are released to step 4, and that pass cites every queued hand-off.
+4. Reflect the changed code files that are not held: the loop's pass, which writes ops as
+   `loop` and cites the hand-offs step 1 noted.
+5. Unless an agent epoch is open, settle hand-offs (section 10).
+6. Publish the derived files.
 
 **Exactly once.** Every writer mints random client ids (a per-page prefix in the editor, a
 uuid in the CLI and the MCP server), and the drain reads each inbox line once, from the
@@ -206,6 +209,15 @@ newest 2000 acks per client are kept to answer that with the same op.
   commit records them; a merge of two branches is unaffected, because each branch's
   files are its own.
 - A read-only open replays the logs and writes nothing.
+
+**Actors.** The local person is `human:<email>`, the `git config user.email` of the
+repository, read once per process (`log.local_actor`); `human:local` only when there is no
+git or no email. The CLI, the daemon, the VS Code host and the editor page all get it from
+there: the daemon writes it to `status.json` as `actor`. So two people sharing the log
+through git are two actors: one's unsent words are not inked as the other's, and one's
+batches are not in the other's ⌘Z. A hand-off is still per feature: it covers every
+person's words in it. The email lands in the tracked session logs, as it does in git
+commits. Logs written before this carry `human:local`.
 
 ## 6. Replay
 
@@ -236,8 +248,11 @@ same thing after it.
 The role table is `roles: {actor: role}` in the tracked `config.json`, so every clone
 reads the same one. An actor's role is, first match:
 
-1. Its entry in the table. `human:local` and `human:import` are `owner` unless the table
-   says otherwise.
+1. Its entry in the table. This checkout's own person (section 5), `human:local` and
+   `human:import` are `owner` unless the table says otherwise. Another clone's person is
+   whatever the table says, so a teammate who is not in it is a `suggest`er here: their
+   applied trunk ops are counted by `codoc rebuild` and reported by `codoc validate-logs`
+   as ops the table would refuse. A team that shares the log through git lists each person.
 2. `machine`, when the actor's kind is `agent`, `translator`, `loop` or `import`.
 3. `suggest`.
 
@@ -536,17 +551,23 @@ removed. The paragraph reads `Retries once.`
   turns documentation into a request. Only `owner` and `maintainer` may write it.
 - `feature.realized` moves the `realized` frontier. It conflicts `nothing_queued` when no
   hand-off is waiting.
-- The daemon writes `feature.realized` as `loop`, and only on evidence: the reflect pass
-  that ran because an agent session closed tags its ops on a queued feature with
-  `caused_by` the feature's latest hand-off, and the feature settles once any op since
-  the hand-off is an applied binding op citing it. A build that spans two agent sessions
-  settles on the second pass if only that one moved bound code.
-- A deleted heading with a hand-off waiting settles when that pass saw every symbol the
-  heading owned removed from the code. If the hand-off did not set `delete_code`, it
-  settles on the pass alone.
+- The applier writes `feature.realized` as `loop`, and only on evidence: a feature
+  settles once an applied binding op since its latest hand-off cites that hand-off in
+  `caused_by`. Only the recorded `caused_by` decides, never the actor or the timing. The
+  op may be an agent's `codoc_reflect` (any agent), the reflect pass that ran because a
+  Claude Code session closed (it cites every queued hand-off), or the pass over commits
+  whose `Codoc-Handoff` trailer names the hand-off (the hub's pull requests). The daemon
+  checks at the end of every batch and after every reflect pass; a daemonless writer
+  checks after it applies.
+- Nothing settles while an agent epoch is open (`activity.json`): the build is in
+  progress, so the feature stays queued and the agent's amends land as plans. The batch
+  that sees the epoch close runs the same check, so a Claude Code turn settles at its end.
+- A deleted heading with a hand-off waiting settles when a pass that cited it saw every
+  symbol the heading owned removed from the code. If the hand-off did not set
+  `delete_code`, it settles on that pass alone.
 - A reflect pass caused by a hand edit cites nothing and settles nothing.
-- When the build moved no bound symbol there is no evidence. An owner writes
-  `feature.realized` by hand with `codoc done`.
+- When the build moved no bound symbol, or the code was written by hand, there is no
+  evidence. An owner writes `feature.realized` by hand with `codoc done`.
 
 ## 11. Git
 

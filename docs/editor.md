@@ -114,9 +114,17 @@ Two plugins in `guards.ts` keep the page and the shadows in step:
 a hand-off, an undo and an adoption flush the queue first. The batch is the undo unit.
 
 **Undo.** ProseMirror's history is not installed. ⌘Z asks the host for `history.json` and
-submits the recorded inverses of the viewer's newest batch that is not undone, newest op
-first, as batch `u-<batch>`; ⇧⌘Z and ⌘Y undo that batch (`u-u-<batch>`)
-(`calc/window.ts`, `nextUndo`). It waits while any submission is unacked.
+submits the recorded inverses of the newest batch this page sent that is not undone, newest
+op first, as batch `u-<batch>`; ⇧⌘Z and ⌘Y undo that batch (`u-u-<batch>`)
+(`calc/window.ts`, `nextUndo`). It waits while any submission is unacked. A batch is this
+page's when the page submitted it, not when its actor is the viewer's: a teammate's batch
+merged through git and the person's own `codoc accept` in a terminal are never offered.
+The page keeps its batch ids in the webview's state (`setState`; on the hub, the tab's
+`sessionStorage`), so a reload still undoes them; an editor opened fresh has nothing to undo.
+
+**The viewer.** `status.actor` is the person the page writes as: `human:<git config
+user.email>` on this machine (`human:local` without one), or `human:gh:<login>` on the hub
+(docs/concurrency.md, section 5). Only the viewer's own words are inked.
 
 ## 5. Submitting and acks
 
@@ -159,8 +167,8 @@ whose paints can have changed.
 
 | paint | from | drawn as |
 |---|---|---|
-| `ink-unsent`, `ink-sent` | Runs by a `human:` actor with no plan, outside `realized`; sent when inside `handoff`. | Blue. |
-| `plan-open`, `plan-accepted` | Runs with a plan. | Gray. |
+| `ink-unsent`, `ink-sent` | Runs by the viewer with no plan, outside `realized`; sent when inside `handoff`. Another person's words are not inked. | Blue. |
+| `plan-open` | Runs of an open plan. An accepted plan's words are ordinary text; History shows who proposed them. | Gray. |
 | `plan-cut` | `suggest_del` spans. | Struck gray. |
 | `plan-mark`, `plan-unmark` | `marked`, `unmarked` claims. | A dashed gray underline. |
 | `code-added`, `code-removed` | `ground` claims, where no ink overlaps. Removed words are a widget at their place. | Green, red. |

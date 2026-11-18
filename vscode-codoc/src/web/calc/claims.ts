@@ -13,7 +13,7 @@
  */
 import { isBuiltin, pathOf, textField, type Claim, type Phase, type ProjectedBlock, type Projection, type TextField } from './projection';
 
-export type Ink = 'ink-unsent' | 'ink-sent' | 'plan-open' | 'plan-accepted' | 'plan-cut' | 'plan-mark' | 'plan-unmark'
+export type Ink = 'ink-unsent' | 'ink-sent' | 'plan-open' | 'plan-cut' | 'plan-mark' | 'plan-unmark'
     | 'code-added' | 'code-removed' | 'author-human' | 'author-loop' | 'author-agent' | 'author-other';
 
 export interface Paint {
@@ -34,16 +34,17 @@ export function inFrontier(op: string, frontier: Record<string, number>): boolea
     return i > 0 && Number(op.slice(i + 1)) <= (frontier[op.slice(0, i)] ?? -1);
 }
 
-/** The person's own words that the code does not yet say: pulsing until they
+/** The viewer's own words that the code does not yet say: pulsing until they
  *  are handed off, steady once they are. The two watermarks are the whole
  *  distinction. There is no separate "not yet acked" case, because a run
- *  reaches the projection only after its op has been applied. */
+ *  reaches the projection only after its op has been applied. Another
+ *  person's words are not the viewer's to hand off, so they are not inked. */
 export function inkPaints(b: ProjectedBlock, f: TextField, realized: Record<string, number>,
-                          handoff: Record<string, number>): Paint[] {
+                          handoff: Record<string, number>, viewer: string): Paint[] {
     const out: Paint[] = [];
     let cur: Paint | null = null;
     for (const r of f.runs) {
-        if (!r.actor.startsWith(HUMAN) || r.plan) { cur = null; continue; }
+        if (r.actor !== viewer || r.plan) { cur = null; continue; }
         if (inFrontier(r.op, realized)) { cur = null; continue; }
         const cls: Ink = inFrontier(r.op, handoff) ? 'ink-sent' : 'ink-unsent';
         if (cur && cur.cls === cls && cur.end === r.start) { cur.end = r.end; continue; }
@@ -53,16 +54,17 @@ export function inkPaints(b: ProjectedBlock, f: TextField, realized: Record<stri
     return out;
 }
 
-/** A plan's words (gray) and the words it proposes to cut (struck). */
+/** An open plan's words (gray) and the words it proposes to cut (struck).
+ *  The projection lists only open plans: a decided plan's words are ordinary
+ *  text, and History still says who proposed them. */
 export function planPaints(b: ProjectedBlock, f: TextField, plans: Projection['plans']): Paint[] {
     const status = new Map(plans.map(p => [p.id, p]));
     const out: Paint[] = [];
     for (const r of f.runs) {
-        if (!r.plan) continue;
-        const p = status.get(r.plan);
-        const accepted = p ? p.status === 'accepted' : true;
-        out.push({ bid: b.id, start: r.start, end: r.end, cls: accepted ? 'plan-accepted' : 'plan-open',
-                   title: `${r.actor} proposed this${p?.note ? `: ${p.note}` : ''}` });
+        const p = r.plan ? status.get(r.plan) : undefined;
+        if (!p) continue;
+        out.push({ bid: b.id, start: r.start, end: r.end, cls: 'plan-open',
+                   title: `${r.actor} proposed this${p.note ? `: ${p.note}` : ''}` });
     }
     for (const s of f.suggest_del) {
         const p = status.get(s.plan);
@@ -102,11 +104,11 @@ function groundPaints(claims: Claim[] | undefined): Paint[] {
  *  (the person's words are theirs, whatever the code did around them). */
 export function paintsFor(b: ProjectedBlock, proj: Projection, fid: string | null,
                           watermarks: { handoff: Record<string, number>; realized: Record<string, number> },
-                          history = false): Paint[] {
+                          history = false, viewer = ''): Paint[] {
     // A card (a kind without a node type) holds its words in text areas, which take no paints.
     const f = isBuiltin(b.kind) ? textField(b, pathOf(b.kind)) : null;
     if (!f) return [];
-    const ink = inkPaints(b, f, watermarks.realized, watermarks.handoff);
+    const ink = inkPaints(b, f, watermarks.realized, watermarks.handoff, viewer);
     const plan = planPaints(b, f, proj.plans);
     const mine = fid ? proj.claims[fid]?.filter(c => c.bid === b.id) : undefined;
     const ground = groundPaints(mine).filter(g => !ink.some(i => i.start < g.end && g.start < i.end));

@@ -174,7 +174,7 @@ def test_a_deleted_bound_feature_with_delete_code_can_be_settled(tmp_path):
     # the agent deletes send(); the epoch closes; the reflect pass runs under it
     cs = ChangeSet(removed=[ChunkRef("c.py", "c.py::send", "f1", "t1")])
     res = reflect(ws, cs, Graph(), propose=lambda *a, **k: [], under_epoch=True)
-    R.settle(ws, res, sha="abc", files=["c.py"])
+    R.settle(ws, res, sha="abc")
     assert R.queued(ws.store) == [], "the phantom's removal was implemented and it is still queued"
     ws.close()
 

@@ -227,3 +227,40 @@ def test_a_feature_is_proposed_for_removal_once(tmp_path):
         assert [p.target for p in st.plans.values() if p.kind == "delete" and p.status == "open"] == ["h1"]
     finally:
         client.release(cd)
+
+
+def test_codoc_agent_names_the_actor_and_its_citing_attach_settles_the_handoff(tmp_path, monkeypatch):
+    """Cursor or Codex run this MCP server with CODOC_AGENT set and run no
+    Claude Code hooks, so no agent epoch ever closes. Their attach that cites
+    the hand-off is the evidence, and the applier settles on it, here with no
+    daemon running."""
+    from codoc.loops.realize import queued
+    cd, ws = workspace(tmp_path)
+    ho = handoff(ws, "h1", actor=H)
+    ws.close()
+    monkeypatch.setenv("CODOC_AGENT", "cursor")
+    try:
+        r = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::retry"]}],
+                          caused_by=ho.id, root_dir=str(tmp_path))
+    finally:
+        client.release(cd)
+    assert r["ok"], r
+    st = Workspace(cd, readonly=True).store
+    assert st.by_id[r["applied"][0]["op"]].actor == "agent:cursor"
+    assert queued(st) == [] and phase(st, "h1") == "synced"
+    assert [o.caused_by for o in st.ops if o.kind == K.FEATURE_REALIZED] == [ho.id]
+
+
+def test_the_agent_is_claude_code_unless_codoc_agent_names_another(monkeypatch):
+    from codoc.workspace import log as L
+    monkeypatch.delenv("CODOC_AGENT", raising=False)
+    assert L.actor_for(tools.agent_client()) == "agent:claude-code"
+    monkeypatch.setenv("CODOC_AGENT", "codex")
+    assert L.actor_for(tools.agent_client()) == "agent:codex"
+    # The name becomes an inbox file name and an actor id: anything else refuses to start.
+    import pytest
+    from codoc.mcp import server
+    monkeypatch.setenv("CODOC_AGENT", "../Cursor")
+    with pytest.raises(SystemExit, match="CODOC_AGENT"):
+        server.main()
+    assert L.actor_for("agent-../Cursor") is None

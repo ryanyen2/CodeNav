@@ -3,16 +3,20 @@
 
 Per debounced batch of filesystem events it does, in order:
 
-1. rotate the session log if ``HEAD`` moved (a commit, a checkout);
+1. rotate the session log if ``HEAD`` moved (a commit, a checkout), noting
+   the hand-offs the new commits name in a ``Codoc-Handoff`` trailer;
 2. drain every client inbox into ops;
 3. read the agent epoch (``activity.json``): while an interactive session is
    open, code changes accumulate instead of triggering a reflect pass, since the
    agent owns those files; when the epoch closes, one scoped reflect pass runs
-   over everything it touched, and realizations are settled against the
-   hand-offs it cited. A hard-killed session (no hook fired) is recovered after
-   ``EPOCH_STALE_SECONDS`` of silence;
-4. otherwise, reflect the changed code files;
+   over everything it touched and cites every queued hand-off. A hard-killed
+   session (no hook fired) is recovered after ``EPOCH_STALE_SECONDS`` of silence;
+4. otherwise, reflect the changed code files, citing the hand-offs of step 1;
 5. publish the derived files.
+
+After a reflect pass and at the end of every batch, when no agent epoch is
+open, every queued hand-off that an applied binding op now cites is settled
+(``loops.realize.settle``), whoever wrote the op.
 
 ``process_batch`` is pure enough to test with an injected reflect; ``run``
 wires it to ``watchfiles``.
@@ -24,10 +28,10 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path, PurePosixPath
 
-from codoc.daemon.epoch import EPOCH_STALE_SECONDS, close_epoch, epoch_touched_files, read_epoch
+from codoc.daemon.epoch import EPOCH_STALE_SECONDS, close_epoch, epoch_alive, epoch_touched_files, read_epoch
 from codoc.daemon.pidfile import clear_pidfile, daemon_running, write_pidfile
 from codoc.daemon.publish import Publisher, realizing_is_fresh
-from codoc.index.git import head_sha
+from codoc.index.git import handoffs_landed, head_sha
 from codoc.index.graph import Graph
 from codoc.index.lang import detect_language
 from codoc.loops import realize as R
@@ -66,7 +70,7 @@ class Daemon:
         self._reflect = reflect
         self._changeset = changeset
         self._propose = propose
-        self.identity = L.actor_for          # inbox file name → actor (log.CLIENT_IDENTITY, hub-<login>)
+        self.identity = L.actor_for          # inbox file name → actor (ide/cli, agent-<name>, hub-<login>)
         self.publisher = Publisher(self.codoc_dir, str(self.root))
 
     # ── routing ────────────────────────────────────────────────────────────
@@ -107,7 +111,13 @@ class Daemon:
         # 1. HEAD moved → the set of logs on disk may have changed (a checkout,
         # a pull): rebuild from them, then start a new session file.
         sha = head_sha(self.root)
+        landed: frozenset[str] = frozenset()
         if sha != self.state.head:
+            # ponytail: the trailer is read when the batch that sees HEAD move
+            # reflects the merged files; a merge whose files were reflected in an
+            # earlier batch (a conflicted merge committed later) cites nothing,
+            # and `codoc done` settles it.
+            landed = handoffs_landed(self.root, self.state.head, sha)
             self.state.head = sha
             self.ws.rebuild()
             self.ws.rotate_session()
@@ -123,8 +133,9 @@ class Daemon:
         done = self.ws.drain_inbox(self.identity)
         if done:
             notes.append(f"{len(done)} client op(s)")
-        # 3. Epoch edges and stale recovery. A pass that runs because an agent
-        # session ended is the one kind of evidence that settles a hand-off.
+        # 3. Epoch edges and stale recovery. The pass that runs because an agent
+        # session ended cites the queued hand-offs, as an agent's own
+        # `codoc_reflect` and a merged commit's trailer do.
         under_epoch = False
         if self.state.epoch_open and _stale(self.codoc_dir, now):
             dead = self.state.epoch_id
@@ -155,13 +166,14 @@ class Daemon:
                 self.state.suppressed |= code
                 notes.append(f"holding {len(code)} file(s) for the open session")
             else:
-                notes.append(self.reflect(code, under_epoch=under_epoch))
+                notes.append(self.reflect(code, under_epoch=under_epoch, landed=landed))
+        self._settle(sha=sha, now=now)       # what the drain landed, and a session that just closed
         # 5. Publish (the publisher skips the write when nothing moved).
         realizing = set(R.queued(self.ws.store)) if realizing_is_fresh(self.codoc_dir, now) else set()
         self.publisher.publish(self.ws.store, realizing=realizing, force=rebuilt)
         return "; ".join(notes) or "no-op"
 
-    def reflect(self, files: set[str], *, under_epoch: bool = False) -> str:
+    def reflect(self, files: set[str], *, under_epoch: bool = False, landed: frozenset[str] = frozenset()) -> str:
         from codoc.loops.reflect import reflect as _reflect
         cs = (self._changeset or _changeset)(str(self.root), str(self.codoc_dir), files)
         if cs is None:
@@ -169,13 +181,19 @@ class Daemon:
         self.graph.update(cs.rows, cs.touched_files())
         atomic_write(self.codoc_dir / GRAPH_CACHE, self.graph.dumps())
         res = (self._reflect or _reflect)(self.ws, cs, self.graph, propose=self._propose or _propose(),
-                                          under_epoch=under_epoch)
-        if under_epoch:
-            R.settle(self.ws, res, sha=head_sha(self.root), files=sorted(files))
+                                          under_epoch=under_epoch, landed=landed)
+        self._settle(res, sha=head_sha(self.root))
         # Kind blocks that derive from code (a diagram) follow the bindings.
         from codoc.kinds.lift import lift_pass
         lifted = lift_pass(self.ws, self.graph, str(self.codoc_dir))
         return f"reflect: {res.summary()}" + (f" · {lifted} block(s) lifted" if lifted else "")
+
+    def _settle(self, res=None, *, sha: str, now: float | None = None) -> None:
+        """Settle the hand-offs binding ops now cite, unless an agent epoch is
+        open: its build is in progress, so the feature stays queued and the
+        agent's amends land as plans. The close runs the same scan."""
+        if not epoch_alive(self.codoc_dir, now=now):
+            R.settle(self.ws, res, sha=sha)
 
     # ── lifecycle ──────────────────────────────────────────────────────────
     def start(self) -> None:

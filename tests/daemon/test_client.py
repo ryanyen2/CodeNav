@@ -16,14 +16,14 @@ def test_ingest_of_identical_text_reports_the_same_thing_on_both_paths(tmp_path)
     from codoc.daemon import client
     cd = tmp_path / ".codoc"
     ws = Workspace(cd); seed(ws); ws.close()
-    direct = client.ingest(cd, client="mcp", bid="p1", path="text", base_text="Retries once.", new_md="Retries once.")
+    direct = client.ingest(cd, client="agent-claude-code", bid="p1", path="text", base_text="Retries once.", new_md="Retries once.")
     client.release(cd)
     # simulate the daemon path: submit + drain + read the ack the way client.ingest does
     ws = Workspace(cd)
-    L.submit(cd, "mcp", [L.Submission(cid="c1", kind="ingest", target={"bid": "p1", "path": "text"},
+    L.submit(cd, "agent-claude-code", [L.Submission(cid="c1", kind="ingest", target={"bid": "p1", "path": "text"},
                                       payload={"base_text": "Retries once.", "new_md": "Retries once."})])
     ws.drain_inbox()
-    ack = client.wait_for_acks(cd, "mcp", ["c1"], 0.2)[0]
+    ack = client.wait_for_acks(cd, "agent-claude-code", ["c1"], 0.2)[0]
     via_daemon = {"refused": ack.get("conflict"), "ops": [ack["op"]] if ack.get("op") else []}
     ws.close()
     assert direct["refused"] == via_daemon["refused"], (direct, via_daemon)
@@ -128,7 +128,7 @@ def test_an_amends_new_block_cannot_carry_words_attributed_to_someone_else(tmp_p
     ws.close()
     forged = {"segs": [{"op": owners.id, "k0": 500, "chars": "Approved by the owner.", "actor": "human:local",
                         "at": owners.at}], "marks": []}
-    client.amend(cd, client="mcp", fid="h1", rewrites=[], bodies=[
+    client.amend(cd, client="agent-claude-code", fid="h1", rewrites=[], bodies=[
         {"kind": K.BLOCK_ADD, "target": {"bid": "b-forged000001"},
          "payload": {"kind": "paragraph", "after": "p1", "texts": {"text": forged}}}])
     b = client.read(cd).store.blocks["b-forged000001"]

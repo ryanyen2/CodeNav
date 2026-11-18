@@ -5,7 +5,8 @@
     history.json      the timeline window: the last ops, each touched block's
                       text after them, and their recorded inverses
     realize.md        the queued directives, as the realizing agent reads them
-    status.json       {state, pending, detail, head, at}
+    status.json       {state, pending, detail, head, at, actor}: actor is the
+                      person at this machine, the one the editor writes as
 
 All derived, all regenerable, all written atomically. Nothing here is read
 back by the calculus. ``status.json`` keeps one input the store does not hold:
@@ -33,6 +34,7 @@ from codoc.calculus.store import Store
 from codoc.calculus.window import history_window
 from codoc.loops.realize import queued, write_queue
 from codoc.workspace.layout import EXPORT, HISTORY, PROJECTION, REALIZE, STATUS, atomic_write
+from codoc.workspace.log import local_actor
 
 HISTORY_WINDOW = 200
 REALIZING_LEASE_SECONDS = 300
@@ -202,7 +204,7 @@ def write_status(codoc_dir: str | Path, store: Store, *, phases: dict[str, str] 
     else:
         state, pending = "synced", len(phases)
     d = {"version": 2, "state": state, "pending": pending, "detail": detail, "head": store.pos,
-         "features": len(phases), "at": time.time()}
+         "features": len(phases), "at": time.time(), "actor": local_actor(Path(codoc_dir).parent)}
     if realizing and (owner := read_status(codoc_dir).get("owner")):
         d["owner"] = owner              # the lease stays the pass's own across this rewrite
     atomic_write(path, json.dumps(d))

@@ -128,6 +128,52 @@ def test_a_branch_the_agent_already_built_is_published_not_rebuilt(tmp_path):
     assert names.index("git push -u") < names.index("git branch -D")
 
 
+def test_a_merged_hub_pull_request_settles_its_handoff(tmp_path, monkeypatch):
+    """The worker's commit names the hand-off in a `Codoc-Handoff` trailer. The
+    daemon that sees HEAD move over that commit reflects the merged code citing
+    the hand-off, and the hand-off settles on those binding ops. Real git; only
+    the push and `gh` are faked."""
+    import subprocess
+    from pathlib import Path
+    from codoc.daemon.daemon import Daemon
+    from codoc.index.changes import ChangeSet, ChunkRef
+    from codoc.loops.realize import queued
+    for k, v in {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t",
+                 "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t",
+                 "GIT_COMMITTER_EMAIL": "t@example.com"}.items():
+        monkeypatch.setenv(k, v)
+    root = tmp_path / "repo"
+    (root / ".codoc").mkdir(parents=True)
+
+    def git(*argv):
+        subprocess.run(["git", *argv], cwd=root, check=True, capture_output=True)
+    git("init", "-q", "-b", "main")
+    (root / "c.py").write_text("def send(): ...\n")
+    git("add", "c.py")
+    git("commit", "-qm", "init")
+    d = Daemon(root, changeset=lambda *a: ChangeSet(modified=[ChunkRef("c.py", "c.py::send", "f2", "t1")]),
+               propose=lambda *a, **k: [], printer=lambda *_: None)
+    seed_loop(d.ws)
+    ho = handoff(d.ws, "h1", actor="human:local")
+
+    def run(argv, cwd=None):
+        if argv[:2] == ["git", "push"] or argv[0] == "gh":
+            return 0
+        return subprocess.run(argv, cwd=cwd, capture_output=True).returncode
+
+    def agent(_directive, worktree, scope=None):
+        Path(worktree, "c.py").write_text("def send(): retry()\n")
+        return ["c.py"]
+    [req] = pending(d.codoc_dir, d.ws.store, {})
+    assert realize_one(req, str(tmp_path / "wt"), run=run, agent=agent, root=str(root)).ok
+    git("merge", "-q", "--ff-only", branch_name(ho.id))          # the pull request merges and is pulled
+    d.process_batch([str(root / "c.py")])
+    st = d.ws.store
+    assert queued(st) == []
+    assert [o.caused_by for o in st.ops if o.kind == K.FEATURE_REALIZED] == [ho.id]
+    assert any(o.kind == K.BIND_REFRESH and o.caused_by == ho.id for o in st.ops)
+
+
 def test_every_path_taking_tool_stays_inside_the_worktree():
     """Write is confined to the files the directive names, so an unconfined Read
     is an exfiltration path with a publisher attached: the agent reads the `gh`

@@ -71,14 +71,25 @@ skill, and the `/codoc:sync`, `/codoc:plan` and `/codoc:ask` commands.
 
 - Open the agent epoch in `activity.json` while a turn runs and record the files it
   touched. The daemon holds those files and reflects them when the epoch closes, or after
-  900 seconds of silence. Nothing else reads the file: the editor and the hub learn that a
-  feature is being built from its `realizing` phase in the projection.
+  900 seconds of silence, citing every queued hand-off in `caused_by`. Nothing else reads
+  the file: the editor and the hub learn that a feature is being built from its
+  `realizing` phase in the projection.
 - Tell the session when hand-offs are queued in `realize.md`.
 - Never raise and never open the workspace; they read published files only.
 
 **MCP tools.** Reads replay the logs into a read-only workspace. Writes go through
-`daemon/client.py` with the inbox name `mcp`, so the applier stamps
-`agent:claude-code`.
+`daemon/client.py` with the inbox name `agent-<CODOC_AGENT>`, so the applier stamps
+`agent:<CODOC_AGENT>`, `agent:claude-code` when the variable is unset. Another agent
+(Cursor, Codex) sets `CODOC_AGENT` in the server's environment.
+
+**How a hand-off settles.** When no agent epoch is open, the applier (the daemon at the
+end of each batch and after each reflect pass, or a daemonless writer after it applies)
+writes `feature.realized` for each queued feature once an applied binding op cites its
+latest hand-off in `caused_by` (`loops/realize.py`, `settle`). It does not matter who
+wrote the op: an agent's `codoc_reflect`, the pass after a Claude Code epoch closes, or
+the pass over a commit whose `Codoc-Handoff` trailer names the hand-off. While an epoch
+is open the build is in progress, so the feature stays queued until the epoch closes.
+Code written by hand settles with `codoc done`.
 
 | tool | does |
 |---|---|
@@ -109,7 +120,7 @@ and no session is live.
 | `push.py` | The SSE channel: `projection`, `status`, this viewer's `acks`. |
 | `auth.py`, `github_auth.py` | Sessions, and collaborator permission to role, written to `config.json`. Re-checked on a cadence. |
 | `ratelimit.py` | Requests per login. |
-| `worker.py` | Each hand-off with no realization and no pull request is built on its own worktree and branch, and the worker opens the pull request. |
+| `worker.py` | Each hand-off with no realization and no pull request is built on its own worktree and branch, and the worker opens the pull request. The commit names the hand-off in a `Codoc-Handoff` trailer, so the daemon's pass over the merged commit cites it. |
 | `realize_agent.py`, `sandbox.py`, `consult.py` | The sandboxed agent the worker runs: no shell, paths confined to the worktree, edits confined to the feature's bound files, secrets unreadable, tokens scrubbed, a scope check after the run, an allowlist for Consult URLs. |
 | `static.py`, `tunnel.py` | Where the bundle is; a Cloudflare tunnel. |
 
@@ -122,6 +133,7 @@ and no session is live.
 | `CODOC_LOG_PROMPTS` | `llm/provider.py` | `1` logs every prompt. |
 | `CODOC_LANCE_PATH`, `CODOC_INDEX_RETENTION_S` | `index/` | The chunk table's location; how long old index versions are kept. |
 | `CODOC_DOC_LANGUAGE` | `doclang.py` | Overrides `doc_language` for one process. |
+| `CODOC_AGENT` | `mcp/tools.py` | The coding agent the MCP server writes as, `agent:<name>`; `claude-code` when unset. |
 | `CODOC_REALIZE_OWNER` | `daemon/publish.py` | Marks the realize pass that holds the lease, so its own agent does not stand down. |
 | `CODOC_GITHUB_CLIENT_ID`, `CODOC_GITHUB_CLIENT_SECRET`, `CODOC_GITHUB_TOKEN`, `CODOC_SERVE_REPO`, `CODOC_GITHUB_API`, `CODOC_GITHUB_WEB` | `serve/` | GitHub sign-in and permission checks. |
 | `CODOC_SERVE_PR`, `CODOC_SERVE_BASE` | `cli/main.py` | `0` turns off the pull-request worker, as `codoc serve --no-prs` does; the base branch (`main`). |

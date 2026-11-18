@@ -430,11 +430,11 @@ def test_an_amend_ack_reports_a_refused_rewrite_even_when_another_landed(tmp_pat
     ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
                 "payload": {"after": list(ws.store.blocks["p1"].text().ref_at(5)), "text": " X"}}],
               actor="agent:claude-code", plan=pid)
-    L.submit(cd, "mcp", [Submission(cid="a1", kind="amend", target={"fid": "h1"}, payload={
+    L.submit(cd, "agent-claude-code", [Submission(cid="a1", kind="amend", target={"fid": "h1"}, payload={
         "fid": "h1", "rewrites": [{"bid": "p1", "new_md": "Retries twice."},
                                   {"bid": "p2", "new_md": "Logs each retry once.", "base_text": "Logs each retry."}]})])
     ws.drain_inbox()
-    ack = json.loads((L.inbox_dir(cd) / "mcp.ack.jsonl").read_text().splitlines()[-1])
+    ack = json.loads((L.inbox_dir(cd) / "agent-claude-code.ack.jsonl").read_text().splitlines()[-1])
     assert ack["status"] == "trunk" and ack["conflict"] == "p1: open_plan", ack
     ws.close()
 
@@ -462,7 +462,7 @@ def test_a_mark_naming_an_op_that_placed_no_mark_is_the_senders(tmp_path):
     ws = Workspace(cd); seed(ws)
     r = refs(ws, "p1")
     owners = ws.store.by_id[r[0][0]]
-    L.submit(cd, "mcp", [Submission(cid="m1", kind=K.TEXT_MARK, target={"bid": "p1", "path": "text"}, payload={
+    L.submit(cd, "agent-claude-code", [Submission(cid="m1", kind=K.TEXT_MARK, target={"bid": "p1", "path": "text"}, payload={
         "kind": BOLD, "start": list(r[0]), "end": list(r[6]), "on": True,
         "actor": H, "op": owners.id, "at": owners.at})])
     ws.drain_inbox()
@@ -503,7 +503,7 @@ def test_a_proposal_is_decided_whole_by_the_applier(tmp_path):
     ws = Workspace(tmp_path / ".codoc"); seed(ws)
 
     def propose(pid: str, text: str):
-        return ws.apply_submissions("mcp", "agent:claude-code", [Submission(
+        return ws.apply_submissions("agent-claude-code", "agent:claude-code", [Submission(
             cid=pid, kind="propose", target={"pid": pid}, payload={
                 "kind": "edit", "target": "h1", "note": "", "build": True,
                 "rewrites": [{"bid": "p1", "new_md": text}]})])[0]
@@ -513,7 +513,7 @@ def test_a_proposal_is_decided_whole_by_the_applier(tmp_path):
     changed = propose("p-new", "Retries twice.")
     assert changed.status == "plan:p-new" and ws.store.open_plans["p-new"].ops
     # A malformed part fails before anything lands, so no half-written plan stays.
-    bad = ws.apply_submissions("mcp", "agent:claude-code", [Submission(
+    bad = ws.apply_submissions("agent-claude-code", "agent:claude-code", [Submission(
         cid="p-bad", kind="propose", target={"pid": "p-bad"}, payload={
             "kind": "edit", "target": "h1", "note": "", "rewrites": [], "strikes": ["nope"],
             "bodies": [{"kind": K.BLOCK_ADD, "target": {"bid": "nb"}, "payload": {"kind": "paragraph", "after": "p1"}}]})])[0]
@@ -560,7 +560,7 @@ def test_only_a_coding_agents_plan_asks_for_a_build(tmp_path):
     opened = {"kind": "edit", "target": "h1", "build": True}
     ws.apply_submissions("hub-bob", "human:gh:bob", [Submission(cid="b", kind=K.PLAN_OPEN, target={"pid": "pb"},
                                                                 payload=dict(opened))])
-    ws.apply_submissions("mcp", "agent:claude-code", [Submission(cid="a", kind=K.PLAN_OPEN, target={"pid": "pa"},
+    ws.apply_submissions("agent-claude-code", "agent:claude-code", [Submission(cid="a", kind=K.PLAN_OPEN, target={"pid": "pa"},
                                                                  payload=dict(opened))])
     assert not ws.store.plans["pb"].build and ws.store.plans["pa"].build
     ws.close()

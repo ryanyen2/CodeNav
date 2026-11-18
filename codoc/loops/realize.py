@@ -12,12 +12,12 @@ A person's edits are already ops on the trunk; nothing here infers them.
 - ``write_queue``: render every queued directive into ``realize.md``, the
   prompt the realizing session or ``codoc realize`` reads. Regenerable; the
   log is the truth.
-- ``settle``: after a reflect pass ran under a closed agent epoch and cited a
-  hand-off in ``caused_by``, record ``feature.realized`` for each feature
-  whose bindings that pass touched, and for each phantom whose code the pass
-  saw go. The daemon emits this, never the agent; the owner may also write it
-  by hand (``codoc done``) for a request whose implementation moved no bound
-  symbol.
+- ``settle``: record ``feature.realized`` for each queued feature once a
+  binding op citing its latest hand-off in ``caused_by`` has landed, from any
+  writer, and for each phantom whose code a citing reflect pass saw go. Every
+  applier runs it after applying (the daemon, a daemonless writer), never the
+  agent; the owner may also write it by hand (``codoc done``) for a request
+  whose implementation moved no bound symbol.
 """
 from __future__ import annotations
 
@@ -73,24 +73,27 @@ def write_queue(codoc_dir: str | Path, store: Store, root_dir: str = ".", doc_la
     return path
 
 
-def settle(ws: Workspace, res, *, sha: str = "", files: list[str] | None = None, summary: str = "") -> list[Op]:
-    """Record ``feature.realized`` for each feature whose latest hand-off the
-    reflect pass ``res`` cited, when a binding op since that hand-off cites it
-    (the agent's own ``codoc_reflect`` attach or this pass's); for a
-    phantom, when the pass saw its code go."""
+def settle(ws: Workspace, res=None, *, sha: str = "") -> list[Op]:
+    """Record ``feature.realized`` for each queued feature once an applied
+    binding op since its latest hand-off cites that hand-off in ``caused_by``,
+    whoever wrote it: an agent's ``codoc_reflect``, or a reflect pass that
+    cited it. A phantom has no bindings left to cite, so it settles on the
+    reflect pass ``res`` that cited it, when that pass saw its code go."""
     out = []
     store = ws.store
-    for fid, did in res.caused.items():
-        w = store.watermarks_by_fid.get(fid)
-        if not w or not w.handoffs or w.handoffs[-1] != did:
+    for fid in queued(store):
+        w = store.watermarks_by_fid[fid]
+        if not w.handoffs:
             continue
-        since = store.ops[store.position.get(did, 0):]
-        if not (any(o.caused_by == did and o.kind.startswith("bind.") and o.conflict is None for o in since)
-                or _phantom_done(store, fid, did, res.removed)):
+        did = w.handoffs[-1]
+        cites = [o for o in store.ops[store.position.get(did, 0):]
+                 if o.caused_by == did and o.kind.startswith("bind.") and o.conflict is None]
+        if not cites and not (res and res.caused.get(fid) == did and _phantom_done(store, fid, did, res.removed)):
             continue
         out.extend(ws.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": fid},
-                               "payload": {"covers": dict(w.handoff), "sha": sha, "files": files or [],
-                                           "summary": summary}}], actor="loop", caused_by=did))
+                               "payload": {"covers": dict(w.handoff), "sha": sha,
+                                           "files": sorted({o.payload["file"] for o in cites})}}],
+                             actor="loop", caused_by=did))
     return out
 
 

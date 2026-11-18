@@ -67,6 +67,25 @@ def test_roles_from_config_make_every_clone_agree(tmp_path):
     assert Roles.load(cd).role("human:local") == "owner"
 
 
+def test_the_local_person_is_their_git_email_and_human_local_without_one(tmp_path):
+    # conftest hides the global git config, so only a repository's own email names anyone.
+    import subprocess
+
+    from codoc.daemon.publish import write_status
+    named, bare = tmp_path / "named", tmp_path / "bare"
+    for repo in (named, bare):
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(named), "config", "user.email", "ada@example.com"], check=True)
+    assert L.actor_for("ide", named / ".codoc") == L.actor_for("cli", named / ".codoc") == "human:ada@example.com"
+    assert L.actor_for("ide", bare / ".codoc") == "human:local"
+    assert L.actor_for("ide", tmp_path / "no-repo" / ".codoc") == "human:local"
+    # The status the editor reads says who the page's person is.
+    assert write_status(named / ".codoc", Store())["actor"] == "human:ada@example.com"
+    # A person working alone owns their checkout; another clone's person is what the tracked table says.
+    roles = Roles.load(named / ".codoc")
+    assert roles.role("human:ada@example.com") == "owner" and roles.role("human:bob@example.com") == "suggest"
+
+
 def test_a_later_demotion_does_not_rewrite_what_was_written(tmp_path):
     from codoc.workspace.config import write_config
     cd = tmp_path / ".codoc"

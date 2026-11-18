@@ -2,8 +2,9 @@
 
 Reads replay the logs into a read-only workspace and derive from it. Writes
 go through ``daemon.client`` (the daemon's inbox when a daemon owns the
-checkout, the applier otherwise) and are stamped ``actor=agent:<id>`` by the
-receiving side, never by the agent.
+checkout, the applier otherwise) as client ``agent-<CODOC_AGENT>``, and the
+receiving side stamps ``actor=agent:<CODOC_AGENT>``, never the agent. A
+binding op that cites a hand-off in ``caused_by`` settles it when it lands.
 
 Two writes take tree edits (``loops.edits``). Every edit is compiled against
 the current tree before anything is written; if one is refused, nothing is
@@ -23,6 +24,7 @@ code already written, and accepting it takes the words only.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from codoc.calculus import ops as K
@@ -43,9 +45,18 @@ from codoc.calculus.ingest import block_bodies, concat_bodies
 from codoc.loops.edits import PLAN_KIND, Change, Compiler, delete_open
 from codoc.loops.realize import queued
 from codoc.mcp.walkthrough import AskStep, build_walkthrough, clear_walkthrough, read_walkthrough, write_walkthrough
+from codoc.workspace import log as L
 from codoc.workspace.layout import GRAPH_CACHE
 
-AGENT = "mcp"
+
+def agent_client() -> str:
+    """The inbox this server writes to, ``agent-<CODOC_AGENT>``, from which the
+    applier stamps ``agent:<CODOC_AGENT>``. The one place the agent's name is
+    read: set CODOC_AGENT in the MCP server's environment (cursor, codex, ...)."""
+    name = f"agent-{os.environ.get('CODOC_AGENT') or 'claude-code'}"
+    if not L.AGENT_CLIENT.fullmatch(name):
+        raise ValueError(f"CODOC_AGENT must be lowercase letters, digits, '-' or '_': {name[6:]!r}")
+    return name
 
 
 def _err(msg: str) -> dict:
@@ -219,11 +230,11 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "", caused_by: 
     out: dict = {"ok": True, "applied": [], "amended": [], "planned": None}
     bodies = [b for c in trunk for b in c.bodies]
     if bodies:
-        out["applied"] = client.write(codoc_dir, client=AGENT, bodies=bodies, caused_by=caused_by, root_dir=root_dir)
+        out["applied"] = client.write(codoc_dir, client=agent_client(), bodies=bodies, caused_by=caused_by, root_dir=root_dir)
     for c in amends:
         rewrites = [{"bid": r.bid, "path": r.path, "new_md": r.new_md,
                      "base_text": ws.store.blocks[r.bid].text(r.path).live_text()} for r in c.rewrites]
-        got = client.amend(codoc_dir, client=AGENT, fid=c.target, rewrites=rewrites, bodies=c.bodies,
+        got = client.amend(codoc_dir, client=agent_client(), fid=c.target, rewrites=rewrites, bodies=c.bodies,
                            strikes=c.strikes, structural=c.structural, note=c.note or rationale,
                            caused_by=caused_by, root_dir=root_dir)
         out["amended"].append({"feature_id": c.target, **got})
@@ -285,7 +296,7 @@ def _write_plan(codoc_dir: str, store, changes: list[Change], *, note: str, caus
     pid, bodies = new_plan_id(), []
     for c in changes:
         bodies = concat_bodies(bodies, c.bodies)
-    got = client.propose(codoc_dir, client=AGENT, pid=pid, kind=kind, target=target, note=note, build=build, bodies=bodies,
+    got = client.propose(codoc_dir, client=agent_client(), pid=pid, kind=kind, target=target, note=note, build=build, bodies=bodies,
                          rewrites=[{"bid": r.bid, "path": r.path, "new_md": r.new_md,
                                     "base_text": store.blocks[r.bid].text(r.path).live_text()}
                                    for c in changes for r in c.rewrites],
@@ -329,7 +340,7 @@ def write_block(codoc_dir: str, *, content: dict, bid: str | None = None, kind: 
         if err := k.validate(content):
             return _err(err)
         bodies, (bid,) = block_bodies([BlockSpec(kind, content=content)], after=store.feature_body(feature_id)[-1].id)
-        added = client.write(codoc_dir, client=AGENT, bodies=bodies, plan=plan, caused_by=caused_by, root_dir=root_dir)
+        added = client.write(codoc_dir, client=agent_client(), bodies=bodies, plan=plan, caused_by=caused_by, root_dir=root_dir)
         refused = [a["conflict"] for a in added if a.get("conflict")]
         if refused:
             return _err(f"block.add refused: {refused[0]}")
@@ -343,9 +354,9 @@ def write_block(codoc_dir: str, *, content: dict, bid: str | None = None, kind: 
             return _err(p.refused)
     results: dict = {"ok": True, "bid": bid, "applied": [], "ingested": []}
     if p.sets:
-        results["applied"] = client.write(codoc_dir, client=AGENT, bodies=p.sets, plan=plan, caused_by=caused_by, root_dir=root_dir)
+        results["applied"] = client.write(codoc_dir, client=agent_client(), bodies=p.sets, plan=plan, caused_by=caused_by, root_dir=root_dir)
     for f, base, new_md in p.ingests:
-        results["ingested"].append({"field": f, **client.ingest(codoc_dir, client=AGENT, bid=bid, path=f, base_text=base,
+        results["ingested"].append({"field": f, **client.ingest(codoc_dir, client=agent_client(), bid=bid, path=f, base_text=base,
                                                                  new_md=new_md, plan=plan, caused_by=caused_by, root_dir=root_dir)})
     return results
 

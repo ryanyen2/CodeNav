@@ -44,7 +44,7 @@ def status_message(codoc_dir: Path, actor: str = "") -> dict | None:
     except ValueError:
         return None
     from codoc.workspace.roles import OWNER, Roles
-    role = Roles.from_config(cfg).role(actor) if actor else OWNER
+    role = Roles.from_config(cfg, L.local_actor(codoc_dir.parent)).role(actor) if actor else OWNER
     return {"kind": "status", "status": {**status, "doc_language": cfg.get("doc_language", "en"),
                                          "actor": actor, "role": role}}
 
@@ -70,7 +70,7 @@ class Feed:
     def __init__(self, codoc_dir: str | Path, client: str, replay: int = REPLAY_ACKS) -> None:
         self.dir = Path(codoc_dir)
         self.client = client
-        self.actor = L.actor_for(client) or ""
+        self.actor = L.actor_for(client, self.dir) or ""
         self.sent: dict[str, str] = {}
         self.stamps: dict[str, tuple[float, int] | None] = {}
         ack = L.inbox_dir(self.dir) / f"{client}.ack.jsonl"
@@ -169,7 +169,7 @@ async def event_source(codoc_dir: str | Path, client: str, *, is_disconnected=No
     their next request meets the door.
     """
     feed = Feed(codoc_dir, client)
-    actor = L.actor_for(client)
+    actor = L.actor_for(client, codoc_dir)
     while True:
         if still_allowed is not None and not still_allowed():
             return

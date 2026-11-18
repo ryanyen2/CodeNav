@@ -23,7 +23,7 @@ import { Margin, type Thread } from './comments';
 import { mountEditor, type EditorHandle } from './editor';
 import { Timeline } from './timeline';
 
-declare function acquireVsCodeApi(): { postMessage(m: unknown): void };
+declare function acquireVsCodeApi(): { postMessage(m: unknown): void; getState?(): unknown; setState?(s: unknown): void };
 
 const api = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : { postMessage: () => undefined };
 
@@ -33,8 +33,15 @@ const root = document.getElementById('app')!;
 let editor: EditorHandle | null = null;
 let margin: Margin | null = null;
 let timeline: Timeline | null = null;
-/** Who the daemon says this viewer is. Undo inverts this actor's batches only. */
-let actor = 'human:local';
+/** Who the daemon says this viewer is (`status.actor`); only their words are inked. */
+let actor = '';
+/** The batches this page sent, oldest first. ⌘Z inverts only these: never a
+ *  teammate's batch merged through git, nor the person's own `codoc accept` in
+ *  a terminal. Kept in the page's state, so a reload of the page still knows
+ *  them; a page opened fresh has nothing to undo. */
+const SENT_KEPT = 500;
+const restored = api.getState?.() as { sent?: unknown } | undefined;
+const sent = new Set<string>(Array.isArray(restored?.sent) ? restored.sent : []);
 let pendingUndo: 'undo' | 'redo' | null = null;
 /** Batch → the client ids it submitted that the daemon has not answered. Undo
  *  waits for these, because it must choose from a window that already carries
@@ -245,7 +252,9 @@ function submit(subs: Submission[]): void {
         const cids = inFlight.get(s.batch) ?? new Set<string>();
         cids.add(s.cid);
         inFlight.set(s.batch, cids);
+        sent.add(s.batch);
     }
+    api.setState?.({ sent: [...sent].slice(-SENT_KEPT) });
     send({ kind: 'submit', subs });
 }
 
@@ -326,11 +335,11 @@ function applyUndo(w: HistoryWindow): void {
     if (inFlight.size) return;                    // something sent is still unanswered; its ack asks again
     const redo = pendingUndo === 'redo';
     for (const [b, r] of refusedUndo) {
-        const changed = w.ops.some(e => e.actor !== actor && e.pos > r.pos
+        const changed = w.ops.some(e => !sent.has(e.batch) && e.pos > r.pos
             && (touchedBy(e).some(x => r.blocks.has(x)) || (r.conflict === 'not_adjacent' && REORDER.has(e.kind))));
         if (!FINAL.has(r.conflict) && changed) refusedUndo.delete(b);
     }
-    const next = nextUndo(w, actor, redo, new Set(refusedUndo.keys()));
+    const next = nextUndo(w, sent, redo, new Set(refusedUndo.keys()));
     pendingUndo = null;
     if (!next) { notify(redo ? 'nothing to redo' : 'nothing to undo'); return; }
     const subs = next.ops.map(op => ({ cid: newCid(), batch: next.batch, ...op }));
@@ -412,7 +421,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToPage>) => {
         case 'status':
             status = m.status ?? {};
             if (typeof status.doc_language === 'string') language = status.doc_language;
-            if (typeof status.actor === 'string') actor = status.actor;
+            if (typeof status.actor === 'string' && status.actor !== actor) { actor = status.actor; editor?.repaint(); }
             if (projection) renderToolbar(projection);
             renderStatus();
             return;

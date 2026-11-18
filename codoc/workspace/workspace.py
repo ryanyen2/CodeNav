@@ -360,7 +360,8 @@ class Workspace:
     # ── clients ────────────────────────────────────────────────────────────
     def drain_inbox(self, identity=L.actor_for) -> list[Op]:
         """Apply every new submission from every client. ``identity`` maps a
-        client name to the actor the daemon stamps (a callable or a dict);
+        client name and this workspace's directory to the actor the daemon
+        stamps (a callable), or a client name to it (a dict);
         unknown clients are ignored (a file nobody vouches for writes nothing).
         Only whole lines are consumed; a malformed one is acked with an error so
         the client learns, and the offset advances line by line, after the ack.
@@ -374,7 +375,7 @@ class Workspace:
         that raises is acked with the error and left behind."""
         out: list[Op] = []
         for client in L.clients(self.codoc_dir):
-            actor = identity(client) if callable(identity) else identity.get(client)
+            actor = identity(client, self.codoc_dir) if callable(identity) else identity.get(client)
             if actor is None:
                 continue
             lines = L.read_inbox(self.codoc_dir, client, self._inbox_offsets.get(client, 0))

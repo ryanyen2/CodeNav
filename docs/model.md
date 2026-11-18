@@ -605,7 +605,7 @@ rejected plan's words are dead.
 | `block_written_by(b)` | `human` when a person wrote any live character of the block, else the actor of the newest live segment; an open plan's words are left out. |
 | `ink(f)` | Untagged live segments a person minted on the in-flow blocks of `body(f)`, outside `realized`: `sent` when inside `handoff`, else `unsent`. |
 | `ground(f)` | What the loop did since the person last engaged. `since` is the newest clock of a character the person minted or killed, or a mark they placed. A live untagged loop segment is `added` and a segment the loop killed is `removed`, when its clock is after `since` and its op is outside `handoff`. Empty for a feature with no hand-off and no trace of a person. |
-| `plan_claims(f)` | Tagged live runs of open plans (`open`) and accepted plans (`accepted`); `suggest_del` spans of open plans (`removed`); then `mark_claims(f)`. |
+| `plan_claims(f)` | Tagged live runs of open plans (`open`); `suggest_del` spans of open plans (`removed`); then `mark_claims(f)`. An accepted plan's words claim nothing. |
 | `mark_claims(f)` | `suggest_mark` records of open plans (`marked`, `unmarked`). |
 | `open_plans_on(f)` | Open plans that target a block of `body(f)` or have an applied op recorded on one. |
 | `open_plans()` | Open plans whose target is null or live: the ones offered for a verdict. |

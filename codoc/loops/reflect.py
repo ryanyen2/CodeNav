@@ -22,9 +22,11 @@ Given a change set from the index, the pass:
 
 When the pass runs because an agent session closed (``under_epoch``), every op
 it writes on a feature with queued work carries ``caused_by`` the feature's
-latest hand-off: that is what lets the daemon mark the feature realized and
-lets History chain a change back to the request. A pass triggered by a hand
-edit cites nothing, since nobody implemented anything.
+latest hand-off; when it runs over commits whose ``Codoc-Handoff`` trailer
+names a hand-off (``landed``), the ops on that hand-off's feature do. That is
+what lets the daemon mark the feature realized and lets History chain a change
+back to the request. A pass triggered by a hand edit cites nothing, since
+nobody implemented anything.
 
 ``propose`` is injectable: a callable ``(changes, subtree, all_titles, **kw) →
 list[dict]`` of raw ops in the prompt's JSON shape. Tests inject a fake.
@@ -104,12 +106,12 @@ class _Pass:
 
 def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: str = "codebase",
             config=None, doc_language=None, allow_delete: bool = True, extra_changes: dict | None = None,
-            under_epoch: bool = False) -> ReflectResult:
+            under_epoch: bool = False, landed: frozenset[str] = frozenset()) -> ReflectResult:
     store = ws.store
     res = ReflectResult()
     fp = cs.fingerprints()
     th = cs.types_hashes()
-    caused_by = _causes(store) if under_epoch else {}
+    caused_by = {fid: did for fid, did in _causes(store).items() if under_epoch or did in landed}
     res.caused = dict(caused_by)
     res.removed = {(r.file, r.symbol_path) for r in cs.removed}
     p = _Pass(ws, res, caused_by)

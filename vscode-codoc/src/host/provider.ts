@@ -49,8 +49,8 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
         const postStatus = async () => {
             const st = await readJson<Record<string, unknown>>(path.join(codocDir, 'status.json'));
             const cfg = await readJson<{ doc_language?: string }>(path.join(codocDir, 'config.json'));
-            // `human:local` is the actor the daemon gives the `ide` inbox.
-            if (st) post({ kind: 'status', status: { ...st, doc_language: cfg?.doc_language ?? 'en', actor: 'human:local' } });
+            // `status.json` carries `actor`: the person the daemon stamps on the `ide` inbox.
+            if (st) post({ kind: 'status', status: { ...st, doc_language: cfg?.doc_language ?? 'en' } });
         };
 
         // Acks: tail the ack file from its current end.

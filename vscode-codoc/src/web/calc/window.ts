@@ -7,7 +7,7 @@
  * Undo is exact and shared with the store: a batch is undone by submitting
  * the recorded inverses of its ops, newest first, as a new batch named
  * `u-<batch>`; redo undoes that batch (`u-u-<batch>`). A batch is undone when
- * a later `u-` batch of it exists. Mod-z picks the newest of the viewer's
+ * a later `u-` batch of it exists. Mod-z picks the newest of the page's own
  * batches with an even number of `u-` prefixes that is not undone; redo, odd.
  */
 import type { OpBody } from './projection';
@@ -79,13 +79,13 @@ function depth(batch: string): number {
     return d;
 }
 
-/** The ops to submit for the viewer's next undo (`redo=false`) or redo, with
- *  the batch id they go under; null when there is nothing to invert. A batch
- *  with no inverse is never offered (a snapshot fold's ops have none), nor one
- *  whose undo batch is in `refused`. */
-export function nextUndo(w: HistoryWindow, actor: string, redo = false, refused: ReadonlySet<string> = new Set()): { batch: string; ops: OpBody[] } | null {
+/** The ops to submit for the next undo (`redo=false`) or redo of one of the
+ *  `mine` batches, with the batch id they go under; null when there is nothing
+ *  to invert. A batch with no inverse is never offered (a snapshot fold's ops
+ *  have none), nor one whose undo batch is in `refused`. */
+export function nextUndo(w: HistoryWindow, mine: ReadonlySet<string>, redo = false, refused: ReadonlySet<string> = new Set()): { batch: string; ops: OpBody[] } | null {
     const batches = new Map<string, WindowEntry[]>();
-    for (const e of w.ops) if (e.actor === actor) (batches.get(e.batch) ?? batches.set(e.batch, []).get(e.batch)!).push(e);
+    for (const e of w.ops) if (mine.has(e.batch)) (batches.get(e.batch) ?? batches.set(e.batch, []).get(e.batch)!).push(e);
     const undone = new Set([...batches.keys()].filter(b => b.startsWith('u-')).map(b => b.slice(2)));
     const candidates = [...batches.entries()]
         .filter(([b]) => (depth(b) % 2 === 1) === redo && !undone.has(b) && !refused.has(`u-${b}`))

@@ -62,7 +62,6 @@ html, body { margin: 0; height: 100%; background: var(--codoc-bg); color: var(--
 .codoc-ink-unsent { text-decoration: underline; text-decoration-color: var(--codoc-human); text-decoration-thickness: 2px; animation: codoc-pulse 1.6s ease-in-out infinite; }
 .codoc-ink-sent { text-decoration: underline; text-decoration-color: var(--codoc-human); text-decoration-thickness: 2px; }
 .codoc-plan, .codoc-plan-open { color: var(--codoc-plan); }
-.codoc-plan-accepted { color: color-mix(in srgb, var(--codoc-plan) 60%, var(--codoc-fg)); }
 .codoc-plan-cut { text-decoration: line-through; text-decoration-color: var(--codoc-plan); color: var(--codoc-plan); }
 .codoc-plan-mark { text-decoration: underline dashed; text-decoration-color: var(--codoc-plan); text-underline-offset: 3px; }
 .codoc-plan-unmark { text-decoration: underline dashed; text-decoration-color: var(--codoc-plan); text-underline-offset: 3px; opacity: .75; }

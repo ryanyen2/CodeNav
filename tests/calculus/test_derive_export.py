@@ -115,6 +115,9 @@ def test_three_channels_and_phase():
     assert all(o.target.get("bid") in ("h1", "p1") or o.target.get("fid") == "h1" for o in history(s, "h1"))
     p = projection(s)
     assert p["phases"] == {"h1": "proposed"} and p["blocks"][1]["fields"]["text"]["text"].endswith("Maybe.")
+    # Accepted: the plan's words are ordinary text, still the agent's.
+    apply(s, m.op(K.PLAN_ACCEPT, {"pid": "pl"}, {}))
+    assert plan_claims(s, "h1") == [] and attribution(s.blocks["p1"].text())[-1].actor == "agent:x"
 
 
 def test_focus_from_human_bold_only():

@@ -60,7 +60,8 @@ export interface EditorHost {
     /** A gesture was not performed (`bid` is empty and `conflict` says why), or
      *  the daemon refused an op and its block was reloaded. */
     onConflict?(bid: string, conflict: string): void;
-    /** The viewer's actor as the projection's runs name it (`status.actor`). */
+    /** The viewer's actor as the projection's runs name it (`status.actor`). Call
+     *  `repaint` when it changes. */
     actor?(): string;
 }
 
@@ -72,6 +73,8 @@ export interface EditorHandle {
     flush(): void;
     /** Show who wrote each run of words (the History stance). */
     setHistory(on: boolean): void;
+    /** Redraw every paint, because the viewer changed. */
+    repaint(): void;
     find(replace: boolean): void;
     /** The selection as a comment anchor: its block, its words, and the first and last character. */
     selectionAnchor(): { bid: string; text: string; start: CharRef; end: CharRef } | null;
@@ -82,14 +85,15 @@ export interface EditorHandle {
 export function mountEditor(container: HTMLElement, proj: Projection, host: EditorHost): EditorHandle {
     const schema = codocSchema();
     const { doc, shadows } = docFrom(schema, proj);
-    const shown: Shown = { projection: proj, history: false };
+    const viewer = () => host.actor?.() ?? '';
+    const shown: Shown = { projection: proj, history: false, viewer };
     const cards: CardFields = new Map();
     const env: Env = {
         shadows, nextBid: newBid, nextCid: newCid, refuse: why => host.onConflict?.('', why), projection: () => shown.projection, cards,
         // Unacked, applied for this page, or in one of the block's projected runs by the viewer.
         mine: bid => {
             const b = shown.projection.blocks.find(x => x.id === bid);
-            const ops = new Set((b ? textField(b, pathOf(b.kind))?.runs ?? [] : []).filter(x => x.actor === host.actor?.()).map(x => x.op));
+            const ops = new Set((b ? textField(b, pathOf(b.kind))?.runs ?? [] : []).filter(x => x.actor === viewer()).map(x => x.op));
             return r => isProvisional(r) || outbox.applied.has(r[0]) || ops.has(r[0]);
         },
     };
@@ -183,6 +187,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
     link = new LinkInput(view, container);
     const finder = new FindWidget(view, container);
     const adopt = adopter(view, shadows, outbox, paints, shown);
+    const repaint = () => { paints.mark(); view.dispatch(view.state.tr.setMeta(REPAINT, true)); };
 
     /** The feature a position is in: the nearest heading at or above it. */
     function featureAt(pos: number): string | null {
@@ -209,9 +214,9 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
         flush: () => { settle(); outbox.flush(); },
         setHistory(on) {
             shown.history = on;
-            paints.mark();
-            view.dispatch(view.state.tr.setMeta(REPAINT, true));
+            repaint();
         },
+        repaint,
         find: replace => finder.open(replace),
         selectionAnchor() {
             const { from, to, empty } = view.state.selection;

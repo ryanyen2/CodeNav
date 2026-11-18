@@ -34,19 +34,21 @@ from pathlib import Path
 from codoc.calculus.ids import new_batch_id
 from codoc.calculus.ingest import resolve_pending_refs
 from codoc.calculus.ops import TEXT_INSERT
+from codoc.daemon.epoch import epoch_alive
 from codoc.daemon.pidfile import daemon_running
 from codoc.daemon.publish import publish
 from codoc.index.git import head_sha
+from codoc.loops.realize import settle
 from codoc.workspace import Workspace
 from codoc.workspace import log as L
 from codoc.workspace.layout import APPLIER_LOCK, locked
 from codoc.workspace.log import Submission
 
 
-def _actor(client: str) -> str:
+def _actor(client: str, codoc_dir: Path) -> str:
     """The actor a client writes as: one identity function for the inbox path
     and the applier path, so a contributor is the same actor on both."""
-    actor = L.actor_for(client)
+    actor = L.actor_for(client, codoc_dir)
     if actor is None:
         raise ValueError(f"no identity for client {client!r}")
     return actor
@@ -164,10 +166,12 @@ def _send(codoc_dir: Path, client: str, subs: list[Submission], root_dir: str | 
     through its inbox, waiting up to ``wait_s`` for the acks. One ack-shaped
     record per submission, ``{"cid", "op", "conflict", "status", "ops"}``;
     through the inbox ``ops`` holds the acked first op only."""
-    actor = _actor(client)
+    actor = _actor(client, codoc_dir)
     try:
         with applying(codoc_dir) as ws:
             got = ws.apply_submissions(client, actor, subs)
+            if not epoch_alive(codoc_dir):               # as the daemon does (Daemon._settle)
+                settle(ws, sha=_HEAD.get(codoc_dir, ""))
             publish(codoc_dir, ws.store, root_dir=root_dir or str(codoc_dir.parent))
     except DaemonRunning:
         L.submit(codoc_dir, client, subs)

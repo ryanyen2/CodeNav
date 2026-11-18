@@ -13,8 +13,13 @@ describe('the page', () => {
     const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
     const statusLine = () => document.querySelector('.codoc-status')?.textContent ?? '';
 
+    // The batches this page sent before a reload, as the webview's state kept them.
+    // ⌘Z offers only these and the ones it sends from now on.
+    let saved: unknown = { sent: ['b-page', 'b-old', 'b-verdict', 'e-old', 'e-mine', 'k-old', 'k-mine', 'j-old', 'j-split', 't-earlier'] };
+
     beforeAll(async () => {
-        (globalThis as unknown as { acquireVsCodeApi: () => unknown }).acquireVsCodeApi = () => ({ postMessage: (m: Record<string, unknown>) => posted.push(m) });
+        (globalThis as unknown as { acquireVsCodeApi: () => unknown }).acquireVsCodeApi = () => ({
+            postMessage: (m: Record<string, unknown>) => posted.push(m), getState: () => saved, setState: (st: unknown) => { saved = st; } });
         const app = document.createElement('div');
         app.id = 'app';
         document.body.append(app);
@@ -28,6 +33,21 @@ describe('the page', () => {
         const before = statusLine();
         post({ kind: 'status', status: { state: 'PWNED', detail: 'PWNED', actor: 'human:gh:eve' } }, 'https://evil.example');
         expect(statusLine()).toBe(before);
+    });
+
+    it("offers only this page's batches: not a teammate's merged batch, not the person's own terminal", () => {
+        const op = (pos: number, batch: string, actor: string): HistoryWindow['ops'][number] => ({ pos, id: `q:${pos}`, at: String(pos),
+            actor, kind: 'text.insert', batch, batch_first: pos, plan: null, caused_by: null, blocks: {},
+            inverse: [{ kind: 'text.delete', target: { bid: 'p', path: 'text' }, payload: {} }] });
+        const w: HistoryWindow = { start: 0, head: 3, before: {}, ops: [
+            op(0, 'b-page', 'human:local'), op(1, 'x-teammate', 'human:bob@x.org'), op(2, 'x-codoc-accept', 'human:local')] };
+        posted.length = 0;
+        document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true }));
+        post({ kind: 'history', history: w });
+        const subs = posted.filter(m => m.kind === 'submit').flatMap(m => (m as { subs: Submission[] }).subs);
+        expect(subs.map(s => s.batch)).toEqual(['u-b-page']);
+        expect((saved as { sent: string[] }).sent).toContain('u-b-page');      // a reload still knows it
+        post({ kind: 'acks', acks: subs.map(s => ({ cid: s.cid, op: 'q:9', conflict: null })) });
     });
 
     it('says when an undo is refused, and the next undo moves past that batch', () => {

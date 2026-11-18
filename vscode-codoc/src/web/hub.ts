@@ -16,7 +16,7 @@
 import type { HostToPage, PageToHost } from '../wire';
 
 (() => {
-    const w = window as unknown as { acquireVsCodeApi?: () => { postMessage(m: PageToHost): void } };
+    const w = window as unknown as { acquireVsCodeApi?: () => { postMessage(m: PageToHost): void; getState(): unknown; setState(s: unknown): void } };
     if (typeof w.acquireVsCodeApi === 'function') return;   // inside VS Code: the real one exists
 
     const deliver = (m: HostToPage) => window.postMessage(m, window.location.origin);
@@ -24,6 +24,13 @@ import type { HostToPage, PageToHost } from '../wire';
     let signedOut = false;
 
     w.acquireVsCodeApi = () => ({
+        // The page's state across a reload of this tab, as a webview's is kept.
+        getState() {
+            try { return JSON.parse(sessionStorage.getItem('codoc-page') ?? 'null'); } catch { return null; }
+        },
+        setState(s) {
+            try { sessionStorage.setItem('codoc-page', JSON.stringify(s)); } catch { /* storage off: a reload forgets */ }
+        },
         postMessage(m) {
             void fetch('/api/message', {
                 method: 'POST', credentials: 'same-origin',

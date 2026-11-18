@@ -9,7 +9,7 @@ for maintainers; the terminal-bound ones are refused with a reason);
 
 With an ``AuthContext`` every ``/api`` route needs a session whose role is not
 ``none``. Without one the hub is for localhost and its single viewer is the
-owner (``hub-local`` → ``human:local``).
+owner, writing to ``cli`` as the local person (``log.local_actor``).
 """
 from __future__ import annotations
 

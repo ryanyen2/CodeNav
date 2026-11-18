@@ -18,6 +18,7 @@ from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
 from codoc.calculus.text import AnchorError
 from codoc.workspace.config import read_config
+from codoc.workspace.log import LOCAL, local_actor
 
 OWNER = "owner"
 SUGGEST = "suggest"
@@ -153,15 +154,16 @@ class Roles:
     @classmethod
     def load(cls, codoc_dir: str | Path) -> "Roles":
         """The table every clone must agree on lives in the tracked
-        ``config.json`` (``roles: {actor: role}``); the local person and an
-        import are owners unless it says otherwise."""
-        return cls.from_config(read_config(codoc_dir))
+        ``config.json`` (``roles: {actor: role}``); this checkout's person
+        (``log.local_actor``), ``human:local`` and an import are owners unless
+        it says otherwise."""
+        return cls.from_config(read_config(codoc_dir), local_actor(Path(codoc_dir).parent))
 
     @classmethod
-    def from_config(cls, cfg: dict) -> "Roles":
+    def from_config(cls, cfg: dict, person: str = LOCAL) -> "Roles":
         """The same table from a ``config.json`` already in hand, so a caller
         that has read it does not read it twice or build the defaults again."""
-        table = {"human:local": OWNER, "human:import": OWNER}
+        table = {LOCAL: OWNER, person: OWNER, "human:import": OWNER}
         roles = cfg.get("roles")
         if isinstance(roles, dict):
             table.update({str(k): str(v) for k, v in roles.items()})

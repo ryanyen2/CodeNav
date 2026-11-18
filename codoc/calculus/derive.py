@@ -205,7 +205,7 @@ class Claim:
     start: int
     end: int
     channel: str        # human | plan | code
-    stage: str          # unsent | sent | open | accepted | added | removed
+    stage: str          # unsent | sent | open | added | removed | marked | unmarked
     actor: str
     text: str = ""
 
@@ -280,19 +280,16 @@ def ground(store: Store, fid: str) -> list[Claim]:
 
 def plan_claims(store: Store, fid: str) -> list[Claim]:
     """Open plans' insertions (``open``) and suggested deletions (``removed``)
-    on this feature, accepted plans' words (``accepted``), then ``mark_claims``."""
+    on this feature, then ``mark_claims``. An accepted plan's words are
+    ordinary text and claim nothing; their runs still name the proposer."""
     out: list[Claim] = []
     for b in prose_blocks(store, fid):
         for f in b.layout.text:
             t = b.text(f)
             lt = t.live_text()
             for r in attribution(t):
-                if not r.plan or r.plan not in store.plans:
-                    continue
-                st = store.plans[r.plan].status
-                if st == "rejected":
-                    continue
-                out.append(Claim(b.id, f, r.start, r.end, "plan", "open" if st == "open" else "accepted", r.actor, lt[r.start:r.end]))
+                if r.plan in store.open_plans:
+                    out.append(Claim(b.id, f, r.start, r.end, "plan", "open", r.actor, lt[r.start:r.end]))
             for sp in _suggest_spans(t, store):
                 out.append(Claim(b.id, f, sp.start, sp.end, "plan", "removed", store.plans[sp.attrs["plan"]].actor, lt[sp.start:sp.end]))
     return out + mark_claims(store, fid)
