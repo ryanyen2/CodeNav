@@ -646,9 +646,12 @@ removed. The paragraph reads `Retries once.`
   byte-order mark, else as UTF-8 with undecodable bytes replaced, line endings kept), and
   named as the index's walk names it (`canonical_file`: repo-relative, with `./`, `..`
   and an absolute path folded lexically; a linked file keeps its link's name, a file under
-  a linked or excluded directory is not read, since the walk enters neither; a file
-  outside the repository is refused), so the evidence and the binding it is compared with
-  are the same text under the same key:
+  a linked or excluded directory is not read, since the walk enters neither; a path none
+  of whose ancestors is the repository, such as one through a link from outside into a
+  subdirectory (`/tmp/src -> repo/src`), is named by its real path below the root when
+  the walk keys the file by that name, and refused as outside the repository otherwise),
+  so the evidence and the binding it is compared with are the same text under the same
+  key:
   - a symbol the files do not define is refused, and nothing of the call is written;
   - a symbol the feature does not own is attached (`bind.attach`);
   - a symbol the feature owns is refreshed (`bind.refresh`) when its code changed since
@@ -756,12 +759,17 @@ store as the folded ops left it:
 | `bind.attach` | binding | the hashes | `import` |
 | `plan.open` | plan | `kind`, `target`, `note`, `ops`, `opened_by`, `build` | the plan's actor |
 | `plan.accept` or `plan.reject` | plan | `verdict`, the op it folded; it sets the plan's status and verdict and does nothing else | the actor who decided |
-| `feature.handoff` | feature with a hand-off | `covers`, and `asked`, `delete_code` of the latest hand-off | that hand-off's actor |
-| `feature.realized` | feature with a realization | `covers` | `import` |
+| `feature.handoff` | block with a `handoff` or `realized` frontier | `covers` and `realized`, the two frontiers; `asked`, `delete_code` of the latest hand-off | that hand-off's actor; `import` when `covers` is empty |
 
-A feature with a realization and no hand-off (the person undid the hand-off) gets a
-stand-in hand-off before the realization and a restore that removes it afterwards, since
-`feature.realized` needs a hand-off to settle.
+The fold's `feature.handoff` is the one place a watermark's frontiers are restored. It
+carries `realized`, a field only a snapshot writes, and with it the op sets `handoff` to
+`covers` and `realized` to `realized` on the block, whatever the block's kind is now. A
+watermark stays on its block through a kind change, so a hand-off whose heading was made
+prose before the fold is queued again when the block is made a heading again, as it would
+be without the fold. The op does not move `code_at` or `realized_at`; the `block.add`
+restores both clocks. When `covers` is not empty the op becomes the block's latest
+hand-off. It comes after the `bind.attach` ops, because a settle reads its evidence from
+the ops after the latest hand-off.
 
 None of these ops carries an inverse, and replay gives them none (section 6). They
 re-express state and are nobody's gesture, so an undo never takes the fold's batch for
@@ -778,9 +786,10 @@ opens a new session (section 5), so nothing is appended under `log/archive/`.
 
 **What a fold keeps.** `state_fingerprint` and every view of the document are equal
 before and after. A segment carries its author, its clock and its killer's; a mark
-carries its placer; a watermark carries when the code last moved and when a realization
-last settled; a dead heading carries the bindings it owned. `history` and the timeline
-are views of the log and lose the folded ops.
+carries its placer; a watermark carries its frontiers, when the code last moved and when a
+realization last settled, on any block that holds one; a dead heading carries the
+bindings it owned. `history` and the timeline are views of the log and lose the folded
+ops.
 
 **A branch forked before the fold** still merges: replay applies the snapshot and then
 every op outside its frontier, whatever its `at`, and the snapshot keeps dead blocks and
@@ -838,12 +847,6 @@ It adopts each new projection block by block.
 - A marker op per commit, to scrub the timeline by commit.
 - An exact snapshot cut. The cut is at the oldest op of a feature with an open plan,
   which can be earlier than the oldest op the verdict needs.
-- Keeping a hand-off through a fold when its heading was made prose before the fold.
-  The snapshot's `feature.handoff` then conflicts `no_feature`, so turning the block back
-  into a heading after the fold shows it as not queued.
-- Binding a file reached through a symlink outside the repository that points into a
-  subdirectory of it (`/tmp/src -> repo/src`). Such a path is refused as outside the
-  repository; a link to the repository root itself is accepted.
 - Ranks from writers other than codoc's clients. `rank.valid` refuses a pinned rank that
   `rank.between` cannot produce (for example one ending in the zero digit), so a block
   added with such a rank is a `malformed` conflict.
