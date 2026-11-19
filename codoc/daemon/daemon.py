@@ -20,7 +20,7 @@ Per debounced batch of filesystem events it does, in order:
 4. reflect the changed code files that are not deferred, citing the hand-offs
    of step 1: every code file changed since the index was last updated, not
    only those the batch saw change, and the change set a stopped pass left
-   (``with_pending``);
+   (``with_pending``), which runs a pass even when no code file changed;
 5. settle the hand-offs applied binding ops now cite, unless an epoch is open
    (``realize.settle_if_idle``); a reflect pass settles too;
 6. publish the derived files.
@@ -204,13 +204,14 @@ class Daemon:
             self.state = DaemonState(reflected=ep.get("ended_at"))
             under_epoch = True
             notes.append("recovered a dead agent session" if stale else "agent session closed")
-        # 4. Reflect.
-        if code:
-            if self.state.epoch_open:
+        # 4. Reflect. A change set a stopped pass left runs a pass with no
+        # changed file, so the startup batch or the next tick applies it.
+        if self.state.epoch_open:
+            if code:
                 self.state.deferred |= code
                 notes.append(f"deferring {len(code)} file(s) for the open session")
-            else:
-                notes.append(self.reflect(under_epoch=under_epoch, landed=landed))
+        elif code or (self.codoc_dir / PENDING).exists():
+            notes.append(self.reflect(under_epoch=under_epoch, landed=landed))
         if under_epoch:
             note_reflected(self.codoc_dir, self.state.reflected)
         # 5. Settle what the drain landed, and a session that just closed.

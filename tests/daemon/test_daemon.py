@@ -64,6 +64,21 @@ def test_a_pass_stopped_before_its_model_call_has_its_refreshed_code_judged_next
     d.process_batch([str(d.root / "c.py")])
     assert asked == [["c.py::send"]] and not (d.codoc_dir / "cache" / "pending.json").exists()
 
+
+def test_a_daemon_started_with_a_stopped_passs_change_set_reflects_it_with_no_code_change(tmp_path):
+    """The window reloaded mid-pass in a quiet repository: no code file
+    changes again, so the startup batch itself runs the pass over what the
+    stopped one left, and deletes the file."""
+    d, calls = make(tmp_path, [])
+    pending = d.codoc_dir / "cache" / "pending.json"
+    pending.parent.mkdir(parents=True, exist_ok=True)
+    pending.write_text(json.dumps({"added": [{"symbol": "c.py::retry", "fingerprint": "f7", "types_hash": "t7",
+                                              "source": "def retry(): ..."}], "modified": [], "removed": []}))
+    asked = []
+    d._propose = lambda changes, *a, **k: asked.append([x["symbol"] for x in changes["added"]]) or []
+    d.batch([])
+    assert calls == [False] and asked == [["c.py::retry"]] and not pending.exists()
+
 def test_open_epoch_holds_code_until_it_closes(tmp_path):
     d, calls = make(tmp_path, [ChangeSet(modified=[ChunkRef("c.py::send", "f3", "t1")])])
     act = d.codoc_dir / "activity.json"
