@@ -9,7 +9,7 @@ from codoc.calculus import ops as K
 from codoc.calculus.doc import PARAGRAPH
 from codoc.calculus.ids import START
 from codoc.daemon.daemon import Daemon
-from codoc.daemon.epoch import read_activity, write_activity
+from codoc.workspace.epoch import read_activity, write_activity
 from codoc.index.changes import ChangeSet, ChunkRef
 from codoc.workspace import Workspace
 from codoc.workspace import log as L
@@ -268,7 +268,7 @@ def test_projection_carries_the_realizing_lease_and_publish_skips_unchanged(tmp_
     proj = json.loads((d.codoc_dir / "projection.json").read_text())
     assert proj["phases"] == {"h1": "realizing"}
     stamp = (d.codoc_dir / "projection.json").stat().st_mtime_ns
-    assert d.process_batch([]) == "no-op" and (d.codoc_dir / "projection.json").stat().st_mtime_ns == stamp
+    assert d.process_batch([]) == "" and (d.codoc_dir / "projection.json").stat().st_mtime_ns == stamp
 
 
 def test_every_publish_reads_the_lease_and_none_renews_it(tmp_path):
@@ -469,13 +469,12 @@ def test_a_citing_attach_settles_nothing_while_an_agent_epoch_is_open_and_settle
 
 
 def test_a_batch_does_not_wake_the_daemon_for_what_it_wrote(tmp_path):
-    """The daemon writes acks, offsets.json and atomic_write's tmp files into
-    the inbox. Waking on them made every batch start the next, forever; and a
-    drain with nothing new rewrites nothing."""
-    from codoc.daemon.daemon import _filter
+    """The daemon writes its session file, and acks, offsets.json and
+    atomic_write's tmp files into the inbox. Waking on them made every batch
+    start the next, forever; and a drain with nothing new rewrites nothing."""
     d, _ = make(tmp_path, [])
     inbox = I.inbox_dir(d.codoc_dir)
-    keep = _filter(d.codoc_dir, d.code_path)
+    keep = d.wakes
     t = d.ws.store.blocks["p1"].text()
     I.submit(d.codoc_dir, "ide", [Submission(cid="w1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
                                              payload={"after": list(t.last_live_ref()), "text": " Typed."})])
@@ -488,7 +487,7 @@ def test_a_batch_does_not_wake_the_daemon_for_what_it_wrote(tmp_path):
     now = stamps()
     written = [p for p in now if was.get(p) != now[p]] + [inbox / ".offsets.json.x1.tmp"]
     assert (inbox / "offsets.json") in written and not [p for p in written if keep(None, str(p))]
-    assert d.process_batch([]) == "no-op" and stamps() == now
+    assert d.process_batch([]) == "" and stamps() == now
 
 
 def test_no_log_names_the_machine(tmp_path, monkeypatch):
@@ -509,3 +508,67 @@ def test_no_log_names_the_machine(tmp_path, monkeypatch):
     for f in files:
         assert "alices-laptop" not in f.path.read_text()
         assert {parse(o.at)[2] for o in f.ops} == {f.session}
+
+
+def test_the_daemon_prints_what_a_batch_did_and_nothing_for_a_no_op(tmp_path, monkeypatch):
+    """A hook's write to activity.json starts a batch that does nothing, and
+    it prints nothing. The batch a start runs drains what queued while no
+    daemon ran, and prints it like any other."""
+    import atexit
+    import signal
+    import watchfiles
+    d, _ = make(tmp_path, [])
+    said: list[str] = []
+    d.say = said.append
+    I.submit(d.codoc_dir, "ide", [Submission(cid="q1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                                             payload={"after": list(d.ws.store.blocks["p1"].text().last_live_ref()),
+                                                      "text": " Queued."})])
+    monkeypatch.setattr(watchfiles, "watch", lambda *a, **k: iter([{(2, str(d.codoc_dir / "activity.json"))}]))
+    monkeypatch.setattr(signal, "signal", lambda *a: None)
+    monkeypatch.setattr(atexit, "register", lambda *a: None)
+    d.run()
+    d.ws.close()
+    assert [line for line in said if line.startswith("▸")] == ["▸ 1 client op(s)"]
+
+
+def test_a_daemon_started_after_a_turn_went_silent_reflects_that_turn(tmp_path):
+    """A turn that touched c.py was killed without its hooks while no daemon
+    ran. The daemon that starts later closes the stale epoch and runs the
+    pass over what that turn touched, as if it had seen the turn open."""
+    import time
+    root = tmp_path / "repo"
+    (root / ".codoc").mkdir(parents=True)
+    calls: list[set[str]] = []
+
+    def changeset(_root, _codoc, files):
+        calls.append(set(files))
+        return ChangeSet(modified=[ChunkRef("c.py::send", "f2", "t1")])
+    write_activity(root / ".codoc", {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": ["c.py"]})
+    old = time.time() - 2000
+    os.utime(root / ".codoc" / "activity.json", (old, old))
+    d = Daemon(root, changeset=changeset, propose=lambda *a, **k: [], printer=lambda *_: None)
+    assert "recovered a dead agent session" in d.process_batch([])
+    assert read_activity(root / ".codoc")["epoch"]["open"] is False and calls == [{"c.py"}]
+
+
+def test_a_lease_that_names_its_process_holds_while_the_process_lives(tmp_path):
+    """A `claude -p` pass can spend longer than the lease's window on one
+    hand-off without writing anything. Its lease names its process, so it
+    holds for as long as that process runs, and lapses when it exits."""
+    import subprocess
+    import sys
+    import time
+    from codoc.daemon.publish import REALIZING_LEASE_SECONDS, realizing_is_fresh, write_realizing
+    cd = tmp_path / ".codoc"
+    cd.mkdir()
+    (cd / "realize.md").write_text("### ⟨d:s:1⟩ Retry\n")
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        write_realizing(cd, detail="building", owner="o1", pid=child.pid)
+        later = time.time() + REALIZING_LEASE_SECONDS + 60
+        assert realizing_is_fresh(cd, now=later)
+    finally:
+        child.kill()
+        child.wait()
+    assert not realizing_is_fresh(cd)
+

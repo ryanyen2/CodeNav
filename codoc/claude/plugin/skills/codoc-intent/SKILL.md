@@ -42,7 +42,7 @@ targets and anything in backticks stay exactly as they are in the code.
 | `move_node` | `feature_id`, `parent_id` | put a feature under another parent |
 | `delete_node` | `feature_id` | propose deleting a feature |
 
-- `bindings` is a list of `"file.py::symbol"` strings.
+- `bindings` is a list of `"file.py::symbol"` strings, each naming code the index already holds. Code written during your turn is indexed when the turn ends, and the pass that runs then binds it; a binding to it is refused.
 - `description` is Markdown.
 - `amend.blocks` changes a description block by block. Each block in `codoc_context` is `{"id", "text"}`, where `text` is that block as Markdown: a paragraph, a `- ` bullet, a `1. ` step, a whole table, or a whole fenced diagram or snippet.
 
@@ -59,7 +59,7 @@ A block you do not list is unchanged. A list item's indentation is its level, as
 
 One call with everything your change implies.
 
-1. `attach` the symbols you wrote or changed to the feature they belong to. Prefer an existing feature. `add_node` only when nothing covers the new code, and put related new symbols under one node.
+1. `attach` symbols you changed that existed before your turn, to the feature they belong to, when it does not own them yet. Code you wrote new is bound when your turn ends. `add_node` only when no feature covers what you built.
 2. `amend` a block only when it says something the code does not do, or when you added a capability the description does not mention. Change that block. Leave the others as they are.
 3. `rationale` is one plain line saying what the edits change in the tree. It is the note on any plan they open. Describe the code as it is, not what changed: no "now", "no longer" or "updated to", in the rationale or in amended text.
 4. When the work came from a hand-off in `.codoc/realize.md`, pass its `d:…` id as `caused_by`. That reports the hand-off and you are done with it. It settles when your turn ends; there is nothing to wait for.

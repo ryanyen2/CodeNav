@@ -19,18 +19,26 @@ as absent.
 Merging: for each hook event an entry whose command runs the codoc hook is
 replaced by the fresh one; other entries and other keys are untouched, so
 installing twice changes nothing and an entry from an older install is upgraded.
-The hook template says ``python``; installing replaces it with
-``sys.executable``, the interpreter running the install.
+
+Which codoc runs: the hooks and the MCP server run ``<sys.executable> -m
+<module>``, the interpreter running the install (the hook template says
+``python``). That interpreter, started in the project root without this
+process's ``PYTHONPATH``, may import a different codoc: one installed in the
+same environment, when this one runs from a checkout. Then the hook commands
+and the server's registration set ``PYTHONPATH`` to the directory that holds
+this codoc.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import subprocess
 import sys
 from pathlib import Path
 
+import codoc
 from codoc.claude.autorealize import find_claude
 from codoc.llm.prompt import load_prompt
 from codoc.workspace.layout import atomic_write
@@ -54,14 +62,28 @@ def _load_plugin_hooks() -> dict:
         return {}
 
 
-def _resolve_hooks(hooks_data: dict) -> dict:
-    """The template with ``python`` in every hook command replaced by sys.executable."""
+def _pythonpath(root_dir: str) -> str | None:
+    """The directory that holds the codoc running this install, when this
+    interpreter, started in ``root_dir`` without ``PYTHONPATH``, would import
+    another codoc or none; else None."""
+    here = Path(codoc.__file__).resolve().parent
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    run = subprocess.run([sys.executable, "-c", "import codoc; print(codoc.__file__)"], cwd=root_dir, env=env,
+                         capture_output=True, text=True, timeout=60)
+    found = run.stdout.strip() if run.returncode == 0 else ""
+    return None if found and Path(found).resolve().parent == here else str(here.parent)
+
+
+def _resolve_hooks(hooks_data: dict, pythonpath: str | None) -> dict:
+    """The template with ``python`` in every hook command replaced by
+    sys.executable, after ``PYTHONPATH=…`` when ``pythonpath`` is given."""
+    run = (f"PYTHONPATH={shlex.quote(pythonpath)} " if pythonpath else "") + shlex.quote(sys.executable)
     resolved = json.loads(json.dumps(hooks_data))
     for entries in resolved.get("hooks", {}).values():
         for entry in entries:
             for hook in entry.get("hooks", []):
                 if "command" in hook:
-                    hook["command"] = hook["command"].replace("python ", f"{sys.executable} ", 1)
+                    hook["command"] = hook["command"].replace("python ", f"{run} ", 1)
     return resolved
 
 
@@ -121,18 +143,13 @@ def _strip_hooks(hooks: dict, path: Path) -> dict:
     return out
 
 
-def _mcp_command() -> list[str]:
-    """The ``codoc-mcp`` console script beside this interpreter (a venv or a
-    ``uv`` install), else ``python -m codoc.mcp.server``."""
-    script = Path(sys.executable).parent / "codoc-mcp"
-    return [str(script)] if script.exists() else [sys.executable, "-m", "codoc.mcp.server"]
-
-
-def install_mcp(root_dir: str) -> str | None:
-    """Register the codoc MCP server at Claude Code's local scope for the
-    project at ``root_dir``. Returns None when done, else why not and the
-    command to run once ``claude`` is on PATH."""
-    add = ["claude", "mcp", "add", "--scope", "local", "codoc", "--", *_mcp_command()]
+def install_mcp(root_dir: str, pythonpath: str | None = None) -> str | None:
+    """Register the codoc MCP server, ``<sys.executable> -m codoc.mcp.server``,
+    at Claude Code's local scope for the project at ``root_dir``, with
+    ``pythonpath`` in its environment when given. Returns None when done, else
+    why not and the command to run once ``claude`` is on PATH."""
+    env = ["-e", f"PYTHONPATH={pythonpath}"] if pythonpath else []
+    add = ["claude", "mcp", "add", "--scope", "local", "codoc", *env, "--", sys.executable, "-m", "codoc.mcp.server"]
     claude = find_claude()
     if claude is None:
         return f"`claude` is not on PATH, so the MCP server is not registered. Run in {root_dir}: {shlex.join(add)}"
@@ -184,9 +201,10 @@ def install_hooks(root_dir: str, *, say=lambda _msg: None) -> list[str]:
     tracked_hooks = _field(tracked, "hooks", dict, shared)
     tracked_kept = _strip_hooks(tracked_hooks, shared)
     servers = _field(mcp_json, "mcpServers", dict, mcp)
+    pythonpath = _pythonpath(root_dir)
 
     # 1. Hooks and the MCP permission, in the untracked local settings.
-    for event, entries in _resolve_hooks(_load_plugin_hooks()).get("hooks", {}).items():
+    for event, entries in _resolve_hooks(_load_plugin_hooks(), pythonpath).get("hooks", {}).items():
         hooks[event] = hooks.get(event, []) + entries
     settings["hooks"] = hooks
     settings["permissions"] = {**perms, "allow": allow if MCP_ALLOW in allow else [*allow, MCP_ALLOW]}
@@ -228,7 +246,7 @@ def install_hooks(root_dir: str, *, say=lambda _msg: None) -> list[str]:
 
     # 4. The MCP server, at the local scope. An older install's entry in the
     #    tracked .mcp.json goes only once this one is registered.
-    if (why := install_mcp(root_dir)) is None:
+    if (why := install_mcp(root_dir, pythonpath)) is None:
         if "codoc" in servers:
             _save_or_remove(mcp, mcp_json, "mcpServers", {k: v for k, v in servers.items() if k != "codoc"})
     else:

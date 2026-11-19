@@ -3,6 +3,7 @@ import { Fragment, Slice } from '@tiptap/pm/model';
 import { AllSelection } from '@tiptap/pm/state';
 import { describe, expect, it } from 'vitest';
 
+import type { TextField } from '../../../web/calc/projection';
 import { deleteFeature } from '../../../web/editor/commands';
 import { block, ids, key, kindBlock, kinds, mount, paste, pasteSlice, pasteText, perform, posIn, select, shadowFaults, shape, texts, typeText }
     from './harness';
@@ -144,6 +145,37 @@ describe('a paste of several paragraphs', () => {
         pasteText(m, 'at most\ntwice, then');
         m.handle.flush();
         expect(texts(m.view.state.doc)).toEqual(['T', 'Retries at most', 'twice, thenonce.']);
+        expect(kinds(m.submitted)).toEqual(['text.insert', 'block.split', 'text.insert']);
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it('keeps a last piece of another kind a block of its own, before the words after the caret', () => {
+        const list = mount([block('h', 'heading', 'T'), block('p', 'paragraph', 'hello world')]);
+        select(list.view, posIn(list.view, 'p', 6));
+        pasteText(list, '- a\n- b\n- c');
+        expect(shape(list.view.state.doc)).toEqual(['heading:1', 'paragraph', 'bullet:1', 'bullet:1', 'paragraph']);
+        expect(texts(list.view.state.doc)).toEqual(['T', 'hello a', 'b', 'c', 'world']);
+        expect(shadowFaults(list)).toEqual([]);
+        const head = mount([block('h', 'heading', 'T'), block('p', 'paragraph', 'hello world')]);
+        select(head.view, posIn(head.view, 'p', 6));
+        pasteText(head, 'intro\n# New feature');
+        expect(shape(head.view.state.doc)).toEqual(['heading:1', 'paragraph', 'heading:1', 'paragraph']);
+        expect(texts(head.view.state.doc)).toEqual(['T', 'hello intro', 'New feature', 'world']);
+        expect(shadowFaults(head)).toEqual([]);
+    });
+
+    it('gives the first line the bold it continues, as the store does', () => {
+        const p = block('p', 'paragraph', 'ab cd');
+        (p.fields.text as TextField).spans.push({ kind: 'bold', attrs: {}, start: 0, end: 2 });
+        const m = mount([block('h', 'heading', 'T'), p]);
+        select(m.view, posIn(m.view, 'p', 2));                        // "ab|", the end of the bold
+        pasteText(m, 'xy\nzw');
+        m.handle.flush();
+        const marks = (bid: string, i: number) => m.view.state.doc.nodeAt(posIn(m.view, bid, i))!.marks.map(x => x.type.name);
+        expect(texts(m.view.state.doc)).toEqual(['T', 'abxy', 'zw cd']);
+        expect([marks('p', 2), marks('p', 3)]).toEqual([['bold'], ['bold']]);
+        expect(marks(ids(m.view.state.doc)[2].split(':')[1], 0)).toEqual([]);
+        // The store grows the bold over "xy" by itself: no mark is sent.
         expect(kinds(m.submitted)).toEqual(['text.insert', 'block.split', 'text.insert']);
         expect(shadowFaults(m)).toEqual([]);
     });

@@ -653,11 +653,25 @@ def accept_handoffs(store: Store, plan) -> list[str]:
 
 
 def offered_plans(store: Store) -> list:
-    """Plans still awaiting a verdict whose target (when they have one) is
-    live: a proposal on a heading the person deleted is not decidable from
-    any surface, so it is not offered."""
+    """Open plans a person can see, which are the ones offered for a verdict:
+    one with no target or a live one, and one whose target was deleted but
+    whose words or proposal records are still live on a live block (it wrote
+    into another feature). Every plan ``plan_claims`` draws is one of these. A
+    plan with nothing left on the page is not offered; it comes back with its
+    target."""
     return [p for p in store.open_plans.values()
-            if p.target is None or (p.target in store.blocks and store.blocks[p.target].live)]
+            if p.target is None or (p.target in store.blocks and store.blocks[p.target].live) or _on_page(store, p)]
+
+
+def _on_page(store: Store, plan) -> bool:
+    for op_id in plan.ops:
+        for b, f in store.holders(op_id):
+            if b.live and any(s.live and s.op == op_id for s in b.text(f).segs):
+                return True
+        for b, f, m in store.placed_by(op_id):
+            if b.live and m.kind in PROPOSALS and b.text(f).mark_refs(m):
+                return True
+    return False
 
 
 # ── export ───────────────────────────────────────────────────────────────────

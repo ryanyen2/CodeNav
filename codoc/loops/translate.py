@@ -28,7 +28,6 @@ interrupted run can be run again.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from codoc.calculus import block_md
 from codoc.calculus.derive import open_plans_on, title
@@ -78,11 +77,11 @@ def _prose(item: dict) -> str:
     return "\n".join([item["title"], *(b["text"] for b in item["blocks"])])
 
 
-def translate_tree(ws: Workspace, codoc_dir: str | Path, *, language: DocLanguage | None = None, dry_run: bool = False,
+def translate_tree(ws: Workspace, *, language: DocLanguage | None = None, dry_run: bool = False,
                    limit: int = 0, repo_name: str = "codebase", config=None, propose=propose_translations,
                    printer=None) -> TranslateResult:
     say = printer or (lambda *_a, **_k: None)
-    lang = language or workspace_doc_language(codoc_dir)
+    lang = language or workspace_doc_language(ws.codoc_dir)
     actor = f"translator:{lang.code}"
     res = TranslateResult()
     store = ws.store

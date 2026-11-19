@@ -3,9 +3,9 @@
 One process opens a workspace; it is the applier. Opening replays the logs
 (snapshot first, then every op outside the snapshot's frontier, in
 ``(at, session, seq)`` order), advances the clock past everything replayed, and
-starts a new session log. ``follow_head`` keeps the store a function of the
-logs on disk: when ``HEAD`` moved or git took the session file, it rebuilds and
-starts a new session. ``submit`` mints ids, stamps actors, applies, and appends
+starts a new session log. ``follow_disk`` keeps the store a function of the
+logs on disk: when ``HEAD`` moved or git took the session file it starts a new
+session and rebuilds, and when any other log file changed it rebuilds. ``submit`` mints ids, stamps actors, applies, and appends
 to the session log; ``ingest`` runs the boundary diff and submits its ops as
 one batch under the machine gate. ``drain_inbox`` turns client submissions into
 ops and acks them by client id, each exactly once.
@@ -65,19 +65,25 @@ class Workspace:
         self._answering: tuple[str, str] | None = None  # (client, cid) of the submission being applied
         self._sent_text: dict[str, str] = {}      # cid → the insert's text as the client counted it
         # The HEAD (sha, branch) this session writes under, as the caller read
-        # it; None until a caller says (``follow_head``).
+        # it; None until a caller says (``follow_disk``).
         self.head: tuple[str, str] | None = None
+        self._loaded: dict[str, tuple[int, int]] = {}   # the other log files the store was built from
         self.rebuild()
         self.readonly = readonly
         self.seq = 0
         # A read-only open (an MCP read, `codoc status`) replays the logs and
         # writes nothing: no session file, and `submit` refuses.
         self.writer = None if readonly else L.SessionWriter(self.codoc_dir, self.session, self.clock.tick())
+        if not readonly:
+            self._answer_logged()
 
     # ── replay ─────────────────────────────────────────────────────────────
     def rebuild(self) -> None:
         """Fold every valid log on disk into a fresh store (I6). The log is the
         truth: nothing replayed is refused, and the clock advances past it."""
+        # Taken before the files are read, so a write landing during the read
+        # is seen as a change at the next look.
+        self._loaded = self._other_logs()
         self.store = Store(policy=self.roles.policy)
         self.problems = []
         self.torn = []
@@ -242,7 +248,7 @@ class Workspace:
         authored: the lift pass's re-derived diagram, and nothing else. The
         gate exists to keep a machine from overwriting words somebody meant,
         and a derived field holds none: it is attribution, like a binding
-        refresh. Gating it would turn every large code change into a proposal
+        refresh. Gating it would turn every large code change into a plan
         to redraw the diagram, which is when the diagram most needs to follow
         the code."""
         res = self.plan_ingest(bid, path, base_text=base_text, new_md=new_md, actor=actor, trunk=plan is None,
@@ -319,7 +325,7 @@ class Workspace:
     def propose(self, *, actor: str, kind: str, target: str | None, note: str, build: bool = False,
                 bodies: list[dict] = (), rewrites: list[tuple] = (), strikes: list[str] = (),
                 caused_by: str | None = None, pid: str | None = None) -> "Amended":
-        """A machine's proposal, decided whole: one plan holding ``bodies``,
+        """A machine's plan, decided whole: one plan holding ``bodies``,
         the ``rewrites`` ``(bid, path, new_md, base_text | None)`` and the
         ``strikes``. When nothing lands under it the plan is taken back, so the
         person is never asked to accept nothing; a delete plan stays, since
@@ -327,7 +333,7 @@ class Workspace:
         out = Amended()
         pid = pid or new_plan_id()
         # What can fail on a malformed submission fails here, before anything
-        # lands: a proposal is decided whole, and a plan half written would stay.
+        # lands: a plan is decided whole, and a plan half written would stay.
         if any(not isinstance(md, str) or not (base is None or isinstance(base, str)) for _, _, md, base in rewrites):
             raise TypeError("a rewrite's new_md and base_text are strings")
         struck = strike_bodies(self.store, list(strikes), pid) if strikes else []
@@ -423,12 +429,7 @@ class Workspace:
                 I.ack(self.codoc_dir, client, line.cid, error=line.error)
                 continue
             cid = line.sub.cid
-            acked = self._acked.setdefault(client, {})
-            if cid in acked or (client, cid) in taken:
-                continue
-            if (logged := self._logged.get(client, {}).get(cid)) is not None:
-                I.ack(self.codoc_dir, client, cid, self.store.by_id.get(logged))
-                acked[cid] = logged
+            if (client, cid) in taken or self._answered(client, cid):
                 continue
             taken.add((client, cid))
             todo.append((client, actor, line.sub))
@@ -441,6 +442,30 @@ class Workspace:
             self._inbox_offsets = offsets
             I.write_offsets(self.codoc_dir, offsets)
         return out
+
+    def _answered(self, client: str, cid: str) -> bool:
+        """Whether submission ``cid`` of ``client`` has its answer: it was
+        acked, or the logs record its ops (the applier stopped between logging
+        them and writing the ack), in which case it is acked now from the log.
+        Either way it is not applied again."""
+        acked = self._acked.setdefault(client, {})
+        if cid in acked:
+            return True
+        logged = self._logged.get(client, {}).get(cid)
+        if logged is None:
+            return False
+        I.ack(self.codoc_dir, client, cid, self.store.by_id.get(logged))
+        acked[cid] = logged
+        return True
+
+    def _answer_logged(self) -> None:
+        """Answer every undrained submission the logs already record, when a
+        writing workspace opens: before a fold archives the file that records
+        it, and before a drain could apply it twice."""
+        for client in self._logged:
+            for line in I.read_inbox(self.codoc_dir, client, self._inbox_offsets.get(client, 0)):
+                if line.sub is not None:
+                    self._answered(client, line.sub.cid)
 
     def apply_submissions(self, subs: list[tuple[str, str, I.Submission]], on_applied=None) -> list["Applied"]:
         """Apply ``(client, actor, submission)`` triples in order
@@ -471,18 +496,18 @@ class Workspace:
         self._apply(self._mint(K.PLAN_REJECT, {"pid": plan.id}, {}, actor=plan.actor, batch=plan.id), answers=False)
         self._opened_plans = {k: v for k, v in self._opened_plans.items() if v != plan.id}
 
-    def _as_proposal(self, actor: str, s: I.Submission) -> I.Submission:
-        """A suggester's Backspace, as a proposal. A plan proposes and never
+    def _as_strike(self, actor: str, s: I.Submission) -> I.Submission:
+        """A suggester's Backspace, as a strike in their plan. A plan never
         kills, so a contributor's ``text.delete`` becomes the plan's
         ``suggest_del`` over the characters it names, unless they are all
         words the contributor's own open plan put there, which are theirs to
         take back. A ``segments`` delete names its characters exactly, and the
-        proposal records exactly those (``chars``), so a word another actor
-        typed between them is not struck."""
+        mark records exactly those (``chars``), so a word another actor typed
+        between them is not struck."""
         if s.kind != K.TEXT_DELETE or s.plan or self.roles.role(actor) != SUGGEST:
             return s
         if own_plan_words(self.store, actor, deleted_ops(self.store, s.target, s.payload)):
-            return s        # their own proposed words: a real delete, not a proposal to strike a proposal
+            return s        # their own plan's words: a real delete, not a strike of a strike
         if "segments" in s.payload:
             payload = self._strike_segments(s.target, s.payload["segments"])
         elif "from" in s.payload and "to" in s.payload:
@@ -514,7 +539,7 @@ class Workspace:
     def _plan_for(self, actor: str, batch: str, bid: str, note: str) -> str | None:
         """The plan this actor's writes ride in, opened on demand. One per edit,
         not one per batch: the editor flushes every 350 ms, so a contributor
-        typing a sentence would otherwise leave the maintainer four proposals to
+        typing a sentence would otherwise leave the maintainer four plans to
         answer. An open plan of theirs on the same block is that edit."""
         key = (actor, batch)
         pid = self._opened_plans.get(key)
@@ -522,7 +547,7 @@ class Workspace:
         if plan is not None and plan.status == "open":
             return pid
         if bid:
-            # An `edit` plan only: a proposal to DELETE or MOVE this feature is
+            # An `edit` plan only: a plan to delete or move this feature is
             # a different question, and filing a repair under it means accepting
             # the deletion accepts the repair and rejecting it drops it.
             for p in reversed(list(self.store.open_plans.values())):
@@ -599,12 +624,12 @@ class Workspace:
             return Applied(done.ops, "; ".join(f"{b}: {why}" if b else why for b, why in done.refused) or None,
                            f"plan:{done.plan}" if done.plan else "unchanged")
         if s.kind != "ingest":
-            # Resolve first: `_as_proposal` asks which plan minted the
+            # Resolve first: `_as_strike` asks which plan minted the
             # characters a range names, and a `$cid` ref answers nothing. The
             # editor batches a flush, so an insert and the Backspace over it
             # arrive together exactly when somebody corrects a typo.
             s = replace(s, payload=I.resolve_provisional(s.payload, acked, self._sent_text))
-        s = self._as_proposal(actor, s)
+        s = self._as_strike(actor, s)
         plan = s.plan or self._suggester_plan(actor, s.kind if s.kind != "ingest" else K.TEXT_INSERT,
                                               s.target, s.payload, batch)
         if s.kind == "ingest":
@@ -625,21 +650,45 @@ class Workspace:
         if self.writer is not None:
             self.writer.sync()
 
-    def follow_head(self, sha: str, branch: str) -> bool:
-        """Before applying anything: when ``HEAD`` moved since the last call (a
-        commit, a checkout, a pull: its sha or its branch) or the session file
-        is not the one the writer appends to (``git stash -u``, ``git clean``,
-        a discard), rebuild from the logs on disk and start a new
-        session. The store stays a function of the logs on disk (I6), and a
-        session file is never appended to after a commit may have recorded it.
-        The first call records ``HEAD``. Returns whether it rebuilt."""
+    def follow_disk(self, sha: str, branch: str) -> bool:
+        """Before applying anything, make the store the one the logs on disk
+        describe (I6). When ``HEAD`` moved since the last call (a commit, a
+        checkout, a pull: its sha or its branch) or the session file is not the
+        one the writer appends to (``git stash -u``, ``git clean``, a discard),
+        start a new session and rebuild: a session file is never appended to
+        after a commit may have recorded it. Otherwise rebuild when another log
+        file changed (``catch_up``). The first call records ``HEAD``. Returns
+        whether it rebuilt."""
         moved = self.head is not None and self.head != (sha, branch)
         self.head = (sha, branch)
-        if not moved and (self.writer is None or self.writer.intact()):
+        if moved or (self.writer is not None and not self.writer.intact()):
+            self.rotate_session()
+            self.rebuild()
+            return True
+        return self.catch_up()
+
+    def catch_up(self) -> bool:
+        """Rebuild when a log file other than this session's appeared, vanished
+        or changed since the store was built: another writer applied, or git
+        brought or took a file without moving ``HEAD`` (``git stash pop``).
+        Returns whether it rebuilt."""
+        if self._other_logs() == self._loaded:
             return False
         self.rebuild()
-        self.rotate_session()
         return True
+
+    def _other_logs(self) -> dict[str, tuple[int, int]]:
+        """Every log file but this session's own, by size and modification time."""
+        mine = f"{self.session}.jsonl"
+        out = {}
+        for p in L.log_dir(self.codoc_dir).glob("*.jsonl"):
+            try:
+                st = p.stat()
+            except OSError:
+                continue                # removed between the listing and the stat
+            if p.name != mine:
+                out[p.name] = (st.st_size, st.st_mtime_ns)
+        return out
 
     def rotate_session(self) -> str:
         """Close the current session log and open a new one."""

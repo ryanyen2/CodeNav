@@ -20,7 +20,7 @@ import { SOURCE, START, isBuiltin, isOneLine, kindOf, nfc, pathOf, type CharRef,
          type Span } from '../calc/projection';
 import { SENT_MARKS, markAttrs, scalarOffset } from '../calc/recorder';
 import { Shadow } from '../calc/shadow';
-import { deleteSelection, done, isLevelled, lineAttrs, type Env, type Gesture } from './commands';
+import { deleteSelection, done, isLevelled, lineAttrs, splitAt, type Env, type Gesture } from './commands';
 import { cardFence, clampLevel } from './schema';
 
 /** One block as it arrives in a paste: inline Markdown already read into
@@ -91,6 +91,9 @@ function inline(node: PMNode): { text: string; spans: Span[] } {
     return { text, spans };
 }
 
+/** A block's level as the store keeps it: clamped for a heading or a list item, 0 otherwise. */
+const levelOf = (kind: string, level: unknown): number => (isLevelled(kind) ? clampLevel(Number(level)) : 0);
+
 /** The position right after the top-level block with this id, or 0 for START. */
 function blockEnd(doc: PMNode, bid: string): number {
     let end = bid === START ? 0 : doc.content.size;
@@ -156,36 +159,41 @@ export function pasteBlocks(state: EditorState, env: Env, pieces: Piece[]): Gest
         const wasEmpty = shadow.length === 0;
         if (first.text) {
             write({ bid, path: 'text' }, shadow, off, first.text, first.spans);
-            tr = tr.insert(caret, inlineNodes(schema, first.text, first.spans));
+            // On the page the text takes the marks the store gives an insert
+            // after the character before the caret (a bold it ends, a mark it
+            // is inside; docs/model.md, "Marks"), then its own.
+            const at = (k: number) => caret + Array.from(first.text).slice(0, k).join('').length;
+            tr = tr.insert(caret, schema.text(first.text, off > 0 ? tr.doc.resolve(caret).marks() : []));
+            for (const s of first.spans) tr = tr.addMark(at(s.start), at(s.end), schema.marks[s.kind].create(s.attrs));
             off += Array.from(first.text).length;
             caret += first.text.length;
         }
         if (wasEmpty && hostKind === 'paragraph' && first.kind !== 'paragraph') {
-            const lvl = isLevelled(first.kind) ? clampLevel(first.level) : 0;
+            const lvl = levelOf(first.kind, first.level);
             ops.push({ kind: 'block.set', target: { bid, path: 'kind' }, payload: lvl ? { value: first.kind, level: lvl } : { value: first.kind } });
             tr = tr.setNodeMarkup($at.before(1), schema.nodes[first.kind], lineAttrs(first.kind, bid, host.attrs.head as number, lvl));
         }
     }
 
-    // The words after the caret go after the last piece, in `tail`.
+    // The words after the caret go after the last piece, in `tail`: the
+    // caret's block split there, or the whole block when the caret is at its start.
     let after = bid;
-    let tail: { bid: string; shadow: Shadow } | null = null;
+    let tail: { bid: string; shadow: Shadow; kind: string; level: number } | null = null;
     if (rest.length && off < shadow.length) {
         if (off === 0) {
             after = $at.index(0) > 0 ? tr.doc.child($at.index(0) - 1).attrs.bid as string : START;
-            tail = { bid, shadow };
+            tail = { bid, shadow, kind: hostKind, level: levelOf(hostKind, host.attrs.level) };
         } else {
-            // A heading's tail is a paragraph; any other block's is a block like it.
-            const nt = env.nextBid();
-            ops.push({ kind: 'block.split', target: { bid, path: 'text' }, payload: { at: shadow.ref(off - 1), new: nt } });
-            tail = { bid: nt, shadow: shadow.split(off) };
-            env.shadows.set(nt, tail.shadow);
-            const heading = hostKind === 'heading';
-            tr = tr.split(caret, 1, [{ type: heading ? schema.nodes.paragraph : host.type,
-                                       attrs: heading ? { bid: nt, head: 0 } : { ...host.attrs, bid: nt, head: 0 } }]);
+            const split = splitAt(tr, env, host, caret, off);
+            tr = split.tr;
+            ops.push(split.op);
+            const kind = hostKind === 'heading' ? 'paragraph' : hostKind;
+            tail = { bid: split.nid, shadow: env.shadows.get(split.nid)!, kind, level: levelOf(kind, host.attrs.level) };
         }
     }
-    const last = tail && isOneLine(rest[rest.length - 1]?.kind ?? '') ? rest.pop()! : null;
+    // A last piece of the tail's kind and level is typed at its start; any other is a block before it.
+    const lp = rest[rest.length - 1];
+    const last = tail && lp && lp.kind === tail.kind && levelOf(lp.kind, lp.level) === tail.level ? rest.pop()! : null;
 
     // The rest arrive as blocks, each after the one before. Each position is
     // read from the document as it stands, never mapped: a position computed
@@ -223,7 +231,7 @@ export function pasteBlocks(state: EditorState, env: Env, pieces: Piece[]): Gest
             after = nb;
             continue;
         }
-        const lvl = isLevelled(p.kind) ? clampLevel(p.level) : 0;
+        const lvl = levelOf(p.kind, p.level);
         const source = SOURCE.has(p.kind);
         const payload: Record<string, unknown> = { kind: p.kind, after };
         if (lvl) payload.level = lvl;

@@ -7,6 +7,8 @@
                   the writer.
 - ``inbox``:      the client inbox the applier drains, its acks, and which
                   actor each inbox file writes as.
+- ``epoch``:      ``activity.json``, the agent epoch: while a coding agent's
+                  turn runs, the daemon defers reflecting and nothing settles.
 - ``snapshot``:   folding a settled prefix of the log into one snapshot file.
 - ``roles``:      who may write what.
 - ``workspace``:  ``Workspace``: open the directory, rebuild the store from its

@@ -3,11 +3,12 @@
 
 Per debounced batch of filesystem events it does, in order:
 
-1. follow the logs on disk: when ``HEAD`` moved (its sha or its branch) or
-   git took the session file, rebuild and start a new session
-   (``Workspace.follow_head``), noting the hand-offs the commits ``HEAD``
-   moved over name in a ``Codoc-Handoff`` trailer, each from a commit whose
-   ``Codoc-Base`` names the branch ``HEAD`` is on;
+1. follow the logs on disk (``Workspace.follow_disk``): when ``HEAD`` moved
+   (its sha or its branch) or git took the session file, start a new session
+   and rebuild, noting the hand-offs the commits ``HEAD`` moved over name in a
+   ``Codoc-Handoff`` trailer, each from a commit whose ``Codoc-Base`` names
+   the branch ``HEAD`` is on; when another log file appeared, vanished or
+   changed, rebuild;
 2. drain every client inbox into ops, warning once about an inbox file whose
    name maps to no actor;
 3. read the agent epoch (``activity.json``): while a coding agent's session is
@@ -17,11 +18,11 @@ Per debounced batch of filesystem events it does, in order:
 4. reflect the changed code files that are not deferred, citing the hand-offs
    of step 1;
 5. settle the hand-offs applied binding ops now cite, unless an epoch is open
-   (``client.settle_if_idle``); a reflect pass settles too;
+   (``realize.settle_if_idle``); a reflect pass settles too;
 6. publish the derived files.
 
 ``process_batch`` runs with an injected change set and model in tests; ``run``
-wires it to ``watchfiles``.
+wires ``batch`` to ``watchfiles``, filtered by ``wakes``.
 """
 from __future__ import annotations
 
@@ -31,18 +32,20 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path, PurePosixPath
 
-from codoc.daemon.client import settle_if_idle
-from codoc.daemon.epoch import EPOCH_STALE_SECONDS, close_epoch, epoch_age, epoch_touched_files, read_epoch
 from codoc.daemon.pidfile import clear_pidfile, daemon_running, write_pidfile
 from codoc.daemon.publish import Publisher
 from codoc.doclang import workspace_doc_language
-from codoc.index.git import handoffs_landed, head
+from codoc.index.git import handoffs_landed, head, is_tracked
 from codoc.index.graph import Graph
 from codoc.index.lang import detect_language
+from codoc.loops.realize import settle_if_idle
 from codoc.workspace import Roles, Workspace
 from codoc.workspace import inbox as I
 from codoc.workspace import log as L
-from codoc.workspace.layout import ACTIVITY, APPLIER_LOCK, CODOC_DIR, GRAPH_CACHE, atomic_write, locked
+from codoc.workspace.epoch import EPOCH_STALE_SECONDS, close_epoch, epoch_age, epoch_touched_files, read_activity
+from codoc.workspace.layout import (
+    ACTIVITY, APPLIER_LOCK, CODOC_DIR, EXPORT, GRAPH_CACHE, atomic_write, locked, write_gitignore,
+)
 
 DEBOUNCE_MS = 600
 
@@ -104,7 +107,37 @@ class Daemon:
             return None
         return rel if detect_language(rel) and self._source.is_file_included(PurePosixPath(rel)) else None
 
+    def wakes(self, _change, path: str) -> bool:
+        """Whether a filesystem event starts a batch: a code file the index
+        reads, ``activity.json``, a client's inbox file, or a log file other
+        than this daemon's own session (another writer, or git, changed the
+        logs on disk). The daemon's own writes (its session file, the acks,
+        ``offsets.json``, ``atomic_write``'s tmp files) never do, or every
+        batch would start the next."""
+        rp = Path(path).resolve()
+        if rp == (self.codoc_dir / ACTIVITY).resolve():
+            return True
+        if rp.suffix == ".jsonl" and rp.parent == I.inbox_dir(self.codoc_dir).resolve():
+            return not rp.name.endswith(".ack.jsonl")
+        if rp.suffix == ".jsonl" and rp.parent == L.log_dir(self.codoc_dir).resolve():
+            return rp.name != f"{self.ws.session}.jsonl"
+        return self.code_path(path) is not None
+
+    def batch(self, paths: list[str]) -> None:
+        """One batch as ``run`` runs it, the first included: its note printed
+        when it did something, an error printed rather than raised, then
+        ``after_batch``."""
+        try:
+            note = self.process_batch(paths)
+        except Exception as e:  # noqa: BLE001 (a bad batch must not kill the daemon)
+            note = f"error: {e}"
+        if note:
+            self.say(f"▸ {note}")
+        if self.after_batch:
+            self.after_batch(self)
+
     def process_batch(self, paths: list[str], *, now: float | None = None) -> str:
+        """Run one batch; returns what it did, empty when nothing."""
         now = now if now is not None else time.time()
         code = {rel for p in paths if (rel := self.code_path(p)) is not None}
         notes: list[str] = []
@@ -112,7 +145,7 @@ class Daemon:
         was = self.ws.head
         sha, branch = head(self.root)
         landed: frozenset[str] = frozenset()
-        rebuilt = self.ws.follow_head(sha, branch)
+        rebuilt = self.ws.follow_disk(sha, branch)
         if rebuilt:
             # A trailer counts from the commits HEAD moved over when HEAD is on
             # the branch the commit's `Codoc-Base` names (a merge, a pull with or
@@ -122,7 +155,7 @@ class Daemon:
             # files; a merge whose files were reflected in an earlier batch (a
             # conflicted merge committed later) cites nothing, and `codoc done`
             # settles it.
-            landed = handoffs_landed(self.root, was[0], sha, branch) if was else frozenset()
+            landed = handoffs_landed(self.root, was[0], sha, branch) if was and was[0] != sha else frozenset()
             self.publisher.invalidate()      # a different set of logs is a different tree
             notes.append("rebuilt from the logs on disk")
         # 2. Client ops, under the roles the tracked config names right now
@@ -139,15 +172,17 @@ class Daemon:
         # pass that runs because a session ended cites the queued hand-offs, as
         # an agent's own `codoc_reflect` and a merged commit's trailer do.
         under_epoch = False
-        ep = read_epoch(self.codoc_dir) or {}
+        ep = read_activity(self.codoc_dir).get("epoch") or {}
         is_open = bool(ep.get("open"))
-        stale = is_open and epoch_age(self.codoc_dir, now) > EPOCH_STALE_SECONDS
-        if stale and close_epoch(self.codoc_dir, ep.get("id", ""), now=now, stale_after=EPOCH_STALE_SECONDS):
-            is_open = False                  # a session killed without its hooks
+        # A session killed without its hooks: close it, and reflect its turn
+        # whether or not this daemon saw it open.
+        stale = (is_open and epoch_age(self.codoc_dir, now) > EPOCH_STALE_SECONDS
+                 and close_epoch(self.codoc_dir, ep.get("id", ""), now=now, stale_after=EPOCH_STALE_SECONDS))
+        is_open = is_open and not stale
         if is_open and not self.state.epoch_open:
             self.state = DaemonState(epoch_open=True)
             notes.append("agent session opened")
-        elif self.state.epoch_open and not is_open:
+        elif not is_open and (self.state.epoch_open or stale):
             code |= self.state.deferred | set(epoch_touched_files(self.codoc_dir))
             self.state = DaemonState()
             under_epoch = True
@@ -163,14 +198,12 @@ class Daemon:
         settle_if_idle(self.ws, sha=sha, now=now)
         # 6. Publish (the publisher skips the write when nothing moved).
         self.publisher.publish(self.ws.store, force=rebuilt)
-        return "; ".join(notes) or "no-op"
+        return "; ".join(notes)
 
     def reflect(self, files: set[str], *, under_epoch: bool = False, landed: frozenset[str] = frozenset()) -> str:
         from codoc.kinds.lift import lift_pass
         from codoc.loops.reflect import reflect
         cs = index_code(self.root, self.codoc_dir, self.graph, files, changeset=self._changeset)
-        if cs is None:
-            return "index unavailable"
         res = reflect(self.ws, cs, self.graph, propose=self._propose or _propose(),
                       doc_language=workspace_doc_language(self.codoc_dir), under_epoch=under_epoch, landed=landed)
         settle_if_idle(self.ws, res, sha=head(self.root)[0])
@@ -188,6 +221,13 @@ class Daemon:
         # Limit: the logs are replayed twice at start; build the store after
         # the pidfile if start-up time on a long log matters.
         write_pidfile(self.codoc_dir)
+        # Codoc owns `.codoc/.gitignore`, so a workspace an older codoc set up
+        # takes the current one. Untracking a file git already tracks is the
+        # person's commit to make.
+        write_gitignore(self.codoc_dir)
+        if is_tracked(self.root, self.codoc_dir / EXPORT):
+            self.say(f"▸ {CODOC_DIR}/{EXPORT} is still tracked by git; "
+                     f"`git rm --cached {CODOC_DIR}/{EXPORT}` untracks it")
         with locked(self.codoc_dir / APPLIER_LOCK):
             self.ws.rebuild()
         self.publisher.invalidate()
@@ -205,17 +245,10 @@ class Daemon:
         # The hub and the editor stop the daemon with SIGTERM, whose default
         # skips atexit and would leave the pidfile behind.
         signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-        self.process_batch([])   # absorb anything that queued while we were down
         self.say(f"codoc watching {self.root} (session {self.ws.session})")
-        for changes in watchfiles.watch(str(self.root), debounce=debounce_ms, watch_filter=_filter(self.codoc_dir, self.code_path)):
-            paths = [p for _c, p in changes]
-            try:
-                note = self.process_batch(paths)
-            except Exception as e:  # noqa: BLE001 (a bad batch must not kill the daemon)
-                note = f"error: {e}"
-            self.say(f"▸ {note}")
-            if self.after_batch:
-                self.after_batch(self)
+        self.batch([])           # what clients wrote while no daemon ran
+        for changes in watchfiles.watch(str(self.root), debounce=debounce_ms, watch_filter=self.wakes):
+            self.batch([p for _c, p in changes])
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -227,11 +260,8 @@ def index_code(root: str | Path, codoc_dir: str | Path, graph: Graph, files: set
     comparison to what a batch saw change, and the graph re-extracts only
     their edges; with none, every file is compared and the graph is built
     whole (``codoc init``, ``codoc sync``). ``changeset(root, codoc_dir,
-    files)`` stands in for the index in tests. Returns the change set, or None
-    when the index is unavailable."""
+    files)`` stands in for the index in tests. Returns the change set."""
     cs = (changeset or _changeset)(str(root), str(codoc_dir), set(files))
-    if cs is None:
-        return None
     if files:
         graph.update(cs.rows, cs.touched_files())
     else:
@@ -248,17 +278,3 @@ def _changeset(root: str, codoc_dir: str, files: set[str]):
 def _propose():
     from codoc.llm.passes import propose_tree_update_raw
     return propose_tree_update_raw
-
-
-def _filter(codoc_dir: Path, code_path):
-    inbox = I.inbox_dir(codoc_dir).resolve()
-    act = (codoc_dir / ACTIVITY).resolve()
-
-    def keep(_change, path: str) -> bool:
-        # In the inbox only a client's `<client>.jsonl`: the acks, offsets.json
-        # and atomic_write's tmp files are this daemon's own writes, and waking
-        # on them made every batch start the next.
-        rp = Path(path).resolve()
-        return (rp == act or (rp.parent == inbox and rp.suffix == ".jsonl" and not rp.name.endswith(".ack.jsonl"))
-                or code_path(path) is not None)
-    return keep

@@ -9,3 +9,10 @@
 
 Everything here is derived from the source tree and can be rebuilt.
 """
+import os
+
+# lancedb's native logger reads LANCEDB_LOG once, when lancedb first loads,
+# which is always through this package. Writing a table that does not exist yet
+# logs a warning, and every first index does that; every other warning, and
+# every error, still prints. A LANCEDB_LOG the user set wins.
+os.environ.setdefault("LANCEDB_LOG", "warn,lance::dataset::write::insert=error")

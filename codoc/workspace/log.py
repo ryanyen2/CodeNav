@@ -83,13 +83,19 @@ def read_session(path: str | Path) -> SessionFile:
     for k, (n, line) in enumerate(body):
         try:
             d = json.loads(line)
-            op = Op.from_json(d)
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
-            problems.append(LogProblem(str(path), n, f"unreadable op: {e}"))
+        except json.JSONDecodeError as e:
+            problems.append(LogProblem(str(path), n, f"unreadable line: {e}"))
             if k == len(body) - 1:
                 # A crash mid-write left a torn last line: the prefix is a
                 # state the applier was in, so it stays; the caller truncates.
                 torn = len("\n".join(lines[:n - 1]).encode("utf-8")) + (1 if n > 1 else 0)
+            break
+        try:
+            op = Op.from_json(d)
+        except (KeyError, TypeError, AttributeError) as e:
+            # A whole line that is not an op was written, not torn: the file is
+            # reported and skipped, never cut.
+            problems.append(LogProblem(str(path), n, f"not an op: {e!r}"))
             break
         sess, _, seq = op.id.rpartition(":")
         if sess != session or not seq.isdigit() or int(seq) != expected_seq:

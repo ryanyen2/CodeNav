@@ -28,6 +28,7 @@ from codoc.index.flows import flow_lines
 from codoc.index.git import commit_rationales
 from codoc.index.graph import Graph
 from codoc.llm.passes import propose_brief, propose_file_features_raw, propose_organization_raw
+from codoc.llm.provider import cost_since, spent
 from codoc.loops.context import aliases, owner_of
 from codoc.loops.edits import Compiler, symbol, title_from_file
 from codoc.workspace import Workspace
@@ -46,12 +47,14 @@ class BootstrapResult:
     chunks: int = 0
     features: int = 0
     calls: int = 0
+    cost: float | None = None                                       # US dollars the calls reported; None when none did
     skipped: list[str] = field(default_factory=list)
     refused: list[tuple[str, str]] = field(default_factory=list)   # (edit kind, why) an edit that did not land
     unplaced: list[str] = field(default_factory=list)             # top-level features the organizing call did not place
 
     def summary(self) -> str:
-        base = f"{self.chunks} chunks → {self.features} features ({self.calls} LLM calls)"
+        cost = f", ${self.cost:.2f}" if self.cost is not None else ""
+        base = f"{self.chunks} chunks → {self.features} features ({self.calls} LLM calls{cost})"
         base += f", {len(self.skipped)} file(s) skipped" if self.skipped else ""
         base += f", {len(self.unplaced)} feature(s) left unorganized" if self.unplaced else ""
         return base + (f", {len(self.refused)} block(s) refused" if self.refused else "")
@@ -63,6 +66,7 @@ def bootstrap(ws: Workspace, rows: list, graph: Graph, *, repo_name: str = "code
               propose_the_brief=propose_brief, concurrency: int = 8) -> BootstrapResult:
     say = printer or (lambda *_a, **_k: None)
     res = BootstrapResult(chunks=len(rows))
+    mark = spent()
     batch = new_batch_id()
     by_file: dict[str, list] = {}
     for r in rows:
@@ -142,6 +146,7 @@ def bootstrap(ws: Workspace, rows: list, graph: Graph, *, repo_name: str = "code
     elif organize and len(top) > ORG_FEATURE_CAP:
         say(f"  ⚠ {len(top)} top-level features, so the organization pass is skipped")
     res.features = len(ws.store.headings())
+    res.cost = cost_since(mark)
     return res
 
 

@@ -10,9 +10,9 @@
 
 All derived, all regenerable, all written atomically. Nothing here is read
 back by the calculus. ``status.json`` keeps one input the store does not hold:
-the realizing lease. A realize pass takes it with ``write_realizing``, renews it
-by rewriting the file, and it lapses ``REALIZING_LEASE_SECONDS`` after the last
-write (``realizing_is_fresh``).
+the realizing lease. A realize pass takes it with ``write_realizing``. A lease
+that names its process holds while that process lives; one that names none
+lapses ``REALIZING_LEASE_SECONDS`` after its last write (``realizing_is_fresh``).
 
 A ``Publisher`` memoizes the per-block views on the cache keys of
 docs/model.md (a block's own head, the structural head, the plans head), so a settle in one paragraph
@@ -33,6 +33,7 @@ from codoc.calculus.derive import (
 )
 from codoc.calculus.store import Store
 from codoc.calculus.window import history_window
+from codoc.daemon.pidfile import pid_alive
 from codoc.doclang import workspace_doc_language
 from codoc.loops.realize import write_queue
 from codoc.workspace.inbox import local_actor
@@ -59,7 +60,11 @@ class Publisher:
 
     # ── cache keys ─────────────────────────────────────────────────────────
     @staticmethod
-    def _block_key(store: Store, bid: str) -> tuple:
+    def _entry_key(store: Store, bid: str) -> tuple:
+        return (store.block_head.get(bid, 0),)
+
+    @staticmethod
+    def _spec_key(store: Store, bid: str) -> tuple:
         return (store.block_head.get(bid, 0), store.plans_head)
 
     @staticmethod
@@ -89,13 +94,13 @@ class Publisher:
         keys = keys if keys is not None else self._feature_keys(store, realizing)
         return projection(
             store, phases=phases,
-            entry=lambda s, b: self._memo(self._entries, self._block_key(s, b.id), b.id, lambda: block_entry(s, b)),
+            entry=lambda s, b: self._memo(self._entries, self._entry_key(s, b.id), b.id, lambda: block_entry(s, b)),
             claims=lambda s, fid: self._memo(self._claims, keys.get(fid) or self._feature_key(s, fid, realizing), fid,
                                              lambda: feature_claims(s, fid)))
 
     def export(self, store: Store) -> str:
         return export_markdown(store, spec=lambda s, b: self._memo(
-            self._specs, self._block_key(s, b.id), b.id, lambda: export_spec(s, b)))
+            self._specs, self._spec_key(s, b.id), b.id, lambda: export_spec(s, b)))
 
     # ── files ──────────────────────────────────────────────────────────────
     def publish(self, store: Store, *, force: bool = False) -> dict:
@@ -142,30 +147,35 @@ def read_status(codoc_dir: str | Path) -> dict:
 
 def realizing_is_fresh(codoc_dir: str | Path, now: float | None = None) -> bool:
     """Whether another realize pass holds the lease: ``status.json`` says
-    ``realizing``, was written within the lease, and a queue is still there. A
-    lease this process's own pass took (``REALIZE_OWNER_ENV`` names its owner)
-    does not count."""
+    ``realizing``, a queue is still there, and the holder is alive. A lease
+    that names the process holding it (``pid``) is alive while that process
+    is; one that names none lapses ``REALIZING_LEASE_SECONDS`` after its last
+    write. A lease this process's own pass took (``REALIZE_OWNER_ENV`` names
+    its owner) does not count."""
     path = Path(codoc_dir) / STATUS
     try:
         d = json.loads(path.read_text(encoding="utf-8"))
-        if d.get("state") != "realizing":
+        if d.get("state") != "realizing" or not (Path(codoc_dir) / REALIZE).exists():
             return False
         if d.get("owner") and os.environ.get(REALIZE_OWNER_ENV) == d["owner"]:
             return False
-        age = (now or time.time()) - path.stat().st_mtime
-        return age < REALIZING_LEASE_SECONDS and (Path(codoc_dir) / REALIZE).exists()
+        if isinstance(d.get("pid"), int):
+            return pid_alive(d["pid"])
+        return (now or time.time()) - path.stat().st_mtime < REALIZING_LEASE_SECONDS
     except (OSError, json.JSONDecodeError):
         return False
 
 
 def write_realizing(codoc_dir: str | Path, *, pending: int | None = None, detail: str | None = None,
-                    owner: str | None = None) -> dict:
+                    owner: str | None = None, pid: int | None = None) -> dict:
     """Take or renew the realizing lease: set ``state: realizing`` in
-    ``status.json`` and leave the fields not named as they are. The write is
-    what renews the lease, since its clock is the file's mtime."""
+    ``status.json`` and leave the fields not named as they are. ``pid`` names
+    the process doing the work, which keeps the lease while it lives; without
+    one the write is what renews the lease, since its clock is the file's
+    mtime."""
     d = read_status(codoc_dir)
     d["state"] = "realizing"
-    for key, value in (("pending", pending), ("detail", detail), ("owner", owner)):
+    for key, value in (("pending", pending), ("detail", detail), ("owner", owner), ("pid", pid)):
         if value is not None:
             d[key] = value
     atomic_write(Path(codoc_dir) / STATUS, json.dumps(d))
@@ -180,6 +190,22 @@ def renew_realizing(codoc_dir: str | Path) -> bool:
     return True
 
 
+def store_state(store: Store, phases: dict[str, str]) -> tuple[str, int, str]:
+    """``(state, pending, detail)`` as the store has it: queued hand-offs
+    first, then features with unsent edits, then plans awaiting a verdict.
+    ``phases`` is every feature's phase."""
+    q = queued(store)
+    edited = sum(1 for p in phases.values() if p == "edited")
+    plans = len(offered_plans(store))
+    if q:
+        return "queued", len(q), f"{len(q)} hand-off(s) ready to build. Run /codoc:realize or codoc realize"
+    if edited:
+        return "edited", edited, f"{edited} feature(s) with unsent edits. Hand off to build"
+    if plans:
+        return "proposed", plans, f"{plans} plan(s) awaiting your verdict"
+    return "synced", len(phases), ""
+
+
 def write_status(codoc_dir: str | Path, store: Store, *, phases: dict[str, str] | None = None,
                  detail: str = "") -> dict:
     """Derive the workspace state and write it. A fresh realizing lease is
@@ -190,21 +216,8 @@ def write_status(codoc_dir: str | Path, store: Store, *, phases: dict[str, str] 
     if realizing_is_fresh(codoc_dir):
         return read_status(codoc_dir)
     phases = phases if phases is not None else {h.id: phase(store, h.id) for h in store.headings()}
-    q = queued(store)
-    edited = sum(1 for p in phases.values() if p == "edited")
-    proposals = len(offered_plans(store))
-    if q:
-        state, pending = "queued", len(q)
-        detail = detail or f"{len(q)} hand-off(s) ready to build. Run /codoc:realize or codoc realize"
-    elif edited:
-        state, pending = "edited", edited
-        detail = detail or f"{edited} feature(s) with unsent edits. Hand off to build"
-    elif proposals:
-        state, pending = "proposed", proposals
-        detail = detail or f"{proposals} plan(s) awaiting your verdict"
-    else:
-        state, pending = "synced", len(phases)
-    d = {"version": 2, "state": state, "pending": pending, "detail": detail, "head": store.pos,
+    state, pending, said = store_state(store, phases)
+    d = {"version": 2, "state": state, "pending": pending, "detail": detail or said, "head": store.pos,
          "features": len(phases), "at": time.time(), "actor": local_actor(Path(codoc_dir).parent)}
     atomic_write(path, json.dumps(d))
     return d

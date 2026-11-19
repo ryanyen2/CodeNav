@@ -30,9 +30,9 @@ One process applies ops at a time. It is called the applier.
   `.codoc/inbox/<client>.jsonl` and reads the answer from `.codoc/inbox/<client>.ack.jsonl`.
 - With no daemon, a writer is the applier for one call. It takes an exclusive lock on
   `.codoc/applier.lock`. If `HEAD` moved since its last turn, or git took its session
-  file, it rebuilds and starts a new session, as the daemon does (section 5); otherwise
-  it rebuilds only if a log file other than its own session's changed size. Then it
-  applies, publishes the derived files, and releases the lock.
+  file, it starts a new session and rebuilds, as the daemon does (section 5); otherwise
+  it rebuilds only if a log file other than its own session's appeared, vanished or
+  changed. Then it applies, publishes the derived files, and releases the lock.
 - The lock is held per call. Held for the life of a process, it would leave every other
   writer submitting to an inbox that no daemon drains. `codoc translate`,
   `codoc rebuild` and `codoc sync` hold it for their whole run (a sync builds its store
@@ -85,8 +85,9 @@ A file is checked when it is read:
 | The first line is a header with a `session`. | The file is reported and skipped whole. |
 | Every id is `<session>:<seq>` and `seq` runs 1, 2, 3, … | Reported and skipped whole. |
 | Every `at` is a well-formed HLC and never decreases. | Reported and skipped whole. |
-| Every line parses. | Reported and skipped whole, unless only the last line is unreadable. |
-| The last line is unreadable (a crash mid-write). | The lines before it are kept. The daemon cuts the torn line at its next start. |
+| Every line parses as JSON. | Reported and skipped whole, unless only the last line is unreadable. |
+| Every line that parses is an op. | Reported and skipped whole. A line that parses was written whole, so it is never cut. |
+| The last line does not parse (a crash mid-write). | The lines before it are kept. The daemon cuts the torn line at its next start. |
 
 A partial read is never used: it would put the store in a state no log describes.
 
@@ -197,12 +198,15 @@ name. Ack files are trimmed to their newest 2000 lines when a session opens, and
 `offsets.json` keeps the applier from re-reading lines it has drained.
 
 **The daemon's batch.** File events are debounced (600 ms). A batch starts on a change to
-a code file the index reads, to `activity.json`, or to a client's `inbox/<client>.jsonl`,
-never on a file the daemon writes itself (acks, `offsets.json`), so a batch does not start
-the next. For each batch the daemon does, in order:
+a code file the index reads, to `activity.json`, to a client's `inbox/<client>.jsonl`, or
+to a file in `log/` other than the daemon's own session file. It never starts on a file
+the daemon writes itself (its session file, acks, `offsets.json`), so a batch does not
+start the next. A batch that did nothing prints nothing. For each batch the daemon does,
+in order:
 
-1. If `HEAD` moved (its commit or its branch), or git took the session file: rebuild the
-   store from the log files now on disk and start a new session (section 5). Note the
+1. Follow the logs on disk (section 5). If `HEAD` moved (its commit or its branch), or
+   git took the session file: start a new session and rebuild the store from the log
+   files now on disk. If another log file appeared, vanished or changed: rebuild. Note the
    hand-offs that the commits in `old..new` name in a `Codoc-Handoff` trailer, each from
    a commit whose `Codoc-Base` trailer names the branch `HEAD` is on now. The commit and
    the branch are read in one git call. A merge, a pull with or without rebase, and a
@@ -213,9 +217,10 @@ the next. For each batch the daemon does, in order:
    submissions written while no daemon ran are applied.
 3. Read the agent epoch from `activity.json`, every batch, so a daemon started during a
    turn knows it. While a coding agent's session is open, changed code files are
-   deferred. When it closes, or after 900 seconds of silence, the deferred files and
-   every file the session touched go to step 4, and that pass cites every queued
-   hand-off.
+   deferred. When it closes, or after 900 seconds of silence (the daemon then closes it,
+   whether or not it saw it open), the deferred files and every file the session touched
+   go to step 4, and that pass cites every queued hand-off. An epoch with no id (a
+   realize pass opened it where no session had started) is closed by any session's stop.
 4. Reflect the changed code files that are not deferred: the loop's pass, which writes
    ops as `loop` and cites the hand-offs step 1 noted.
 5. Unless an agent epoch is open, settle hand-offs (section 10).
@@ -227,16 +232,20 @@ offset it stored. A `cid` is read again if a client appends the same line again,
 newest 2000 acks per client are kept to answer that with the same op. It is also read
 again when the applier stopped (a signal, a kill, a crash) after logging a submission's
 ops and before writing its ack or the offset: the logged ops name the submission
-(`sub`), so the next drain acks it from the log and applies nothing. A submission whose
-ops were not all logged when the applier stopped keeps the ones that were.
+(`sub`), so it is acked from the log and nothing is applied again. The next writing
+workspace to open (a daemon's, a daemonless writer's, the one `codoc snapshot` folds
+with) does this for every undrained line before anything else, so a fold that archives
+the log naming a submission never loses the answer. A submission whose ops were not all
+logged when the applier stopped keeps the ones that were.
 
 ## 5. Sessions
 
 - A session is one applier's run between rotations. Its id is random.
 - One session file has one writer and many actors: the person, the loop and the agents
   appear in it in the order they wrote.
-- The applier (the daemon, or a writer with no daemon) rebuilds from the logs on disk,
-  closes its session and opens a new one (`Workspace.follow_head`) when:
+- The store is a function of the logs on disk. Before it applies anything, the applier
+  (the daemon, or a writer with no daemon) compares them with what it loaded
+  (`Workspace.follow_disk`). It closes its session, opens a new one and rebuilds when:
   - `HEAD` moved: its commit or its branch (a commit, a checkout, a pull, a rebase,
     `checkout -b`). A commit may have recorded the session file, and a checkout changes
     which files are on disk.
@@ -245,18 +254,20 @@ ops were not all logged when the applier stopped keeps the ones that were.
     person took those edits out of the working tree, so the store follows; words typed
     after it land in the new file. A submission anchored on characters that went with
     the file conflicts `unknown_anchor`.
-- Both are checked at the start of each daemon batch and each daemonless call, before
-  anything applies. A commit made while a long pass runs (a reflect pass waiting on a
-  model) is seen at the next batch, so that pass's ops still go to the file the commit
-  may have recorded. The next commit records them; a merge of two branches is
-  unaffected, because each branch's files are its own.
-- A log file another hand adds without moving `HEAD` (a `git stash pop` of a session
-  file) is read by a daemonless writer at its next call, and by the daemon at its next
-  rebuild.
+- It rebuilds, keeping its session, when a log file other than its own appeared,
+  vanished or changed: another writer applied, or git brought a file back or took one
+  without moving `HEAD` (`git stash pop`). The restored words reach the editor at that
+  batch, so nobody types them twice.
+- All of this is checked at the start of each daemon batch and each daemonless call,
+  before anything applies; a change in `log/` alone starts a daemon batch. A commit made
+  while a long pass runs (a reflect pass waiting on a model) is seen at the next batch,
+  so that pass's ops still go to the file the commit may have recorded. The next commit
+  records them; a merge of two branches is unaffected, because each branch's files are
+  its own.
 - A read-only open replays the logs and writes nothing.
 
 **Actors.** The local person is `human:<email>`, the `git config user.email` of the
-repository, read once per process (`log.local_actor`); `human:local` only when there is no
+repository, read once per process (`inbox.local_actor`); `human:local` only when there is no
 git or no email. The CLI, the daemon, the VS Code host and the editor page all get it from
 there: the daemon writes it to `status.json` as `actor`. So two people sharing the log
 through git are two actors: one's unsent words are not inked as the other's, and one's
@@ -396,7 +407,7 @@ an agent through the `amend` submission):
 | Any rewording meets a plan row of the table above. | One plan for the whole amend. |
 | Otherwise. | Every part on the trunk. |
 
-An agent's proposal (`codoc_propose`, or a `codoc_reflect` edit that needs a plan) is one
+An agent's plan (`codoc_propose`, or a `codoc_reflect` edit that needs one) is one
 `propose` submission, decided whole by `Workspace.propose`: it opens the plan, writes the
 new blocks, rewordings and strikes under it, and takes the plan back when nothing landed.
 A delete plan stays with nothing under it, since accepting it is the deletion. The agent
@@ -538,8 +549,8 @@ before P. Both rejected leave it where neither put it. A reopen drops the void i
 recorded. Nothing here reads the log, so a fold changes no later verdict.
 
 A reader finds the trunk marks a verdict removed or added as its `mark` steps: `on` true
-for added, false for removed, each with the placer's `op`. The proposal records it
-dropped are `mark` steps too, of kind `suggest_del` or `suggest_mark`. A reopen's `mark`
+for added, false for removed, each with the placer's `op`. The `suggest_del` marks
+and `suggest_mark` records it dropped are `mark` steps too. A reopen's `mark`
 steps are the ones it undid, so there `on` true means it removed that mark.
 
 **A folded verdict is not reopened.** The undo of a verdict a snapshot folded conflicts
@@ -563,11 +574,14 @@ included.
   demoted, need a plan. The applier uses, first match: the plan it opened for the same
   actor and batch, if still open; the newest open `edit` plan of that actor targeting the
   same block; a new `edit` plan targeting the block. A sentence typed over several
-  flushes is therefore one proposal.
+  flushes is therefore one plan.
 - **Empty plans are withdrawn.** When a plan the applier opened ends with no ops, the
   applier rejects it as the plan's own actor.
-- **A plan whose target is dead is not offered.** It stays open. If the block is restored,
-  the plan is offered again.
+- **A plan with nothing on the page is not offered.** A plan whose target is dead is
+  offered while words, `suggest_del` marks or `suggest_mark` records of it are still
+  live on a live block, since the editor draws them and the person must be able to
+  decide them. Once nothing of it is left on the page it stays open but is not offered;
+  if its target is restored, it is offered again.
 - **An open plan stops a snapshot** at the oldest op of the feature it is on (section 12).
 
 ### Example: a plan
@@ -768,7 +782,7 @@ It adopts each new projection block by block.
 ## Rejected
 
 - **Rejecting a plan automatically when its target block dies.** Built and reverted. A
-  delete can be undone, and restoring the heading has to bring its proposals back. Such a
+  delete can be undone, and restoring the heading has to bring its plans back. Such a
   plan stays open and is not offered. Keeping them costs a cold publish about 50 ms.
 - **Checking authority again at replay.** A role reduced tomorrow would delete what the
   person wrote today, and the rebuild would differ with the state of the table.

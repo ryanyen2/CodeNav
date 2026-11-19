@@ -259,6 +259,13 @@ ROWS = [row("net/client.py", "net/client.py::Client"), row("net/client.py", "net
         row("store/db.py", "store/db.py::open"), row("store/db.py", "store/db.py::_helper")]
 
 
+def index_holds(monkeypatch, *symbols):
+    """The code index, as the MCP tools read it, holds ``symbols`` and nothing else."""
+    from codoc.mcp import tools
+    monkeypatch.setattr(tools, "indexed", lambda _cd, files: {
+        s: (f"h-{s}", "t") for s in symbols if s.split("::")[0] in files})
+
+
 def fake_file(file, chunks, edges, titles, **kw):
     """The bootstrap's per-file pass for ``ROWS``."""
     if file == "net/client.py":
@@ -275,3 +282,15 @@ def fake_org(features, edges, **kw):
     """The bootstrap's organising pass for ``ROWS``."""
     return [{"id": "t1", "kind": "add_node", "title": "Networking", "description": "Everything on the wire."},
             {"kind": "move_node", "feature_id": next(f["id"] for f in features if f["title"] == "HTTP client"), "parent_id": "t1"}]
+
+
+def fake_claude(monkeypatch, *envelopes: dict) -> None:
+    """Answer each `claude -p` call with the next JSON envelope, without a model."""
+    import json
+    import shutil
+    import subprocess
+    from types import SimpleNamespace
+    replies = iter(envelopes)
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/claude")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(
+        returncode=0, stdout=json.dumps(next(replies)), stderr=""))

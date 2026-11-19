@@ -15,7 +15,8 @@ import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 
 import { PHASE_CHANNEL, PHASE_LABEL, paintsFor, theirEdits, type Paint } from '../calc/claims';
-import type { Phase, Projection } from '../calc/projection';
+import { pathOf, refEq, refsOf, textField, type CharRef, type Phase, type ProjectedBlock, type Projection } from '../calc/projection';
+import type { Shadow } from '../calc/shadow';
 import { REPLACED } from './commands';
 import { sameStructure } from './guards';
 
@@ -122,6 +123,40 @@ function decorationsFor(doc: PMNode, paints: Map<string, Paint[]>, shown: Shown,
     return decos;
 }
 
+/**
+ * A block's paints moved from the projection's text onto the page's. The two
+ * differ while the block holds words the daemon has not answered, so each
+ * painted character is found in the shadow by identity: a paint keeps the
+ * characters still on the page, splits where the page has new ones between
+ * them, and is dropped when none is left. A zero-width paint stays after the
+ * character it followed.
+ */
+function onPage(paints: Paint[], b: ProjectedBlock, shadow: Shadow | undefined): Paint[] {
+    const f = textField(b, pathOf(b.kind));
+    if (!paints.length || !f || !shadow) return paints;
+    const refs = refsOf(f);
+    if (refs.length === shadow.length && refs.every((r, i) => refEq(r, shadow.refs[i]))) return paints;
+    const key = (r: CharRef | undefined) => JSON.stringify(r);
+    const index = new Map(shadow.refs.map((r, i) => [key(r), i]));
+    const at = (k: number) => index.get(key(refs[k]));
+    const out: Paint[] = [];
+    for (const p of paints) {
+        if (p.end <= p.start) {
+            const i = p.start === 0 ? -1 : at(p.start - 1);
+            if (i !== undefined) out.push({ ...p, start: i + 1, end: i + 1 });
+            continue;
+        }
+        let run: Paint | null = null;
+        for (let k = p.start; k < p.end; k++) {
+            const i = at(k);
+            if (i === undefined) run = null;
+            else if (run && run.end === i) run.end = i + 1;
+            else { run = { ...p, start: i, end: i + 1 }; out.push(run); }
+        }
+    }
+    return out;
+}
+
 /** Where each of `bids` sits in the document, as a `[from, to)` range. */
 function blockRanges(doc: PMNode, bids: ReadonlySet<string>): Array<{ from: number; to: number }> {
     const out: Array<{ from: number; to: number }> = [];
@@ -138,9 +173,9 @@ function blockRanges(doc: PMNode, bids: ReadonlySet<string>): Array<{ from: numb
  * Whoever changes what a block should look like calls `mark`, for that block
  * or for all of them, and the plugin redraws what is marked at the next
  * transaction that changes the document or carries `REPAINT`. A change to the
- * document's structure marks every block by itself, because which feature a
- * block belongs to is where it sits, so a block arriving or leaving can change
- * the paints of every block after it.
+ * document's structure marks every block by itself, because the feature a
+ * block sits in (`featureOf`, which adoption reads to mark a feature's blocks)
+ * is where it sits.
  */
 export class Paints {
     readonly plugin: Plugin<DecorationSet>;
@@ -150,7 +185,8 @@ export class Paints {
     private all = true;
     private readonly dirty = new Set<string>();
 
-    constructor(private readonly shown: Shown) {
+    /** `shadows` are the page's blocks with their character identities (calc/shadow.ts). */
+    constructor(private readonly shown: Shown, private readonly shadows: Map<string, Shadow>) {
         const key = new PluginKey<DecorationSet>('codoc-paints');
         this.plugin = new Plugin<DecorationSet>({
             key,
@@ -207,14 +243,13 @@ export class Paints {
                 if (block.type.name === 'heading') fid = bid;
                 this.featureOf.set(bid, fid);
                 const pb = byId.get(bid);
-                if (pb) this.byBlock.set(bid, paintsFor(pb, projection, fid, history, viewer));
+                if (pb) this.byBlock.set(bid, onPage(paintsFor(pb, projection, history, viewer), pb, this.shadows.get(bid)));
             });
         } else {
             for (const bid of this.dirty) {
                 if (!this.featureOf.has(bid)) continue;
-                const fid = this.featureOf.get(bid) ?? null;
                 const pb = projection.blocks.find(b => b.id === bid);
-                if (pb) this.byBlock.set(bid, paintsFor(pb, projection, fid, history, viewer));
+                if (pb) this.byBlock.set(bid, onPage(paintsFor(pb, projection, history, viewer), pb, this.shadows.get(bid)));
                 else this.byBlock.delete(bid);
             }
         }

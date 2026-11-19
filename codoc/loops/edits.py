@@ -165,6 +165,9 @@ class Compiler:
         binds = self._binds(raw.get("bindings"))
         if not binds:
             return Change("attach", fid, refused="no bindable symbol")
+        # A symbol the feature already owns is left alone: attaching it again
+        # would rewrite its hashes, and a `caused_by` on it would report work.
+        binds = [s for s in binds if getattr(self.store.bindings.get(s), "feature", None) != fid]
         return Change("attach", fid, bodies=[self._bind(fid, s) for s in binds], bound=binds)
 
     def _detach(self, raw: dict) -> Change:

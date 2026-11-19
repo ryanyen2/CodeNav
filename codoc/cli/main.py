@@ -25,10 +25,21 @@ from pathlib import Path
 
 import typer
 
-from codoc.workspace.layout import CODOC_DIR, LOG_DIR, REALIZE
+from codoc.workspace.layout import CODOC_DIR, LOG_DIR, REALIZE, find_codoc_dir, write_gitignore
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help=__doc__)
-ROOT = typer.Option(".", "--root", help="Repository root.")
+
+
+def _find_root(root: str) -> str:
+    """The directory that holds ``.codoc``: ``root`` or its nearest ancestor
+    that has one, found as the hooks and the MCP server find it. ``root``
+    itself when none has."""
+    cd = find_codoc_dir(root)
+    return str(Path(cd).parent) if cd else root
+
+
+ROOT = typer.Option(".", "--root", callback=_find_root,
+                    help="Repository root; default: the nearest directory up from here that holds .codoc.")
 
 
 def _codoc(root: str) -> Path:
@@ -41,7 +52,8 @@ def _require(root: str) -> Path:
     # appears with the first op, and a repository with no indexable file is
     # bootstrapped without writing one.
     if not cd.is_dir():
-        typer.echo(f"No codoc workspace at {cd}. Run `codoc init` first.", err=True)
+        typer.echo(f"No codoc workspace in {Path(root).resolve()} or any directory above it. "
+                   "Run `codoc init` in the repository root first.", err=True)
         raise typer.Exit(1)
     return cd
 
@@ -59,13 +71,6 @@ def _applier(cd: Path, refusal: str):
         raise typer.Exit(1)
     finally:
         client.release(cd)
-
-
-def _write_gitignore(cd: Path) -> None:
-    (cd / ".gitignore").write_text(
-        "# codoc: the log, the config and the media blocks reference travel with the repo;\n"
-        "# the export, caches, channels and local state do not.\n"
-        "*\n!.gitignore\n!config.json\n!log/\n!log/**\n!media/\n!media/**\n", encoding="utf-8")
 
 
 def _default_branch(root: str) -> str:
@@ -121,7 +126,7 @@ def init(root: str = ROOT,
         (cd / LOG_DIR).rename(cd / "log.old")
         shutil.rmtree(cd / "cache", ignore_errors=True)
     cd.mkdir(parents=True, exist_ok=True)
-    _write_gitignore(cd)
+    write_gitignore(cd)
     if doc_language:
         from codoc.doclang import resolve
         from codoc.workspace.config import write_config
@@ -188,9 +193,9 @@ def watch(root: str = ROOT,
 def status(root: str = ROOT):
     """Where the tree and the code stand."""
     from codoc.calculus.derive import offered_plans
-    from codoc.daemon import client
+    from codoc.daemon import client, reads
     cd = _require(root)
-    st = client.queue_status(cd)
+    st = reads.queue_status(cd)
     typer.echo(f"{st['state']}  ·  {st['features']} features  ·  {st['queued']} queued  ·  "
                f"{st['edited']} edited  ·  {st['plans']} plan(s)")
     for q in st["queued_list"]:
@@ -239,7 +244,12 @@ def _resolve_feature(store, ref: str) -> str:
     hits = [h.id for h in store.headings() if ref.lower() in title(store, h.id).lower()]
     if len(hits) == 1:
         return hits[0]
-    typer.echo(f"{'no' if not hits else len(hits)} feature(s) match {ref!r}", err=True)
+    if not hits:
+        typer.echo(f"no feature matches {ref!r}", err=True)
+    else:
+        typer.echo(f"{len(hits)} features match {ref!r}; pass one's id:", err=True)
+        for fid in hits:
+            typer.echo(f"  {fid}  {title(store, fid)}", err=True)
     raise typer.Exit(1)
 
 
@@ -323,17 +333,28 @@ def reject(plan: str, root: str = ROOT):
 
 @app.command()
 def history(feature: str, root: str = ROOT, limit: int = typer.Option(15, "--limit")):
-    """One feature's history (who, when, what) and current attribution."""
-    from codoc.daemon import client
+    """One feature's history (when, who, what, for which hand-off) and who wrote
+    each run of its words."""
+    from datetime import datetime
+    from codoc.daemon import client, reads
+    from codoc.workspace.clock import parse
     cd = _require(root)
     fid = _resolve_feature(client.read(cd).store, feature)
-    h = client.read_history(cd, fid, limit)
+    h = reads.read_history(cd, fid, limit)
+
+    def words(text: str) -> str:
+        text = " ".join(text.split())
+        return repr(text if len(text) <= 60 else text[:59] + "…")
     typer.echo(f"{h['title']}  ⟨{fid}⟩")
     for e in h["ops"]:
-        extra = f"  {e['text']!r}" if e.get("text") else ""
-        typer.echo(f"  {e['at'][:20]}  {e['actor']:<16} {e['kind']:<16}{extra}")
+        when = datetime.fromtimestamp(parse(e["at"])[0] / 1000).strftime("%Y-%m-%d %H:%M:%S")
+        what = e.get("symbol") or e.get("mark") or (words(e["text"]) if e.get("text") else "")
+        cause = f"  for hand-off d:{e['caused_by']}" if e.get("caused_by") else ""
+        typer.echo(f"  {when}  {e['actor']:<20} {e['kind']:<14} {what}{cause}".rstrip())
+    typer.echo("who wrote it:")
     for bid, runs in h["attribution"].items():
-        typer.echo(f"  {bid}: " + ", ".join(f"{r['actor']}[{r['start']}:{r['end']}]" for r in runs))
+        for i, r in enumerate(runs):
+            typer.echo(f"  {bid if i == 0 else '':<14} {r['actor']:<20} {words(r['text'])}")
 
 
 @app.command()
@@ -364,7 +385,7 @@ def translate(root: str = ROOT, to: str = typer.Option("", "--to"), dry_run: boo
     # Under the applier lock for the whole run, so a daemonless writer (the MCP
     # server) waits instead of applying into a store this run does not see.
     with _applier(cd, "Stop the daemon before translating (it is the applier).") as ws:
-        res = translate_tree(ws, cd, language=resolve(to) if to else None, dry_run=dry_run, limit=limit,
+        res = translate_tree(ws, language=resolve(to) if to else None, dry_run=dry_run, limit=limit,
                              printer=typer.echo)
         if not dry_run:
             publish(cd, ws.store, root_dir=root)

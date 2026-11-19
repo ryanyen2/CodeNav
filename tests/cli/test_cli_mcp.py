@@ -4,13 +4,13 @@ import json
 from typer.testing import CliRunner
 
 from codoc.cli.main import app
-from codoc.daemon import client
+from codoc.daemon import client, reads
 from codoc.daemon.publish import publish
 from codoc.index.graph import Graph
 from codoc.loops.bootstrap import bootstrap
 from codoc.mcp import tools
 from codoc.workspace import Workspace
-from tests.helpers import ROWS, fake_file, fake_org
+from tests.helpers import ROWS, fake_file, fake_org, index_holds
 
 runner = CliRunner()
 
@@ -40,7 +40,7 @@ def test_status_handoff_history_and_verdicts_via_cli(tmp_path):
     r = runner.invoke(app, ["status", "--root", str(root)])
     assert "queued" in r.output and (cd / "realize.md").read_text().count("Author asked: retry thrice") == 1
     r = runner.invoke(app, ["history", "HTTP client", "--root", str(root)])
-    assert r.exit_code == 0 and "feature.handoff" in r.output and "loop[" in r.output
+    assert r.exit_code == 0 and "feature.handoff" in r.output and "who wrote it:" in r.output
     # An agent proposes an amend; the person rejects it from the CLI.
     st = client.read(cd).store
     client_id = next(h.id for h in st.headings() if "HTTP client" in tools.title(st, h.id))
@@ -60,8 +60,9 @@ def test_status_handoff_history_and_verdicts_via_cli(tmp_path):
     assert "HTTP/2" not in tools.description(client.read(cd).store, client_id)
 
 
-def test_reflect_attaches_and_repairs_and_closes_the_queue(tmp_path):
+def test_reflect_attaches_and_repairs_and_closes_the_queue(tmp_path, monkeypatch):
     root, cd = seeded(tmp_path)
+    index_holds(monkeypatch, "net/client.py::Client.retry")
     st = client.read(cd).store
     client_id = next(h.id for h in st.headings() if "HTTP client" in tools.title(st, h.id))
     runner.invoke(app, ["handoff", client_id, "--root", str(root)])
@@ -69,7 +70,7 @@ def test_reflect_attaches_and_repairs_and_closes_the_queue(tmp_path):
     ctx = tools.read_context(str(cd), files=["net/client.py"])
     me = next(e for e in ctx["subtree"] if e["id"] == client_id)
     assert me["blocks"] and "written_by" in me and "phase" not in me
-    from codoc.daemon.epoch import write_activity
+    from codoc.workspace.epoch import write_activity
     write_activity(cd, {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": []})   # the agent's turn
     res = tools.reflect(str(cd), ops=[
         {"kind": "attach", "feature_id": client_id, "bindings": ["net/client.py::Client.retry"]},
@@ -81,7 +82,7 @@ def test_reflect_attaches_and_repairs_and_closes_the_queue(tmp_path):
     assert "net/client.py::Client.retry" in st.bindings
     assert "three times" in tools.description(st, client_id)
     assert any(o.caused_by == ho and o.kind == "bind.attach" for o in st.ops)
-    status = client.queue_status(str(cd))
+    status = reads.queue_status(str(cd))
     assert status["doc_language"]["code"] == "en"
 
 
@@ -201,8 +202,10 @@ def test_init_that_stops_at_the_install_says_the_document_is_built(tmp_path, mon
 def test_a_foreground_realize_holds_the_lease_its_agent_runs_under(tmp_path, monkeypatch):
     """`codoc realize --engine cli` takes the realizing lease and names its
     `claude -p` the owner, as a pass the daemon starts does; without the name,
-    the agent reads the lease as another pass's and stands down."""
+    the agent reads the lease as another pass's and stands down. The lease
+    carries the child's pid, so it holds while the child lives."""
     import subprocess
+    import sys
     from codoc.claude import autorealize
     from codoc.daemon.publish import REALIZE_OWNER_ENV
     root, cd = seeded(tmp_path)
@@ -210,6 +213,8 @@ def test_a_foreground_realize_holds_the_lease_its_agent_runs_under(tmp_path, mon
     started = []
 
     class Child:
+        pid = 4242
+
         def __init__(self, argv, **kw):
             started.append((argv, kw["env"]))
 
@@ -220,9 +225,9 @@ def test_a_foreground_realize_holds_the_lease_its_agent_runs_under(tmp_path, mon
     r = runner.invoke(app, ["realize", "--engine", "cli", "--root", str(root)])
     assert r.exit_code == 0, r.output
     [(argv, env)] = started
-    assert argv == ["/bin/claude", "-p", "/codoc:realize", "--permission-mode", "acceptEdits"]
+    assert argv == [sys.executable, "-m", "codoc.claude.autorealize", str(root), "acceptEdits"]
     status = json.loads((cd / "status.json").read_text())
-    assert status["state"] == "realizing" and status["owner"] == env[REALIZE_OWNER_ENV]
+    assert status["state"] == "realizing" and status["owner"] == env[REALIZE_OWNER_ENV] and status["pid"] == 4242
 
 
 def test_the_hubs_pull_requests_target_the_repositorys_default_branch(tmp_path, monkeypatch):
@@ -252,3 +257,66 @@ def test_lang_takes_a_tag_and_writes_it_normalized(tmp_path):
     assert r.exit_code == 2 and not (cd / "config.json").exists()
     r = runner.invoke(app, ["lang", "zh", "--root", str(root)])
     assert r.exit_code == 0 and json.loads((cd / "config.json").read_text())["doc_language"] == "zh-Hans"
+
+
+def test_the_cli_finds_the_workspace_from_a_subdirectory(tmp_path, monkeypatch):
+    """As the hooks and the MCP server do; `codoc init` there finds the
+    workspace above instead of making a second one."""
+    root, cd = seeded(tmp_path)
+    sub = root / "src" / "pkg"
+    sub.mkdir(parents=True)
+    monkeypatch.chdir(sub)
+    r = runner.invoke(app, ["status"])
+    assert r.exit_code == 0 and "4 features" in r.output, r.output
+    assert runner.invoke(app, ["status", "--root", str(sub)]).exit_code == 0
+    r = runner.invoke(app, ["init"])
+    assert r.exit_code == 1 and "already exists" in r.output and not (sub / ".codoc").exists()
+    monkeypatch.chdir(tmp_path)
+    r = runner.invoke(app, ["status"])
+    assert r.exit_code == 1 and "No codoc workspace in" in r.output
+
+
+def test_history_says_when_what_and_for_which_handoff(tmp_path, monkeypatch):
+    """A local time, not the clock's padded stamp; the symbol a binding names;
+    the hand-off an op answers; and who wrote each run of words, as words."""
+    import re
+    root, cd = seeded(tmp_path)
+    index_holds(monkeypatch, "net/client.py::Client.retry")
+    runner.invoke(app, ["handoff", "HTTP client", "--root", str(root), "--asked", "retry thrice"])
+    st = client.read(cd).store
+    fid = next(h.id for h in st.headings() if tools.title(st, h.id) == "HTTP client")
+    ho = st.watermarks(fid).handoffs[-1]
+    assert tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": fid, "bindings": ["net/client.py::Client.retry"]}],
+                         caused_by=ho, root_dir=str(root))["ok"]
+    out = runner.invoke(app, ["history", "HTTP client", "--root", str(root)]).output
+    assert re.search(rf"\n  \d{{4}}-\d\d-\d\d \d\d:\d\d:\d\d  agent:claude-code +bind.attach +"
+                     rf"net/client.py::Client.retry  for hand-off d:{ho}\n", out), out
+    assert "feature.handoff 'retry thrice'" in out and "'Sends requests.'" in out and "00000" not in out
+
+
+def test_a_feature_name_that_matches_several_lists_them_with_their_ids(tmp_path):
+    root, cd = seeded(tmp_path)
+    st = client.read(cd).store
+    hits = [h.id for h in st.headings() if "n" in tools.title(st, h.id).lower()]
+    assert len(hits) > 1
+    r = runner.invoke(app, ["handoff", "n", "--root", str(root)])
+    assert r.exit_code == 1 and f"{len(hits)} features match 'n'" in r.output, r.output
+    for fid in hits:
+        assert f"  {fid}  {tools.title(st, fid)}" in r.output
+
+
+def test_a_realize_pass_ends_with_its_time_and_cost(tmp_path, monkeypatch):
+    """`claude -p` with a JSON result, and the SDK's result message: both
+    passes end with one line that says what the run cost."""
+    from codoc.claude import autorealize
+    from codoc.claude.sdk_realize import RealizeMonitor
+    claude = tmp_path / "claude"
+    claude.write_text("#!/bin/sh\necho '{\"result\": \"Built the retry.\", \"is_error\": false, \"total_cost_usd\": 1.03}'\n")
+    claude.chmod(0o755)
+    monkeypatch.setattr(autorealize, "find_claude", lambda: str(claude))
+    said = []
+    assert autorealize.run_cli(str(tmp_path), "acceptEdits", printer=said.append) == 0
+    assert said[0] == "Built the retry." and said[1].startswith("  ✓ done · ") and said[1].endswith(" · $1.03")
+    monitor = RealizeMonitor(str(tmp_path), str(tmp_path / ".codoc"), printer=said.append, tty=False)
+    monitor.handle_message(type("ResultMessage", (), {"is_error": False, "result": "", "total_cost_usd": 0.42})())
+    assert monitor.summary().endswith(" · $0.42")

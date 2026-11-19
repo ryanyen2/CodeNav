@@ -29,7 +29,7 @@ _COMMENT_EDITS = frozenset({K.TEXT_INSERT, K.TEXT_DELETE, K.TEXT_MARK, K.BLOCK_S
 
 
 def _withdrawing_own_empty_plan(store: Store, op: Op) -> bool:
-    """Taking back a proposal of your own that nobody has written into is not a
+    """Taking back a plan of your own that nobody has written into is not a
     verdict on anybody's work: there is nothing to decide. A plan opened for a
     submission that then did not land would otherwise stand for ever, since
     ``plan.open`` has no inverse and only an owner may reject."""
@@ -42,8 +42,8 @@ def _withdrawing_own_empty_plan(store: Store, op: Op) -> bool:
 def deleted_ops(store: Store, target: dict, payload: dict) -> set[str]:
     """The ops that minted the characters a delete names. The ``segments`` form
     lists them; the ``from``/``to`` form has to be resolved against the text.
-    Used by the DRAIN to decide whether a contributor's Backspace is a proposal
-    or their own words coming back; never by the policy, which has only the
+    Used by the drain to decide whether a contributor's Backspace is a strike
+    in their plan or their own words coming back; never by the policy, which has only the
     plans to reason from (and the hub's door, which validates a stranger's log,
     has only what the log carries)."""
     if "segments" in payload:
@@ -128,7 +128,7 @@ class Roles:
       ops, turning a deletion into the plan's ``suggest_del``. What
       it cannot carry under a plan (a merge, a block delete) stays refused.
       Nothing untagged but a comment: taking back words they proposed is the
-      proposal getting smaller, so it rides in the plan like everything else
+      plan getting smaller, so it rides in the plan like everything else
       (``ops.PLANNABLE`` carries ``text.delete``/``text.restore`` for exactly
       that, and the applier holds them to the plan's own characters). The
       policy reads only ``plans`` and who added a comment block, so

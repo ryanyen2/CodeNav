@@ -3,9 +3,8 @@ import copy
 
 from codoc.calculus import ops as K
 from codoc.calculus.apply import apply, replay_recorded
-from codoc.calculus.derive import phase
+from codoc.calculus.derive import export_markdown, markdown, phase
 from codoc.calculus.doc import PARAGRAPH
-from codoc.calculus.derive import export_markdown
 from codoc.calculus.ids import START
 from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
@@ -17,6 +16,7 @@ from codoc.workspace import Workspace
 from codoc.workspace.snapshot import settled_prefix, snapshot_ops, state_at
 from tests.helpers import (
     H,
+    apply_mark,
     Clock,
     Mint,
     T,
@@ -599,22 +599,28 @@ def test_a_word_typed_inside_a_proposed_strike_is_not_drawn_struck(tmp_path):
     assert T(ws.store, "p1") == "Retries X."
 
 
-def test_a_plan_whose_target_died_does_not_leave_the_feature_its_words_are_in_proposed(tmp_path):
-    """A plan whose target is dead is not offered, so no surface can decide
-    it; the feature its words landed in is not waiting on a verdict."""
-    from codoc.calculus.derive import offered_plans
+def test_a_plan_whose_target_died_is_offered_while_its_words_are_on_the_page(tmp_path):
+    """The plan targets h2 and wrote into h1's paragraph. With h2 deleted its
+    words are still drawn in h1, so it is still offered and h1 still waits on
+    it. Once the plan takes its words back nothing of it is on the page: it is
+    not offered and h1 is not waiting on anything."""
+    from codoc.calculus.derive import offered_plans, plan_claims
     ws = Workspace(tmp_path / ".codoc")
     seed(ws, actor="loop")
     ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "h2"}, "payload": {"kind": "heading", "after": "p1"}},
                {"kind": K.TEXT_INSERT, "target": {"bid": "h2", "path": "text"}, "payload": {"after": START, "text": "B"}}],
               actor="loop")
-    pid = ws.open_plan(actor="agent:claude-code", target="h2")
-    ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
-                "payload": {"after": list(ws.store.blocks["p1"].text().last_live_ref()), "text": " Maybe."}}],
-              actor="agent:claude-code", plan=pid)
-    assert phase(ws.store, "h1") == "proposed"
+    agent = "agent:claude-code"
+    pid = ws.open_plan(actor=agent, target="h2")
+    maybe = ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                        "payload": {"after": list(ws.store.blocks["p1"].text().last_live_ref()), "text": " Maybe."}}],
+                      actor=agent, plan=pid)[0]
     ws.submit([{"kind": K.BLOCK_DELETE, "target": {"bid": "h2"}, "payload": {}}], actor=H)
-    assert offered_plans(ws.store) == [] and phase(ws.store, "h1") == "synced"
+    drawn = {c.plan for c in plan_claims(ws.store, "h1")}
+    assert drawn == {pid} and [p.id for p in offered_plans(ws.store)] == [pid] and phase(ws.store, "h1") == "proposed"
+    ws.submit([{"kind": K.TEXT_DELETE, "target": {"bid": "p1", "path": "text"},
+                "payload": {"segments": [[maybe.id, 0, len(" Maybe.")]]}}], actor=agent, plan=pid)
+    assert plan_claims(ws.store, "h1") == [] and offered_plans(ws.store) == [] and phase(ws.store, "h1") == "synced"
 
 
 def test_accepting_a_build_plans_strike_without_a_hand_off_leaves_it_the_accepters_edit(tmp_path):
@@ -634,3 +640,34 @@ def test_accepting_a_build_plans_strike_without_a_hand_off_leaves_it_the_accepte
               actor=agent, plan=pid)
     ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor=H)
     assert T(ws.store, "p1") == "Retries ." and editors(ws.store, "h1") == [H]
+
+
+def test_accepting_only_a_plans_mark_takes_the_words_it_marks():
+    """A subset accept takes every plan op an accepted op anchors on: a bold
+    proposed over the plan's own words brings the words with it."""
+    m, s, ag = Mint(), Store(), Mint("a", "agent:x")
+    heading(m, s, "h1", "A")
+    base = paragraph(m, s, "p1", "base", after="h1")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit", "target": "p1"}))
+    i1 = apply(s, ag.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [base.id, 3], "text": " A"}, plan="P"))
+    mk = apply_mark(ag, s, "p1", i1, 1, 1, plan="P")
+    acc = apply(s, m.op(K.PLAN_ACCEPT, {"pid": "P"}, {"subset": [mk.id]}))
+    assert acc.payload["accepted"] == [i1.id, mk.id]
+    assert markdown(s.blocks["p1"].text()) == "base **A**"
+
+
+def test_accepting_a_delete_plan_kills_the_body_and_spares_child_headings_and_a_heading_already_gone():
+    """A delete plan's accept kills its heading's body: the heading and the
+    blocks up to the next heading of any level. A child heading and its body
+    survive. A heading the person already deleted is left as it is."""
+    m, s, ag = Mint(), Store(), Mint("a", "agent:x")
+    heading(m, s, "h1", "A"); paragraph(m, s, "p1", "a body", after="h1")
+    heading(m, s, "h2", "A child", level=2, after="p1"); paragraph(m, s, "p2", "child body", after="h2")
+    heading(m, s, "h3", "B", after="p2"); paragraph(m, s, "p3", "b body", after="h3")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "D1"}, {"kind": "delete", "target": "h1"}))
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "D3"}, {"kind": "delete", "target": "h3"}))
+    assert apply(s, m.op(K.PLAN_ACCEPT, {"pid": "D1"}, {})).conflict is None
+    assert [b.id for b in s.ordered()] == ["h2", "p2", "h3", "p3"]
+    apply(s, m.op(K.BLOCK_DELETE, {"bid": "h3"}, {}))
+    gone = apply(s, m.op(K.PLAN_ACCEPT, {"pid": "D3"}, {}))
+    assert gone.conflict is None and gone.payload["steps"] == [] and [b.id for b in s.ordered()] == ["h2", "p2"]

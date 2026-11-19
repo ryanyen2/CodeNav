@@ -18,7 +18,7 @@ const claim = (start: number, end: number, channel: Claim['channel'], stage: Cla
 function paints(claims: Claim[], viewer = 'human:a', plans: Projection['plans'] = []) {
     const { b } = paragraph('keep this maybe', []);
     const proj: Projection = { head: 1, frontier: {}, blocks: [b], phases: {}, plans, bindings: { by_feature: {} }, claims: { h: claims } };
-    return paintsFor(b, proj, 'h', false, viewer);
+    return paintsFor(b, proj, false, viewer);
 }
 
 describe('ink', () => {

@@ -6,7 +6,7 @@ Invoked as ``python -m codoc.claude.hook <event>``, where ``<event>`` is one of
 
 It does two things:
 
-1. Keeps the agent epoch in ``.codoc/activity.json`` (``daemon.epoch``): open
+1. Keeps the agent epoch in ``.codoc/activity.json`` (``workspace.epoch``): open
    while a turn runs, so the daemon defers its reflect pass until the turn
    ends, with the files the turn touched, which that pass reflects. With no
    daemon, the close starts a detached process that settles what the turn
@@ -29,7 +29,7 @@ from pathlib import Path
 from subprocess import DEVNULL, Popen
 from typing import Any
 
-from codoc.daemon import epoch
+from codoc.workspace import epoch
 from codoc.daemon.pidfile import daemon_running
 from codoc.workspace.layout import REALIZE, find_codoc_dir
 
@@ -52,14 +52,17 @@ def handle_session_start(payload: dict[str, Any], codoc_dir: str) -> None:
 
 def handle_user_prompt(payload: dict[str, Any], codoc_dir: str) -> None:
     """The person's prompt is a turn's first rising edge: reopen the epoch.
-    Then, when hand-offs are queued, say so and how to build them."""
+    Then, when hand-offs are queued, say so and how to build them, and record
+    how many the session was told, so the first tool call of the turn does not
+    announce them again as growth."""
+    n = len(queued_ids(codoc_dir))
     try:
         epoch.reopen_epoch(codoc_dir, payload.get("session_id"))
+        epoch.note_queue_size(codoc_dir, n)
     except Exception:  # noqa: BLE001 (epoch upkeep must never break the turn)
         pass
     if not (Path(codoc_dir) / REALIZE).exists():
         return
-    n = len(queued_ids(codoc_dir))
     count = f"{n} hand-off(s)" if n else "hand-offs"
     msg = (
         f"codoc: {count} queued in .codoc/realize.md. "

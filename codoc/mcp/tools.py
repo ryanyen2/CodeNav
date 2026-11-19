@@ -7,8 +7,13 @@ receiving side stamps ``actor=agent:<CODOC_AGENT>``, never the agent. A
 binding op that cites a hand-off in ``caused_by`` settles it when it lands.
 
 Two writes take tree edits (``loops.edits``). Every edit is compiled against
-the current tree before anything is written; if one is refused, nothing is
-written and the error names it.
+the current tree and the code index before anything is written; if one is
+refused, nothing is written and the error names it. A symbol an ``attach`` or
+``add_node`` binds must be a chunk the index holds. The daemon does not index
+a file while an agent's turn holds it, so code written during the turn is
+indexed, and bound, by the pass that runs when the turn ends. An ``attach`` of
+a symbol the feature already owns writes nothing: it would only rewrite the
+binding's hashes, and its ``caused_by`` would report work that did not happen.
 
 | tool | edit | lands |
 |---|---|---|
@@ -33,8 +38,8 @@ from codoc.calculus.derive import (
 from codoc.calculus.doc import HEADING, fold_tree
 from codoc.calculus.ids import new_plan_id
 from codoc.daemon import client
-from codoc.daemon.client import doc_language_block
-from codoc.daemon.epoch import note_cited, read_activity
+from codoc.daemon.reads import doc_language_block
+from codoc.workspace.epoch import note_cited, read_activity
 from codoc.daemon.publish import REALIZE_OWNER_ENV, write_realizing
 from codoc.doclang import detect_prose_language, workspace_doc_language
 from codoc.index.graph import Graph
@@ -42,7 +47,7 @@ from codoc.llm.prompt import titles_outline
 from codoc.loops.context import description_blocks, feature_context, select_context, written_by
 from codoc.calculus.block_md import BlockSpec
 from codoc.calculus.ingest import block_bodies, concat_bodies
-from codoc.loops.edits import PLAN_KIND, Change, Compiler, delete_open
+from codoc.loops.edits import PLAN_KIND, Change, Compiler, delete_open, symbol
 from codoc.workspace.inbox import AGENT_CLIENT
 from codoc.workspace.layout import GRAPH_CACHE
 
@@ -131,9 +136,9 @@ def read_tree(codoc_dir: str, *, root_id: str | None = None, depth: int = 0, inc
     if root_id:
         roots = [_find(roots, root_id)]
     walk(roots, 1, None)
-    # `offered_plans`, not every open plan: one whose target block is gone cannot
-    # be answered from any surface, so offering it asks for a verdict nobody
-    # can give. It comes back when the block does.
+    # `offered_plans`, not every open plan: one with nothing left on the page
+    # (its target and its words gone) cannot be answered from any surface, so
+    # offering it asks for a verdict nobody can give. It comes back with them.
     plans = [{"plan_id": p.id, "kind": p.kind, "target": p.target, "actor": p.actor, "note": p.note}
              for p in offered_plans(store)]
     return {"ok": True, "features": out, "plans": plans, "doc_language": doc_language_block(codoc_dir)}
@@ -151,11 +156,33 @@ def _find(nodes, fid):
 
 # ── writes ───────────────────────────────────────────────────────────────────
 
-def _compile(store, ops: list[dict]) -> tuple[list[Change], str | None]:
-    """Every edit compiled in order, or the first refusal as an error."""
-    compiler = Compiler(store)
+def indexed(codoc_dir: str, files: set[str]) -> dict[str, tuple[str, str]]:
+    """``(fingerprint, types_hash)`` of every chunk the code index holds in
+    ``files``; empty when there is no index to read."""
+    if not files:
+        return {}
+    from codoc.index.reader import read_all_chunks
+    try:
+        rows = read_all_chunks(codoc_dir, files=files, with_source=False)
+    except Exception:  # noqa: BLE001 (no index yet: nothing is bindable)
+        return {}
+    return {r.symbol: (r.fingerprint, r.types_hash) for r in rows}
+
+
+def _compile(codoc_dir: str, store, ops: list[dict]) -> tuple[list[Change], str | None]:
+    """Every edit compiled in order, or the first refusal as an error (see the
+    module docstring for what a binding may name)."""
+    binds = {i: [s for b in raw.get("bindings") or [] if (s := symbol(b))]
+             for i, raw in enumerate(ops or []) if isinstance(raw, dict) and raw.get("kind") in ("attach", "add_node")}
+    hashes = indexed(codoc_dir, {s.split("::")[0] for named in binds.values() for s in named})
+    compiler = Compiler(store, hashes=hashes, bindable=set(hashes))
     changes = []
     for i, raw in enumerate(ops or []):
+        missing = [s for s in binds.get(i, []) if s not in hashes]
+        if missing:
+            return [], (f"ops[{i}] ({raw['kind']}): not in the code index: {', '.join(missing)}. Code written "
+                        "during this turn is indexed when the turn ends, and the pass that runs then binds it; "
+                        "bind only symbols that existed before the turn.")
         change = compiler.compile(raw)
         if change.refused:
             return [], f"ops[{i}] ({change.kind}): {change.refused}"
@@ -186,7 +213,7 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "", caused_by: 
     """What the agent did to the code, as tree edits (see the module table)."""
     caused_by = _handoff(caused_by)
     ws, _ = _open(codoc_dir)
-    changes, err = _compile(ws.store, ops)
+    changes, err = _compile(codoc_dir, ws.store, ops)
     if err:
         return _err(err)
     minted = {c.target for c in changes if c.kind == "add_node"}
@@ -216,7 +243,7 @@ def propose(codoc_dir: str, *, ops: list[dict], note: str = "", caused_by: str |
     """A plan of tree edits, drawn in place for the person to accept or reject."""
     caused_by = _handoff(caused_by)
     ws, _ = _open(codoc_dir)
-    changes, err = _compile(ws.store, ops)
+    changes, err = _compile(codoc_dir, ws.store, ops)
     if err:
         return _err(err)
     if not changes:

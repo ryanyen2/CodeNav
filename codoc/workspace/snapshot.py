@@ -50,7 +50,7 @@ def settled_prefix(store: Store) -> int:
     """How many of ``store.ops`` may be folded: everything before the oldest op
     that something still unsettled was written by.
 
-    A feature with no proposal open on it is finished: its ops are history and
+    A feature with no plan open on it is finished: its ops are history and
     the state they produced is enough, because every other reader reads state
     (``derive.reads_its_ops`` says which and why). Stopping at the oldest op of
     any feature that is not is conservative: the cut lands at that feature's
@@ -199,7 +199,7 @@ def write_snapshot(codoc_dir: str | Path, store: Store, clock: Clock) -> Path | 
 
     A daemonless writer between calls may hold one of the archived files open;
     at its next call it finds the file gone and opens a new session over the
-    logs on disk (``Workspace.follow_head``), so nothing is appended under
+    logs on disk (``Workspace.follow_disk``), so nothing is appended under
     ``log/archive/``."""
     cut = settled_prefix(store)
     if cut == 0:

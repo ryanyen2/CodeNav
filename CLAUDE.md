@@ -31,12 +31,12 @@ codoc install-hooks              # the hooks, /codoc:* commands and MCP registra
 | package | holds | may import |
 |---|---|---|
 | `calculus/` | document model, applier, ingest, Markdown codecs, views | nothing in codoc |
-| `workspace/` | the `.codoc` directory: layout, config, clock, log, snapshot, roles, Workspace, log validation | calculus |
+| `workspace/` | the `.codoc` directory: layout, config, clock, log, inbox, agent epoch, snapshot, roles, Workspace, log validation | calculus |
 | `index/` | language adapters, chunk index, change set, dependency graph, git facts | nothing in codoc |
 | `llm/` | provider, prompt loading, the LLM passes | doclang |
 | `kinds/` | block kinds | calculus, workspace |
 | `loops/` | bootstrap, reflect, realize, translate, context, edits (tree edits to ops) | all above |
-| `daemon/` | daemon, client, publish, pidfile, agent epoch | all above |
+| `daemon/` | daemon, client, reads, publish, pidfile | all above |
 | `claude/` | Claude Code hooks, installer, plugin, SDK realize | daemon and below |
 | `cli/`, `mcp/`, `serve/` | surfaces | daemon and below; `cli` also `claude`, `mcp`, `serve` |
 

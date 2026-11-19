@@ -184,7 +184,7 @@ def test_a_feature_carrying_media_survives_every_whole_feature_pass(tmp_path):
     from codoc.doclang import resolve
     from codoc.loops.context import block_written_by, written_by
     from codoc.calculus.ingest import strike_bodies
-    from codoc.daemon import client
+    from codoc.daemon import reads
     from codoc.loops.translate import translate_tree
 
     ws = Workspace(tmp_path / ".codoc")
@@ -198,14 +198,14 @@ def test_a_feature_carrying_media_survives_every_whole_feature_pass(tmp_path):
     # the description is the prose and the diagram; the comment is not part of what the feature says
     assert description(ws.store, "h1") == "Retries once before giving up.\n\n```mermaid\nflowchart TB\n  a --> b\n```"
     ws.close()
-    blame = client.read_history(str(tmp_path / ".codoc"), "h1")["attribution"]
+    blame = reads.read_history(str(tmp_path / ".codoc"), "h1")["attribution"]
     assert f"{d}.source" in blame and f"{c}.body" in blame and "p1" in blame
     ws = Workspace(tmp_path / ".codoc")
     struck = strike_bodies(ws.store, [b.id for b in ws.store.body("h1")], "p-1")
     assert sorted(b["target"]["path"] for b in struck) == ["body", "source", "text", "text"]
     propose = lambda payload, lang, **kw: {p["id"]: ("客户端", {b["id"]: "放弃前重试一次。" for b in p["blocks"]})
                                           for p in payload}
-    res = translate_tree(ws, tmp_path / ".codoc", language=resolve("zh-Hans"), propose=propose)
+    res = translate_tree(ws, language=resolve("zh-Hans"), propose=propose)
     assert res.translated == 1 and ws.store.blocks[c].text("body").live_text() == "Twice?"
     assert ws.store.blocks[d].text("source").live_text().startswith("flowchart")
 

@@ -32,7 +32,7 @@ def test_translate_ingests_per_block_and_plans_human_prose(tmp_path):
         return {f["id"]: ("HTTP 客户端" if f["title"] == "HTTP client" else "发送",
                           {b["id"]: zh_text(b["text"]) for b in f["blocks"]}) for f in features}
 
-    res = translate_tree(ws, tmp_path / ".codoc", language=zh, propose=fake)
+    res = translate_tree(ws, language=zh, propose=fake)
     assert res.translated == 2 and res.planned == 1 and not res.skipped, res.skipped
     # The human-written feature's translation is a plan (gray), not a trunk write:
     # the live view shows both wordings, the accepted view the translation alone.
@@ -41,7 +41,7 @@ def test_translate_ingests_per_block_and_plans_human_prose(tmp_path):
     # Focus span survived by identity.
     assert "**once**" in description(ws.store, client, "accepted")
     # Idempotent: a re-run finds nothing to do while the plan is open.
-    res2 = translate_tree(ws, tmp_path / ".codoc", language=zh, propose=fake)
+    res2 = translate_tree(ws, language=zh, propose=fake)
     assert res2.translated == 0
 
 
@@ -60,7 +60,7 @@ def test_translating_a_queued_feature_is_a_plan_even_when_the_loop_wrote_it(tmp_
     def fake(features, language, **kw):
         return {f["id"]: ("译", {b["id"]: "译文。" for b in f["blocks"]}) for f in features}
 
-    res = translate_tree(ws, tmp_path / ".codoc", language=resolve("zh-Hans"), propose=fake)
+    res = translate_tree(ws, language=resolve("zh-Hans"), propose=fake)
     assert res.translated == 2 and res.planned == 1, res           # only the queued one waits
     assert title(ws.store, client) != "译" and title(ws.store, client, "accepted") == "译"
     other = next(h.id for h in ws.store.headings() if h.id != client and "译" in title(ws.store, h.id, "accepted"))
@@ -86,7 +86,7 @@ def test_translate_says_when_it_skipped_a_feature_for_an_open_plan(tmp_path):
     t = ws.store.blocks["p1"].text()
     ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
                 "payload": {"after": list(t.last_live_ref()), "text": " Maybe."}}], actor="loop", plan=pid)
-    res = translate_tree(ws, tmp_path / ".codoc", language=resolve("zh-Hans"),
+    res = translate_tree(ws, language=resolve("zh-Hans"),
                          propose=lambda payload, lang, **kw: {p["id"]: ("客户端", {b["id"]: "重试一次。" for b in p["blocks"]})
                                                               for p in payload})
     assert res.translated == 0 and res.already == 0
@@ -102,7 +102,7 @@ def test_translate_skips_a_feature_with_an_open_plan(tmp_path):
     ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": list(t.last_live_ref()), "text": " Maybe."}}], actor="loop", plan=pid)
     propose = lambda payload, lang, **kw: {p["id"]: ("客户端", {b["id"]: "放弃前重试一次。" for b in p["blocks"]})
                                           for p in payload}
-    res = translate_tree(ws, tmp_path / ".codoc", language=resolve("zh-Hans"), propose=propose)
+    res = translate_tree(ws, language=resolve("zh-Hans"), propose=propose)
     assert res.translated == 0
     assert all(s.live for s in ws.store.blocks["p1"].text().segs if s.plan == pid)
 
@@ -140,7 +140,7 @@ def test_translate_never_leaves_an_empty_open_plan(tmp_path):
         # a bullet where the feature has a paragraph
         return {p["id"]: ("客户端", {b["id"]: "- 重试一次。" for b in p["blocks"]}) for p in payload}
 
-    res = translate_tree(ws, cd, language=lang, propose=propose)
+    res = translate_tree(ws, language=lang, propose=propose)
     assert res.skipped and "different kind" in res.skipped[0].reason
     open_ = [p for p in ws.store.plans.values() if p.status == "open"]
     assert not open_, [(p.id, p.ops) for p in open_]

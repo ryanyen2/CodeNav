@@ -11,7 +11,7 @@ import subprocess
 import pytest
 
 from codoc.calculus import ops as K
-from codoc.cli.main import _write_gitignore
+from codoc.workspace.layout import write_gitignore
 from codoc.daemon.daemon import Daemon
 from codoc.index.changes import ChangeSet
 from codoc.workspace import Workspace
@@ -39,7 +39,7 @@ def repo(tmp_path, git_env):
     (root / ".codoc").mkdir(parents=True)
     _git(root, "init", "-q", "-b", "main")
     (root / "c.py").write_text("def send(): ...\n")
-    _write_gitignore(root / ".codoc")
+    write_gitignore(root / ".codoc")
     _git(root, "add", "-A")
     _git(root, "commit", "-qm", "init")
     return root, lambda *argv, check=True: _git(root, *argv, check=check)
@@ -84,6 +84,25 @@ def test_words_typed_after_git_takes_the_session_file_survive_a_rebuild(repo, ta
     assert T(replayed.store, "p1") == T(d.ws.store, "p1") == SEED + " Three."
 
 
+def test_a_session_file_git_brings_back_wakes_the_daemon_and_is_read(repo):
+    """`git stash -u`, then `git stash pop`: the session file comes back with
+    HEAD where it was. Its arrival starts a batch, and the batch reads it, so
+    the editor shows the restored words and nobody types them twice."""
+    root, git = repo
+    d = daemon(root)
+    seed_loop(d.ws)
+    git("add", "-A")
+    git("commit", "-qm", "docs")
+    type_(d, " One.", "c1")
+    typed = d.ws.writer.path
+    git("stash", "-u")
+    d.process_batch([])
+    git("stash", "pop")
+    assert d.wakes(None, str(typed))
+    d.process_batch([str(typed)])
+    assert T(d.ws.store, "p1") == SEED + " One."
+
+
 def test_commit_then_checkout_back_before_the_daemon_looks(repo):
     """`git checkout -b feat`, type, `git commit -am wip && git checkout main`:
     the first batch after sees main's sha, the one it saw last, but not the
@@ -106,15 +125,16 @@ def test_commit_then_checkout_back_before_the_daemon_looks(repo):
 
 
 def test_a_commit_does_not_leave_a_tracked_log_modified(repo):
-    """After a commit the daemon's next batch starts a new session and writes
-    nothing to the committed file, so a checkout of a branch without it works."""
+    """After a commit the daemon's next batch starts a new session, so what is
+    typed after it goes to a new file and the committed one is left alone, and
+    a checkout of a branch without it works."""
     root, git = repo
     git("branch", "older")
     d = daemon(root)
     seed_loop(d.ws)
     git("add", "-A")
     git("commit", "-qm", "docs")
-    d.process_batch([])
+    type_(d, " After.", "c1")
     assert git("status", "--porcelain", "--untracked-files=no").stdout == ""
     co = git("checkout", "-q", "older", check=False)
     assert co.returncode == 0, co.stderr
@@ -184,7 +204,7 @@ def test_git_pull_with_unsaved_doc_edits_when_a_teammate_pushed_docs(tmp_path, g
     alice = tmp_path / "alice"
     _git(tmp_path, "clone", "-q", str(remote), str(alice))
     (alice / ".codoc").mkdir()
-    _write_gitignore(alice / ".codoc")
+    write_gitignore(alice / ".codoc")
     (alice / "c.py").write_text("def send(): ...\n")
     a = daemon(alice)
     seed_loop(a.ws)
@@ -206,3 +226,23 @@ def test_git_pull_with_unsaved_doc_edits_when_a_teammate_pushed_docs(tmp_path, g
     assert pull.returncode == 0, pull.stderr
     b.process_batch([])
     assert T(b.ws.store, "p1") in (SEED + " Alice. Bob.", SEED + " Bob. Alice.")
+
+
+def test_a_workspace_set_up_to_track_the_export_is_told_how_to_stop(repo):
+    """A `.codoc/.gitignore` an older codoc wrote still tracks `tree.codoc`.
+    The daemon's start writes the current one, and since git already tracks
+    the file, says how to untrack it rather than running git itself."""
+    root, git = repo
+    gitignore = root / ".codoc" / ".gitignore"
+    gitignore.write_text(gitignore.read_text().replace("!config.json\n", "!config.json\n!tree.codoc\n"))
+    (root / ".codoc" / "tree.codoc").write_text("# Client\n")
+    git("add", "-A")
+    git("commit", "-qm", "an older codoc")
+    said: list[str] = []
+    d = Daemon(root, changeset=lambda *a: ChangeSet(), propose=lambda *a, **k: [], printer=said.append)
+    d.start()
+    d.ws.close()
+    assert "!tree.codoc" not in gitignore.read_text()
+    assert any("git rm --cached .codoc/tree.codoc" in line for line in said)
+    assert git("ls-files", ".codoc/tree.codoc").stdout.strip() == ".codoc/tree.codoc"
+

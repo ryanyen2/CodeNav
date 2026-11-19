@@ -60,10 +60,17 @@ pass caused by a hand edit cites nothing.
    `directive` renders it.
 4. A coding agent builds it: `/codoc:realize` in Claude Code, `codoc realize`
    (`--engine sdk` or `cli`), or `codoc watch --auto-realize`. On the hub, the worker
-   opens a pull request (section 3.6).
+   opens a pull request (section 3.6). `codoc realize` runs the agent with
+   `--permission-mode acceptEdits`: it may edit files but not run a shell command
+   nobody allowed, so it cannot run the tests unless the person allows the test
+   command in `.claude/settings.local.json`, for example
+   `{"permissions": {"allow": ["Bash(pytest:*)"]}}`. The agent says when it could not
+   run them. At the end `codoc realize` prints the run's cost and time.
 5. The build cites the hand-off in binding ops, in any of three ways. The agent's
-   `codoc_reflect` attaches what it wrote with `caused_by` the hand-off's `d:` id; any
-   agent that runs the MCP server can do this. Claude Code's hooks also keep the agent
+   `codoc_reflect` attaches symbols the code index already holds, with `caused_by` the
+   hand-off's `d:` id; any agent that runs the MCP server can do this. A symbol the index
+   does not hold is refused, and one the feature already owns writes nothing, so an
+   attach is evidence only of code that exists. Claude Code's hooks also keep the agent
    epoch open in `.codoc/activity.json` while a turn runs, and the daemon reflects the
    deferred files with `caused_by` when the epoch closes. A commit whose `Codoc-Handoff`
    trailer names the hand-off and whose `Codoc-Base` trailer names a branch (the hub's
@@ -116,7 +123,7 @@ One gesture is one batch, and a batch is the undo unit. Typing is flushed as one
 | Undo, redo (⌘Z, ⇧⌘Z, ⌘Y) | editor | The recorded inverses of the viewer's newest batch, newest first, as batch `u-<batch>`; redo undoes that | The log keeps both. |
 | Delete feature | editor, the `/` menu in a heading | `block.delete` of the heading, `block.set(level)` per promoted child heading | The heading and its body are gone; History keeps them. |
 | `codoc done <feature>` | CLI | `feature.realized` | The feature leaves the queue. |
-| Switch language | editor (the VS Code host runs `codoc lang`; the hub, for a maintainer, writes the same normalized tag), `codoc lang` | none; writes `doc_language` in `config.json` | New prose is written in that language. |
+| Switch language | editor (the VS Code host runs `codoc lang`; the hub, for a maintainer, writes the same normalized tag), `codoc lang` | none; writes `doc_language` in `config.json` | New features are written in that language. An amend, a new block included, keeps the language of the description it changes; `codoc translate` converts existing prose. |
 
 Two outcomes have no gesture: a heading merged into prose by a keystroke, and a heading
 removed by a text edit. A feature goes only through `block.delete` or an accepted
@@ -193,12 +200,15 @@ branches' files and the store is rebuilt from the union
 
 ### 3.8 The authoring language
 
-`codoc lang <tag>` sets `doc_language` in `config.json`; prose written from then on is in
-that language. `codoc translate` rewrites existing prose as `translator:<lang>`, one
-`Workspace.amend` per feature: on the trunk when machines
-wrote the feature, as one plan when a person wrote any of it, the feature has pending
-intent, or the translation would drop a citation, link or bold a person placed (the
-machine gate, [concurrency.md](concurrency.md#the-machine-gate)). A feature with an open plan is
+`codoc lang <tag>` sets `doc_language` in `config.json`. From then on the loop writes a new
+feature's title and description, and its rationales, in that language. An amend keeps the
+language of the description it changes, a block it adds included, so the loop does not
+leave a description half in one language (`doclang.prompt_directive` tells the model so).
+`codoc translate` rewrites existing prose as `translator:<lang>`, one `Workspace.amend`
+per feature: on the trunk when machines wrote the feature, as one plan when a person wrote
+any of it, the feature has pending intent, or the translation would drop a citation, link
+or bold a person placed (the machine gate,
+[concurrency.md](concurrency.md#the-machine-gate)). A feature with an open plan is
 skipped, so a second run does not stack translations. The daemon must be stopped.
 
 ## 4. What the person sees, and where it comes from

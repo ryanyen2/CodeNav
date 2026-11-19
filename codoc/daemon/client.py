@@ -14,16 +14,13 @@ held workspace is closed. Both ways a submission is applied by
 
 Two daemonless writers are allowed (the MCP server holds its workspace while
 the person runs `codoc accept`), so ``applying()`` wraps apply-and-publish
-in an exclusive lock, and both writes and reads rebuild when the log grew by a
-hand that is not ours since our last turn. Without the lock each held a store
+in an exclusive lock, and both writes and reads rebuild when a log file that is
+not ours changed since the store was built (``Workspace.catch_up``). Without the lock each held a store
 the other had moved on from and the derived files described whichever published
 last; without the read half, the agent's `codoc_tree` and the `base_text`
 its next amend cites describe the tree before the person's `codoc accept`.
 The lock is per call, never for the life of the process: a lease would leave
 the other writer submitting into an inbox with no daemon to drain it.
-
-Reads for other processes are here too: ``queue_status`` (what is queued,
-reported and edited) and ``read_history`` (one feature's ops and attribution).
 """
 from __future__ import annotations
 
@@ -36,18 +33,14 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from codoc.calculus import ops as K
-from codoc.calculus.derive import attribution, dead_cites, history as feature_history, offered_plans, phase, title
 from codoc.calculus.ids import new_batch_id
 from codoc.calculus.ingest import resolve_pending_refs
-from codoc.daemon.epoch import epoch_alive, read_activity
 from codoc.daemon.pidfile import daemon_running
-from codoc.daemon.publish import publish, read_status, realizing_is_fresh
-from codoc.doclang import workspace_doc_language
+from codoc.daemon.publish import publish
 from codoc.index.git import head
-from codoc.loops.realize import queued, settle
+from codoc.loops.realize import settle_if_idle
 from codoc.workspace import Workspace
 from codoc.workspace import inbox as I
-from codoc.workspace import log as L
 from codoc.workspace.inbox import Submission
 from codoc.workspace.layout import APPLIER_LOCK, locked
 
@@ -61,24 +54,12 @@ def _actor(client: str, codoc_dir: Path) -> str:
     return actor
 
 
-def settle_if_idle(ws: Workspace, res=None, *, sha: str, now: float | None = None) -> list:
-    """Settle the hand-offs that binding ops now cite (``realize.settle``),
-    unless an agent epoch is open: its build is in progress, so the feature
-    stays queued and the agent's amends land as plans. The batch, or the
-    process, that sees the epoch close runs the same check. Every applier
-    settles through here."""
-    if epoch_alive(ws.codoc_dir, now=now):
-        return []
-    return settle(ws, res, sha=sha)
-
-
 # Held by an apply and by `release`. The MCP server applies in FastMCP's
 # worker threads and releases from its signal handler in the main thread, so a
 # stop waits for the batch in flight instead of closing the log under it.
 # Reentrant: `applying` releases a workspace when a daemon takes the checkout.
 _LOCK = threading.RLock()
 _OWNED: dict[Path, Workspace] = {}
-_SEEN: dict[Path, dict[str, int]] = {}      # log file → size, as this process last left it
 
 
 def _applier(codoc_dir: Path) -> Workspace:
@@ -87,24 +68,6 @@ def _applier(codoc_dir: Path) -> Workspace:
     if ws is None:
         ws = _OWNED[codoc_dir] = Workspace(codoc_dir)
     return ws
-
-
-def _sizes(codoc_dir: Path) -> dict[str, int]:
-    return {p.name: p.stat().st_size for p in L.log_dir(codoc_dir).glob("*.jsonl")}
-
-
-def _catch_up(codoc_dir: Path, ws: Workspace) -> None:
-    """Rebuild when the log grew by a hand that is not ours since our last
-    turn. Both the writes and the reads go through this: a held workspace that
-    has not looked describes the tree before the person's `codoc accept`, and
-    the agent's next amend computes its `base_text` from that."""
-    mine = ws.session + ".jsonl"
-    was = _SEEN.get(codoc_dir)
-    if was is None:
-        return
-    now = _sizes(codoc_dir)
-    if {k: v for k, v in now.items() if k != mine} != {k: v for k, v in was.items() if k != mine}:
-        ws.rebuild()
 
 
 class DaemonRunning(RuntimeError):
@@ -124,10 +87,8 @@ def applying(codoc_dir: Path):
             release(codoc_dir)
             raise DaemonRunning(str(codoc_dir))
         ws = _applier(codoc_dir)
-        if not ws.follow_head(*head(codoc_dir.parent)):
-            _catch_up(codoc_dir, ws)
+        ws.follow_disk(*head(codoc_dir.parent))
         yield ws
-        _SEEN[codoc_dir] = _sizes(codoc_dir)
 
 
 def release(codoc_dir: Path | None = None) -> None:
@@ -232,10 +193,10 @@ def read(codoc_dir: str | Path) -> Workspace:
     held = _OWNED.get(codoc_dir)
     if held is None:
         return Workspace(codoc_dir, readonly=True)
-    # A read does not take the lock (nothing is written) and does not record
-    # what it saw: `_SEEN` is the write turn's memory, and a read must not
-    # convince the next write that it has already caught up.
-    _catch_up(codoc_dir, held)
+    # A read takes no file lock, since it writes nothing, but a rebuild must not
+    # run under an apply in another of this process's threads.
+    with _LOCK:
+        held.catch_up()
     return held
 
 
@@ -265,7 +226,7 @@ def _decide(codoc_dir: str | Path, client: str, kind: str, target: dict, payload
 def propose(codoc_dir: str | Path, *, client: str, pid: str, kind: str, target: str | None, note: str, build: bool,
             bodies: list[dict], rewrites: list[dict], strikes: list[str], caused_by: str | None = None,
             root_dir: str | None = None, wait_s: float = 10.0) -> dict:
-    """A machine's proposal as plan ``pid``, decided whole in the applier
+    """A machine's plan ``pid``, decided whole in the applier
     (``Workspace.propose``): a plan nothing landed under is taken back there,
     whether or not the ack arrives in time. ``rewrites`` are
     ``{bid, path, new_md, base_text}``."""
@@ -282,72 +243,6 @@ def amend(codoc_dir: str | Path, *, client: str, fid: str, rewrites: list[dict],
     return _decide(codoc_dir, client, "amend", {"fid": fid}, {
         "rewrites": rewrites, "bodies": bodies or [], "strikes": strikes or [], "structural": structural,
         "note": note}, caused_by, root_dir, wait_s)
-
-
-# ── reads ────────────────────────────────────────────────────────────────────
-
-def doc_language_block(codoc_dir: str | Path) -> dict:
-    """The language the tree is authored in, as a reader is told it."""
-    lang = workspace_doc_language(codoc_dir)
-    block = {"code": lang.code, "name": lang.name}
-    if not lang.is_default:
-        block["instruction"] = (f"This tree is authored in {lang.name}. Write every title, paragraph and note in "
-                                f"{lang.name}; never translate identifiers, paths or codoc: targets.")
-    return block
-
-
-def queue_status(codoc_dir: str | Path) -> dict:
-    """Where the tree stands for its builder. ``queued_list`` is what is left
-    to build; ``reported_list`` is what this turn's calls cited
-    (``epoch.note_cited``), which settles when the turn ends. State
-    ``reported`` says every queued hand-off is reported."""
-    store = read(codoc_dir).store
-    heads = store.headings()
-    phases = {h.id: phase(store, h.id) for h in heads}
-    cited = set(read_activity(codoc_dir).get("cited") or [])
-    items: dict[bool, list] = {False: [], True: []}
-    for f in queued(store):
-        did = (store.watermarks(f).handoffs or [""])[-1]
-        items[did in cited].append({"feature_id": f, "title": title(store, f, "rejected"), "handoff": f"d:{did}"})
-    todo, reported = items[False], items[True]
-    state = read_status(codoc_dir).get("state", "synced")
-    if state == "realizing" and not realizing_is_fresh(codoc_dir):
-        # The lease lapsed, or it is the lease of the pass this agent belongs to:
-        # either way no other pass is working the queue.
-        state = "queued" if todo or reported else "synced"
-    if state == "queued" and not todo:
-        state = "reported"
-    dead = [{"block": bid, "symbol": m.attrs.get("symbol")} for bid, m in dead_cites(store)]
-    edited = [f for f, p in phases.items() if p == "edited"]
-    return {"ok": True, "state": state, "features": len(heads), "queued": len(todo), "queued_list": todo[:20],
-            "reported": len(reported), "reported_list": reported[:20],
-            "edited": len(edited), "edited_list": [{"feature_id": f, "title": title(store, f)} for f in edited[:20]],
-            "plans": len(offered_plans(store)),
-            "dead_cites": len(dead), "dead_cite_list": dead[:20],
-            "doc_language": doc_language_block(codoc_dir)}
-
-
-def read_history(codoc_dir: str | Path, feature_id: str, limit: int = 20) -> dict:
-    """One feature's last ``limit`` ops and who wrote each span of its body."""
-    store = read(codoc_dir).store
-    if feature_id not in store.blocks:
-        return {"ok": False, "error": f"no feature {feature_id!r}"}
-    entries = []
-    for o in feature_history(store, feature_id)[-limit:]:
-        e = {"op": o.id, "at": o.at, "actor": o.actor, "kind": o.kind, "batch": o.batch}
-        if o.caused_by:
-            e["caused_by"] = o.caused_by
-        if o.plan:
-            e["plan"] = o.plan
-        if o.kind == K.TEXT_INSERT:
-            e["text"] = o.payload.get("text")
-        if o.kind == K.TEXT_DELETE:
-            e["removed_segments"] = o.payload.get("segments")
-        entries.append(e)
-    blame = {(b.id if f == "text" else f"{b.id}.{f}"):
-             [{"actor": r.actor, "start": r.start, "end": r.end} for r in attribution(b.text(f))]
-             for b in store.body(feature_id) for f in b.layout.text}
-    return {"ok": True, "feature_id": feature_id, "title": title(store, feature_id), "ops": entries, "attribution": blame}
 
 
 if __name__ == "__main__":

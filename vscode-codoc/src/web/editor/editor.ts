@@ -95,8 +95,8 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             return r => isProvisional(r) || outbox.applied.has(r[0]) || ops.has(r[0]);
         },
     };
-    const paints = new Paints(shown);
-    const outbox = new Outbox(shadows, subs => host.submit(subs), bid => paints.mark(bid), cards);
+    const paints = new Paints(shown, shadows);
+    const outbox = new Outbox(shadows, subs => host.submit(subs), cards);
     /** Record what a finished IME composition left on the page. */
     const settle = () => { if (!view.composing) outbox.settle(view.state.doc); };
 

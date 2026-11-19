@@ -12,7 +12,7 @@ import signal
 
 from fastmcp import FastMCP
 
-from codoc.daemon import client
+from codoc.daemon import client, reads
 from codoc.workspace.layout import find_codoc_dir
 from codoc.mcp import tools
 
@@ -60,7 +60,7 @@ def codoc_status() -> dict:
     unsent edits, the number of open plans, and citations that do not resolve
     to code."""
     cd, err = _need_dir()
-    return err or client.queue_status(cd)
+    return err or reads.queue_status(cd)
 
 
 @mcp.tool
@@ -68,14 +68,16 @@ def codoc_history(feature_id: str, limit: int = 20) -> dict:
     """One feature's history: its ops newest-last (who, when, what) and the
     current attribution of every paragraph as runs (who wrote which words)."""
     cd, err = _need_dir()
-    return err or client.read_history(cd, feature_id, limit)
+    return err or reads.read_history(cd, feature_id, limit)
 
 
 @mcp.tool
 def codoc_reflect(ops: list[dict], rationale: str = "", caused_by: str | None = None) -> dict:
     """Reflect what you did to the code into the tree. Each op is one of:
     `{"kind": "attach"|"detach", "feature_id", "bindings": ["file.py::symbol", …]}`
-    (lands at once); `{"kind": "amend", "feature_id", "title"?, "blocks": [{"id", "text"}
+    (lands at once; a binding must name code the index already holds, so code you
+    wrote this turn is refused here and bound by the pass that runs when your
+    turn ends, and a symbol the feature already owns is skipped); `{"kind": "amend", "feature_id", "title"?, "blocks": [{"id", "text"}
     | {"id", "delete": true} | {"text"}]}`, where `text` is one block as Markdown
     (a paragraph, a `- ` item, a `1. ` step, a table) and a block you do not list is
     unchanged (lands on the trunk when it only rewords a little and nobody has
@@ -94,7 +96,8 @@ def codoc_reflect(ops: list[dict], rationale: str = "", caused_by: str | None = 
 def codoc_propose(ops: list[dict], note: str = "", caused_by: str | None = None) -> dict:
     """Propose a plan the person accepts or rejects in the editor. Ops:
     `{"kind": "add_node", "id": "n1", "parent_id"?, "title", "description", "bindings"?}`
-    (`description` is Markdown), `{"kind": "amend", "feature_id", "title"?, "blocks":
+    (`description` is Markdown; `bindings` only for code that already exists),
+    `{"kind": "amend", "feature_id", "title"?, "blocks":
     [{"id", "text"} | {"id", "delete": true} | {"text"}]}` (a block you do not list is
     unchanged), `{"kind": "move_node", "feature_id", "parent_id"}`,
     `{"kind": "delete_node", "feature_id"}`. `note` is one plain line saying what

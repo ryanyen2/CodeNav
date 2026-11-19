@@ -51,12 +51,9 @@ export class Outbox {
     /** The ops the daemon applied for this page that no adopted projection covers yet. */
     readonly applied = new Set<string>();
 
-    /** `onHoldChange` is told each block whose hold changed, so its paints can
-     *  be redrawn. `cards` holds the field shadows of card blocks (card.ts),
-     *  which an ack resolves too. */
+    /** `cards` holds the field shadows of card blocks (card.ts), which an ack resolves too. */
     constructor(private readonly shadows: Map<string, Shadow>,
                 private readonly submit: (subs: Submission[]) => void,
-                private readonly onHoldChange: (bid: string) => void,
                 private readonly cards: CardFields = new Map()) {
         this.recorder = new Recorder(shadows, newCid);
     }
@@ -76,7 +73,7 @@ export class Outbox {
         if (composing || this.composed.size) {
             // A change that ends a composition belongs to it too: some
             // browsers deliver the committed text after `compositionend`.
-            for (const bid of this.touched(tr, tr.steps.map((_s, i) => i))) { this.composed.add(bid); this.onHoldChange(bid); }
+            for (const bid of this.touched(tr, tr.steps.map((_s, i) => i))) this.composed.add(bid);
             return;
         }
         const rec = this.recorder.record(tr.steps, tr.docs);
@@ -133,7 +130,6 @@ export class Outbox {
         const hold = (bid: unknown, cid: string) => {
             if (typeof bid !== 'string' || !bid) return;
             this.unacked.set(bid, (this.unacked.get(bid) ?? new Set()).add(cid));
-            this.onHoldChange(bid);
         };
         for (const op of ops) {
             // An insert keeps the client id its shadow refs were minted under.
@@ -174,7 +170,6 @@ export class Outbox {
             for (const [bid, set] of this.unacked) {
                 if (set.delete(a.cid)) {
                     waiting.push(bid);
-                    this.onHoldChange(bid);
                     if (a.conflict) { refused.set(bid, a.conflict); this.stale.add(bid); }
                     if (set.size === 0) this.unacked.delete(bid);
                 }
@@ -221,7 +216,6 @@ export class Outbox {
      *  it applied before say nothing about the new frontier: forget them. Ops
      *  in flight still hold their blocks; the new store answers them. */
     rebuilt(): void {
-        for (const bid of this.lastOp.keys()) this.onHoldChange(bid);
         this.lastOp.clear();
         this.stale.clear();
     }

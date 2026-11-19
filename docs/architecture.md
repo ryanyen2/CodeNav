@@ -28,13 +28,14 @@ A package imports only packages to its left in this order: `calculus`, `index`,
 | `derive.py` | The views: description, attribution, ink, ground, plan claims, phase, history, projection, and `tree.codoc`. |
 | `window.py` | The timeline window in `history.json`. |
 | **`workspace/`** | The `.codoc` directory. |
-| `layout.py` | File names, atomic write, tolerant read, `flock`. |
+| `layout.py` | File names, `.codoc/.gitignore`, atomic write, tolerant read, `flock`. |
 | `config.py` | `config.json`. |
 | `clock.py` | The hybrid logical clock. |
 | `log.py` | Session files: reading and checking them, replay order, the writer. |
 | `inbox.py` | The client inbox and acks, drain offsets, inbox name to actor, what a submission may assert (`client_payload`, `resolve_provisional`). |
+| `epoch.py` | `activity.json`, the agent epoch: every write a locked read-modify-write. |
 | `roles.py` | The role table and the policy `apply` asks. |
-| `workspace.py` | `Workspace`: rebuild, `follow_head` (a new session when `HEAD` moves or git takes the session file), `submit`, `ingest` and the machine gate, `drain_inbox`. |
+| `workspace.py` | `Workspace`: rebuild, `follow_disk` (a new session when `HEAD` moves or git takes the session file; a rebuild when any other log file changed), `submit`, `ingest` and the machine gate, `drain_inbox`. |
 | `snapshot.py` | `codoc snapshot`. |
 | `validate.py` | `codoc validate-logs`. |
 | **`index/`** | The code, read without the document. |
@@ -45,7 +46,7 @@ A package imports only packages to its left in this order: `calculus`, `index`,
 | `extract.py`, `graph.py`, `flows.py` | The dependency graph over chunks, cached as JSON. |
 | `git.py` | `HEAD` (commit and branch), the hand-offs commit trailers name, and what recent commits said about a file. |
 | **`doclang.py`** | The authoring language: its profiles (tags, the prompt directive) and the script-aware text helpers (detection, title keys, character budgets). |
-| **`llm/`** | `provider.py` (which model, `complete()`, the `.env` fallback), `prompt.py` (templates in `codoc/prompts/`, JSON out), `passes.py` (one function per prompt). |
+| **`llm/`** | `provider.py` (which model, `complete()`, the `.env` fallback, `spent()`: what the calls reported they cost), `prompt.py` (templates in `codoc/prompts/`, JSON out), `passes.py` (one function per prompt). |
 | **`kinds/`** | The kind registry, the shipped kinds, `write.py` (content to ops), `lift.py` (the lift pass), `fetch_guard.py`. See [kinds.md](kinds.md). |
 | **`loops/`** | |
 | `context.py` | What a pass or an agent read is shown: the ego graph over bindings, the title outline. |
@@ -53,12 +54,12 @@ A package imports only packages to its left in this order: `calculus`, `index`,
 | `bootstrap.py`, `reflect.py`, `realize.py`, `translate.py` | The loops in [workflows.md](workflows.md). |
 | **`daemon/`** | |
 | `daemon.py` | `codoc watch`: the per-batch order in [concurrency.md](concurrency.md#4-a-submissions-path). |
-| `client.py` | How another process writes and reads: the inbox when a daemon is alive, else the applier under `applier.lock`; `settle_if_idle`, which every applier settles through; `queue_status` and `read_history`, the reads the CLI and the MCP tools share. |
+| `client.py` | How another process writes: the inbox when a daemon is alive, else the applier under `applier.lock`. |
+| `reads.py` | What the CLI and the MCP tools read: `queue_status`, `read_history`, `doc_language_block`. |
 | `publish.py` | The derived files and the realizing lease in `status.json`. |
-| `epoch.py` | `activity.json`, the agent epoch: every write a locked read-modify-write. |
 | `pidfile.py` | `watch.pid`. |
 | **`claude/`** | Section 2. |
-| **`cli/main.py`** | The `codoc` command. |
+| **`cli/main.py`** | The `codoc` command. It finds `.codoc` in the current directory or the nearest one above it, as the hooks and the MCP server do (`--root` names where to start). |
 | **`mcp/`** | `server.py` (FastMCP over stdio, `codoc-mcp`), `tools.py`. |
 | **`serve/`** | Section 3. |
 
@@ -68,8 +69,12 @@ A package imports only packages to its left in this order: `calculus`, `index`,
 hooks name this machine's interpreter, so they go in the untracked
 `.claude/settings.local.json`, with the permission rule `mcp__codoc__*` (without it a
 headless `claude -p` is denied every codoc tool). The MCP server is registered at Claude
-Code's local scope with `claude mcp add --scope local`; when `claude` is not on PATH the
-install prints that command to run later. The `codoc-intent` skill and the `/codoc:realize`,
+Code's local scope with `claude mcp add --scope local` as `<interpreter> -m
+codoc.mcp.server`, the interpreter the hooks run; when `claude` is not on PATH the install
+prints that command to run later. When that interpreter, started in the project root
+without `PYTHONPATH`, would import a different codoc than the one installing (codoc run
+from a checkout beside another codoc in the same environment), the hook commands and the
+server's registration set `PYTHONPATH` to the directory holding the installing one. The `codoc-intent` skill and the `/codoc:realize`,
 `/codoc:plan` and `/codoc:ask` commands are copied into `.claude/`, and an installed
 `/codoc:*` command the plugin no longer ships is removed. Codoc's own entries in a
 tracked `.claude/settings.json` or `.mcp.json`, where an older install put them, are
@@ -93,7 +98,7 @@ cloning.
   call cites in the epoch's `cited` list (`epoch.note_cited`), daemon or not, once an op
   of the call has landed (applied or planned), so a call that errored cites nothing. The
   epoch's open resets it. Every writer of `activity.json` (the hooks, the MCP server, an
-  SDK realize pass) goes through the locked functions in `daemon/epoch.py`, so none drops
+  SDK realize pass) goes through the locked functions in `workspace/epoch.py`, so none drops
   another's write.
 - At `stop` with no daemon alive and something queued, start a detached
   `python -m codoc.daemon.client` that settles what could not settle while the epoch was open, and exits
@@ -123,7 +128,7 @@ Code written by hand settles with `codoc done`.
 |---|---|
 | `codoc_context` | Read: with `files`, the features bound in them, one hop along the code graph, their parents and children; with `feature_id`, that feature, the features under it and the features owning a symbol one call, import or inheritance away from their code, in either direction. |
 | `codoc_tree`, `codoc_status`, `codoc_history` | Read: the tree and its open plans; the queue of hand-offs, phases and the number of open plans; one feature's ops and attribution. |
-| `codoc_reflect` | Tree edits. `attach`, `detach` and a rewording `amend` land on the trunk (an `amend` through the machine gate); anything else becomes one plan. |
+| `codoc_reflect` | Tree edits. `attach`, `detach` and a rewording `amend` land on the trunk (an `amend` through the machine gate); anything else becomes one plan. An `attach` or `add_node` binds only symbols the code index holds, with their hashes, and refuses any other; code written during the turn is indexed and bound by the pass when the turn ends. An `attach` of a symbol the feature already owns writes nothing. |
 | `codoc_propose` | Tree edits as one plan. |
 | `codoc_write_block` | Content for a kind block ([kinds.md](kinds.md#4-how-content-becomes-ops)). |
 | `codoc_realize_progress` | Renews the realizing lease with "building n of m", as the MCP server's own lease (`CODOC_REALIZE_OWNER`), so the agent's status does not read it as another pass. |
@@ -134,9 +139,12 @@ refused, nothing is written.
 **Realize engines.** `codoc realize` and `codoc watch --auto-realize` start a pass through
 `claude/autorealize.py`'s `start_realize`: `/codoc:realize` through the Claude Agent SDK
 (`claude/sdk_realize.py`, the `sdk` extra) or `claude -p` (`--engine cli`), with
-`--permission-mode` (`acceptEdits` by default) for either. It takes the realizing lease and
-names the child its owner in `CODOC_REALIZE_OWNER`. `--auto-realize` starts a pass when work
-is queued and no session is live.
+`--permission-mode` (`acceptEdits` by default) for either. It starts the child, takes the
+realizing lease with the child's pid, which keeps the lease while the child lives, and names
+the child its owner in `CODOC_REALIZE_OWNER`. The cli engine's child is `python -m
+codoc.claude.autorealize`, which runs `claude -p --output-format json` and prints the
+agent's last message. Either engine ends with one line: how the pass ended, its time and
+its cost. `--auto-realize` starts a pass when work is queued and no session is live.
 
 **Commands.** `/codoc:realize` builds the queue (`state` decides what it does, from
 `codoc_status`); `/codoc:plan <task>` proposes the change with `codoc_propose` and stops;

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 
-from codoc.daemon.epoch import EPOCH_STALE_SECONDS, activity_path, epoch_alive
+from codoc.workspace.epoch import EPOCH_STALE_SECONDS, activity_path, epoch_alive
 
 
 def _write(codoc_dir, *, open: bool, epoch_id: str = "ep-1") -> None:

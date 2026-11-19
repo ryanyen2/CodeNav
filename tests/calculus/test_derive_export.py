@@ -337,3 +337,23 @@ def test_a_fold_changes_neither_who_owns_a_comment_nor_what_lower_compares_again
     ws.close()
     fold(cd)
     assert answers(Workspace(cd, readonly=True).store) == before
+
+
+def test_in_flight_lists_a_queued_feature_and_one_an_offered_plan_targets_whatever_their_phase(tmp_path):
+    """`edited` outranks `queued` and `proposed` in the phase; `in_flight`
+    still lists both kinds of work, so the editor keeps those headings."""
+    from codoc.calculus.derive import in_flight
+    from tests.helpers import H, seed
+    ws = Workspace(tmp_path / ".codoc"); seed(ws)
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "h2"}, "payload": {"kind": HEADING, "after": "p1"}},
+               {"kind": K.TEXT_INSERT, "target": {"bid": "h2", "path": "text"}, "payload": {"after": START, "text": "B"}},
+               {"kind": K.BLOCK_ADD, "target": {"bid": "p2"}, "payload": {"kind": PARAGRAPH, "after": "h2"}},
+               {"kind": K.TEXT_INSERT, "target": {"bid": "p2", "path": "text"}, "payload": {"after": START, "text": "b"}}],
+              actor=H)
+    assert in_flight(ws.store) == []
+    ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {}}], actor=H)
+    ws.open_plan(actor="agent:claude-code", target="p2")
+    ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                "payload": {"after": list(ws.store.blocks["p1"].text().last_live_ref()), "text": " More."}}], actor=H)
+    assert phase(ws.store, "h1") == "edited" and phase(ws.store, "h2") == "edited"
+    assert in_flight(ws.store) == ["h1", "h2"]

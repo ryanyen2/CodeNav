@@ -21,7 +21,7 @@ One call: `codoc_propose(ops=[…], note="<what the plan changes, in one plain l
 | to | edit |
 |---|---|
 | change what a feature does | `{"kind": "amend", "feature_id", "blocks": [{"id", "text"}, {"id", "delete": true}, {"text"}]}`: list only the blocks you change |
-| add intent nothing covers | `{"kind": "add_node", "id": "n1", "parent_id", "title", "description", "bindings"}` |
+| add intent nothing covers | `{"kind": "add_node", "id": "n1", "parent_id", "title", "description", "bindings"}`; `bindings` only for code that already exists |
 | regroup | `{"kind": "move_node", "feature_id", "parent_id"}` |
 
 - Write each block as it should read after the change, not as a note about the change.

@@ -162,3 +162,20 @@ def test_a_writer_that_waited_for_the_lock_while_a_daemon_started_uses_its_inbox
     assert not got[0]["op"] and (I.inbox_dir(cd) / "cli.jsonl").exists()
     assert T(Workspace(cd, readonly=True).store, "p1") == "Retries once."
     client.release(cd)
+
+
+def test_codoc_status_reads_the_tree_from_the_logs_alone(tmp_path):
+    """`codoc status` and `codoc_status` take the state from the same replay
+    as their counts, not from a `status.json` the daemon wrote from an older
+    store."""
+    from codoc.daemon import reads
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed(ws)
+    ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                "payload": {"after": list(refs(ws, "p1")[-1]), "text": " Twice."}}], actor="human:local")
+    ws.close()
+    (cd / "status.json").write_text(json.dumps({"state": "synced", "version": 2}))
+    st = reads.queue_status(cd)
+    assert (st["state"], st["edited"]) == ("edited", 1)
+

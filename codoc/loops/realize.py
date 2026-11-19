@@ -12,7 +12,8 @@ A person's edits are already ops on the trunk, and their hand-off
   binding op on any feature citing its latest hand-off in ``caused_by`` has
   landed, from any writer (under a plan, once accepted), and for each phantom
   whose code a citing reflect pass saw go. Every applier runs it after
-  applying (the daemon, a daemonless writer), never the agent. ``codoc done``
+  applying (the daemon, a daemonless writer), never the agent, through
+  ``settle_if_idle``, which waits while an agent epoch is open. ``codoc done``
   writes it by hand for a request whose implementation moved no bound symbol.
 """
 from __future__ import annotations
@@ -31,6 +32,7 @@ from codoc.calculus.store import Store, Watermarks, file_of
 from codoc.calculus.text import BOLD, LINK
 from codoc.llm.prompt import format_prompt, load_prompt
 from codoc.workspace import Workspace
+from codoc.workspace.epoch import epoch_alive
 from codoc.workspace.layout import REALIZE, atomic_write
 
 
@@ -86,6 +88,15 @@ def settle(ws: Workspace, res=None, *, sha: str = "") -> list[Op]:
                                            "files": sorted({file_of(o.payload["symbol"]) for o in cites})}}],
                              actor=LOOP, caused_by=latest_handoff))
     return out
+
+
+def settle_if_idle(ws: Workspace, res=None, *, sha: str, now: float | None = None) -> list[Op]:
+    """``settle``, unless an agent epoch is open: its build is in progress, so
+    the feature stays queued and the agent's amends land as plans. The batch,
+    or the process, that sees the epoch close runs the same check."""
+    if epoch_alive(ws.codoc_dir, now=now):
+        return []
+    return settle(ws, res, sha=sha)
 
 
 def _taken(store: Store, o: Op) -> bool:

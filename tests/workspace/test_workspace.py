@@ -584,11 +584,15 @@ def test_a_machine_ingest_on_the_trunk_never_deletes_an_open_plans_words(tmp_pat
     ws.close()
 
 
-def test_a_submission_logged_before_its_ack_is_acked_from_the_log_and_not_applied_again(tmp_path, monkeypatch):
+@pytest.mark.parametrize("fold_first", [False, True], ids=["restart", "fold, then restart"])
+def test_a_submission_logged_before_its_ack_is_acked_from_the_log_and_not_applied_again(tmp_path, monkeypatch,
+                                                                                        fold_first):
     """The applier stops (SIGTERM from a closing window, or SIGKILL) after it
     logged a submission's op and before it wrote the ack or the offset. The
-    next applier reads the line again, finds the submission named in the log,
-    acks it from there and does not type the words twice."""
+    next workspace to open, a daemon's or the one `codoc snapshot` folds with,
+    finds the submission named in the log and acks it from there, so the words
+    are not typed twice even after the fold archives that log."""
+    from tests.helpers import fold
     cd = tmp_path / ".codoc"
     ws = Workspace(cd)
     seed_loop(ws)
@@ -603,6 +607,8 @@ def test_a_submission_logged_before_its_ack_is_acked_from_the_log_and_not_applie
         ws.drain_inbox(identity={"ide": H})
     monkeypatch.undo()
     typed = ws.store.ops[-1].id
+    if fold_first:
+        fold(cd)
 
     again = Workspace(cd)
     again.drain_inbox(identity={"ide": H})
@@ -634,4 +640,37 @@ def test_the_drain_applies_submissions_in_the_order_they_were_appended(tmp_path)
     ws.drain_inbox(identity={"ide": H, "agent-claude-code": "agent:claude-code"})
     assert T(ws.store, "p1") == "Retries twice."
     ws.close()
+
+
+def test_the_drain_applies_the_agents_amend_first_when_it_was_appended_first(tmp_path):
+    """The other direction: the order is the append time, not which kind of
+    client wrote the line."""
+    import time
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed_loop(ws)
+    I.submit(cd, "agent-claude-code", [Submission(cid="a1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                                                  payload={"after": "START", "text": "A"})])
+    time.sleep(0.01)
+    I.submit(cd, "ide", [Submission(cid="i1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                                    payload={"after": "START", "text": "B"})])
+    ops = ws.drain_inbox(identity={"ide": H, "agent-claude-code": "agent:claude-code"})
+    assert [o.actor for o in ops] == ["agent:claude-code", H]
+    ws.close()
+
+
+def test_a_whole_line_that_is_not_an_op_is_reported_and_never_cut(tmp_path):
+    """A torn tail is a last line that does not parse. A line that parses was
+    written whole: the file is reported and skipped, and nothing rewrites it."""
+    from codoc.workspace.log import read_session, truncate_torn
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed_loop(ws)
+    ws.close()
+    [path] = L.list_sessions(cd)
+    path.write_text(path.read_text() + '{"closed": 1}\n')
+    before = path.read_bytes()
+    f = read_session(path)
+    assert not f.valid and f.torn_tail is None and "not an op" in f.problems[0].reason
+    assert not truncate_torn(f) and path.read_bytes() == before
 

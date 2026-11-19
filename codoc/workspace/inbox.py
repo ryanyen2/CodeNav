@@ -264,7 +264,7 @@ def acked(codoc_dir: str | Path) -> dict[str, dict[str, str]]:
 def client_payload(store: Store, kind: str, payload: dict, actor: str = "", target: dict | None = None) -> dict:
     """``payload`` as ``actor`` may send it.
 
-    - Snapshot-only fields are removed, from an amend's or a proposal's bodies
+    - Snapshot-only fields are removed, from an amend's or a plan's bodies
       too; a body keeps only its kind, target and payload, since the
       submission decides the plan.
     - A mark that names its placer (``actor``/``op``/``at``) is honoured only

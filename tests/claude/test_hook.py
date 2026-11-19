@@ -10,14 +10,14 @@ import pytest
 
 from codoc.claude import hook
 from codoc.daemon import client
-from codoc.daemon.epoch import read_activity, write_activity
+from codoc.workspace.epoch import read_activity, write_activity
 from codoc.daemon.publish import publish
 from codoc.calculus.derive import queued
 from codoc.mcp import tools
 from codoc.workspace import Workspace
 from codoc.workspace import inbox as I
 from codoc.workspace.layout import REALIZE
-from tests.helpers import H, handoff, seed
+from tests.helpers import H, handoff, index_holds, seed
 
 
 @pytest.fixture(autouse=True)
@@ -83,6 +83,7 @@ def test_a_turn_with_no_daemon_settles_what_it_cited_when_it_ends(tmp_path, monk
     ho = handoff(ws, "h1", actor=H)
     publish(cd, ws.store, root_dir=str(tmp_path))
     ws.close()
+    index_holds(monkeypatch, "c.py::retry")
     hook.handle_user_prompt({"session_id": "s"}, str(cd))
     try:
         r = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::retry"]}],
@@ -96,3 +97,18 @@ def test_a_turn_with_no_daemon_settles_what_it_cited_when_it_ends(tmp_path, monk
     assert queued(Workspace(cd, readonly=True).store) == []
     hook.handle_user_prompt({"session_id": "s"}, str(cd))
     assert capsys.readouterr().out == ""
+
+
+def test_the_queue_a_prompt_announced_is_not_announced_again_as_growth(tmp_path, capsys):
+    """The prompt tells the session what is queued. Its first tool call stays
+    quiet about it; a hand-off added while the agent works is announced."""
+    cd = _setup(tmp_path, [], open_=False)
+    hook.handle_user_prompt({"session_id": "a"}, cd)
+    assert "2 hand-off(s)" in capsys.readouterr().out
+    hook.handle_post_tool({"session_id": "a", "tool_input": {}}, cd)
+    assert capsys.readouterr().out == ""
+    with (Path(cd) / REALIZE).open("a", encoding="utf-8") as fh:
+        fh.write("\n### ⟨d:s:3⟩ Backoff\nz\n")
+    hook.handle_post_tool({"session_id": "a", "tool_input": {}}, cd)
+    assert "queue grew: 3 hand-off(s)" in capsys.readouterr().out
+

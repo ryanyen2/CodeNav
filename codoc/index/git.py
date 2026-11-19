@@ -58,6 +58,11 @@ def head(root_dir: str | Path) -> tuple[str, str]:
     return "", ""
 
 
+def is_tracked(root_dir: str | Path, path: str | Path) -> bool:
+    """Whether git's index holds ``path``."""
+    return bool(_git(root_dir, "ls-files", "--", str(path)))
+
+
 def head_sha(root_dir: str | Path) -> str:
     """The commit at ``HEAD``, or ``""`` when there is none."""
     return head(root_dir)[0]

@@ -627,7 +627,7 @@ rejected plan's words are dead.
 | `removals(f)` | What a person removed from the in-flow blocks of `body(f)` with an op outside `realized`: each dead segment they killed, zero-width at its live offset, then each block of `removed_body(f)` they deleted that held document words. `sent` inside `handoff`, else `unsent`. A removal a verdict made counts only when the verdict adopted its plan and the words were not the plan's own; it is then the removal of the person who accepted. Read from the plans, which name their verdicts, so a fold keeps it. |
 | `editors(f)` | The actors of `unsent` ink and `unsent` removals. |
 | `open_plans_on(f)` | Offered plans that target a block of `body(f)` or have an applied op recorded on one. |
-| `offered_plans()` | Open plans whose target is null or live: the ones offered for a verdict. A plan whose target is dead stays open, and its words are still drawn, but no surface can decide it. |
+| `offered_plans()` | Open plans a person can see, which are the ones offered for a verdict: one whose target is null or live, and one whose target is dead but whose words or proposal records are still live on a live block (it wrote into another feature). Every plan `plan_claims` draws is offered. A plan with nothing left on the page stays open, is not offered, and comes back with its target. |
 | `phase(f)` | Below. |
 | `queued()` | Queued features in document order, then queued dead headings (a removal still waiting) in id order. |
 | `in_flight()` | Queued features and every live feature an offered plan is about (its target's feature and the feature of each block its ops landed in): work under way that `edited` hides in the phase. |
@@ -647,7 +647,7 @@ rejected plan's words are dead.
 | phase | holds when |
 |---|---|
 | `edited` | `ink(f)` or `removals(f)` has an `unsent` claim. Changing a block's kind, level or place is layout and does not count. |
-| `realizing` | `f` is queued and a realize pass holds the lease: `status.json` says `realizing` and was written within the last 300 seconds. The lease is the one input from outside the store. |
+| `realizing` | `f` is queued and a realize pass holds the lease: `status.json` says `realizing`, and the process the lease names is alive, or, when it names none, the file was written within the last 300 seconds. The lease is the one input from outside the store. |
 | `queued` | `f` is queued and has at least one binding. |
 | `planned` | `f` is queued and has no binding. |
 | `proposed` | `open_plans_on(f)` is not empty: a plan offered for a verdict is waiting on `f`. |

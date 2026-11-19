@@ -1,14 +1,15 @@
 /**
  * claims.ts: what to draw, from what the projection says.
  *
- * Every paint on the prose is one of the daemon's claims (`derive.feature_claims`):
+ * The paints on the prose are the daemon's claims (`derive.feature_claims`):
  * the person's ink, an open plan's words, cuts and mark toggles, and what the
  * code added or removed. Only the viewer's own ink is drawn: another person's
- * words are not the viewer's to hand off. One palette on every surface: blue
- * is the person, gray a plan, green and red the code. Pure and DOM-free; the
- * editor turns `Paint`s into decorations at scalar → position. A block's
- * paints come from its edited field: `source` for a table, a diagram or a code
- * block, `text` otherwise.
+ * words are not the viewer's to hand off. History adds one paint per author,
+ * read from the runs. One palette on every surface: blue is the person, gray
+ * a plan, green and red the code. Pure and DOM-free; the editor turns
+ * `Paint`s into decorations at scalar → position. A block's paints come from
+ * its edited field: `source` for a table, a diagram or a code block, `text`
+ * otherwise.
  */
 import { isBuiltin, pathOf, textField, type Claim, type Phase, type ProjectedBlock, type Projection, type TextField } from './projection';
 
@@ -49,15 +50,35 @@ export function paintOf(c: Claim, plans: Projection['plans']): Paint {
              title: `${c.actor} proposes ${marked ? 'marking' : 'unmarking'} this as ${kind}` };
 }
 
-/** All paints for one block, from its feature's claims. Ink wins over ground
- *  where both claim a range (the person's words are theirs, whatever the code
- *  did around them). */
-export function paintsFor(b: ProjectedBlock, proj: Projection, fid: string | null, history = false, viewer = ''): Paint[] {
+const indexes = new WeakMap<Projection, Map<string, Claim[]>>();
+
+/** The projection's claims on one block, whichever feature published them.
+ *  Indexed once per projection. A block a gesture moved to another feature
+ *  keeps its paints until the projection that answers the gesture arrives. */
+function claimsOn(proj: Projection, bid: string): Claim[] {
+    let index = indexes.get(proj);
+    if (!index) {
+        index = new Map();
+        for (const cs of Object.values(proj.claims)) {
+            for (const c of cs) {
+                const list = index.get(c.bid);
+                if (list) list.push(c); else index.set(c.bid, [c]);
+            }
+        }
+        indexes.set(proj, index);
+    }
+    return index.get(bid) ?? [];
+}
+
+/** All paints for one block, from its claims. Ink wins over ground where both
+ *  claim a range (the person's words are theirs, whatever the code did around
+ *  them). */
+export function paintsFor(b: ProjectedBlock, proj: Projection, history = false, viewer = ''): Paint[] {
     // A card (a kind without a node type) holds its words in text areas, which take no paints.
     const f = isBuiltin(b.kind) ? textField(b, pathOf(b.kind)) : null;
     if (!f) return [];
-    const mine = (fid ? proj.claims[fid] ?? [] : [])
-        .filter(c => c.bid === b.id && (c.channel !== 'human' || c.actor === viewer))
+    const mine = claimsOn(proj, b.id)
+        .filter(c => c.channel !== 'human' || c.actor === viewer)
         .map(c => paintOf(c, proj.plans));
     const ink = mine.filter(p => p.cls.startsWith('ink-'));
     const ground = mine.filter(p => p.cls.startsWith('code-') && !ink.some(i => i.start < p.end && p.start < i.end));
@@ -76,7 +97,7 @@ export const PHASE_LABEL: Record<Phase, string> = {
 };
 
 /** For an `edited` feature the viewer has no edits in: who edited it, said so the
- *  person knows their ⌘S does not send it. '' for any other feature. */
+ *  person knows their hand-off does not send it. '' for any other feature. */
 export function theirEdits(proj: Projection, fid: string, viewer: string): string {
     const who = proj.editors?.[fid] ?? [];
     return proj.phases[fid] === 'edited' && !who.includes(viewer)

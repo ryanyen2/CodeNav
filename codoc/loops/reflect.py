@@ -35,22 +35,26 @@ may name them by alias or by id.
 """
 from __future__ import annotations
 
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 
 from codoc.calculus import ops as K
-from codoc.calculus.derive import HELD, open_plans_on, phase
+from codoc.calculus.derive import HELD, open_plans_on, phase, title
 from codoc.calculus.ids import LOOP
 from codoc.calculus.ingest import strike_bodies
 from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
 from codoc.index.changes import ChangeSet, ChunkRef
 from codoc.index.graph import Graph
+from codoc.llm.provider import cost_since, spent
 from codoc.loops.context import aliases, impacted_features, owner_of, renamed, select_context
 from codoc.loops.edits import PLAN_KIND, Change, Compiler, delete_open, title_from_file
 from codoc.workspace import Workspace
 
 MAX_ADDED_PER_CALL = 25
+# An alias (`f3`, `f3.7`) in the model's free text, apart from a word or a version number around it.
+_ALIAS = re.compile(r"(?<![A-Za-z0-9_.])f\d+(?:\.\d+)?(?![A-Za-z0-9_])")
 
 
 @dataclass
@@ -58,6 +62,7 @@ class ReflectResult:
     auto: Counter = field(default_factory=Counter)
     plans: list[str] = field(default_factory=list)
     llm_calls: int = 0
+    cost: float | None = None                                       # US dollars the calls reported; None when none did
     refused: list[tuple[str, str]] = field(default_factory=list)   # (bid or kind, reason)
     caused: dict[str, str] = field(default_factory=dict)            # fid -> handoff op cited
     removed: set[str] = field(default_factory=set)                  # symbols removed from the code
@@ -68,7 +73,7 @@ class ReflectResult:
         if self.plans:
             parts.append(f"{len(self.plans)} plan(s)")
         if self.llm_calls:
-            parts.append(f"{self.llm_calls} LLM call(s)")
+            parts.append(f"{self.llm_calls} LLM call(s)" + (f", ${self.cost:.4f}" if self.cost is not None else ""))
         if self.refused:
             parts.append(f"{len(self.refused)} refused")
         return " · ".join(parts)
@@ -118,9 +123,14 @@ def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: s
         if b:
             removed_owner[r.symbol] = b.feature
             bodies.append(_bind(K.BIND_DETACH, b.feature, r.symbol, caused_by=p.cause(b.feature)))
+    # A modified chunk whose binding already holds its fingerprint (a branch
+    # switched back to the code the binding was refreshed on) needs neither a
+    # refresh nor the model's judgment.
+    stale: dict[str, str] = {}                  # modified bound symbol -> its feature
     for c in cs.modified:
         b = store.bindings.get(c.symbol)
         if b and (b.fingerprint != c.fingerprint or b.types_hash != c.types_hash):
+            stale[c.symbol] = b.feature
             bodies.append(_bind(K.BIND_REFRESH, b.feature, c.symbol, c.fingerprint, c.types_hash,
                                 caused_by=p.cause(b.feature)))
     if bodies:
@@ -151,7 +161,7 @@ def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: s
 
     # 3. The LLM pass over what needs judgment.
     added_unbound = [a for a in cs.added if a.symbol not in store.bindings and a.symbol not in relocated]
-    modified_bound = [(c, store.bindings[c.symbol].feature) for c in cs.modified if c.symbol in store.bindings]
+    modified_bound = [(c, stale[c.symbol]) for c in cs.modified if c.symbol in stale]
     if not added_unbound and not modified_bound:
         return res
     changed_symbols = {c.symbol for c in cs.added + cs.modified + cs.removed}
@@ -172,6 +182,7 @@ def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: s
     names = aliases(store, subtree)
     changes, subtree, titles = renamed(changes, names), renamed(subtree, names), renamed(all_titles, names)
     raw_ops: list[dict] = []
+    mark = spent()
     for batch in _batches(added_unbound, MAX_ADDED_PER_CALL) or [[]]:
         changes["added"] = [{"symbol": a.symbol, "source": (a.source or "")[:600]} for a in batch]
         fresh = propose(changes, subtree, titles, repo_name=repo_name, config=config, doc_language=doc_language)
@@ -179,7 +190,14 @@ def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: s
         titles = titles + [{"id": "(proposed this pass)", "title": o.get("title"), "parent_id": o.get("parent_id")}
                            for o in (fresh or []) if isinstance(o, dict) and o.get("kind") == "add_node" and o.get("title")]
         res.llm_calls += 1
+    res.cost = cost_since(mark)
     raw_ops = renamed(raw_ops, {a: real for real, a in names.items()})
+    # A rationale becomes the plan note a person reads: an alias in it reads as
+    # the title of the feature it names.
+    shown_as = {a: title(store, store.feature_of(real) or real, "rejected") for real, a in names.items()}
+    for raw in raw_ops:
+        if isinstance(raw, dict) and isinstance(raw.get("rationale"), str):
+            raw["rationale"] = _ALIAS.sub(lambda m: shown_as.get(m.group(0), m.group(0)), raw["rationale"])
 
     # The model may bind only what this change set added or modified: those
     # chunks exist by construction, and untouched code is not its to reshuffle.

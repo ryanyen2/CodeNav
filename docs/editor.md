@@ -100,7 +100,7 @@ The gestures (`commands.ts`, bound in `keymap.ts`):
 | Tab in a paragraph, a table or a diagram | Nothing; focus stays in the editor. |
 | Mod-B, Mod-E | `text.mark` bold or code, on or off, one per block the selection covers. |
 | Mod-K | An inline field for the URL. Enter sends `text.mark` link; an empty field turns the link off. An address with no scheme gets `https://`. |
-| Paste (`paste.ts`) | The selection is deleted first. Plain text with structure (a block that is not a paragraph, or an inline mark) is read as Markdown (`calc/markdown.ts`): the first heading or prose piece joins the caret's block, every further piece is `block.add`, `text.insert`, `text.mark`. Other text splits into one block per line. When further pieces follow, the words after the caret go after the last one: `block.split` at the caret (at the block's start, the pieces go before the block), and a last heading or prose piece is a `text.insert` at the start of those words, which keep their block's kind. Ids in pasted Markdown are ignored; a pasted `codoc:<kind>` fence becomes a code block. |
+| Paste (`paste.ts`) | The selection is deleted first. Plain text with structure (a block that is not a paragraph, or an inline mark) is read as Markdown (`calc/markdown.ts`): the first heading or prose piece joins the caret's block, every further piece is `block.add`, `text.insert`, `text.mark`. Other text splits into one block per line. The first piece's words take the marks an insert at the caret takes in the store (a bold the caret ends, a mark it is inside), then their own. When further pieces follow, the words after the caret go after the last one: `block.split` at the caret (at the block's start, the pieces go before the block). A last piece of those words' kind and level is a `text.insert` at their start; any other last piece is a block of its own before them. Ids in pasted Markdown are ignored; a pasted `codoc:<kind>` fence becomes a block of that kind (a card unless it is a table, a diagram or a code block), and one whose body is not a JSON object becomes a code block. |
 | Composition (an IME) | Nothing while composing; when it ends, the fallback: one `text.insert` of the composed text, and a `text.mark` per mark the page shows on it (bold after Mod-B). |
 | Drop a drag handle (`drag.ts`) | `block.move`, `level_delta` 0. A heading moves with its range. |
 | Delete feature in the `/` menu | `block.delete` of the heading, `block.set(level)` per descendant heading, one level up. Refused when it would empty the document. |
@@ -170,7 +170,11 @@ Everything drawn is a decoration from the projection (`calc/claims.ts`,
 (model.md, Derived views), so a block shows what the last projection said of it: a block
 moved to another feature takes that feature's paints when the projection that answers the
 move arrives. `Paints` keeps the paints per block and redraws only the blocks whose paints
-can have changed.
+can have changed. A claim names characters by their place in the projection's text, and a
+block with words the daemon has not answered reads differently on the page, so each paint
+is moved onto the characters it names, found by identity in the shadow: it splits where
+the page has new words inside it and is dropped when its words are gone. Between
+projections the decorations move with the person's typing.
 
 | paint | from | drawn as |
 |---|---|---|

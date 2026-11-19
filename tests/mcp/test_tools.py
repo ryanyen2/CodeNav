@@ -9,11 +9,11 @@ from codoc.calculus.derive import accept_handoffs, markdown, phase
 from codoc.calculus.doc import PARAGRAPH
 from codoc.calculus.ids import START
 from codoc.calculus.text import BOLD
-from codoc.daemon import client
+from codoc.daemon import client, reads
 from codoc.daemon.publish import publish
 from codoc.mcp import tools
 from codoc.workspace import Workspace
-from tests.helpers import H, T, handoff, refs, seed
+from tests.helpers import H, T, handoff, index_holds, refs, seed
 
 
 def workspace(tmp_path):
@@ -136,21 +136,21 @@ def test_the_tools_do_not_offer_a_proposal_nobody_can_answer(tmp_path):
                 "payload": {"after": list(r[-1]), "text": " Proposed."}}], actor="agent:claude-code", plan=pid)
     publish(cd, ws.store, root_dir=str(tmp_path))
     ws.close()
-    assert client.queue_status(str(cd))["plans"] == 1
+    assert reads.queue_status(str(cd))["plans"] == 1
     assert [p["plan_id"] for p in tools.read_tree(str(cd))["plans"]] == [pid]
     client.release(cd)
     ws = Workspace(cd)
     d = ws.submit([{"kind": K.BLOCK_DELETE, "target": {"bid": "h1"}, "payload": {}}], actor=H)[0]
     publish(cd, ws.store, root_dir=str(tmp_path))
     ws.close()
-    assert client.queue_status(str(cd))["plans"] == 0
+    assert reads.queue_status(str(cd))["plans"] == 0
     assert tools.read_tree(str(cd))["plans"] == []
     client.release(cd)
     ws = Workspace(cd)                                   # …and it comes back with the block
     ws.submit([dict(b) for b in d.inverse], actor=H)
     publish(cd, ws.store, root_dir=str(tmp_path))
     ws.close()
-    assert client.queue_status(str(cd))["plans"] == 1
+    assert reads.queue_status(str(cd))["plans"] == 1
     client.release(cd)
 
 
@@ -239,6 +239,7 @@ def test_codoc_agent_names_the_actor_and_its_citing_attach_settles_the_handoff(t
     cd, ws = workspace(tmp_path)
     ho = handoff(ws, "h1", actor=H)
     ws.close()
+    index_holds(monkeypatch, "c.py::retry")
     monkeypatch.setenv("CODOC_AGENT", "cursor")
     try:
         r = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::retry"]}],
@@ -252,13 +253,14 @@ def test_codoc_agent_names_the_actor_and_its_citing_attach_settles_the_handoff(t
     assert [o.caused_by for o in st.ops if o.kind == K.FEATURE_REALIZED] == [ho.id]
 
 
-def test_the_queues_d_id_settles_the_handoff(tmp_path):
+def test_the_queues_d_id_settles_the_handoff(tmp_path, monkeypatch):
     """realize.md shows a hand-off as ⟨d:<op id>⟩ and the agent is told to pass
     that id as caused_by; it must cite the hand-off the same as the bare id."""
     from codoc.calculus.derive import queued
     cd, ws = workspace(tmp_path)
     ho = handoff(ws, "h1", actor=H)
     ws.close()
+    index_holds(monkeypatch, "c.py::retry")
     try:
         r = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::retry"]}],
                           caused_by=f"d:{ho.id}", root_dir=str(tmp_path))
@@ -268,13 +270,14 @@ def test_the_queues_d_id_settles_the_handoff(tmp_path):
     assert queued(Workspace(cd, readonly=True).store) == []
 
 
-def test_only_a_call_whose_ops_landed_cites_its_handoff(tmp_path):
+def test_only_a_call_whose_ops_landed_cites_its_handoff(tmp_path, monkeypatch):
     """The Stop hook asks about each queued item no call of the turn cited. A
     call that errored reported nothing, so it cites nothing."""
-    from codoc.daemon.epoch import read_activity, write_activity
+    from codoc.workspace.epoch import read_activity, write_activity
     cd, ws = workspace(tmp_path)
     ho = handoff(ws, "h1", actor=H)
     ws.close()
+    index_holds(monkeypatch, "c.py::retry", "c.py::x")
     write_activity(str(cd), {"epoch": {"id": "ep", "open": True}, "cited": []})
     cite, root = f"d:{ho.id}", str(tmp_path)
     try:
@@ -294,7 +297,7 @@ def test_status_lists_an_item_reported_this_turn_as_settling_when_the_turn_ends(
     """A hand-off settles when the agent's turn ends, not when its citing
     reflect lands. Until then the agent's status lists the item as reported,
     and the lease its own progress calls hold does not read as another pass."""
-    from codoc.daemon.epoch import write_activity
+    from codoc.workspace.epoch import write_activity
     from codoc.daemon.publish import REALIZE_OWNER_ENV
     monkeypatch.setenv(REALIZE_OWNER_ENV, "")
     monkeypatch.delenv(REALIZE_OWNER_ENV)             # an interactive session; restored after the test
@@ -302,19 +305,54 @@ def test_status_lists_an_item_reported_this_turn_as_settling_when_the_turn_ends(
     ho = handoff(ws, "h1", actor=H)
     publish(cd, ws.store, root_dir=str(tmp_path))
     ws.close()
+    index_holds(monkeypatch, "c.py::retry")
     write_activity(str(cd), {"epoch": {"id": "ep", "open": True}, "cited": []})
     item = {"feature_id": "h1", "title": "Client", "handoff": f"d:{ho.id}"}
     try:
         tools.realize_progress(str(cd), done=0, total=1, current="Client")
-        st = client.queue_status(str(cd))
+        st = reads.queue_status(str(cd))
         assert (st["state"], st["queued_list"], st["reported_list"]) == ("queued", [item], [])
         assert tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::retry"]}],
                              caused_by=item["handoff"], root_dir=str(tmp_path))["ok"]
-        st = client.queue_status(str(cd))
+        st = reads.queue_status(str(cd))
         assert (st["state"], st["queued"], st["reported_list"]) == ("reported", 0, [item])
         assert tools.realize_progress(str(cd), done=1, total=1)["reported"] == [item["handoff"]]
     finally:
         client.release(cd)
+
+
+def test_an_attach_binds_only_indexed_code_and_settles_nothing_else(tmp_path, monkeypatch):
+    """A binding op citing a hand-off settles it, so an attach is evidence only
+    of code the index holds. A symbol it does not hold (code this turn wrote,
+    or a file the index excludes) is refused, and naming a symbol the feature
+    already owns writes nothing at all."""
+    from codoc.calculus.derive import queued
+    cd, ws = workspace(tmp_path)
+    ho = handoff(ws, "h1", actor=H)
+    before = ws.store.bindings["c.py::send"]
+    ws.close()
+    index_holds(monkeypatch, "c.py::send", "c.py::retry")
+    cite, root = f"d:{ho.id}", str(tmp_path)
+    try:
+        r = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1",
+                                         "bindings": ["c.py::retry", "nope/ghost.py::does_not_exist"]}],
+                          caused_by=cite, root_dir=root)
+        assert not r["ok"] and "not in the code index: nope/ghost.py::does_not_exist" in r["error"], r
+        r = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::send"]}],
+                          caused_by=cite, root_dir=root)
+        assert r["ok"] and r["applied"] == [], r
+    finally:
+        client.release(cd)
+    st = Workspace(cd, readonly=True).store
+    assert queued(st) == ["h1"] and "c.py::retry" not in st.bindings
+    assert st.bindings["c.py::send"] == before
+    try:
+        assert tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::retry"]}],
+                             caused_by=cite, root_dir=root)["ok"]
+    finally:
+        client.release(cd)
+    st = Workspace(cd, readonly=True).store
+    assert st.bindings["c.py::retry"].fingerprint == "h-c.py::retry" and queued(st) == []
 
 
 def test_context_for_a_feature_is_its_range_and_the_features_one_call_away(tmp_path):

@@ -9,6 +9,7 @@ set, else ``anthropic`` when ``ANTHROPIC_API_KEY`` is set, else ``claude``.
 **Calling.** ``complete`` sends one prompt to OpenAI, Anthropic, Ollama, or
 Claude Code. Claude Code (provider ``claude``, the default) needs no API key: it
 runs the ``claude`` CLI in headless JSON mode under the user's Claude login.
+``spent`` totals what the calls reported they cost.
 
 Environment variables:
     CODOC_PROVIDER          LLM provider: "openai" | "anthropic" | "ollama" | "claude"
@@ -34,6 +35,7 @@ from __future__ import annotations
 import functools
 import os
 import sys
+import threading
 from dataclasses import dataclass, replace
 
 from dotenv import dotenv_values, find_dotenv
@@ -227,7 +229,11 @@ def complete(
     elif config.provider == "anthropic":
         response_text = _complete_anthropic(prompt, config, parts)
     elif config.provider in ("claude", "claude-code"):
-        response_text = _complete_claude(prompt, config, parts)
+        response_text, cost = _complete_claude(prompt, config, parts)
+        if cost is not None:
+            with _spent_lock:
+                _spent[0] += 1
+                _spent[1] += cost
     else:
         raise ValueError(f"Unknown LLM provider: {config.provider!r}")
 
@@ -235,6 +241,27 @@ def complete(
         print(f"[CODOC] RESPONSE:\n{response_text}", file=sys.stderr)
 
     return response_text
+
+
+# What this process's calls reported they cost: (calls that reported one, US
+# dollars). Only the ``claude`` CLI reports a price. The APIs report tokens, and
+# a price table to turn tokens into dollars would go stale, so their calls add
+# nothing here.
+_spent = [0, 0.0]
+_spent_lock = threading.Lock()
+
+
+def spent() -> tuple[int, float]:
+    """``(calls that reported a cost, their total in US dollars)`` in this process."""
+    with _spent_lock:
+        return _spent[0], _spent[1]
+
+
+def cost_since(mark: tuple[int, float]) -> float | None:
+    """What the calls since ``spent()`` returned ``mark`` cost in US dollars,
+    or None when none of them reported a cost."""
+    n, usd = spent()
+    return usd - mark[1] if n > mark[0] else None
 
 
 def _joined(parts: list[str], prompt: str) -> str:
@@ -391,7 +418,7 @@ _CLAUDE_MIN_SYSTEM = (
 )
 
 
-def _complete_claude(prompt: str, config: LLMConfig, parts: list[str]) -> str:
+def _complete_claude(prompt: str, config: LLMConfig, parts: list[str]) -> tuple[str, float | None]:
     """Complete through the ``claude`` CLI in headless JSON mode, under the
     user's Claude login, with no API key.
 
@@ -408,7 +435,8 @@ def _complete_claude(prompt: str, config: LLMConfig, parts: list[str]) -> str:
       ``_CLAUDE_MIN_SYSTEM`` and the prefix parts, and ``--disallowedTools "*"``
       drops every tool schema.
 
-    Returns the model's text, the JSON envelope's ``result``.
+    Returns the model's text, the JSON envelope's ``result``, and the cost it
+    reports (``total_cost_usd``), None when it reports none.
     """
     import json as _json
     import shutil
@@ -488,4 +516,5 @@ def _complete_claude(prompt: str, config: LLMConfig, parts: list[str]) -> str:
             f"`claude -p` did not succeed (subtype={payload.get('subtype')!r}): "
             f"{str(payload.get('result') or '')[:300]}"
         )
-    return str(payload.get("result", ""))
+    cost = payload.get("total_cost_usd")
+    return str(payload.get("result", "")), float(cost) if isinstance(cost, (int, float)) else None

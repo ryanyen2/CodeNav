@@ -30,6 +30,8 @@ def test_install_writes_local_settings_registers_locally_and_clears_the_tracked_
     calls, run = [], subprocess.run
 
     def fake_run(argv, **k):
+        if argv[:2] == [sys.executable, "-c"]:          # the interpreter imports this codoc
+            return subprocess.CompletedProcess(argv, 0, I.codoc.__file__ + "\n", "")
         if argv[0] != "claude":
             return run(argv, **k)
         calls.append(argv)
@@ -52,7 +54,33 @@ def test_install_writes_local_settings_registers_locally_and_clears_the_tracked_
     assert json.loads((root / ".mcp.json").read_text()) == {"mcpServers": {"other": {"command": "o"}}}
     assert run(["git", "-C", str(root), "check-ignore", "-q", LOCAL]).returncode == 0
     assert (root / ".gitignore").read_text().count(LOCAL) == 1
-    assert calls[-1][:7] == ["claude", "mcp", "add", "--scope", "local", "codoc", "--"]
+    assert calls[-1] == ["claude", "mcp", "add", "--scope", "local", "codoc", "--", sys.executable, "-m", "codoc.mcp.server"]
+
+
+def test_when_the_interpreter_would_import_another_codoc_the_hooks_and_server_are_pointed_at_this_one(tmp_path, monkeypatch):
+    """codoc run from a checkout beside another codoc installed in the same
+    environment: the installed hooks and server must not run the other one."""
+    from pathlib import Path
+    root = _repo(tmp_path, monkeypatch)
+    here = str(Path(I.codoc.__file__).resolve().parent.parent)
+    calls, run = [], subprocess.run
+
+    def fake_run(argv, **k):
+        if argv[:2] == [sys.executable, "-c"]:
+            assert "PYTHONPATH" not in k["env"] and k["cwd"] == str(root)
+            return subprocess.CompletedProcess(argv, 0, "/venv/site-packages/codoc/__init__.py\n", "")
+        if argv[0] != "claude":
+            return run(argv, **k)
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr(I, "find_claude", lambda: "claude")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    I.install_hooks(str(root))
+    local = json.loads((root / LOCAL).read_text())
+    commands = [h["command"] for es in local["hooks"].values() for e in es for h in e["hooks"]]
+    assert all(c.startswith(f"PYTHONPATH={here} {sys.executable} -m codoc.claude.hook ") for c in commands), commands
+    assert calls[-1] == ["claude", "mcp", "add", "--scope", "local", "codoc", "-e", f"PYTHONPATH={here}", "--",
+                         sys.executable, "-m", "codoc.mcp.server"]
 
 
 def test_without_claude_on_path_install_says_what_to_run_and_keeps_the_tracked_server(tmp_path, monkeypatch):
@@ -63,7 +91,7 @@ def test_without_claude_on_path_install_says_what_to_run_and_keeps_the_tracked_s
     monkeypatch.setattr(I, "find_claude", lambda: None)
     said = []
     I.install_hooks(str(root), say=said.append)
-    assert "claude mcp add --scope local codoc --" in said[0] and ".mcp.json" in said[1]
+    assert "claude mcp add --scope local codoc " in said[0] and "-m codoc.mcp.server" in said[0] and ".mcp.json" in said[1]
     assert (root / ".mcp.json").read_text() == mcp
 
 

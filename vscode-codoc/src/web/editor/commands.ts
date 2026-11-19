@@ -196,6 +196,22 @@ export function deleteSelection(state: EditorState, env: Env, landing = false): 
     return done(tr, ops);
 }
 
+/**
+ * Split the heading or prose block `node` at document position `pos`, scalar
+ * offset `off`. The tail becomes a new block with the tail of the shadow: a
+ * paragraph when `node` is a heading, a block like `node` otherwise.
+ */
+export function splitAt(tr: Transaction, env: Env, node: PMNode, pos: number, off: number): { tr: Transaction; op: OpBody; nid: string } {
+    const bid = node.attrs.bid as string;
+    const shadow = env.shadows.get(bid)!;
+    const nid = env.nextBid();
+    const op = { kind: 'block.split', target: { bid, path: 'text' }, payload: { at: off === 0 ? START : shadow.ref(off - 1), new: nid } };
+    env.shadows.set(nid, shadow.split(off));
+    const heading = node.type.name === 'heading';
+    return { op, nid, tr: tr.split(pos, 1, [{ type: heading ? tr.doc.type.schema.nodes.paragraph : node.type,
+                                               attrs: heading ? { bid: nid, head: 0 } : { ...node.attrs, bid: nid, head: 0 } }]) };
+}
+
 /** Enter: split the caret's heading or prose block. A list item splits into
  *  two items at the same level, a heading into a heading and a paragraph. */
 export function splitBlock(state: EditorState, env: Env): Gesture | null {
@@ -206,39 +222,23 @@ export function splitBlock(state: EditorState, env: Env): Gesture | null {
     const bid = b.node.attrs.bid as string;
     const shadow = env.shadows.get(bid);
     if (!shadow) return null;
-    const $from = state.doc.resolve(from);
-    const off = scalarOffset(b.node, $from.parentOffset);
-    const nid = env.nextBid();
-    const at = off === 0 ? START : shadow.ref(off - 1);
-    const headHasText = off > 0;
-    const tailHasText = off < shadow.length;
-    const newFirst = !headHasText && tailHasText;      // the id stays with the text
-    const isHeading = b.node.type.name === 'heading';
-    const tailType = isHeading ? state.schema.nodes.paragraph : b.node.type;
-    let tr = state.tr.split(from, 1, [{ type: tailType, attrs: isHeading ? { bid: null, head: 0 } : { ...b.node.attrs } }]);
-    // Assign ids: the half that keeps the text keeps `bid`.
-    const headPos = b.pos;
-    const tailPos = tr.mapping.map(from);
-    const $tail = tr.doc.resolve(tailPos);
-    const tailStart = $tail.before(1);
+    const off = scalarOffset(b.node, state.doc.resolve(from).parentOffset);
+    const newFirst = off === 0 && shadow.length > 0;
+    const { op, nid, ...split } = splitAt(state.tr, env, b.node, from, off);
+    let tr = split.tr;
+    const tailStart = tr.doc.resolve(tr.mapping.map(from)).before(1);
     if (newFirst) {
-        tr = tr.setNodeMarkup(headPos, undefined, { ...b.node.attrs, bid: nid, head: 0 });
-        tr = tr.setNodeMarkup(tailStart, undefined, { ...tr.doc.nodeAt(tailStart)!.attrs, bid, head: b.node.attrs.head });
-    } else {
-        tr = tr.setNodeMarkup(tailStart, undefined, { ...tr.doc.nodeAt(tailStart)!.attrs, bid: nid, head: 0 });
+        // At the start of a block with words, the id stays with the words: the
+        // two halves trade ids, kinds and shadows, so the empty head is the new
+        // block, and a paragraph when a heading split.
+        const head = tr.doc.nodeAt(b.pos)!, tail = tr.doc.nodeAt(tailStart)!;
+        tr = tr.setNodeMarkup(b.pos, tail.type, tail.attrs).setNodeMarkup(tailStart, head.type, head.attrs);
+        const words = env.shadows.get(nid)!;
+        env.shadows.set(nid, env.shadows.get(bid)!);
+        env.shadows.set(bid, words);
     }
-    // Splitting a heading yields a heading and a paragraph, and the heading is
-    // the half that keeps its text, so when the new block comes first it is
-    // the new one that is the paragraph.
-    if (isHeading && newFirst) {
-        tr = tr.setNodeMarkup(headPos, state.schema.nodes.paragraph, { bid: nid, head: 0 });
-        tr = tr.setNodeMarkup(tailStart, state.schema.nodes.heading, { bid, head: b.node.attrs.head, level: b.node.attrs.level });
-    }
-    const tail = shadow.split(off);
-    if (newFirst) { env.shadows.set(nid, shadow); env.shadows.set(bid, tail); }
-    else env.shadows.set(nid, tail);
     tr = tr.setSelection(TextSelection.create(tr.doc, tailStart + 1));
-    return done(tr, [{ kind: 'block.split', target: { bid, path: 'text' }, payload: { at, new: nid } }]);
+    return done(tr, [op]);
 }
 
 /** Backspace at the start of a prose block: merge it into the prose block before. */

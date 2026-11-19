@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 
-from codoc.index.schema import LANCE_TABLE_NAME
+from codoc.index.schema import LANCE_TABLE_NAME, CodeChunk
 
 
 def _lance_path(codoc_dir: str | Path) -> Path:
@@ -114,8 +114,22 @@ async def _open_table(codoc_dir: str | Path):
     return await conn.open_table(LANCE_TABLE_NAME)
 
 
-_BASE_COLUMNS = ["id", "file", "symbol", "language", "fingerprint",
-                 "types_hash", "start_byte", "end_byte"]
+_COLUMNS = [f.name for f in fields(CodeChunk)]
+
+
+async def _current_table(codoc_dir: str | Path):
+    """The chunk table, or None when there is none or its columns are not
+    ``CodeChunk``'s (an older codoc wrote it)."""
+    try:
+        tbl = await _open_table(codoc_dir)
+    except (FileNotFoundError, ValueError):
+        return None
+    return tbl if set((await tbl.schema()).names) == set(_COLUMNS) else None
+
+
+def has_current_table(codoc_dir: str | Path) -> bool:
+    """Whether the chunk table exists with ``CodeChunk``'s columns."""
+    return _run(_current_table(codoc_dir)) is not None
 
 
 async def _read_all(
@@ -123,9 +137,8 @@ async def _read_all(
     files: set[str] | None = None,
     with_source: bool = True,
 ) -> list[ChunkRow]:
-    try:
-        tbl = await _open_table(codoc_dir)
-    except (FileNotFoundError, ValueError):
+    tbl = await _current_table(codoc_dir)
+    if tbl is None:
         return []
     q = tbl.query()
     if files is not None:
@@ -133,10 +146,7 @@ async def _read_all(
             return []
         quoted = ", ".join("'" + f.replace("'", "''") + "'" for f in sorted(files))
         q = q.where(f"file IN ({quoted})")
-    cols = list(_BASE_COLUMNS)
-    if with_source:
-        cols.append("source")
-    rows = await q.select(cols).to_list()
+    rows = await q.select([c for c in _COLUMNS if with_source or c != "source"]).to_list()
     return [ChunkRow.from_raw(r) for r in rows]
 
 

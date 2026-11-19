@@ -25,9 +25,9 @@ grows when text is typed at its end (I2).
 canonical payload, its inverse and, when it could not apply, a conflict code.
 Ids are `session:seq`.
 
-**Plan**: a proposal by an agent, the loop, a translator or a contributor: ops
-tagged with a plan id that apply at once and show as gray text until a
-verdict. Accept keeps the proposer as author; reject kills its words by
+**Plan**: the changes an agent, the loop, a translator or a contributor
+proposes, as ops tagged with a plan id that apply at once and show as gray text
+until a verdict. Accept keeps the proposer as author; reject kills its words by
 identity.
 
 **Hand-off / realized**: per-feature frontiers (watermarks). A feature is

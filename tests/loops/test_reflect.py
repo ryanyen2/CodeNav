@@ -344,3 +344,36 @@ def test_the_model_sees_aliases_and_its_aliases_are_mapped_back(tmp_path):
     assert (titles[0]["id"], subtree[0]["id"], changes["modified"][0]["current_feature_id"]) == ("f1", "f1", "f1")
     assert T(ws.store, "p1") == "Retries twice before giving up."
     assert r.refused == [("attach", "unknown feature 'f12'")]
+
+
+def test_a_plan_note_names_a_feature_by_title_not_by_alias(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    seed_loop(ws)
+
+    def propose(changes, subtree, titles, **kw):
+        return [{"kind": "add_node", "parent_id": "f1", "title": "Storage", "description": "Saves state.",
+                 "bindings": ["s.py::save"], "rationale": "把 f1.1 的保存部分拆出来，放在f1下"}]
+
+    cs = ChangeSet(added=[chunk("s.py::save", "f9", "t9")], modified=[chunk("c.py::send", "f2", "t1")])
+    r = reflect(ws, cs, Graph(), propose=propose)
+    assert ws.store.plans[r.plans[0]].note == "把 Client 的保存部分拆出来，放在Client下"
+
+
+def test_a_chunk_back_at_its_bound_fingerprint_asks_the_model_nothing(tmp_path):
+    """Checking a branch out again changes the index, not the code the binding was refreshed on."""
+    ws = Workspace(tmp_path / ".codoc")
+    seed_loop(ws)                                     # c.py::send bound at fingerprint f1
+    r = reflect(ws, ChangeSet(modified=[chunk("c.py::send", "f1", "t1")]), Graph(),
+                propose=lambda *a, **k: [{"kind": "amend", "feature_id": "f1", "title": "Changed"}])
+    assert r.llm_calls == 0 and not r.ops
+
+
+def test_the_reflect_line_reports_what_its_calls_cost(tmp_path, monkeypatch):
+    from codoc.llm import provider
+    from tests.helpers import fake_claude
+    fake_claude(monkeypatch, {"result": "[]", "total_cost_usd": 0.0031})
+    ws = Workspace(tmp_path / ".codoc")
+    seed_loop(ws)
+    r = reflect(ws, ChangeSet(modified=[chunk("c.py::send", "f2", "t1")]), Graph(),
+                propose=lambda *a, **k: provider.complete("p", provider.LLMConfig("claude", "haiku")) and [])
+    assert "1 LLM call(s), $0.0031" in r.summary()

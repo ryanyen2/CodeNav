@@ -8,6 +8,7 @@ table version and fragments, and nothing else prunes them.
 from __future__ import annotations
 
 import os
+import shutil
 from datetime import timedelta
 from pathlib import Path
 
@@ -59,6 +60,15 @@ def update_index(
     """
     codoc_path = Path(codoc_dir).resolve()
     codoc_path.mkdir(parents=True, exist_ok=True)
+
+    from codoc.index import reader
+    if not reader.has_current_table(codoc_path):
+        # No chunk table, or one whose columns an older codoc chose. cocoindex's
+        # memo would skip every unchanged file and leave that table as it is,
+        # so both stores go and the whole tree is indexed again.
+        reader.invalidate_cache(codoc_path)
+        shutil.rmtree(reader._lance_path(codoc_path), ignore_errors=True)
+        shutil.rmtree(codoc_path / "cocoindex.db", ignore_errors=True)
 
     from codoc.index.app import make_app
 

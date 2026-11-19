@@ -52,6 +52,25 @@ APPLIER_LOCK = "applier.lock"     # held for one apply-and-publish turn
 SERVE_LOCK = "serve.lock"         # the hub that owns this checkout
 
 
+# What git carries of `.codoc/`: the log, the config and the files media blocks
+# reference. The export is derived and rewritten on every edit, so it is not.
+GITIGNORE = ("# codoc writes this file. The log, the config and the media blocks reference\n"
+             "# travel with the repo; the export, caches, channels and local state do not.\n"
+             "*\n!.gitignore\n!config.json\n!log/\n!log/**\n!media/\n!media/**\n")
+
+
+def write_gitignore(codoc_dir: str | Path) -> None:
+    """Write ``.codoc/.gitignore`` when it says anything else. Codoc owns the
+    file: ``codoc init`` and every daemon start write it."""
+    path = Path(codoc_dir) / ".gitignore"
+    try:
+        if path.read_text(encoding="utf-8") == GITIGNORE:
+            return
+    except OSError:
+        pass
+    atomic_write(path, GITIGNORE)
+
+
 def find_codoc_dir(cwd: str) -> str | None:
     """Walk up from *cwd* to the first ancestor that contains ``.codoc``."""
     p = Path(cwd).resolve()

@@ -211,6 +211,29 @@ def test_a_contributor_backspacing_over_their_own_proposal_removes_it(tmp_path):
     ws.close()
 
 
+def test_a_contributor_backspacing_over_their_own_words_and_a_dead_trunk_letter_takes_their_words_back(tmp_path):
+    """`deleted_ops` asks which ops minted the live characters a range names. A
+    trunk letter already dead between the suggester's words is not one the
+    delete kills, so the range is still their own words to take back."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    r = refs(ws, "p1")                                          # "Retries once."
+    I.submit(cd, "hub-alice", [sub("x", K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": list(r[4]), "text": "X"})])
+    x = [o for o in ws.drain_inbox() if o.kind == K.TEXT_INSERT][0]
+    ws.submit([{"kind": K.TEXT_DELETE, "target": {"bid": "p1", "path": "text"}, "payload": {"segments": [[r[5][0], r[5][1], 1]]}}],
+              actor=H)
+    I.submit(cd, "hub-alice", [sub("y", K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": list(r[5]), "text": "Y"},
+                                   batch="b2")])
+    y = [o for o in ws.drain_inbox() if o.kind == K.TEXT_INSERT][0]
+    assert x.plan and y.plan == x.plan and T(ws.store, "p1") == "RetriXYs once."
+    I.submit(cd, "hub-alice", [sub("d", K.TEXT_DELETE, {"bid": "p1", "path": "text"},
+                                   {"from": [x.id, 0], "to": [y.id, 0]}, batch="b3")])
+    assert all(o.conflict is None for o in ws.drain_inbox())
+    assert T(ws.store, "p1") == "Retris once."
+    assert not [m for m in ws.store.blocks["p1"].text().marks if m.kind == SUGGEST_DEL]
+    ws.close()
+
+
 def test_a_contributor_cannot_revive_words_the_maintainer_deleted(tmp_path):
     """A restore is judged by the delete it undoes, not by who minted the
     characters. A maintainer removing a plan's words is an ordinary trunk

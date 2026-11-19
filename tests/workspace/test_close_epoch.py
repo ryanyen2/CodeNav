@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from codoc.daemon.epoch import EPOCH_STALE_SECONDS, activity_path, close_epoch
+from codoc.workspace.epoch import EPOCH_STALE_SECONDS, activity_path, close_epoch
 
 
 def _write(codoc_dir, *, open: bool, epoch_id: str) -> None:
@@ -91,3 +91,15 @@ def test_empty_expected_id_matches_any_open_epoch(tmp_path):
     _write(codoc_dir, open=True, epoch_id="ep-anything")
     assert close_epoch(codoc_dir, "") is True
     assert json.loads(activity_path(codoc_dir).read_text())["epoch"]["open"] is False
+
+
+def test_an_epoch_with_no_id_is_closed_by_any_session(tmp_path):
+    """A realize pass reopens the epoch with no session id when no session
+    started one. The stop hook of the turn that follows names its session and
+    still closes it, or the open epoch would hold back settling until it went
+    stale."""
+    codoc_dir = tmp_path / ".codoc"
+    codoc_dir.mkdir()
+    _write(codoc_dir, open=True, epoch_id="")
+    assert close_epoch(codoc_dir, "ep-abc") is True
+

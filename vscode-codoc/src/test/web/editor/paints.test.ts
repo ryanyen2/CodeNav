@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { Claim, TextField } from '../../../web/calc/projection';
 import { moveBlock } from '../../../web/editor/commands';
-import { block, ids, key, mount, para, perform, posIn, proj, select, texts, type Mounted } from './harness';
+import { block, ids, key, mount, para, perform, posIn, proj, select, texts, typeText, type Mounted } from './harness';
 
 /** The paint classes drawn inside a block. */
 const paintsIn = (m: Mounted, bid: string) =>
@@ -45,12 +45,24 @@ describe('paints after a structural gesture', () => {
         expect(paintsIn(m, 'p2')).toEqual(['codoc-ink-unsent']);     // B was not
         perform(m, s => moveBlock(s, 'p1', 'p2'));
         expect(ids(m.view.state.doc)).toEqual(['heading:h1', 'heading:h2', 'paragraph:p2', 'paragraph:p1']);
-        // The projection that answers the move says what the paragraph's ink is in B.
+        // Until the daemon answers, the paragraph keeps the paints it had.
+        expect(paintsIn(m, 'p1')).toEqual(['codoc-ink-sent']);
+        // The projection that answers the move says what its ink is in B.
         m.handle.adopt(proj([block('h1', 'heading', 'A'), block('h2', 'heading', 'B'),
                              para('p2', 1, [['b-body', { op: 'w:2', actor: 'human:a' }]]),
                              para('p1', 5, [['a-body', { op: 'w:1', actor: 'human:a' }]])],
                             { head: 20, claims: { h2: [ink('p2', 6), ink('p1', 6)] } }));
         expect(paintsIn(m, 'p1')).toEqual(['codoc-ink-unsent']);     // now B's
+    });
+
+    it('keep the ink of a paragraph moved under another feature before the projection answers', () => {
+        const m = mount([block('h1', 'heading', 'A'),
+                         para('p1', 1, [['a-body', { op: 'w:1', actor: 'human:a' }]]),
+                         block('h2', 'heading', 'B')],
+                        { claims: { h1: [ink('p1', 6)] } });
+        perform(m, s => moveBlock(s, 'p1', 'h2'));
+        expect(ids(m.view.state.doc)).toEqual(['heading:h1', 'heading:h2', 'paragraph:p1']);
+        expect(paintsIn(m, 'p1')).toEqual(['codoc-ink-unsent']);
     });
 
     it('keep every phase marker after a move', () => {
@@ -62,5 +74,31 @@ describe('paints after a structural gesture', () => {
         expect(ids(m.view.state.doc)).toEqual(['heading:h2', 'paragraph:p2', 'heading:h1', 'paragraph:p1']);
         // Right after the gesture, before any ack or keystroke.
         expect(m.view.dom.querySelectorAll('.codoc-marker').length).toBe(2);
+    });
+});
+
+// A block with unanswered words differs from the projection's text, and its
+// paints sit on the characters the claims name, not at the claims' offsets.
+describe('paints on a block with words the daemon has not answered', () => {
+    const cut: Claim = { bid: 'p', path: 'text', start: 5, end: 9, channel: 'plan', stage: 'removed', actor: 'agent:x', text: 'this', plan: 'pl' };
+    const plans = [{ id: 'pl', actor: 'agent:x', kind: 'edit', target: 'p', note: '', status: 'open' }];
+    const struck = (m: Mounted) => Array.from(m.view.dom.querySelectorAll('[data-bid="p"] .codoc-plan-cut')).map(e => e.textContent);
+
+    it('stay on the words while the person types before them', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', 'keep this maybe')], { plans, claims: { h: [cut] } });
+        expect(struck(m)).toEqual(['this']);
+        select(m.view, posIn(m.view, 'p', 0));
+        for (const c of 'XYZ') typeText(m.view, c);
+        expect(struck(m)).toEqual(['this']);
+    });
+
+    it('arriving in a projection, land on the words it names', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', 'keep this maybe')]);
+        select(m.view, posIn(m.view, 'p', 0));
+        typeText(m.view, 'XYZ');
+        m.handle.flush();                                              // sent, not answered: the block is held
+        m.handle.adopt({ ...m.proj, head: 20, plans, claims: { h: [cut] } });
+        expect(texts(m.view.state.doc)[1]).toBe('XYZkeep this maybe');
+        expect(struck(m)).toEqual(['this']);
     });
 });

@@ -7,7 +7,7 @@ codoc reacts to each action as it happens:
   run), so the person can see what the agent is doing without reading the
   diff. Plain text, dim ANSI only on a tty.
 * **activity.json**: every file touch reopens the agent epoch and records the
-  file, as the interactive pre-tool hook does (``daemon.epoch``).
+  file, as the interactive pre-tool hook does (``workspace.epoch``).
 * **status.json**: the pass renews the realizing lease from its own tool
   activity. ``autorealize.start_realize`` takes the lease and starts this
   module as ``python -m codoc.claude.sdk_realize <root> [<permission mode>]``,
@@ -23,7 +23,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from codoc.daemon.epoch import reopen_epoch, repo_relative, touch_epoch
+from codoc.claude import autorealize
+from codoc.workspace.epoch import reopen_epoch, repo_relative, touch_epoch
 from codoc.daemon.publish import renew_realizing
 from codoc.workspace.layout import CODOC_DIR, REALIZE
 
@@ -72,6 +73,7 @@ class RealizeMonitor:
         self.reflections = 0
         self.errored = False
         self.result_text = ""
+        self.cost: float | None = None
         self._started = time.monotonic()
         self._last_heartbeat = 0.0  # monotonic ts of the last lease renewal
 
@@ -158,14 +160,12 @@ class RealizeMonitor:
         if type(msg).__name__ == "ResultMessage":
             self.errored = bool(getattr(msg, "is_error", False))
             self.result_text = str(getattr(msg, "result", "") or "")
+            self.cost = getattr(msg, "total_cost_usd", None)
 
     def summary(self) -> str:
-        elapsed = int(time.monotonic() - self._started)
-        if self.errored:
-            tail = f": {self.result_text}" if self.result_text else ""
-            return f"  ✗ failed · {elapsed}s{tail}"
-        return (f"  ✓ done · {len(self.writes)} file(s) written · "
-                f"{self.reflections} reflection(s) · {elapsed}s")
+        done = f"{len(self.writes)} file(s) written · {self.reflections} reflection(s)"
+        return autorealize.summary(not self.errored, time.monotonic() - self._started, self.cost,
+                       self.result_text if self.errored else done)
 
 
 async def consume_stream(monitor: RealizeMonitor, stream: Any) -> None:
