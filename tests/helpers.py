@@ -9,8 +9,14 @@ Two levels:
 - On a ``Workspace``: ``seed`` writes a person's feature ``Client`` with the
   paragraph ``Retries once.`` bound to ``c.py::send``; ``seed_loop`` writes the
   same feature as the loop, with ``Retries once before giving up.``.
+
+``another_daemon`` holds the daemon's lock on a checkout from another process.
 """
 import copy
+import os
+import subprocess
+import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 from codoc.calculus import block_md
@@ -242,6 +248,22 @@ def fold(cd) -> None:
 
 def sub(cid, kind, target, payload, batch="b1", **kw) -> I.Submission:
     return I.Submission(cid=cid, kind=kind, target=target, payload=payload, batch=batch, **kw)
+
+
+@contextmanager
+def another_daemon(codoc_dir):
+    """A process other than this one holding the daemon's lock on watch.pid,
+    as a running ``codoc watch`` does, until the block ends. Yields its pid."""
+    held = subprocess.Popen(
+        [sys.executable, "-c", "import sys, time; from codoc.daemon.pidfile import hold_pidfile; "
+         "print(hold_pidfile(sys.argv[1]), flush=True); time.sleep(120)", str(codoc_dir)],
+        stdout=subprocess.PIPE, text=True, env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])})
+    try:
+        assert held.stdout.readline().strip() == "True"
+        yield held.pid
+    finally:
+        held.kill()
+        held.wait()
 
 
 # ── the index and the LLM ───────────────────────────────────────────────────

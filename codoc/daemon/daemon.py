@@ -30,14 +30,13 @@ import sys
 import time
 from dataclasses import dataclass, field
 from functools import cached_property
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
-from codoc.daemon.pidfile import clear_pidfile, daemon_running, write_pidfile
+from codoc.daemon.pidfile import hold_pidfile
 from codoc.daemon.publish import Publisher
 from codoc.doclang import workspace_doc_language
 from codoc.index.git import handoffs_landed, head
 from codoc.index.graph import Graph
-from codoc.index.lang import detect_language
 from codoc.loops.realize import settle_if_idle
 from codoc.workspace import Roles, Workspace
 from codoc.workspace import inbox as I
@@ -46,10 +45,11 @@ from codoc.workspace.epoch import EPOCH_STALE_SECONDS, close_epoch, epoch_age, e
 from codoc.workspace.layout import ACTIVITY, APPLIER_LOCK, CODOC_DIR, GRAPH_CACHE, atomic_write, locked
 
 DEBOUNCE_MS = 600
-# With no file event for this long the daemon runs an empty batch: it closes a
-# stale agent epoch (EPOCH_STALE_SECONDS) and lets `after_batch` retry a
-# realize pass whose back-off has run out, neither of which a file event
-# would otherwise ever start in a quiet repository.
+# This long after its last batch the daemon runs one with no paths, whatever
+# changed meanwhile that does not wake it: it closes a stale agent epoch
+# (EPOCH_STALE_SECONDS) and lets `after_batch` retry a realize pass whose
+# back-off has run out, neither of which a waking event would otherwise ever
+# start in a quiet repository.
 TICK_MS = 30_000
 
 
@@ -57,6 +57,7 @@ TICK_MS = 30_000
 class DaemonState:
     epoch_open: bool = False
     deferred: set[str] = field(default_factory=set)   # code files changed while the epoch was open
+    ended_at: str | None = None                        # the `ended_at` of the last epoch close this daemon reflected
 
 
 class Daemon:
@@ -74,7 +75,10 @@ class Daemon:
         for p in self.ws.problems:
             printer(f"▸ log problem: {p.path}:{p.line}: {p.reason}")
         self.graph = Graph.load(self.codoc_dir / GRAPH_CACHE)
-        self.state = DaemonState()
+        # A close already in activity.json at start was reflected by the daemon
+        # that saw it, or settled by the Stop hook when no daemon ran
+        # (docs/concurrency.md, Processes).
+        self.state = DaemonState(ended_at=(read_activity(self.codoc_dir).get("epoch") or {}).get("ended_at"))
         self.say = printer
         self.after_batch = after_batch       # called with the daemon after every watched batch
         self._changeset = changeset
@@ -102,13 +106,12 @@ class Daemon:
         return source_matcher(self.root)
 
     def code_path(self, path: str) -> str | None:
-        """``path`` relative to the root when the index reads it (a language
-        adapter parses it and no index exclude covers it), else None."""
-        try:
-            rel = Path(path).resolve().relative_to(self.root.resolve()).as_posix()
-        except ValueError:
-            return None
-        return rel if detect_language(rel) and self._source.is_file_included(PurePosixPath(rel)) else None
+        """``path`` as the index names it (``index.app.canonical_file``) when
+        the index reads that file (``index.app.why_not_indexed``; a file just
+        removed counts by its name), else None."""
+        from codoc.index.app import canonical_file, why_not_indexed
+        rel = canonical_file(self.root, path)
+        return rel if rel is not None and why_not_indexed(self.root, rel, self._source) is None else None
 
     def wakes(self, _change, path: str) -> bool:
         """Whether a filesystem event starts a batch: a code file the index
@@ -178,18 +181,21 @@ class Daemon:
         # an agent's own `codoc_reflect` and a merged commit's trailer do.
         under_epoch = False
         ep = read_activity(self.codoc_dir).get("epoch") or {}
-        is_open = bool(ep.get("open"))
-        # A session killed without its hooks: close it, and reflect its turn
-        # whether or not this daemon saw it open.
-        stale = (is_open and epoch_age(self.codoc_dir, now) > EPOCH_STALE_SECONDS
+        # A session killed without its hooks: close it, as its Stop hook would.
+        stale = (ep.get("open") and epoch_age(self.codoc_dir, now) > EPOCH_STALE_SECONDS
                  and close_epoch(self.codoc_dir, ep.get("id", ""), now=now, stale_after=EPOCH_STALE_SECONDS))
-        is_open = is_open and not stale
-        if is_open and not self.state.epoch_open:
-            self.state = DaemonState(epoch_open=True)
-            notes.append("agent session opened")
-        elif not is_open and (self.state.epoch_open or stale):
+        if stale:
+            ep = read_activity(self.codoc_dir).get("epoch") or {}
+        if ep.get("open"):
+            if not self.state.epoch_open:
+                self.state = DaemonState(epoch_open=True, ended_at=self.state.ended_at)
+                notes.append("agent session opened")
+        elif self.state.epoch_open or ep.get("ended_at") not in (None, self.state.ended_at):
+            # A close: the epoch this daemon saw open is no longer open, or one
+            # it never saw open was closed since its last close (a turn can
+            # open and close while one batch runs).
             code |= self.state.deferred | set(epoch_touched_files(self.codoc_dir))
-            self.state = DaemonState()
+            self.state = DaemonState(ended_at=ep.get("ended_at"))
             under_epoch = True
             notes.append("recovered a dead agent session" if stale else "agent session closed")
         # 4. Reflect.
@@ -217,37 +223,49 @@ class Daemon:
         return f"reflect: {res.summary()}" + (f" · {lifted} block(s) lifted" if lifted else "")
 
     # ── lifecycle ──────────────────────────────────────────────────────────
-    def start(self) -> None:
-        """Become the only applier: write the pidfile, then rebuild under the
-        applier lock. A daemonless writer that applied after this store was
-        built and before the pidfile appeared wrote a log this store has not
-        read; one that takes the lock after this sees the pidfile and submits
-        to the inbox (``client.applying``)."""
+    def start(self) -> bool:
+        """Become the only applier: take the daemon's lock on watch.pid, then
+        rebuild under the applier lock. False, with nothing done, when another
+        daemon holds the lock. A daemonless writer that applied after this
+        store was built and before the lock was taken wrote a log this store
+        has not read; one that takes the applier lock after this sees the
+        daemon and submits to the inbox (``client.applying``)."""
         # Limit: the logs are replayed twice at start; build the store after
-        # the pidfile if start-up time on a long log matters.
-        write_pidfile(self.codoc_dir)
+        # the lock if start-up time on a long log matters.
+        if not hold_pidfile(self.codoc_dir):
+            return False
         with locked(self.codoc_dir / APPLIER_LOCK):
             self.ws.rebuild()
         self.publisher.invalidate()
+        return True
 
-    def run(self, *, debounce_ms: int = DEBOUNCE_MS) -> None:  # pragma: no cover - blocking loop
+    def run(self, *, debounce_ms: int = DEBOUNCE_MS) -> None:
+        """Watch the root until the process is stopped. A batch runs for the
+        events ``wakes`` keeps, and on the quiet tick: once ``TICK_MS`` has
+        passed since the last batch, whatever else changed."""
         import atexit
         import signal
         import watchfiles
-        if daemon_running(self.codoc_dir):
+        if not self.start():
             self.say("A codoc daemon is already watching this repo.")
             raise SystemExit(3)
-        self.start()
-        atexit.register(clear_pidfile, self.codoc_dir)
         atexit.register(self.ws.close)
         # The hub and the editor stop the daemon with SIGTERM, whose default
-        # skips atexit and would leave the pidfile behind.
+        # skips atexit and would leave the session log unclosed.
         signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
         self.say(f"codoc watching {self.root} (session {self.ws.session})")
         self.batch([])           # what clients wrote while no daemon ran
-        for changes in watchfiles.watch(str(self.root), debounce=debounce_ms, watch_filter=self.wakes,
+        last = time.monotonic()
+        # Every event is yielded and filtered here: an event a `watch_filter`
+        # dropped would restart watchfiles' timeout, so files that change
+        # without waking the daemon (a log, a build's output) would hold the
+        # tick off for as long as they kept changing.
+        for changes in watchfiles.watch(str(self.root), debounce=debounce_ms, watch_filter=None,
                                         rust_timeout=TICK_MS, yield_on_timeout=True):
-            self.batch([p for _c, p in changes])
+            paths = [p for c, p in changes if self.wakes(c, p)]
+            if paths or time.monotonic() - last >= TICK_MS / 1000:
+                self.batch(paths)
+                last = time.monotonic()
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────

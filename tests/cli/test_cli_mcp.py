@@ -326,7 +326,7 @@ def test_history_is_one_row_per_change_so_a_plan_does_not_bury_the_handoff(tmp_p
     assert len(feature_history(client.read(cd).store, fid)) > 15         # more ops than the default limit
     out = runner.invoke(app, ["history", fid, "--root", str(root)]).output
     assert f"plan {pid}: opened; 10 bullets added; 50 words added" in out and "hand-off: 'retry thrice'" in out, out
-    rows = reads.read_history(cd, fid, 2)["batches"]
+    rows = reads.read_history(cd, fid, 2)["changes"]
     assert [r["summary"] for r in rows] == [f"accepted plan {pid}", "hand-off: 'retry thrice'"] and "ops" not in rows[0]
     detail = runner.invoke(app, ["history", fid, "--root", str(root), "--limit", "1", "--ops"]).output
     assert "feature.handoff  'retry thrice'" in detail and "accepted plan" not in detail, detail
@@ -468,18 +468,22 @@ def test_the_back_off_counts_from_when_the_failed_pass_ended(tmp_path, monkeypat
 
 def test_a_quiet_daemon_still_runs_its_batch_on_a_tick(tmp_path, monkeypatch):
     """Auto-realize's retry and the stale-epoch close run in a batch; with no
-    file event the watch yields empty on a timeout, and that is a batch too."""
+    file event the watch yields empty when its timeout (`TICK_MS`) runs out,
+    and that is a batch too."""
     import atexit
     import signal
+    import time
     import watchfiles
     from codoc.daemon import daemon as D
     root, cd = seeded(tmp_path)
     seen, ran = {}, []
     monkeypatch.setattr(signal, "signal", lambda *a: None)       # run() installs process-wide handlers
     monkeypatch.setattr(atexit, "register", lambda *a: None)
+    monkeypatch.setattr(D, "TICK_MS", 20)
 
     def fake_watch(*paths, **kw):
         seen.update(kw)
+        time.sleep(kw["rust_timeout"] / 1000)
         yield set()                              # the timeout, with no change
     monkeypatch.setattr(watchfiles, "watch", fake_watch)
     d = D.Daemon(root, cd, changeset=lambda *a: None, propose=lambda *a, **k: [], printer=lambda *_: None,
@@ -509,7 +513,7 @@ def test_history_rows_are_changes_in_the_order_they_happened(tmp_path):
     ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "p2"}, "payload": {"kind": "paragraph", "after": "p1"}},
                {"kind": K.TEXT_INSERT, "target": {"bid": "p2", "path": "text"},
                 "payload": {"after": START, "text": "Logs each failure to the console."}}], actor="loop")
-    before = len(reads.read_history(cd, "h1", 100)["batches"])
+    before = len(reads.read_history(cd, "h1", 100)["changes"])
     done = ws.amend("h1", rewrites=[("p1", "text", "Retries three times before giving up.", None),
                                     ("p2", "text", "Logs each failure to a file.", None)], actor="agent:claude-code")
     assert done.ops and not done.plan
@@ -520,7 +524,7 @@ def test_history_rows_are_changes_in_the_order_they_happened(tmp_path):
                             {"id": "p2", "text": "Logs each failure to stderr."}]}]
     res = reflect(ws, ChangeSet(modified=[chunk("c.py::send", "f2", "t1")]), Graph(), propose=propose)
     assert not res.plans and res.ops, res.summary()
-    rows = reads.read_history(cd, "h1", 100)["batches"]
+    rows = reads.read_history(cd, "h1", 100)["changes"]
     assert [r["actor"] for r in rows[before:]] == ["agent:claude-code", "loop"], [r["summary"] for r in rows[before:]]
     first = Compiler(ws.store).compile({"kind": "amend", "feature_id": "h1", "blocks": [{"text": "- Retries on 503."}]})
     pid = ws.amend("h1", rewrites=[], bodies=first.bodies, actor="loop", structural=True).plan
@@ -528,7 +532,7 @@ def test_history_rows_are_changes_in_the_order_they_happened(tmp_path):
     later = Compiler(ws.store).compile({"kind": "amend", "feature_id": "h1", "blocks": [{"text": "- Gives up after 3 tries."}]})
     newest = ws.amend("h1", rewrites=[], bodies=later.bodies, actor="loop", structural=True, join=pid).ops[-1]
     ws.close()
-    rows = reads.read_history(cd, "h1", 3, ops=True)["batches"]
+    rows = reads.read_history(cd, "h1", 3, ops=True)["changes"]
     assert [(r["actor"], r.get("plan")) for r in rows] == [("loop", pid), (H, None), ("loop", pid)]
     assert newest.id in [e["op"] for e in rows[-1]["ops"]] and rows[-1]["at"] > rows[-2]["at"] > rows[0]["at"]
 

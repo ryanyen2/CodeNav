@@ -3,7 +3,7 @@ applier when no daemon owns the checkout.
 
 The MCP server, the CLI and the hub are separate processes. Only one process
 may apply (docs/concurrency.md, Processes), so a writer takes the applier lock
-and asks whether a daemon is alive (the pidfile). If so it appends submissions
+and asks whether a daemon is alive (its lock on watch.pid). If so it appends submissions
 to its inbox and the daemon drains them on the next batch; the caller gets
 client ids back and may poll the ack file. If not, this process is the
 applier: it opens the workspace once and keeps it for the life of the process,

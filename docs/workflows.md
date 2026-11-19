@@ -75,8 +75,8 @@ pass caused by a hand edit cites nothing.
    is left until the daemon restarts, and the daemon says so once, since a pass that fails
    after spending spends again. A hand-off queued later gets its own three passes. A
    `codoc snapshot` records each hand-off again under a new id, so one that was given up on
-   is tried again after a snapshot. The daemon runs an empty batch after 30 seconds with no
-   file event, so the retry and the close of a stale agent epoch do not wait for an edit.
+   is tried again after a snapshot. The daemon runs an empty batch 30 seconds after its last
+   batch, so the retry and the close of a stale agent epoch do not wait for an edit.
 5. The build cites the hand-off in binding ops, in any of three ways. The agent's
    `codoc_reflect` attaches the symbols it wrote or changed, with `caused_by` the
    hand-off's `d:` id; any agent that runs the MCP server can do this, with or without

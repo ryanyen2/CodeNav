@@ -9,7 +9,7 @@ from codoc.calculus import ops as K
 from codoc.calculus.doc import PARAGRAPH
 from codoc.calculus.ids import START
 from codoc.daemon.daemon import Daemon
-from codoc.workspace.epoch import read_activity, write_activity
+from codoc.workspace.epoch import close_epoch, read_activity, write_activity
 from codoc.index.changes import ChangeSet, ChunkRef
 from codoc.workspace import Workspace
 from codoc.workspace import log as L
@@ -52,9 +52,7 @@ def test_open_epoch_holds_code_until_it_closes(tmp_path):
     assert "opened" in d.process_batch([str(act)])
     (d.root / "c.py").write_text("x")
     assert "deferring" in d.process_batch([str(d.root / "c.py")]) and calls == []
-    data = read_activity(d.codoc_dir)
-    data["epoch"]["open"] = False
-    write_activity(d.codoc_dir, data)
+    close_epoch(d.codoc_dir, "ep-1")
     note = d.process_batch([str(act)])
     assert "closed" in note and "reflect" in note and calls == [{"c.py"}]
 
@@ -75,11 +73,30 @@ def test_a_daemon_started_during_an_agent_turn_reflects_the_turn_when_it_closes(
         modified=[ChunkRef("c.py::send", "f9", "t1")]), propose=lambda *a, **k: [], printer=lambda *_: None)
     again.start()
     assert "opened" in again.process_batch([])
-    data = read_activity(again.codoc_dir)
-    data["epoch"]["open"] = False
-    write_activity(again.codoc_dir, data)
+    close_epoch(again.codoc_dir, "ep-1")
     assert "closed" in again.process_batch([str(again.codoc_dir / "activity.json")])
     assert calls == [{"c.py"}] and queued(again.ws.store) == []
+
+
+def test_a_turn_that_opened_and_closed_while_a_batch_ran_cites_its_hand_off(tmp_path):
+    """A batch can take tens of seconds (a reflect pass waits on the model),
+    and a whole turn can open, edit and close inside it. The daemon never saw
+    the epoch open; the close is still a close, so the pass over the turn's
+    files cites the queued hand-off and it settles."""
+    from codoc.calculus.derive import queued
+    from codoc.workspace.epoch import open_epoch, touch_epoch
+    d, calls = make(tmp_path, [ChangeSet(modified=[ChunkRef("c.py::send", "f9", "t1")])])
+    ho = handoff(d.ws, "h1", actor="human:local")
+    d.process_batch([])
+    open_epoch(d.codoc_dir, "s2")
+    touch_epoch(d.codoc_dir, "c.py")
+    (d.root / "c.py").write_text("def send(): retry()\n")
+    close_epoch(d.codoc_dir, "ep-s2")
+    assert "closed" in d.process_batch([str(d.codoc_dir / "activity.json"), str(d.root / "c.py")])
+    assert calls == [{"c.py"}]
+    assert [o.caused_by for o in d.ws.store.ops if o.kind == K.BIND_REFRESH] == [ho.id]
+    assert queued(d.ws.store) == []
+    assert "closed" not in d.process_batch([str(d.codoc_dir / "activity.json")])   # one close, reflected once
 
 
 def test_the_daemons_passes_write_in_the_workspace_language(tmp_path):
@@ -251,6 +268,23 @@ def test_the_daemon_wakes_for_the_files_the_index_reads(tmp_path):
     d, _ = make(tmp_path, [])
     rel = ["a.mts", "src/b.py", "dist/c.ts", "d.go", "e.js", "node_modules/f/g.ts", "h.d.ts", ".venv/i.py"]
     assert {d.code_path(str(d.root / p)) for p in rel} - {None} == {"a.mts", "src/b.py"}
+
+
+def test_the_daemon_names_a_changed_file_as_the_index_does(tmp_path):
+    """A batch reflects a file under the key the index's walk gives it: a
+    linked file by its link's name, nothing under a linked directory, nothing
+    over the size limit. A removed file is named by its path, so its chunks
+    leave the index."""
+    import os
+    d, _ = make(tmp_path, [])
+    (d.root / "real.py").write_text("def f():\n    return 1\n")
+    os.symlink("real.py", d.root / "link.py")
+    (d.root / "pkg").mkdir()
+    (d.root / "pkg" / "mod.py").write_text("def g():\n    return 2\n")
+    os.symlink("pkg", d.root / "pkg_link")
+    (d.root / "bundle.py").write_text("x = 1\n" + "#" * 1_500_000)
+    named = {p: d.code_path(str(d.root / p)) for p in ("link.py", "pkg_link/mod.py", "bundle.py", "gone.py")}
+    assert named == {"link.py": "link.py", "pkg_link/mod.py": None, "bundle.py": None, "gone.py": "gone.py"}
 
 
 def test_projection_carries_the_realizing_lease_and_publish_skips_unchanged(tmp_path):
@@ -460,9 +494,7 @@ def test_a_citing_attach_settles_nothing_while_an_agent_epoch_is_open_and_settle
         caused_by=ho.id)])
     d.process_batch([str(I.inbox_dir(d.codoc_dir) / "agent-claude-code.jsonl")])
     assert queued(d.ws.store) == ["h1"]
-    data = read_activity(d.codoc_dir)
-    data["epoch"]["open"] = False
-    write_activity(d.codoc_dir, data)
+    close_epoch(d.codoc_dir, "ep-1")
     assert "closed" in d.process_batch([str(act)])
     assert queued(d.ws.store) == []
     assert [o.caused_by for o in d.ws.store.ops if o.kind == K.FEATURE_REALIZED] == [ho.id]
@@ -529,6 +561,49 @@ def test_the_daemon_prints_what_a_batch_did_and_nothing_for_a_no_op(tmp_path, mo
     d.run()
     d.ws.close()
     assert [line for line in said if line.startswith("▸")] == ["▸ 1 client op(s)"]
+
+
+def test_the_quiet_tick_runs_while_files_that_do_not_wake_the_daemon_keep_changing(tmp_path, monkeypatch):
+    """watchfiles times out only when no event at all arrives, so a steady
+    write to a file the daemon ignores (a log, a build's output) must not hold
+    the tick off. Run against the real watchfiles, with a short tick."""
+    import atexit
+    import signal
+    import threading
+    import time
+    import watchfiles
+    from codoc.daemon import daemon as D
+    d, _ = make(tmp_path, [])
+    stop = threading.Event()
+    real = watchfiles.watch
+    monkeypatch.setattr(watchfiles, "watch", lambda *a, **k: real(*a, **k, stop_event=stop))
+    monkeypatch.setattr(signal, "signal", lambda *a: None)
+    monkeypatch.setattr(atexit, "register", lambda *a: None)
+    monkeypatch.setattr(D, "TICK_MS", 300)
+    ran: list[list[str]] = []
+
+    def batch(paths):
+        ran.append(paths)
+        if len(ran) == 2:
+            stop.set()
+    d.batch = batch
+
+    def churn():
+        i = 0
+        while not stop.is_set():
+            (d.root / "NOTES.md").write_text(str(i))
+            i += 1
+            time.sleep(0.05)
+    threading.Thread(target=churn, daemon=True).start()
+    give_up = threading.Timer(5, stop.set)
+    give_up.start()
+    try:
+        d.run(debounce_ms=50)
+    finally:
+        stop.set()
+        give_up.cancel()
+        d.ws.close()
+    assert ran == [[], []], "the startup batch, then the tick"
 
 
 def test_a_daemon_started_after_a_turn_went_silent_reflects_that_turn(tmp_path):

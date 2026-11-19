@@ -350,8 +350,10 @@ def reject(plan: str, root: str = ROOT):
 def history(feature: str, root: str = ROOT, limit: int = typer.Option(15, "--limit", help="How many changes to show."),
             ops: bool = typer.Option(False, "--ops", help="List each change's ops under it.")):
     """One feature's changes, newest last: when, who, what, under which plan,
-    for which hand-off; then who wrote each run of its words. A change is one
-    batch: a gesture, an ingest or a plan."""
+    for which hand-off; then who wrote each run of its words. A change is what
+    a reader means by one (a gesture, a reflect pass, an amend, a plan's
+    opening, a verdict): one row per change, as ``reads.read_history`` groups
+    the log."""
     from datetime import datetime
     from codoc.daemon import client, reads
     from codoc.workspace.clock import parse
@@ -366,7 +368,7 @@ def history(feature: str, root: str = ROOT, limit: int = typer.Option(15, "--lim
     def when(at: str) -> str:
         return datetime.fromtimestamp(parse(at)[0] / 1000).strftime("%Y-%m-%d %H:%M:%S")
     typer.echo(f"{h['title']}  ⟨{fid}⟩")
-    for row in h["batches"]:
+    for row in h["changes"]:
         plan = f"plan {row['plan']}: " if row.get("plan") else ""
         cause = f"  for hand-off d:{row['caused_by']}" if row.get("caused_by") else ""
         typer.echo(f"  {when(row['at'])}  {row['actor']:<20} {plan}{row['summary']}{cause}")

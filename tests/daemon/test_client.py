@@ -8,7 +8,7 @@ from codoc.workspace import Workspace
 from codoc.workspace import log as L
 from codoc.workspace import inbox as I
 from codoc.workspace.snapshot import write_snapshot
-from tests.helpers import T, refs, seed
+from tests.helpers import T, another_daemon, refs, seed
 
 
 def test_ingest_of_identical_text_reports_the_same_thing_on_both_paths(tmp_path):
@@ -141,24 +141,24 @@ def test_a_writer_that_waited_for_the_lock_while_a_daemon_started_uses_its_inbox
     """A writer that saw no daemon and got the applier lock only after the
     daemon's start-up rebuild would apply ops the daemon never reads. It asks
     again under the lock and submits to the inbox."""
-    import os
-    from contextlib import contextmanager
+    from contextlib import ExitStack, contextmanager
 
     from codoc.daemon import client
-    from codoc.workspace.layout import PIDFILE
     cd = tmp_path / ".codoc"
     ws = Workspace(cd); seed(ws); ws.close()
     r = refs(Workspace(cd, readonly=True), "p1")
     real = client.locked
+    daemon = ExitStack()
 
     @contextmanager
     def a_daemon_starts_meanwhile(path):
-        (cd / PIDFILE).write_text(str(os.getppid()))      # a live process that is not this one
+        daemon.enter_context(another_daemon(cd))
         with real(path):
             yield
     monkeypatch.setattr(client, "locked", a_daemon_starts_meanwhile)
-    got = client.write(cd, client="cli", wait_s=0, bodies=[{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
-                                                           "payload": {"after": list(r[-1]), "text": " X."}}])
+    with daemon:
+        got = client.write(cd, client="cli", wait_s=0, bodies=[{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                                                               "payload": {"after": list(r[-1]), "text": " X."}}])
     assert not got[0]["op"] and (I.inbox_dir(cd) / "cli.jsonl").exists()
     assert T(Workspace(cd, readonly=True).store, "p1") == "Retries once."
     client.release(cd)

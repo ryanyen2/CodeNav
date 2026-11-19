@@ -41,7 +41,7 @@ A package imports only packages to its left in this order: `calculus`, `index`,
 | **`index/`** | The code, read without the document. |
 | `lang/` | Tree-sitter adapters for Python and TypeScript: chunks and references. |
 | `tree_walk.py` | A chunk's two identity hashes (`fingerprint`, `types_hash`). |
-| `app.py`, `runner.py`, `schema.py`, `reader.py` | The cocoindex app and the LanceDB chunk table. |
+| `app.py`, `runner.py`, `schema.py`, `reader.py` | The cocoindex app and the LanceDB chunk table. `app.py` also holds the one rule for which files are code (`why_not_indexed`) and reads code on disk by it (`code_on_disk`). |
 | `changes.py` | The change set of one index update. |
 | `extract.py`, `graph.py`, `flows.py` | The dependency graph over chunks, cached as JSON. |
 | `git.py` | `HEAD` (commit and branch), the hand-offs commit trailers name, and what recent commits said about a file. |
@@ -57,7 +57,7 @@ A package imports only packages to its left in this order: `calculus`, `index`,
 | `client.py` | How another process writes: the inbox when a daemon is alive, else the applier under `applier.lock`. |
 | `reads.py` | What the CLI and the MCP tools read: `queue_status`, `read_history`, `doc_language_block`. |
 | `publish.py` | The derived files and the realizing lease in `status.json`. |
-| `pidfile.py` | `watch.pid`. |
+| `pidfile.py` | Whether a daemon is alive: it holds a `flock` on `watch.pid` for its life. |
 | **`claude/`** | Section 2. |
 | **`cli/main.py`** | The `codoc` command. Without `--root` it finds `.codoc` in the current directory or the nearest one above it, as the hooks and the MCP server do; an explicit `--root` is taken as given. `codoc init` makes its workspace at `--root` (the current directory by default) and never walks up: a package in a monorepo may hold its own. |
 | **`mcp/`** | `server.py` (FastMCP over stdio, `codoc-mcp`), `tools.py`. |
@@ -88,7 +88,7 @@ cloning.
 
 - Open the agent epoch in `activity.json` while a turn runs and record the files it
   touched. The daemon defers those files and reflects them when the epoch closes, or after
-  900 seconds of silence (its quiet tick notices that with no file event), citing every
+  900 seconds of silence (its quiet tick notices that with no event that wakes it), citing every
   queued hand-off in `caused_by`. The editor and the
   hub do not read the file: they learn that a feature is being built from its
   `realizing` phase in the projection.
@@ -156,7 +156,7 @@ that `MAX_FAILED_PASSES` passes in a row failed on is said once and left until t
 restarts, counted per hand-off id, so a snapshot's new ids bring it back), counted from
 when the pass ended: each engine's child records its pid, exit code and wall time in
 `.codoc/cache/realize-ended.json` as it exits (`record_end`). The daemon's quiet tick
-(`TICK_MS`, an empty batch after 30 seconds with no file event) runs `after_batch`, so
+(`TICK_MS`, an empty batch 30 seconds after the last batch) runs `after_batch`, so
 the retry needs no file event.
 
 **Commands.** `/codoc:realize` builds the queue (`state` decides what it does, from

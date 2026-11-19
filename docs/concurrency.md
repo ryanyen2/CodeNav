@@ -17,12 +17,18 @@ One process applies ops at a time. It is called the applier.
 | the MCP server (the coding agent) | `agent-<CODOC_AGENT>` | Same as the CLI. |
 | the hub, per signed-in user | `hub-<login>` | Appends submissions to that user's inbox file. |
 
-- A daemon is alive when `.codoc/watch.pid` names a running process. A second daemon
-  refuses to start.
-- A daemon builds its store, writes the pidfile, then rebuilds the store once under the
+- A daemon is alive while it holds an exclusive `flock` on `.codoc/watch.pid`
+  (`daemon/pidfile.py`). It takes the lock when it starts and keeps it until it exits;
+  the OS releases it however the process ends. The file also holds the daemon's pid, for
+  a person to read, but liveness never depends on it: a file left by a killed daemon, or
+  naming a pid another program has since been given, reads as no daemon. The file is
+  never removed, since a daemon that removed it as it exited could leave one starting at
+  that moment holding the lock on a file no longer at the path. A second daemon cannot
+  take the lock and refuses to start.
+- A daemon builds its store, takes the lock, then rebuilds the store once under the
   applier lock. A daemonless writer that applied before that is in the logs it reads.
-  A writer that saw no daemon and got the lock after the pidfile was written checks for
-  a daemon again under the lock and submits through the inbox instead.
+  A writer that saw no daemon and got the applier lock after the daemon took its lock
+  checks for a daemon again under the applier lock and submits through the inbox instead.
 - Every client submission, applied directly or drained from an inbox, goes through
   `Workspace.apply_submission`: what a client may assert, how a suggester's edit becomes
   a plan, and what an amend or an ingest answers are decided there.
@@ -202,10 +208,13 @@ a code file the index reads, to `activity.json`, to a client's `inbox/<client>.j
 a file in `log/` other than the daemon's own session file, or to its own session file
 when git took or replaced it (`git stash -u`, `git clean`, a `stash pop` that puts it
 back). It never starts on the daemon's own writes (its appends to its session file, acks,
-`offsets.json`), so a batch does not start the next. After 30 seconds with no such event a
-batch runs anyway (`TICK_MS`), so the close of a stale agent epoch and an auto-realize
-retry do not wait for an edit. A batch that did nothing prints nothing. For each batch the
-daemon does, in order:
+`offsets.json`), so a batch does not start the next. 30 seconds after the last batch, a
+batch runs anyway (`TICK_MS`), however many files that start none changed meanwhile, so
+the close of a stale agent epoch and an auto-realize retry do not wait for an edit. The
+daemon takes every file event and filters it itself: watchfiles' timeout runs out only
+when no event at all arrives, so a filter inside watchfiles would let a log or a build's
+output that keeps changing hold the tick off. A batch that did nothing prints nothing.
+For each batch the daemon does, in order:
 
 1. Follow the logs on disk (section 5). If `HEAD` moved (its commit or its branch), or
    git took the session file: start a new session and rebuild the store from the log
@@ -220,11 +229,15 @@ daemon does, in order:
    submissions written while no daemon ran are applied.
 3. Read the agent epoch from `activity.json`, every batch, so a daemon started during a
    turn knows it. While a coding agent's session is open, changed code files are
-   deferred. When it closes, or after 900 seconds of silence (the daemon then closes it,
-   whether or not it saw it open), the deferred files and every file the session touched
-   go to step 4, and that pass cites every queued hand-off. Every epoch has an id, and
-   only a stop naming it closes it: a realize pass that runs no hooks opens one under its
-   own id and closes it when the pass ends.
+   deferred. When it closes, or after 900 seconds of silence (the daemon then closes it),
+   the deferred files and every file the session touched go to step 4, and that pass
+   cites every queued hand-off. A close is an epoch the daemon saw open that is open no
+   longer, or a closed epoch whose `ended_at` the daemon has not reflected, which it never
+   saw open: a turn can open and close while one batch runs. A close already in
+   `activity.json` when the daemon starts was reflected by the daemon before it, or
+   happened while none ran and was settled by the Stop hook (section 1). Every epoch has
+   an id, and only a stop naming it closes it: a realize pass that runs no hooks opens one
+   under its own id and closes it when the pass ends.
 4. Reflect the changed code files that are not deferred: the loop's pass, which writes
    ops as `loop` and cites the hand-offs step 1 noted.
 5. Unless an agent epoch is open, settle hand-offs (section 10).
@@ -645,14 +658,17 @@ removed. The paragraph reads `Retries once.`
   through the one path the indexer reads it by (`index.app.file_chunks`: decoded by its
   byte-order mark, else as UTF-8 with undecodable bytes replaced, line endings kept), and
   named as the index's walk names it (`canonical_file`: repo-relative, with `./`, `..`
-  and an absolute path folded lexically; a linked file keeps its link's name, a file under
-  a linked or excluded directory is not read, since the walk enters neither; a path none
+  and an absolute path folded lexically; a linked file keeps its link's name; a path none
   of whose ancestors is the repository, such as one through a link from outside into a
   subdirectory (`/tmp/src -> repo/src`), is named by its real path below the root when
-  the walk keys the file by that name, and refused as outside the repository otherwise),
-  so the evidence and the binding it is compared with are the same text under the same
-  key:
-  - a symbol the files do not define is refused, and nothing of the call is written;
+  the walk keys the file by that name, and refused as outside the repository otherwise).
+  It is read only when the walk reads it (`why_not_indexed`, the one rule the walk and
+  the daemon also follow): not under a linked or excluded directory, not excluded itself,
+  at most 1.5 MB, and spelled as its directory lists it, so on a case-insensitive
+  filesystem `SRC/rate.py` does not stand for `src/rate.py`. The evidence and the binding
+  it is compared with are then the same text under the same key:
+  - a symbol the files do not define, or one in a file the walk does not read, is
+    refused with the reason, and nothing of the call is written;
   - a symbol the feature does not own is attached (`bind.attach`);
   - a symbol the feature owns is refreshed (`bind.refresh`) when its code changed since
     the hand-off: its hashes on disk differ from the binding's, or a binding op on it

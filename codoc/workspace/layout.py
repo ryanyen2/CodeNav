@@ -7,7 +7,9 @@ and can be deleted.
 
 Primitives: ``atomic_write`` (tmp file, then rename), ``read_json`` (a missing
 or corrupt file degrades to the caller's default), ``locked`` (an exclusive
-``flock`` for a read-modify-write), and ``find_codoc_dir``.
+``flock`` for a read-modify-write), ``take_flock`` (the same lock on an open
+file, kept as long as the caller keeps the file open: the daemon's on
+``watch.pid``), and ``find_codoc_dir``.
 """
 from __future__ import annotations
 
@@ -47,7 +49,7 @@ GRAPH_CACHE = "cache/graph.json"  # the code graph
 
 # Other local state.
 HUB_PRS = "cache/hub-prs.json"    # hand-off → pull-request branch, kept by the hub
-PIDFILE = "watch.pid"             # the daemon's pid
+PIDFILE = "watch.pid"             # the daemon holds a lock on it and writes its pid in it
 APPLIER_LOCK = "applier.lock"     # held for one apply-and-publish turn
 SERVE_LOCK = "serve.lock"         # the hub that owns this checkout
 
@@ -149,19 +151,26 @@ def locked(path: str | Path, timeout: float | None = None):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
     try:
-        if timeout is None:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        else:
-            deadline = time.monotonic() + timeout
-            while True:
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError(f"could not lock {path} within {timeout}s") from None
-                    time.sleep(0.01)
+        take_flock(fd, path, timeout)
         yield
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
+
+
+def take_flock(fd: int, path: str | Path, timeout: float | None = None) -> None:
+    """Take an exclusive ``flock`` on the open file *fd* (*path* names it in
+    the error). With a *timeout*, raises ``TimeoutError`` instead of waiting
+    past it."""
+    if timeout is None:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"could not lock {path} within {timeout}s") from None
+            time.sleep(0.01)
