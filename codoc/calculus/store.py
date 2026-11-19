@@ -109,8 +109,8 @@ class Watermarks:
     handoff: dict = field(default_factory=dict)     # Frontier
     realized: dict = field(default_factory=dict)    # Frontier
     handoffs: list[OpId] = field(default_factory=list)   # hand-off op ids, oldest first
-    # When the code under this feature last moved (a detach, or a refresh that
-    # changed the hashes: `ops.moved_code`), and when a realization last settled it. Drift is
+    # When the code under this feature last moved (a detach, or new hashes on a
+    # binding it already had: `ops.moved_code`), and when a realization last settled it. Drift is
     # "the code moved and nobody has looked at the prose since": these two
     # clocks and the ones on the segments and marks make it a comparison of
     # state, so a snapshot can fold the ops away.

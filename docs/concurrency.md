@@ -838,4 +838,13 @@ It adopts each new projection block by block.
 - A marker op per commit, to scrub the timeline by commit.
 - An exact snapshot cut. The cut is at the oldest op of a feature with an open plan,
   which can be earlier than the oldest op the verdict needs.
+- Keeping a hand-off through a fold when its heading was made prose before the fold.
+  The snapshot's `feature.handoff` then conflicts `no_feature`, so turning the block back
+  into a heading after the fold shows it as not queued.
+- Binding a file reached through a symlink outside the repository that points into a
+  subdirectory of it (`/tmp/src -> repo/src`). Such a path is refused as outside the
+  repository; a link to the repository root itself is accepted.
+- Ranks from writers other than codoc's clients. `rank.valid` refuses a pinned rank that
+  `rank.between` cannot produce (for example one ending in the zero digit), so a block
+  added with such a rank is a `malformed` conflict.
 

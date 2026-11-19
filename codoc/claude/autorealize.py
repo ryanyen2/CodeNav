@@ -178,6 +178,7 @@ def auto_realizer(root_dir: str, codoc_dir: str, *, clock=time.time, printer=pri
                         tried.add(d)
                         given_up.append(d)
                 if given_up:
+                    streak, wait_until = 0, 0.0     # a hand-off queued next starts on the next tick
                     printer(f"auto-realize: {MAX_FAILED_PASSES} passes in a row failed on "
                             f"{', '.join('d:' + d for d in given_up)} (the last exited {proc.returncode}); "
                             "not retrying until the daemon restarts")
