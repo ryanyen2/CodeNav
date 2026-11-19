@@ -71,7 +71,7 @@ def test_reflect_attaches_and_repairs_and_closes_the_queue(tmp_path, monkeypatch
     me = next(e for e in ctx["subtree"] if e["id"] == client_id)
     assert me["blocks"] and "written_by" in me and "phase" not in me
     from codoc.workspace.epoch import write_activity
-    write_activity(cd, {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": []})   # the agent's turn
+    write_activity(cd, {"version": 1, "epoch": {"id": "ep-1", "open": True}})   # the agent's turn
     res = tools.reflect(str(cd), ops=[
         {"kind": "attach", "feature_id": client_id, "bindings": ["net/client.py::Client.retry"]},
         {"kind": "amend", "feature_id": client_id, "blocks": [{"id": me["blocks"][0]["id"], "text": "Sends requests, three times if need be."}]},

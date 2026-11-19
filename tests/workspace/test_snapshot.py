@@ -590,7 +590,7 @@ def test_no_fold_while_an_agents_turn_is_open(tmp_path):
     cd = tmp_path / ".codoc"
     ws = Workspace(cd)
     seed(ws)
-    write_activity(cd, {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": [], "cited": []})
+    write_activity(cd, {"version": 1, "epoch": {"id": "ep-1", "open": True}, "cited": []})
     with pytest.raises(TurnOpen):
         write_snapshot(cd, ws.store, ws.clock)
     ws.close()

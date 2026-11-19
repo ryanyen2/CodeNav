@@ -16,3 +16,8 @@ import os
 # logs a warning, and every first index does that; every other warning, and
 # every error, still prints. A LANCEDB_LOG the user set wins.
 os.environ.setdefault("LANCEDB_LOG", "warn,lance::dataset::write::insert=error")
+
+# cocoindex sends usage events (app created, app updated) to its maintainers
+# unless this is set. Indexing someone's code is not the place for that by
+# default; a value the user set wins.
+os.environ.setdefault("COCOINDEX_DISABLE_USAGE_TRACKING", "1")

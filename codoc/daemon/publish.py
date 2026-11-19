@@ -64,7 +64,7 @@ class Publisher:
     _specs: dict[str, tuple] = field(default_factory=dict)      # bid -> (key, export spec)
     _phases: dict[str, tuple] = field(default_factory=dict)     # fid -> (key, phase)
     _claims: dict[str, tuple] = field(default_factory=dict)     # fid -> (key, claims)
-    _written: tuple | None = None                               # (store.pos, lease fresh)
+    _written: tuple | None = None                               # (store.pos, lease fresh, language)
 
     # ── cache keys ─────────────────────────────────────────────────────────
     @staticmethod
@@ -220,12 +220,21 @@ def store_state(store: Store, phases: dict[str, str]) -> tuple[str, int, str]:
 def write_status(codoc_dir: str | Path, store: Store, *, phases: dict[str, str] | None = None,
                  detail: str = "") -> dict:
     """Derive the workspace state and write it. A fresh realizing lease is
-    left untouched: rewriting the file would renew a lease this call only
+    left as it is: rewriting the file would renew a lease this call only
     checked, and a pass that died would hold it for as long as anything
-    published."""
+    published. Only a changed language is written into it, with the file's
+    old mtime put back, so the page shows the language the daemon writes in
+    during a build without renewing the lease."""
     path = Path(codoc_dir) / STATUS
     if realizing_is_fresh(codoc_dir):
-        return read_status(codoc_dir)
+        d = read_status(codoc_dir)
+        lang = workspace_doc_language(codoc_dir).code
+        if d.get("doc_language") != lang:
+            st = path.stat()
+            atomic_write(path, json.dumps({**d, "doc_language": lang}))
+            os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+            d["doc_language"] = lang
+        return d
     phases = phases if phases is not None else {h.id: phase(store, h.id) for h in store.headings()}
     state, pending, said = store_state(store, phases)
     d = {"version": 2, "state": state, "pending": pending, "detail": detail or said, "head": store.pos,

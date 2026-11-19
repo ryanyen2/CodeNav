@@ -375,7 +375,7 @@ def test_new_code_a_daemonless_turn_wrote_binds_and_settles_when_the_turn_ends(t
     ho = handoff(ws, "h1", actor=H)
     ws.close()
     (tmp_path / "c.py").write_text("def send():\n    return 1\n\n\ndef retry_twice():\n    return send()\n")
-    write_activity(cd, {"version": 1, "epoch": {"id": "ep-s", "open": True}, "touched": ["c.py"], "cited": []})
+    write_activity(cd, {"version": 1, "epoch": {"id": "ep-s", "open": True}, "cited": []})
     try:
         r = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::retry_twice"]}],
                           caused_by=f"d:{ho.id}", root_dir=str(tmp_path))

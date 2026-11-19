@@ -119,7 +119,7 @@ def test_a_stopped_pass_over_a_merged_handoff_still_cites_it_when_it_added_code(
 def test_open_epoch_holds_code_until_it_closes(tmp_path):
     d, calls = make(tmp_path, [ChangeSet(modified=[ChunkRef("c.py::send", "f3", "t1")])])
     act = d.codoc_dir / "activity.json"
-    write_activity(d.codoc_dir, {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": ["c.py"]})
+    write_activity(d.codoc_dir, {"version": 1, "epoch": {"id": "ep-1", "open": True}})
     assert "opened" in d.process_batch([str(act)])
     (d.root / "c.py").write_text("x")
     assert "deferring" in d.process_batch([str(d.root / "c.py")]) and calls == []
@@ -131,12 +131,12 @@ def test_open_epoch_holds_code_until_it_closes(tmp_path):
 def test_a_daemon_started_during_an_agent_turn_reflects_the_turn_when_it_closes(tmp_path):
     """The window reloads (the extension stops its daemon and starts a new
     one) while a coding agent is mid-turn. The new daemon reads the open epoch
-    at its first batch, so the stop hook's close runs the pass over every file
-    the turn touched, and the hand-off it built settles."""
+    at its first batch, so the stop hook's close runs the pass over every code
+    file changed since the index was last updated, and the hand-off it built settles."""
     from codoc.calculus.derive import queued
     d, calls = make(tmp_path, [])
     handoff(d.ws, "h1", actor="human:local")
-    write_activity(d.codoc_dir, {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": ["c.py"]})
+    write_activity(d.codoc_dir, {"version": 1, "epoch": {"id": "ep-1", "open": True}})
     d.process_batch([str(d.codoc_dir / "activity.json")])
     d.ws.close()
 
@@ -219,6 +219,27 @@ def test_status_names_the_language_the_daemon_writes_in(tmp_path, monkeypatch):
     monkeypatch.setenv("CODOC_DOC_LANGUAGE", "ja")
     d.process_batch([])
     assert read_status(d.codoc_dir)["doc_language"] == "ja"
+
+
+def test_a_language_change_during_a_build_reaches_the_status_without_renewing_the_lease(tmp_path):
+    """While a realize pass holds the lease the status is left as it is, but
+    for the language, which the page must show as the daemon writes it. The
+    file keeps its old mtime, so the lease is not renewed."""
+    from codoc.daemon.publish import read_status, write_realizing
+    from codoc.workspace.config import write_config
+    import time
+    d, _ = make(tmp_path, [])
+    handoff(d.ws, "h1", actor="human:local")                           # a queue for the pass to build
+    d.process_batch([])
+    write_realizing(d.codoc_dir, pid=os.getpid(), owner="other")       # a live pass holds the lease
+    status = d.codoc_dir / "status.json"
+    lease_ns = time.time_ns() - 10_000_000_000                        # its last write, 10 s ago
+    os.utime(status, ns=(lease_ns, lease_ns))
+    write_config(d.codoc_dir, doc_language="ja")
+    d.process_batch([str(d.codoc_dir / "config.json")])
+    st = read_status(d.codoc_dir)
+    assert st["doc_language"] == "ja" and st["state"] == "realizing", st
+    assert status.stat().st_mtime_ns == lease_ns
 
 
 def test_the_daemons_passes_write_in_the_workspace_language(tmp_path):
@@ -646,7 +667,7 @@ def test_a_citing_attach_settles_nothing_while_an_agent_epoch_is_open_and_settle
     d, _ = make(tmp_path, [])
     ho = handoff(d.ws, "h1", actor="human:local")
     act = d.codoc_dir / "activity.json"
-    write_activity(d.codoc_dir, {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": []})
+    write_activity(d.codoc_dir, {"version": 1, "epoch": {"id": "ep-1", "open": True}})
     assert "opened" in d.process_batch([str(act)])
     I.submit(d.codoc_dir, "agent-claude-code", [Submission(
         cid="c1", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload={"symbol": "c.py::retry"},
@@ -768,7 +789,8 @@ def test_the_quiet_tick_runs_while_files_that_do_not_wake_the_daemon_keep_changi
 def test_a_daemon_started_after_a_turn_went_silent_reflects_that_turn(tmp_path):
     """A turn that touched c.py was killed without its hooks while no daemon
     ran. The daemon that starts later closes the stale epoch and runs the
-    pass over what that turn touched, as if it had seen the turn open."""
+    pass over every code file changed since the index was last updated, as if
+    it had seen the turn open."""
     import time
     root = tmp_path / "repo"
     (root / ".codoc").mkdir(parents=True)
@@ -777,7 +799,7 @@ def test_a_daemon_started_after_a_turn_went_silent_reflects_that_turn(tmp_path):
     def changeset(_root, _codoc, whole, _bindings):
         calls.append(whole)
         return ChangeSet(modified=[ChunkRef("c.py::send", "f2", "t1")])
-    write_activity(root / ".codoc", {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": ["c.py"]})
+    write_activity(root / ".codoc", {"version": 1, "epoch": {"id": "ep-1", "open": True}})
     old = time.time() - 2000
     os.utime(root / ".codoc" / "activity.json", (old, old))
     d = Daemon(root, changeset=changeset, propose=lambda *a, **k: [], printer=lambda *_: None)
@@ -795,21 +817,21 @@ def test_a_daemon_started_after_a_turn_closed_reflects_that_turn(tmp_path):
     def changeset(_root, _codoc, whole, _bindings):
         calls.append(whole)
         return ChangeSet(modified=[ChunkRef("c.py::send", "f2", "t1")])
-    write_activity(root / ".codoc", {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": ["c.py"]})
+    write_activity(root / ".codoc", {"version": 1, "epoch": {"id": "ep-1", "open": True}})
     close_epoch(root / ".codoc", "ep-1")
     d = Daemon(root, changeset=changeset, propose=lambda *a, **k: [], printer=lambda *_: None)
     assert "agent session closed" in d.process_batch([]) and calls == [False]
 
 
 def _a_turn_a_daemon_reflected(tmp_path):
-    """A repository whose last agent turn, which touched c.py, a daemon
+    """A repository whose last agent turn, which changed c.py, a daemon
     reflected when it closed; that daemon has since exited."""
     root = tmp_path / "repo"
     cd = root / ".codoc"
     cd.mkdir(parents=True)
     d = Daemon(root, changeset=lambda *a: ChangeSet(), propose=lambda *a, **k: [], printer=lambda *_: None)
     seed_loop(d.ws)
-    write_activity(cd, {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": ["c.py"]})
+    write_activity(cd, {"version": 1, "epoch": {"id": "ep-1", "open": True}})
     close_epoch(cd, "ep-1")
     assert "agent session closed" in d.process_batch([str(cd / "activity.json")])
     d.ws.close()

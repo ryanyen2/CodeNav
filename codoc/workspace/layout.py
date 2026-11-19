@@ -37,7 +37,7 @@ MEDIA_DIR = "media"               # files that image and pdf blocks reference
 # Channels into the applier.
 INBOX_DIR = "inbox"               # <client>.jsonl submissions and <client>.ack.jsonl answers
 OFFSETS = "offsets.json"          # under inbox/: how far each client's file has been drained
-ACTIVITY = "activity.json"        # the agent epoch and what the session touched
+ACTIVITY = "activity.json"        # the agent epoch: its lease, cited hand-offs, the last reflected close
 
 # Derived files the applier publishes.
 EXPORT = "tree.codoc"             # the Markdown export

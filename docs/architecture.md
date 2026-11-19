@@ -195,6 +195,7 @@ the file.
 | `CODOC_MODEL`, `CODOC_MODEL_FAST`, `CODOC_BASE_URL`, `CODOC_TEMPERATURE`, `CODOC_MAX_TOKENS`, `CODOC_REASONING_EFFORT`, `CODOC_VERBOSITY`, `CODOC_LLM_TIMEOUT` | `llm/provider.py` | The model and its call settings. |
 | `CODOC_LOG_PROMPTS` | `llm/provider.py` | `1` logs every prompt. |
 | `CODOC_INDEX_RETENTION_S` | `index/runner.py` | How long a superseded version of the chunk table is kept (60 seconds). |
+| `COCOINDEX_DISABLE_USAGE_TRACKING` | cocoindex | codoc sets it to `1` (`index/__init__.py`) so the indexer sends no usage events; a value set in the environment wins. |
 | `CODOC_DOC_LANGUAGE` | `doclang.py` | Overrides `doc_language` for one process. |
 | `CODOC_AGENT` | `mcp/tools.py` | The coding agent the MCP server writes as, `agent:<name>`; `claude-code` when unset. |
 | `CODOC_REALIZE_OWNER` | `daemon/publish.py` | Marks the realize pass that holds the lease, so its own agent does not stand down. |
