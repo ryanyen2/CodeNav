@@ -19,7 +19,7 @@ from codoc.calculus.doc import (
 )
 from codoc.calculus.ids import LOOP, OpId, is_human
 from codoc.calculus.inline_md import Span, render
-from codoc.calculus.ops import BIND_ATTACH, Op, in_frontier
+from codoc.calculus.ops import Op, in_frontier
 from codoc.calculus.store import Store
 from codoc.calculus.text import CITE, COMMENT, PROPOSALS, SUGGEST_DEL, SUGGEST_MARK, Mark, Seg, Text, struck_chars
 
@@ -120,23 +120,6 @@ def unvetted_block(store: Store, b: Block) -> bool:
     it out, and the lift pass leaves it alone, since its fetch would run on a
     stranger's address."""
     return b.added_plan in store.open_plans
-
-
-def unvetted_symbols(store: Store) -> set[str]:
-    """The symbols a still-open plan bound: its ``bind.attach`` took them (a
-    refresh of a binding the feature had does not count) and they are still
-    on that feature. Until the verdict such a binding is the plan's, so the
-    hub worker leaves its file out of the agent's write scope."""
-    out = set()
-    for plan in store.open_plans.values():
-        for oid in plan.ops:
-            o = store.by_id.get(oid)
-            if o is None or o.kind != BIND_ATTACH or o.conflict or "prev_fingerprint" in o.payload:
-                continue
-            cur = store.bindings.get(o.payload.get("symbol", ""))
-            if cur is not None and cur.feature == o.target.get("fid"):
-                out.add(cur.symbol)
-    return out
 
 
 def set_value(payload: dict) -> tuple[bool, object]:

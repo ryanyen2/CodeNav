@@ -4,7 +4,8 @@ A person's edits are already ops on the trunk, and their hand-off
 (``feature.handoff``) is written by the surface they used: the editor,
 ``codoc handoff``, an accept. Nothing here infers either.
 
-- ``directive``: the realize prompt item for one feature.
+- ``directive``: the realize prompt item for one feature, read from
+  ``rejected_view``: the document with every open plan rejected.
 - ``write_queue``: render every queued directive into ``realize.md``, the
   prompt the realizing session or ``codoc realize`` reads. Regenerable; the
   log is the truth.
@@ -18,16 +19,19 @@ A person's edits are already ops on the trunk, and their hand-off
 """
 from __future__ import annotations
 
+import copy
+import uuid
 from pathlib import Path
 
 from codoc import kinds as registry
 from codoc.calculus import ops as K
+from codoc.calculus.apply import apply
 from codoc.calculus.derive import (
     description, first_message, in_mode, ink, kind_words, live_spans, one_line, prose_blocks, queued, realized_content,
     removals, title, unvetted_block,
 )
 from codoc.calculus.doc import BUILTIN
-from codoc.calculus.ids import LOOP, is_human
+from codoc.calculus.ids import IMPORT, LOOP, is_human
 from codoc.calculus.ops import Op, in_frontier
 from codoc.calculus.store import Store, Watermarks, file_of
 from codoc.calculus.text import BOLD, COMMENT, LINK
@@ -38,7 +42,40 @@ from codoc.workspace.layout import REALIZE, atomic_write
 from codoc.workspace.roles import OWNER
 
 
+def rejected_view(store: Store) -> Store:
+    """The store as it would read with every open plan rejected: what the
+    directive, the queue and the hub's scope read a feature from. The
+    ``rejected`` read mode hides an open plan's words and JSON sets, but not a
+    move, a kind or level change or a split, so a contributor's open plan
+    could drop the owner's sentences out of a handed-off feature, or carry
+    another feature's comment into it, before any verdict. Here each open plan
+    is rejected by the applier's own ``plan.reject`` on a copy (the calculus is
+    pure), so every op it carries is taken back by the one undo a verdict
+    uses. The recorded ops are shared, since nothing mutates one once it is
+    recorded; the copy gets an id of its own, so no cache keyed on the store
+    mistakes it for the original. With no open plan holding an op, the store
+    itself."""
+    plans = [p.id for p in store.open_plans.values() if p.ops]
+    if not plans:
+        return store
+    # ponytail: a whole-store copy, about 0.3 s at 2,400 blocks, paid only while a
+    # feature is queued and an open plan holds an op; copy just the blocks the
+    # open plans reach if that shows up in a publish.
+    memo = {id(o): o for o in store.ops}
+    memo[id(store.policy)] = None               # the view judges no one
+    view = copy.deepcopy(store, memo)
+    view.id = uuid.uuid4().hex[:12]
+    at = store.ops[-1].at
+    for n, pid in enumerate(reversed(plans)):
+        # `import`: not a person, so no reader takes the reject's kills for anyone's removal.
+        apply(view, Op(id=f"view:{n}", at=at, actor=IMPORT, batch="", kind=K.PLAN_REJECT, target={"pid": pid}))
+    return view
+
+
 def render_queue(store: Store, root_dir: str = ".", doc_language=None, roles: Roles | None = None) -> str:
+    if not any(w.queued for w in store.watermarks_by_fid.values()):
+        return ""                               # nothing to render: skip the view's copy
+    store = rejected_view(store)
     items = []
     for fid in queued(store):
         w = store.watermarks(fid)
@@ -138,14 +175,16 @@ def _phantom_done(store: Store, fid: str, latest_handoff: str, removed: set[str]
 # ── the directive ────────────────────────────────────────────────────────────
 
 def directive(store: Store, fid: str, roles: Roles | None = None) -> str:
-    """The realize prompt item for a feature: its text in the all-rejected read
-    mode (an un-vetted plan never masquerades as the person's intent), what the
-    person changed since the last realization, Focus and Consult lines, and
-    the person's own words from the hand-off. Words it quotes inside a line
+    """The realize prompt item for a feature, read from ``rejected_view`` (an
+    un-vetted plan never masquerades as the person's intent, by its words or
+    by where it put blocks): its text, what the person changed since the last
+    realization, Focus and Consult lines, and the person's own words from the
+    hand-off. Words it quotes inside a line
     of its own go through ``one_line``, so none of them starts a line.
     ``roles`` is the workspace's role table, which voices each comment by its
     author (``_kind_lines``); without it, the defaults (a hub sign-in is a
     contributor)."""
+    store = rejected_view(store)
     b = store.blocks.get(fid)
     if b is None:
         return ""

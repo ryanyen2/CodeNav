@@ -654,13 +654,21 @@ has one on the field, which reads as the owner's value; with no plan open it rea
 field as it is. A reject's undo of a content set takes out that set and every rejected
 plan's set under it ([concurrency.md](concurrency.md#9-plans-and-verdicts)). `unvetted_block(b)`
 holds when an open plan added `b` (`added_plan`); such a block says nothing in the
-`rejected` mode, the directive
-leaves it out, and the lift pass leaves it alone. `unvetted_symbols()` are the symbols an
-open plan's `bind.attach` took and still holds; the hub worker leaves their files out of
-the agent's write scope until a verdict. The export, the directive, the kind
+`rejected` mode, and the lift pass leaves it alone. The export, the kind
 codecs and the lift read `rejected_content`, so a url a suggester proposed is not fetched
-and not put in front of the agent before a verdict, and the owner's block is shown and
-fetched as the owner left it meanwhile.
+before a verdict, and the owner's block is shown and fetched as the owner left it meanwhile.
+
+**The directive's read.** The `rejected` mode hides an open plan's words, JSON sets and
+added blocks, but not its layout or its code: a `block.move`, a `block.set` of `kind` or
+`level`, a `block.split`, a `bind.attach`. So everything that puts a feature in front of a
+building agent reads the document as it would be with every open plan rejected, structural
+ops included (`realize.rejected_view`): the directive, the queue in `realize.md`, and the
+hub worker's queue, title and write scope. The view is a copy of the store on which each
+open plan gets the applier's own `plan.reject`, so every op is taken back by the one undo
+a verdict uses; the store is not touched. Before any verdict, then, an open plan cannot
+move the owner's sentences out of a handed-off feature, carry another feature's comment
+into it, take a queued heading off the queue, or put a file into the agent's scope or take
+one out. With no open plan holding an op, the view is the store.
 
 ### Views
 
@@ -683,7 +691,7 @@ fetched as the owner left it meanwhile.
 | `queued()` | Queued features in document order, then queued dead headings (a removal still waiting) in id order. |
 | `in_flight()` | Queued features and every live feature an offered plan is about (its target's feature and the feature of each block its ops landed in): work under way that `edited` hides in the phase. |
 | `realized_content(b, realized)` | `b`'s content as its author last had it realized, as a kind's codec reads content: each Text field without the characters the author minted or killed outside `realized` (a person's, or an adopted plan's), in `rejected` mode; each JSON field as the first entry of `prior` outside `realized` by the author says it was, else as `rejected_content` has it. What `lower` compares against. |
-| `directive(f)` | The realize prompt item: title and `description` in `rejected` mode; `added:` from `sent` ink; `removed:` from `sent` removals; `Focus:` from a person's bold marks outside `realized`, their words in `rejected` mode; `Consult:` from links in the in-flow blocks, their labels in `rejected` mode (an `unvetted_block` adds none); each kind block's `consult` and `lower(realized_content, now)` (an `unvetted_block` adds nothing), or for an in-flow block of a kind this process has no code for, `<kind>: <words>` from its Text fields; `Author asked:` from the latest hand-off. Words quoted inside one of its lines go through `one_line`, so none starts a line. For a dead heading: a removal item, which deletes code only when the hand-off set `delete_code`. |
+| `directive(f)` | The realize prompt item, read from `rejected_view` (above): title and `description`; `added:` from `sent` ink; `removed:` from `sent` removals; `Focus:` from a person's bold marks outside `realized`; `Consult:` from links in the in-flow blocks; each kind block's `consult` and `lower(realized_content, now)`, or for an in-flow block of a kind this process has no code for, `<kind>: <words>` from its Text fields; `Author asked:` from the latest hand-off. Words quoted inside one of its lines go through `one_line`, so none starts a line. For a dead heading: a removal item, which deletes code only when the hand-off set `delete_code`. |
 | `history(f)` | Every op recorded against a block of `body(f)`, oldest first, conflicted ones included. Ops on blocks the feature no longer holds are left out. |
 | `history_window(n)` | The timeline: the applied ops among the last `n` (200 as published). Per op: `blocks`, the text of each Text field of each block it touched as it read right after the op (`{bid: {field: text}}`), its recorded inverse, the blocks it took off or put on the page, and the ranks, kinds and levels it displaced; plus what was true entering the window. Computed by un-applying the window backwards on clones of the live fields, by character identity. |
 | `dead_cites` | `cite` marks whose `symbol` no binding has. |

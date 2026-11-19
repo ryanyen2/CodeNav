@@ -25,10 +25,10 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from codoc.calculus.derive import queued, title, unvetted_symbols
+from codoc.calculus.derive import queued, title
 from codoc.daemon import client
 from codoc.index.git import BASE_TRAILER, HANDOFF_TRAILER
-from codoc.loops.realize import directive
+from codoc.loops.realize import directive, rejected_view
 from codoc.serve.realize_agent import make_sandboxed_agent
 from codoc.serve.sandbox import out_of_scope_changes
 from codoc.workspace import Roles
@@ -78,17 +78,21 @@ def pending(codoc_dir: str | Path, store, done: dict[str, str] | None = None) ->
     """The hand-offs this hub may build. A feature with no bindings is not one:
     there is no set of files to confine the agent to, and a contributor's
     accepted proposal must never be a licence to write anywhere. Those stay in
-    the queue for the maintainer, who builds them with a person present. A
-    binding an open plan made is the plan's until a verdict
-    (``unvetted_symbols``), so its file is not in the scope."""
+    the queue for the maintainer, who builds them with a person present. The
+    queue, the title, the directive and the scope are all read from
+    ``rejected_view``: an open plan's binding, kind change or move is the
+    plan's until a verdict, so it neither puts a file in the scope nor takes
+    one out."""
     done = read_ledger(codoc_dir) if done is None else done
-    planned = unvetted_symbols(store)
+    if not any(w.queued for w in store.watermarks_by_fid.values()):
+        return []                               # nothing queued: skip the view's copy
+    store = rejected_view(store)
     roles = Roles.load(codoc_dir)
     out = []
     for fid in queued(store):
         w = store.watermarks(fid)
         hid = w.handoffs[-1] if w.handoffs else ""
-        scope = sorted({b.file for b in store.bindings.values() if b.feature == fid and b.symbol not in planned})
+        scope = sorted({b.file for b in store.bindings.values() if b.feature == fid})
         answer = done.get(hid, "")
         if not hid or (answer and not answer.startswith(BUILT)) or not scope:
             continue

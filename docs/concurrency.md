@@ -390,15 +390,16 @@ the person who started a thread, an owner or a maintainer resolves or reopens it
 A comment needs no verdict, so a contributor's open thread is in every directive of its
 feature (section 10). It is voiced there as theirs, `Contributor <actor> commented on`,
 which the realize prompt reads as a suggestion that never overrides the description or
-the person's own words; only an owner's, a maintainer's or a machine's message is the
-person's note ([kinds.md](kinds.md#6-comments)).
+the person's own words (realize.txt's "Reading a hand-off" legend, which the hub's
+sandboxed agent is given too, `realize_agent.build_directive_prompt`); only an owner's,
+a maintainer's or a machine's message is the person's note ([kinds.md](kinds.md#6-comments)).
 
 - A suggester's `block.merge` or `block.delete` cannot ride in a plan, so it is refused.
 - A suggester's `bind.*` op is refused, tagged or not. An attach applies at once, and the
   hub worker confines its agent to the feature's bound files, so it would widen what the
-  agent may edit before any verdict. The editor never sends one. The worker also leaves
-  out a binding any open plan made (`derive.unvetted_symbols`), since a machine's plan
-  may still carry an attach.
+  agent may edit before any verdict. The editor never sends one. The worker reads the
+  scope with every open plan rejected (section 10), so a binding a machine's open plan
+  made is not in it.
 - The check runs once, when the op arrives, and the answer is recorded on the op: a
   refused op is stored with `conflict: "authority"`.
 - Replay does not ask again. A role changed later never removes what someone already
@@ -687,6 +688,14 @@ removed. The paragraph reads `Retries once.`
 - The directive (`loops/realize.directive`) quotes every open comment thread of the
   feature, each message voiced by its author's role: a contributor's as their suggestion,
   never as the person's note (section 7).
+- The directive, the queue in `realize.md`, and the hub worker's queue, title and write
+  scope read the document as it would be with every open plan rejected, structural ops
+  included (`realize.rejected_view`: each open plan rejected by the applier's own
+  `plan.reject` on a copy of the store, [model.md](model.md#read-modes)). Neither the
+  worker nor the queue waits for verdicts, so an open plan's move, kind or level change,
+  split or attach would otherwise reach a building agent as the owner's text or scope:
+  the owner's sentence moved out of the feature, another feature's comment moved into it
+  and voiced as the owner's note, a queued heading made prose and so dropped.
 - `feature.realized` moves the `realized` frontier. It conflicts `nothing_queued` when no
   hand-off is waiting.
 - The applier writes `feature.realized` as `loop`, and only on evidence: a feature

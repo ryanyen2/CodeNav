@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 from typing import Callable
 
+from codoc.llm.prompt import load_prompt
 from codoc.serve import sandbox
 from codoc.serve.consult import consult_url_allowed
 
@@ -88,11 +89,23 @@ def _default_run_capture(argv, cwd) -> str:
     return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, check=False).stdout
 
 
+def reading_a_handoff() -> str:
+    """The "Reading a hand-off" section of realize.txt: what each line of a
+    directive means, a contributor's comment being a suggestion that never
+    overrides the person's words among them. The one template says it, for the
+    local session and the hub's agent alike, which sees nothing else of it
+    (the rest is about tools and a queue file the sandbox does not have)."""
+    t = load_prompt("realize")
+    start = t.index("## Reading a hand-off")
+    return t[start:t.index("\n## ", start)].strip()
+
+
 def build_directive_prompt(directive: dict, scope) -> str:
-    """The prompt the sandboxed agent implements: the directive text and a note
-    naming the files it may edit. The tool policy enforces the same scope."""
+    """The prompt the sandboxed agent implements: how to read a hand-off, the
+    directive text, and a note naming the files it may edit. The tool policy
+    enforces the same scope."""
     text = (directive.get("text") or "").strip() or "Implement the requested change."
-    lines = [text, ""]
+    lines = [reading_a_handoff(), "", "## Hand-off", "", text, ""]
     if scope:
         lines.append("Edit only these files: " + ", ".join(scope) + ".")
     lines.append("You may not run shell commands, read secrets, or edit CI/settings/"
