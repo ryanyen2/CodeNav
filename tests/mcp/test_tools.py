@@ -456,6 +456,36 @@ def test_a_binding_is_keyed_by_the_file_as_the_index_names_it(tmp_path):
     assert sorted(st.bindings) == ["c.py::retry", "c.py::send"]
 
 
+def test_a_binding_names_a_file_as_the_index_walk_does(tmp_path):
+    """The index's walk names a linked file by its link and does not enter a
+    linked directory. A binding's file is put the same way, lexically and never
+    through a symlink, so an agent can name every key the index holds and only
+    those."""
+    import json
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    from codoc.index.app import canonical_file, code_on_disk
+    (tmp_path / "real.py").write_text("def f():\n    return 1\n")
+    os.symlink("real.py", tmp_path / "link.py")
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "mod.py").write_text("def g():\n    return 2\n")
+    os.symlink("pkg", tmp_path / "pkg_link")
+    assert {canonical_file(tmp_path, f) for f in ("link.py", "./link.py", "pkg/../link.py",
+                                                  str(tmp_path / "link.py"))} == {"link.py"}
+    assert canonical_file(tmp_path, "../elsewhere.py") is None
+    walk = subprocess.run(
+        [sys.executable, "-c", "import json, sys; from codoc.index.changes import compute_changeset; "
+         "print(json.dumps(sorted(c.symbol for c in compute_changeset(sys.argv[1], sys.argv[1] + '/.codoc').added)))",
+         str(tmp_path)], capture_output=True, text=True, timeout=120,
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])})
+    assert walk.returncode == 0, walk.stderr
+    named = {canonical_file(tmp_path, f) for f in ("real.py", "link.py", "pkg/mod.py", "pkg_link/mod.py")}
+    assert sorted(code_on_disk(tmp_path, named)) == json.loads(walk.stdout) == [
+        "link.py::f", "pkg/mod.py::g", "real.py::f"]
+
+
 def test_a_plan_reports_no_build_so_it_refreshes_nothing(tmp_path):
     """`codoc_propose` describes code not yet written: an owned symbol whose
     code changed is not refreshed under its plan, which would conflict
@@ -511,3 +541,25 @@ def test_the_agent_is_claude_code_unless_codoc_agent_names_another(monkeypatch):
     with pytest.raises(SystemExit, match="CODOC_AGENT"):
         server.main()
     assert actor_for("agent-../Cursor") is None
+
+
+def test_an_unbindable_symbol_is_refused_with_the_reason(tmp_path):
+    """A symbol in a file the index excludes (tests/ by default) is defined but
+    cannot be bound, and the refusal says so; a symbol no file defines is
+    refused as undefined."""
+    cd, ws = workspace(tmp_path)
+    ws.close()
+    (tmp_path / "c.py").write_text("def send():\n    return 1\n")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_lists.py").write_text("def test_natural_list_conjunction():\n    pass\n")
+    try:
+        excluded = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1",
+                                                "bindings": ["tests/test_lists.py::test_natural_list_conjunction"]}],
+                                 root_dir=str(tmp_path))
+        absent = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::nope"]}],
+                               root_dir=str(tmp_path))
+    finally:
+        client.release(cd)
+    assert not excluded["ok"] and "is in a file codoc does not index (index_exclude in .codoc/config.json" in excluded["error"]
+    assert "does not define" not in excluded["error"], excluded
+    assert not absent["ok"] and "the code does not define c.py::nope" in absent["error"], absent

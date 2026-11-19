@@ -35,6 +35,10 @@ from codoc.workspace.layout import CODOC_DIR, atomic_write
 # After a failed pass the next waits this long from when it ended, doubled for
 # each failure in a row, up to an hour.
 FAILED_BACKOFF_S = 60.0
+# After this many failed passes in a row, the hand-offs they were started for
+# are left alone until a new hand-off is queued or the daemon restarts: a pass
+# that fails after spending (an error result, the turn limit) spends again.
+MAX_FAILED_PASSES = 3
 # Where a pass's child records when it ended: the daemon may notice the exit
 # long after it happened, and the back-off counts from the exit.
 PASS_ENDED = "cache/realize-ended.json"
@@ -127,7 +131,7 @@ def _ended(codoc_dir: str, pid: int) -> float | None:
         return None
 
 
-def auto_realizer(root_dir: str, codoc_dir: str, *, clock=time.time):
+def auto_realizer(root_dir: str, codoc_dir: str, *, clock=time.time, printer=print):
     """A callable for ``Daemon(after_batch=…)``. After each batch it starts a
     pass when ``realize.md`` holds a hand-off no finished pass was started for,
     the pass this started last has ended, no other pass holds a fresh
@@ -139,9 +143,11 @@ def auto_realizer(root_dir: str, codoc_dir: str, *, clock=time.time):
     nothing, and its own Stop hook wakes the daemon the moment it ends. A pass
     that failed (a nonzero exit, such as no login or a rate limit) leaves its
     hand-offs to be tried again :data:`FAILED_BACKOFF_S` after it ended, doubled
-    for each failure in a row. The daemon's periodic tick runs this between
-    file events, so the retry does not wait for one. ``clock`` is wall time,
-    as the child records it."""
+    for each failure in a row. After :data:`MAX_FAILED_PASSES` failures in a
+    row those hand-offs are counted as tried, and ``printer`` says so once: a
+    new hand-off starts a pass again, and so does a daemon restart. The
+    daemon's periodic tick runs this between file events, so the retry does
+    not wait for one. ``clock`` is wall time, as the child records it."""
     proc: subprocess.Popen | None = None
     tried: set[str] = set()           # hand-offs a pass that finished was started with
     started: list[str] = []
@@ -156,6 +162,12 @@ def auto_realizer(root_dir: str, codoc_dir: str, *, clock=time.time):
             if proc.returncode == 0:
                 tried.update(started)
                 failures = 0
+            elif failures + 1 >= MAX_FAILED_PASSES:
+                tried.update(started)
+                failures = 0
+                printer(f"auto-realize: {MAX_FAILED_PASSES} passes in a row failed (the last exited "
+                        f"{proc.returncode}), so {', '.join('d:' + d for d in started)} will not be retried "
+                        "until a new hand-off is queued or the daemon restarts")
             else:
                 failures += 1
                 ended = _ended(codoc_dir, proc.pid) or started_at

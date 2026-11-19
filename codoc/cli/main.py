@@ -200,7 +200,7 @@ def watch(root: str = ROOT,
     after_batch = None
     if auto_realize:
         from codoc.claude.autorealize import auto_realizer
-        after_batch = auto_realizer(root, str(cd))
+        after_batch = auto_realizer(root, str(cd), printer=typer.echo)
     Daemon(root, cd, printer=typer.echo, after_batch=after_batch).run()
 
 

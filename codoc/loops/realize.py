@@ -63,8 +63,12 @@ def write_queue(codoc_dir: str | Path, store: Store, root_dir: str = ".", doc_la
 def settle(ws: Workspace, res=None, *, sha: str = "") -> list[Op]:
     """Record ``feature.realized`` for each queued feature once an applied
     binding op since its latest hand-off cites that hand-off in
-    ``caused_by``, whoever wrote it: an agent's ``codoc_reflect``, or a
-    reflect pass that cited it. The op may bind any feature: a request built
+    ``caused_by``, whoever wrote it (an agent's ``codoc_reflect``, or a
+    reflect pass that cited it), on a symbol whose code moved since the
+    hand-off (``ops.moved_code``, by that op or an earlier one: a reflect
+    pass may take the change before the agent reports it). A citing op on
+    code that did not move records a review, not the build. The op may bind
+    any feature: a request built
     as a sub-feature binds the new node, and one that changed a symbol another
     feature owns (realize.txt allows it) binds that owner. An op under a plan
     counts once a verdict accepted it. A phantom has no bindings left to cite,
@@ -77,9 +81,10 @@ def settle(ws: Workspace, res=None, *, sha: str = "") -> list[Op]:
         if not w.handoffs:
             continue
         latest_handoff = w.handoffs[-1]
-        cites = [o for o in store.ops[store.position.get(latest_handoff, 0):]
-                 if o.caused_by == latest_handoff and o.kind.startswith("bind.") and o.conflict is None
-                 and _taken(store, o)]
+        since = [o for o in store.ops[store.position.get(latest_handoff, 0):]
+                 if o.conflict is None and o.kind.startswith("bind.") and _taken(store, o)]
+        moved = {o.payload.get("symbol") for o in since if K.moved_code(o.kind, o.payload)}
+        cites = [o for o in since if o.caused_by == latest_handoff and o.payload.get("symbol") in moved]
         if not cites and not (res and res.caused.get(fid) == latest_handoff
                               and _phantom_done(store, fid, latest_handoff, res.removed)):
             continue

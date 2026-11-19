@@ -154,6 +154,22 @@ class Op:
         )
 
 
+def moved_code(kind: str, payload: dict) -> bool:
+    """Whether an applied op, by its canonical payload, says the code under its
+    feature changed: a detach, an attach that took a symbol, or new hashes.
+    A refresh or an attach that sets the hashes a binding already had records
+    who reviewed the code, not a change to it, so it is not drift and not a
+    realization's evidence."""
+    if kind == BIND_DETACH:
+        return True
+    if kind not in (BIND_ATTACH, BIND_REFRESH):
+        return False
+    if kind == BIND_ATTACH and "prev_fingerprint" not in payload:
+        return True
+    return (payload.get("fingerprint", ""), payload.get("types_hash", "")) \
+        != (payload.get("prev_fingerprint", ""), payload.get("prev_types_hash", ""))
+
+
 def frontier_union(a: dict, b: dict) -> dict:
     """Per-session max: the monotone merge of two frontiers (spec I9)."""
     out = dict(a)

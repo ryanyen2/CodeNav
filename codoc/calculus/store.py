@@ -109,8 +109,8 @@ class Watermarks:
     handoff: dict = field(default_factory=dict)     # Frontier
     realized: dict = field(default_factory=dict)    # Frontier
     handoffs: list[OpId] = field(default_factory=list)   # hand-off op ids, oldest first
-    # When the code under this feature last moved (a `bind.refresh` or a
-    # `bind.detach`), and when a realization last settled it. Drift is
+    # When the code under this feature last moved (a detach, or a refresh that
+    # changed the hashes: `ops.moved_code`), and when a realization last settled it. Drift is
     # "the code moved and nobody has looked at the prose since": these two
     # clocks and the ones on the segments and marks make it a comparison of
     # state, so a snapshot can fold the ops away.
@@ -365,19 +365,27 @@ class Store:
             out.extend(mine)
         return out
 
-    def refeature(self, b: Block, prev_kind: str, entries: list[dict]) -> tuple[list[dict], list[dict]]:
+    def refeature(self, b: Block, prev_kind: str, symbols) -> tuple[list[dict], list[dict]]:
         """The one rule for a kind change, by ``block.set`` or a verdict's
         ``set`` step. A heading made another kind leaves as a delete does: its
-        bindings come off, for the record to keep. A live block made a heading
-        takes back ``entries``, what the record of the change it undoes kept:
-        only this block's, each whose symbol nobody owns now, plan or not. A
-        dead block made a heading (a reopen) owns no code, so it keeps them, as
-        a delete keeps what it detached, and its restore re-attaches them.
-        Returns ``(detached, attached)``."""
+        bindings come off and are kept on the block, marked ``set``, replacing
+        an older entry for the same symbol. A live block made a heading takes
+        back the named ``symbols`` it kept that way, each whose symbol nobody
+        owns now, with the hashes and setter it kept: the undo names which
+        symbols, never their values, so no payload sets them. A dead block made
+        a heading (a reopen) owns no code, so it keeps them, as a delete keeps
+        what it detached, and its restore re-attaches them. Returns
+        ``(detached, attached)``."""
         if prev_kind == HEADING and b.kind != HEADING:
-            return self.unbind(b.id), []
+            gone = self.unbind(b.id)
+            names = {e["symbol"] for e in gone}
+            b.detached = [*(d for d in b.detached if not (d.get("set") and d["symbol"] in names)),
+                          *({**e, "set": True} for e in gone)]
+            return gone, []
         if b.kind == HEADING and prev_kind != HEADING:
-            back = [e for e in entries or [] if e.get("fid") == b.id and e["symbol"] not in self.bindings]
+            want = set(symbols or ())
+            back = [{k: v for k, v in e.items() if k != "set"} for e in b.detached
+                    if e.get("set") and e["symbol"] in want and e["symbol"] not in self.bindings]
             if b.live:
                 self.reattach(back)
             else:

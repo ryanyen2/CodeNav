@@ -164,9 +164,10 @@ def _compile(codoc_dir: str, root_dir: str | None, store, ops: list[dict],
     the edits report as built.
 
     A binding's file is first put the way the index names it
-    (``index.app.canonical_file``: repo-relative POSIX, ``./``, ``..``, an
-    absolute path and a symlink resolved), so the compiler sees only keys a
-    reflect pass would produce, and a file outside the repository is refused."""
+    (``index.app.canonical_file``: repo-relative POSIX, ``./``, ``..`` and an
+    absolute path folded lexically, a linked file under its link's name), so
+    the compiler sees only keys a reflect pass would produce, and a file
+    outside the repository is refused."""
     from codoc.index.app import canonical_file, code_on_disk
     root = root_dir or Path(codoc_dir).parent
     ops = [dict(raw) if isinstance(raw, dict) else raw for raw in ops or []]
@@ -191,13 +192,26 @@ def _compile(codoc_dir: str, root_dir: str | None, store, ops: list[dict],
     for i, raw in enumerate(ops):
         missing = [s for s in binds.get(i, []) if s not in hashes]
         if missing:
-            return [], (f"ops[{i}] ({raw['kind']}): the code does not define {', '.join(missing)}. "
-                        "Bind only symbols the files hold now, in files the index reads.")
+            return [], f"ops[{i}] ({raw['kind']}): " + "; ".join(_unbindable(root, s) for s in missing)
         change = compiler.compile(raw)
         if change.refused:
             return [], f"ops[{i}] ({change.kind}): {change.refused}"
         changes.append(change)
     return changes, None
+
+
+def _unbindable(root, sym: str) -> str:
+    """Why ``sym`` cannot be bound: its file is code the index's excludes leave
+    out, or the file does not define it."""
+    from pathlib import PurePosixPath
+    from codoc.index.app import source_matcher
+    from codoc.index.lang import detect_language
+    file = sym.split("::")[0]
+    if ((Path(root) / file).is_file() and detect_language(file) is not None
+            and not source_matcher(Path(root).resolve()).is_file_included(PurePosixPath(file))):
+        return (f"{sym} is in a file codoc does not index (index_exclude in .codoc/config.json, or the root "
+                ".gitignore, covers it), so it cannot be bound")
+    return f"the code does not define {sym}; bind only symbols the files hold now"
 
 
 def _handoff(caused_by: str | None) -> str | None:

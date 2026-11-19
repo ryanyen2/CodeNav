@@ -65,8 +65,9 @@ def read_history(codoc_dir: str | Path, feature_id: str, limit: int = 20, *, ops
     A change is what a reader means by one: a gesture, a reflect pass, an
     amend, a plan's opening, a verdict. The writers give each one batch, so a
     row is a run of consecutive ops of one batch in the log, except that a
-    hand-off, a verdict or a realization is a row of its own. Each row says
-    when, who, the plan its ops carry, the hand-off they answer
+    hand-off, a verdict or a realization is a row of its own. Two rows can
+    share a batch, so a row carries none and is known only by its place. Each
+    row says when, who, the plan its ops carry, the hand-off they answer
     (``caused_by``) and a one-line ``summary`` of what they did. With ``ops`` a
     row also lists its ops, each with what it touched: ``text``, the words
     inserted or removed or a hand-off's ``asked``; ``symbol``, the code a
@@ -83,9 +84,8 @@ def read_history(codoc_dir: str | Path, feature_id: str, limit: int = 20, *, ops
         groups[-1].append(o)
     rows = []
     for group in groups[-limit:]:
-        batch = group[0].batch or group[0].id
         entries = [_op_entry(store, o) for o in group]
-        row = {"batch": batch, "at": group[0].at, "actor": ", ".join(dict.fromkeys(o.actor for o in group)),
+        row = {"at": group[0].at, "actor": ", ".join(dict.fromkeys(o.actor for o in group)),
                "summary": _summary(entries)}
         plans = {o.plan for o in group if o.plan}
         causes = {o.caused_by for o in group if o.caused_by}

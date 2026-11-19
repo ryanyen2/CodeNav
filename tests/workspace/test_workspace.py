@@ -689,6 +689,34 @@ def test_a_client_cannot_say_another_actor_set_a_bindings_hashes(tmp_path):
     ws.close()
 
 
+def test_undoing_a_kind_change_takes_the_bindings_back_as_the_block_kept_them(tmp_path):
+    """The undo of a heading made a paragraph names the symbols to take back;
+    their hashes and setter come from the block, so a client cannot say the
+    loop set them, and a fold keeps the same setter."""
+    from codoc.calculus.doc import HEADING
+    from codoc.workspace.snapshot import write_snapshot
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed_loop(ws)
+    ws.submit([{"kind": K.BIND_REFRESH, "target": {"fid": "h1"},
+                "payload": {"symbol": "c.py::send", "fingerprint": "f2", "types_hash": "t1"}}], actor="agent:claude-code")
+    ident = {"editor": H}
+    I.submit(cd, "editor", [Submission(cid="k1", kind=K.BLOCK_SET, target={"bid": "h1", "path": "kind"},
+                                       payload={"value": PARAGRAPH})])
+    ws.drain_inbox(identity=ident)
+    assert "c.py::send" not in ws.store.bindings
+    I.submit(cd, "editor", [Submission(cid="k2", kind=K.BLOCK_SET, target={"bid": "h1", "path": "kind"}, payload={
+        "value": HEADING, "level": 1, "bindings": [{"fid": "h1", "symbol": "c.py::send", "fingerprint": "f9",
+                                                    "types_hash": "t9", "set_by": "loop"}]})])
+    ws.drain_inbox(identity=ident)
+    back = ws.store.bindings["c.py::send"]
+    assert (back.fingerprint, back.types_hash, back.set_by) == ("f2", "t1", "agent:claude-code")
+    fp = ws.store.state_fingerprint()
+    assert write_snapshot(cd, ws.store, ws.clock)
+    ws.close()
+    assert Workspace(cd, readonly=True).store.state_fingerprint() == fp
+
+
 def test_a_contributor_cannot_dress_an_attach_as_a_loop_refresh(tmp_path):
     """A hub contributor's attach claims the loop set the hashes and carries a
     refresh's `prev_*`. It records the contributor as the setter, and rejecting

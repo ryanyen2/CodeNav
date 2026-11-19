@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import codecs
 import json
+import os
 import pathlib
 from typing import AsyncIterator
 
@@ -160,14 +161,20 @@ def file_chunks(file_str: str, raw: bytes) -> list[tuple]:
 
 
 def canonical_file(sourcedir: str | pathlib.Path, file: str) -> str | None:
-    """``file`` as the index names it: repo-relative POSIX, with ``.``,
-    ``..`` and symlinks resolved, whether it was given relative or absolute.
-    None when it lies outside the repository."""
-    root = pathlib.Path(sourcedir).resolve()
-    try:
-        return (root / file).resolve().relative_to(root).as_posix()
-    except (ValueError, OSError):
+    """``file`` as the index names it: repo-relative POSIX, with ``.`` and
+    ``..`` folded and an absolute path under the root made relative. It is
+    read lexically and never through a symlink, since the walk names a linked
+    file by its link. None when it lies outside the repository."""
+    if os.path.isabs(file):
+        root = pathlib.Path(sourcedir)
+        bases = {os.path.abspath(root), str(root.resolve())}      # the root as given, and as the walk resolves it
+        rels = [os.path.relpath(os.path.normpath(file), base) for base in bases]
+        rel = next((r for r in rels if pathlib.PurePath(r).parts[:1] != ("..",)), None)
+    else:
+        rel = os.path.normpath(file)
+    if rel is None or rel == "." or pathlib.PurePath(rel).parts[:1] == ("..",):
         return None
+    return pathlib.PurePath(rel).as_posix()
 
 
 def code_on_disk(sourcedir: str | pathlib.Path, files: set[str]) -> dict[str, tuple[str, str]]:
@@ -181,7 +188,12 @@ def code_on_disk(sourcedir: str | pathlib.Path, files: set[str]) -> dict[str, tu
     out: dict[str, tuple[str, str]] = {}
     for rel in files:
         path = root / rel
-        if detect_language(rel) is None or not matcher.is_file_included(pathlib.PurePosixPath(rel)):
+        # As the walk decides (`localfs.walk_dir` with this matcher): a file it
+        # reaches through no excluded or symlinked directory, a linked file
+        # included under its link's name.
+        dirs = pathlib.PurePosixPath(rel).parents[:-1]
+        if (detect_language(rel) is None or not matcher.is_file_included(pathlib.PurePosixPath(rel))
+                or not all(matcher.is_dir_included(d) for d in dirs) or not path.is_file()):
             continue
         try:
             if path.stat().st_size > _MAX_FILE_BYTES:

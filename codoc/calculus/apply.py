@@ -474,17 +474,17 @@ def _h_block_set(store: Store, op: Op, touched: set[str]):
         b.level = level_for(value, op.payload.get("level") or keep)
         canonical.update({"prev": prev_kind, "prev_level": prev_level, "level": b.level, "_structural": True})
         back: dict = {"value": prev_kind, "level": prev_level}
-        # The undo carries what this change took off and counts only what the
-        # block recorded losing, as `block.restore` does, so no payload, a
-        # plan's included, binds code the block never had.
-        known = {e["symbol"] for e in b.detached if e.get("set")}
-        detached, _ = store.refeature(b, prev_kind, [e for e in op.payload.get("bindings") or []
-                                                     if isinstance(e, dict) and e.get("symbol") in known])
+        # The undo names the symbols this change took off; what each was bound
+        # with comes from the block, as `block.restore` reads it, so no
+        # payload, a plan's included, binds code the block never had or says
+        # who set its hashes.
+        named = _symbols(op.payload.get("bindings"))
+        detached, _ = store.refeature(b, prev_kind, named)
         if detached:
-            canonical["detached"] = back["bindings"] = detached
-            b.detached = [*b.detached, *({**e, "set": True} for e in detached if e["symbol"] not in known)]
-        elif op.payload.get("bindings"):
-            canonical["bindings"] = op.payload["bindings"]
+            canonical["detached"] = detached
+            back["bindings"] = [e["symbol"] for e in detached]
+        elif named:
+            canonical["bindings"] = named
         inverse = [body(K.BLOCK_SET, {"bid": bid, "path": "kind"}, back)]
     elif path == "level":
         if b.kind not in LEVELLED:
@@ -515,6 +515,12 @@ def _h_block_set(store: Store, op: Op, touched: set[str]):
         inverse = [body(K.BLOCK_SET, {"bid": bid, "path": path}, {"unset": True} if absent else {"value": prev})]
     touched.add(bid)
     return canonical, inverse
+
+
+def _symbols(v) -> list[str]:
+    """The symbols a kind change's undo names: strings, or the ``symbol`` of
+    each entry."""
+    return [str(e.get("symbol") if isinstance(e, dict) else e) for e in v or [] if isinstance(e, (dict, str))]
 
 
 def _h_block_split(store: Store, op: Op, touched: set[str]):
@@ -744,8 +750,9 @@ def _h_bind_attach(store: Store, op: Op, touched: set[str]):
 
 def _set_by(op: Op) -> str:
     """Who set a binding's hashes: the op's actor, or, for an op that restores
-    a binding (an inverse, a snapshot), the actor its payload names."""
-    return op.payload.get("set_by") or op.actor
+    a binding (an inverse, a snapshot), the actor its payload names, even an
+    empty one, so a fold gives back exactly what the store held."""
+    return op.payload["set_by"] if "set_by" in op.payload else op.actor
 
 
 def _hashes(key: str, b: Binding) -> dict:
@@ -760,9 +767,9 @@ def _h_bind_detach(store: Store, op: Op, touched: set[str]):
     if prior is None or prior.feature != fid:
         raise Conflict("not_bound", f"{key} on {fid}")
     del store.bindings[key]
-    store.watermarks(fid).code_at = max(store.watermarks(fid).code_at, op.at)
     touched.add(fid)
     canonical = {**op.payload, "fingerprint": prior.fingerprint, "types_hash": prior.types_hash}
+    _code_moved(store, fid, op, canonical)
     return canonical, [body(K.BIND_ATTACH, {"fid": fid}, _hashes(key, prior))]
 
 
@@ -774,10 +781,18 @@ def _h_bind_refresh(store: Store, op: Op, touched: set[str]):
         raise Conflict("not_bound", f"{key} on {fid}")
     store.bindings[key] = replace(prior, fingerprint=op.payload.get("fingerprint", ""),
                                   types_hash=op.payload.get("types_hash", ""), set_by=_set_by(op))
-    store.watermarks(fid).code_at = max(store.watermarks(fid).code_at, op.at)
     touched.add(fid)
     canonical = {**op.payload, "prev_fingerprint": prior.fingerprint, "prev_types_hash": prior.types_hash}
+    _code_moved(store, fid, op, canonical)
     return canonical, [body(K.BIND_REFRESH, {"fid": fid}, _hashes(key, prior))]
+
+
+def _code_moved(store: Store, fid: str, op: Op, canonical: dict) -> None:
+    """Drift's clock: a detach or a refresh that changed the code under the
+    feature moves ``code_at`` (``ops.moved_code``). An attach does not: a
+    relocation is not drift."""
+    if K.moved_code(op.kind, canonical):
+        store.watermarks(fid).code_at = max(store.watermarks(fid).code_at, op.at)
 
 
 # ── plans ────────────────────────────────────────────────────────────────────

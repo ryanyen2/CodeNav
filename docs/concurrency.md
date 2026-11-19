@@ -624,7 +624,10 @@ removed. The paragraph reads `Retries once.`
   hand-off is waiting.
 - The applier writes `feature.realized` as `loop`, and only on evidence: a feature
   settles once an applied binding op since its latest hand-off cites that hand-off in
-  `caused_by`. The op may bind any feature: the request built as a sub-feature binds the
+  `caused_by`, on a symbol whose code moved since the hand-off (by that op or an earlier
+  one, `ops.moved_code`; a reflect pass may take the change before the agent reports it).
+  A citing op on code that did not move records a review, not the build. The op may bind
+  any feature: the request built as a sub-feature binds the
   new node, and a request that changed a symbol another feature owns binds that owner.
   An op under a plan counts once a verdict accepted it: an open plan may
   still be rejected. Only the record decides, never the actor or the timing. The
@@ -640,9 +643,11 @@ removed. The paragraph reads `Retries once.`
   any pass has indexed it, with or without a daemon, for any agent. The file is read
   through the one path the indexer reads it by (`index.app.file_chunks`: decoded by its
   byte-order mark, else as UTF-8 with undecodable bytes replaced, line endings kept), and
-  named as the index names it (`canonical_file`: repo-relative, with `./`, `..`, an
-  absolute path and a symlink resolved; a file outside the repository is refused), so the
-  evidence and the binding it is compared with are the same text under the same key:
+  named as the index's walk names it (`canonical_file`: repo-relative, with `./`, `..`
+  and an absolute path folded lexically; a linked file keeps its link's name, a file under
+  a linked or excluded directory is not read, since the walk enters neither; a file
+  outside the repository is refused), so the evidence and the binding it is compared with
+  are the same text under the same key:
   - a symbol the files do not define is refused, and nothing of the call is written;
   - a symbol the feature does not own is attached (`bind.attach`);
   - a symbol the feature owns is refreshed (`bind.refresh`) when its code changed since

@@ -235,3 +235,24 @@ def test_a_request_that_changed_a_symbol_another_feature_owns_settles(tmp_path):
               actor="agent:claude-code", caused_by=ho.id)
     done = settle(ws)
     assert [o.target["fid"] for o in done] == ["h1"] and queued(ws.store) == []
+
+
+def test_a_review_of_built_code_neither_drifts_the_feature_nor_settles_a_hand_off(tmp_path):
+    """A refresh that sets the hashes a binding already had records who
+    reviewed the code (`ops.moved_code`): it does not move `code_at`, so the
+    loop reviewing an agent's settled build later is not drift, and it is not
+    evidence that a hand-off was built."""
+    ws = Workspace(tmp_path / ".codoc"); seed(ws)                  # the loop bound c.py::send f1/t1
+    ho = handoff(ws, "h1", actor=H)
+    ws.submit([{"kind": K.BIND_REFRESH, "target": {"fid": "h1"},
+                "payload": {"symbol": "c.py::send", "fingerprint": "f2", "types_hash": "t1"}}],
+              actor="agent:claude-code", caused_by=ho.id)
+    assert len(settle(ws)) == 1 and phase(ws.store, "h1") == "synced"
+    reflect(ws, ChangeSet(modified=[ChunkRef("c.py::send", "f2", "t1", "def send(): ...")]), Graph(),
+            propose=lambda *a, **k: [])
+    assert ws.store.bindings["c.py::send"].set_by == "loop" and phase(ws.store, "h1") == "synced"
+    again = handoff(ws, "h1", actor=H)
+    ws.submit([{"kind": K.BIND_REFRESH, "target": {"fid": "h1"},
+                "payload": {"symbol": "c.py::send", "fingerprint": "f2", "types_hash": "t1"}}],
+              actor="agent:claude-code", caused_by=again.id)
+    assert settle(ws) == [] and queued(ws.store) == ["h1"]

@@ -531,3 +531,37 @@ def test_history_rows_are_changes_in_the_order_they_happened(tmp_path):
     rows = reads.read_history(cd, "h1", 3, ops=True)["batches"]
     assert [(r["actor"], r.get("plan")) for r in rows] == [("loop", pid), (H, None), ("loop", pid)]
     assert newest.id in [e["op"] for e in rows[-1]["ops"]] and rows[-1]["at"] > rows[-2]["at"] > rows[0]["at"]
+
+
+def test_auto_realize_gives_up_on_a_handoff_after_three_failed_passes(tmp_path, monkeypatch):
+    """A pass that fails after spending spends again: after three in a row the
+    hand-off is left alone, once said, until a new hand-off is queued."""
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+    from codoc.claude import autorealize as A
+    from codoc.claude import sdk_realize
+    cd = tmp_path / ".codoc"
+    cd.mkdir()
+    queue = cd / "realize.md"
+    queue.write_text("### ⟨d:s:1⟩ Retry\n")
+    started, said, real, now = [], [], subprocess.Popen, [0.0]
+
+    def fake_pass(argv, **kw):
+        started.append(real([sys.executable, "-c", "raise SystemExit(1)"]))
+        return started[-1]
+    monkeypatch.setattr(A.subprocess, "Popen", fake_pass)
+    monkeypatch.setattr(A, "find_claude", lambda: "/usr/bin/true")
+    monkeypatch.setattr(sdk_realize, "sdk_available", lambda: False)
+    run = A.auto_realizer(str(tmp_path), str(cd), clock=lambda: now[0], printer=said.append)
+    daemon = SimpleNamespace(state=SimpleNamespace(epoch_open=False))
+    for _ in range(6):
+        run(daemon)
+        for proc in started:
+            proc.wait()
+        now[0] += 3600.0                         # past any back-off
+    assert len(started) == A.MAX_FAILED_PASSES
+    assert len(said) == 1 and "3 passes in a row failed" in said[0] and "d:s:1" in said[0], said
+    queue.write_text("### ⟨d:s:1⟩ Retry\n\n### ⟨d:s:2⟩ Back-off\n")
+    run(daemon)
+    assert len(started) == A.MAX_FAILED_PASSES + 1

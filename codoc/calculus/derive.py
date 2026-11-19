@@ -512,7 +512,8 @@ def _drifted(store: Store, fid: str) -> bool:
     """Bound code moved and nobody has looked at the prose since.
 
     Three clocks, all on state: when the code under this feature last moved
-    (`bind.refresh` or `bind.detach`; an `attach` is a relocation, not drift),
+    (a detach, or a refresh that changed the hashes; an `attach` is a
+    relocation, not drift),
     when anybody last touched the prose, and when a realization last settled
     it."""
     w = store.watermarks(fid)

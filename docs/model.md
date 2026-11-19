@@ -49,7 +49,7 @@ Plan       := { id, actor,                  actor: who opened it
 Watermarks := { handoff: Frontier,          the ops the person has handed to the agent
                 realized: Frontier,         the ops a realization has settled
                 handoffs: OpId[],           the hand-off ops, oldest first; the last holds the person's words
-                code_at,                    clock of the newest bind.refresh or bind.detach on the feature
+                code_at,                    clock of the newest bind op that moved the feature's code (moved_code)
                 realized_at }               clock of the newest feature.realized
 
 OpBody     := { kind, target, payload }     what a client submits and what an inverse holds
@@ -88,7 +88,7 @@ Op         := { id, at, actor,              set by the applier; actor from the c
 | `dead` | The op that killed the block. Absent while it is live. |
 | `dead_actor`, `dead_at` | Who killed it and when. |
 | `dead_in` | The feature whose description it was removed from, read when it died. A block that dies with its heading records that heading; a block merged into its neighbour, or added by a plan that was rejected, records none, since no words were removed. `removed:` and the `edited` phase read it, so where the dead block sits later does not matter. |
-| `detached` | On a dead heading: the bindings it owned when it died, or that a reopen gave it back while dead. A restore re-attaches them. A heading made into another kind records them on its `block.set`, and adds an entry marked `set` here for each symbol, which a delete and a restore leave alone and which only grows. |
+| `detached` | On a dead heading: the bindings it owned when it died, or that a reopen gave it back while dead. A restore re-attaches them. A heading made into another kind records them on its `block.set` and keeps each here as an entry marked `set`, replacing an older entry for the same symbol; a delete and a restore leave those alone. Undoing the kind change takes back the symbols it names with the hashes and setter these entries hold. |
 | `prior` | `{field: [[op, value, plan], …]}`: for each JSON field, the author's `block.set`s that the feature's realization has not covered, oldest first, each with the value it replaced and its plan (`""` for a person's untagged set). A set by a person or under a plan is recorded; a machine's untagged set (a lift) is code already written and is not. Entries inside the feature's `realized` frontier are dropped at the next set. `realized_content` reads it. |
 | `void` | `{move: [rank, level, ranked_by]}`: moves of rejected plans that could not be put back, since the block had been ranked again, each with the place it found the block. An undo that would restore `ranked_by` to one of them goes on to its place ([concurrency.md](concurrency.md#9-plans-and-verdicts)). |
 
@@ -325,7 +325,7 @@ Target `{bid, path}`; `path` defaults to `text`.
 | op | target | wire payload | canonical payload adds | inverse |
 |---|---|---|---|---|
 | `block.add` | `bid` | `kind`, `level?`, `after: BlockId \| START` or `under: BlockId \| START`, `content`, `layout?` | `after`, `level`, `rank`; `layout` for a kind that is not builtin | `block.delete {ids: [bid]}` |
-| `block.set` | `bid`, `path` | `value`, or `unset: true` to remove a non-Text field; with `path = kind`, optional `level`, and `bindings` on an inverse | `prev`; for `kind` also `prev_level`, `level`, and `detached` when a heading becomes another kind | `block.set` to the previous value (with `bindings: detached`), or `unset` when the field was absent |
+| `block.set` | `bid`, `path` | `value`, or `unset: true` to remove a non-Text field; with `path = kind`, optional `level`, and `bindings` on an inverse: the symbols to take back | `prev`; for `kind` also `prev_level`, `level`, and `detached` when a heading becomes another kind | `block.set` to the previous value (with `bindings`, the detached symbols), or `unset` when the field was absent |
 | `block.split` | `bid`, `path` | `at: CharRef \| START`, `new: BlockId` | `new_first`, `rank`, `bid`, `path` | `block.merge {into: bid, bid: new}`, with `rejoin` for a heading |
 | `block.merge` | `into`, `bid`, `path` | none | `at` (the seam), `order`, `rank` of the dead block | `block.split {at, new: bid, rank, new_takes}` |
 | `block.move` | `bid` | `after: BlockId \| START` and `level_delta`, or `under: BlockId \| START` | `after`, `level_delta`, `range`, `prev: [[id, rank, level, ranked_by]]` | `block.move {restore: prev}` |
@@ -369,9 +369,10 @@ Target `{bid, path}`; `path` defaults to `text`.
   headings in the range, clamped.
 - **set.** A `kind` change away from heading ends the feature as a delete does: its
   bindings are removed in the same op and recorded as `detached`, and the block keeps each
-  symbol as a `detached` entry marked `set`. Its inverse carries them as `bindings` and
-  re-attaches each whose symbol the block marked and nobody owns now, under a plan too
-  (a suggester's ⌘Z), so no payload binds code the block never had. A verdict's `set`
+  as a `detached` entry marked `set`. Its inverse names the symbols as `bindings` and
+  re-attaches each that the block marked and nobody owns now, with the hashes and setter
+  the block kept, under a plan too (a suggester's ⌘Z). A payload names symbols only, so
+  none binds code the block never had or says who set its hashes. A verdict's `set`
   step that changes `kind` follows the same rule ([concurrency.md](concurrency.md#9-plans-and-verdicts)).
 - **delete.** A heading dies with its `body`; any other block dies alone. Descendant
   headings survive. The bindings of a killed heading are removed, kept on the block as
@@ -392,8 +393,12 @@ Target `{fid}`.
 | `bind.refresh` | `symbol`, `fingerprint`, `types_hash`; `set_by` when it restores in process (the inbox drops a client's) | the previous hashes | `bind.refresh` to them |
 
 `bind.attach` needs a live heading and takes the symbol from any other owner (I8).
-`bind.detach` and `bind.refresh` need `fid` to own the symbol, and set `code_at` to the
-op's clock. `bind.attach` does not: a relocation is not drift.
+`bind.detach` and `bind.refresh` need `fid` to own the symbol. An op **moves the code**
+(`ops.moved_code`, read off the canonical payload) when it is a detach, an attach that took
+the symbol, or an attach or refresh that changed the hashes; one that sets the hashes the
+binding already had records who reviewed the code and moves nothing. A detach or a refresh
+that moves the code sets `code_at` to the op's clock. `bind.attach` does not: a relocation
+is not drift.
 
 ### Plan and watermark ops
 

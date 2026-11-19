@@ -153,9 +153,11 @@ def _step(store: Store, me: Op, s: dict, touched: set[str], undo_of: str | None)
         out.update({"from": was, "to": now} if fwd else {"from": now, "to": was})
         if "kind" in keys:
             # A feature leaves or comes back as `block.set` has it. Undoing a
-            # plan's op takes back what its record kept (`bindings`); a reopen
-            # takes back what this step recorded as `detached`.
-            detached, attached = store.refeature(b, was["kind"], s.get("bindings") if fwd else s.get("detached"))
+            # plan's op takes back the symbols its record names (`bindings`); a
+            # reopen, the ones this step recorded as `detached`. What each was
+            # bound with comes from the block.
+            named = s.get("bindings") if fwd else s.get("detached")
+            detached, attached = store.refeature(b, was["kind"], [e["symbol"] for e in named or []])
             out.update({k: v for k, v in (("detached", detached), ("attached", attached)) if v})
         return [out]
     if do == "void":
