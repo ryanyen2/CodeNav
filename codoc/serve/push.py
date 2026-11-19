@@ -10,7 +10,7 @@ from pathlib import Path
 
 from codoc.workspace import inbox
 from codoc.workspace.layout import CONFIG, HISTORY, PROJECTION, STATUS
-from codoc.workspace.roles import NONE, Roles
+from codoc.workspace.roles import NONE, OWNER, Roles
 
 
 def _read(path: Path) -> str | None:
@@ -31,23 +31,20 @@ def _stamp(path: Path) -> tuple[float, int] | None:
 
 
 def status_message(codoc_dir: Path, actor: str = "") -> dict | None:
-    """The status the editor reads, plus the facts only the host knows: the
-    tree's language, who this viewer is (undo inverts their batches), what they
-    may write, and that the hub has no terminal to build in. A contributor's
-    edits ride as a plan of theirs, so the page must not offer them a verdict
-    or a hand-off on somebody else's."""
+    """The status the editor reads (the tree's language included, as the
+    daemon resolved it), plus the facts only the host knows: who this viewer
+    is (undo inverts their batches), what they may write, and that the hub has
+    no terminal to build in. A contributor's edits ride as a plan of theirs, so
+    the page must not offer them a verdict or a hand-off on somebody else's."""
     st = _read(codoc_dir / STATUS)
     if st is None:
         return None
     try:
         status = json.loads(st)
-        cfg = json.loads(_read(codoc_dir / CONFIG) or "{}")
     except ValueError:
         return None
-    from codoc.workspace.roles import OWNER
-    role = Roles.from_config(cfg).role(actor) if actor else OWNER
-    return {"kind": "status", "status": {**status, "doc_language": cfg.get("doc_language", "en"),
-                                         "actor": actor, "role": role, "terminal": False}}
+    role = Roles.load(codoc_dir).role(actor) if actor else OWNER
+    return {"kind": "status", "status": {**status, "actor": actor, "role": role, "terminal": False}}
 
 
 def history_message(codoc_dir: str | Path) -> dict | None:

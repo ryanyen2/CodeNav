@@ -5,8 +5,11 @@
     history.json      the timeline window: the last ops, each touched block's
                       text after them, and their recorded inverses
     realize.md        the queued directives, as the realizing agent reads them
-    status.json       {state, pending, detail, head, at, actor}: actor is the
-                      person at this machine, the one the editor writes as
+    status.json       {state, pending, detail, head, at, actor, doc_language}:
+                      actor is the person at this machine, the one the editor
+                      writes as; doc_language is the tag this process writes
+                      prose in (``workspace_doc_language``), which the editor
+                      and the hub show
 
 All derived, all regenerable, all written atomically. Nothing here is read
 back by the calculus. ``status.json`` keeps one input the store does not hold:
@@ -113,9 +116,11 @@ class Publisher:
         holds the realizing lease, every queued feature reads as being built.
         Nothing is written when neither the store nor the lease has moved since
         the last publish, unless ``force`` (a rebuild can change the tree
-        without changing the op count)."""
+        without changing the op count). A new language is a move: it changes
+        ``status.json`` and the queue."""
         fresh = realizing_is_fresh(self.codoc_dir)
-        stamp = (store.pos, fresh)
+        lang = workspace_doc_language(self.codoc_dir)
+        stamp = (store.pos, fresh, lang.code)
         if not force and stamp == self._written:
             return read_status(self.codoc_dir)
         realizing = set(queued(store)) if fresh else set()
@@ -129,7 +134,7 @@ class Publisher:
         path = self.codoc_dir / EXPORT
         if not path.exists() or path.read_text(encoding="utf-8") != text:
             atomic_write(path, text)
-        write_queue(self.codoc_dir, store, self.root_dir, workspace_doc_language(self.codoc_dir))
+        write_queue(self.codoc_dir, store, self.root_dir, lang)
         status = write_status(self.codoc_dir, store, phases=phases)
         self._written = stamp
         return status
@@ -224,7 +229,8 @@ def write_status(codoc_dir: str | Path, store: Store, *, phases: dict[str, str] 
     phases = phases if phases is not None else {h.id: phase(store, h.id) for h in store.headings()}
     state, pending, said = store_state(store, phases)
     d = {"version": 2, "state": state, "pending": pending, "detail": detail or said, "head": store.pos,
-         "features": len(phases), "at": time.time(), "actor": local_actor(Path(codoc_dir).parent)}
+         "features": len(phases), "at": time.time(), "actor": local_actor(Path(codoc_dir).parent),
+         "doc_language": workspace_doc_language(codoc_dir).code}
     atomic_write(path, json.dumps(d))
     return d
 

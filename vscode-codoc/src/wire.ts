@@ -17,8 +17,9 @@ import type { HistoryWindow } from './web/calc/window';
 export type HostToPage =
     /** `projection.json`. */
     | { kind: 'projection'; proj: Projection }
-    /** `status.json` plus the tree's language, whether the host has a terminal
-     *  (`terminal`: false on the hub), and on the hub the viewer's actor and role. */
+    /** `status.json` (the tree's language included, as the daemon resolved it), plus
+     *  whether the host has a terminal (`terminal`: false on the hub), and on the hub the
+     *  viewer's actor and role. */
     | { kind: 'status'; status: Record<string, unknown> }
     /** The daemon's answers to this client's submissions. */
     | { kind: 'acks'; acks: Ack[] }

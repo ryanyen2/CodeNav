@@ -159,7 +159,7 @@ def test_a_turn_that_opened_and_closed_while_a_batch_ran_cites_its_hand_off(tmp_
     ho = handoff(d.ws, "h1", actor="human:local")
     d.process_batch([])
     open_epoch(d.codoc_dir, "s2")
-    touch_epoch(d.codoc_dir, "c.py")
+    touch_epoch(d.codoc_dir)
     (d.root / "c.py").write_text("def send(): retry()\n")
     close_epoch(d.codoc_dir, "ep-s2")
     assert "closed" in d.process_batch([str(d.codoc_dir / "activity.json"), str(d.root / "c.py")])
@@ -167,6 +167,58 @@ def test_a_turn_that_opened_and_closed_while_a_batch_ran_cites_its_hand_off(tmp_
     assert [o.caused_by for o in d.ws.store.ops if o.kind == K.BIND_REFRESH] == [ho.id]
     assert queued(d.ws.store) == []
     assert "closed" not in d.process_batch([str(d.codoc_dir / "activity.json")])   # one close, reflected once
+
+
+def test_a_daemon_started_after_a_shell_only_turn_closed_reflects_that_turn(tmp_path):
+    """The turn changed code only through a shell, so the hooks named no
+    file, and it closed while no daemon ran. The next daemon's startup batch
+    runs the pass anyway, which reads what changed from the index and cites
+    the queued hand-off (concurrency.md, The daemon's batch, step 3)."""
+    root = tmp_path / "repo"
+    cd = root / ".codoc"
+    cd.mkdir(parents=True)
+    ws = Workspace(cd)
+    seed_loop(ws)
+    ho = handoff(ws, "h1", actor="human:local")
+    ws.close()
+    write_activity(cd, {"version": 1, "epoch": {"id": "ep-1", "open": True}})
+    (root / "c.py").write_text("def send(): retry()\n")
+    close_epoch(cd, "ep-1")
+    d = Daemon(root, changeset=lambda *a: ChangeSet(modified=[ChunkRef("c.py::send", "f9", "t1")]),
+               propose=lambda *a, **k: [], printer=lambda *_: None)
+    assert "reflect" in d.process_batch([])
+    assert [o.caused_by for o in d.ws.store.ops if o.kind == K.BIND_REFRESH] == [ho.id]
+
+
+def test_the_batch_a_close_record_wakes_does_nothing(tmp_path):
+    """The batch that reflects a close records it in activity.json, a file
+    that wakes the daemon, so one more batch starts; it runs no pass and says
+    nothing (concurrency.md, The daemon's batch)."""
+    d, calls = make(tmp_path, [])
+    act = d.codoc_dir / "activity.json"
+    write_activity(d.codoc_dir, {"version": 1, "epoch": {"id": "ep-1", "open": True}})
+    close_epoch(d.codoc_dir, "ep-1")
+    assert "closed" in d.process_batch([str(act)])
+    assert read_activity(d.codoc_dir)["reflected"] and d.wakes(None, str(act))
+    assert d.process_batch([str(act)]) == "" and calls == [False]
+
+
+def test_status_names_the_language_the_daemon_writes_in(tmp_path, monkeypatch):
+    """The editor and the hub show the language from status.json, so it is
+    the daemon's: a tag in config.json as `resolve` normalizes it, and the
+    environment's override. A change to config.json wakes the daemon and
+    republishes the status though no op moved."""
+    from codoc.daemon.publish import read_status
+    from codoc.workspace.config import write_config
+    d, _ = make(tmp_path, [])
+    d.process_batch([])
+    write_config(d.codoc_dir, doc_language="zh")
+    assert d.wakes(None, str(d.codoc_dir / "config.json"))
+    d.process_batch([str(d.codoc_dir / "config.json")])
+    assert read_status(d.codoc_dir)["doc_language"] == "zh-Hans"
+    monkeypatch.setenv("CODOC_DOC_LANGUAGE", "ja")
+    d.process_batch([])
+    assert read_status(d.codoc_dir)["doc_language"] == "ja"
 
 
 def test_the_daemons_passes_write_in_the_workspace_language(tmp_path):

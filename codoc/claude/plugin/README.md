@@ -5,7 +5,7 @@ works with its feature tree.
 
 | part | file | what it does |
 |---|---|---|
-| hooks | `hooks/hooks.json` | tell the codoc daemon when an agent session starts and ends and which files it touched, so the daemon reflects the session's code changes once, when it closes |
+| hooks | `hooks/hooks.json` | tell the codoc daemon when an agent session starts and ends, so the daemon reflects the session's code changes once, when it closes |
 | skill | `skills/codoc-intent/SKILL.md` | how to read and update the tree through the MCP tools |
 | commands | `commands/codoc/{realize,plan,ask}.md` | `/codoc:realize` builds the queued hand-offs, `/codoc:plan` proposes a change as tree edits, `/codoc:ask` answers a question in chat as a reading path over the tree |
 | MCP server | registered at Claude Code's local scope | the `codoc_*` tools |

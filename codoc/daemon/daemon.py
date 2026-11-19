@@ -12,15 +12,16 @@ Per debounced batch of filesystem events it does, in order:
 2. drain every client inbox into ops, warning once about an inbox file whose
    name maps to no actor;
 3. read the agent epoch (``activity.json``): while a coding agent's session is
-   open, changed code files are deferred, since the agent is mid-edit; when it
-   closes, or after ``EPOCH_STALE_SECONDS`` of silence, they and every file
-   the session touched go to step 4, and that pass cites every queued
-   hand-off; the close is then recorded as reflected in ``activity.json``, so
-   a daemon that starts later does not reflect it again;
-4. reflect the changed code files that are not deferred, citing the hand-offs
-   of step 1: every code file changed since the index was last updated, not
-   only those the batch saw change, and the change set a stopped pass left
-   (``with_pending``), which runs a pass even when no code file changed;
+   open, reflecting waits, since the agent is mid-edit; when it closes, or
+   after ``EPOCH_STALE_SECONDS`` of silence, step 4 runs a pass whatever
+   changed, and that pass cites every queued hand-off; the close is then
+   recorded as reflected in ``activity.json``, so a daemon that starts later
+   does not reflect it again;
+4. reflect, citing the hand-offs of step 1: every code file changed since the
+   index was last updated, not only those the batch saw change (a turn that
+   changed code through a shell names no file), and the change set a stopped
+   pass left (``with_pending``), which runs a pass even when no code file
+   changed;
 5. settle the hand-offs applied binding ops now cite, unless an epoch is open
    (``realize.settle_if_idle``); a reflect pass settles too;
 6. publish the derived files.
@@ -32,7 +33,7 @@ from __future__ import annotations
 
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 
@@ -46,10 +47,10 @@ from codoc.workspace import Roles, Workspace
 from codoc.workspace import inbox as I
 from codoc.workspace import log as L
 from codoc.workspace.epoch import (
-    EPOCH_STALE_SECONDS, close_epoch, epoch_age, epoch_touched_files, note_reflected, read_activity,
+    EPOCH_STALE_SECONDS, close_epoch, epoch_age, note_reflected, read_activity,
 )
-from codoc.workspace.layout import (ACTIVITY, APPLIER_LOCK, CODOC_DIR, GRAPH_CACHE, PENDING, atomic_write, locked,
-                                    read_json, write_json)
+from codoc.workspace.layout import (ACTIVITY, APPLIER_LOCK, CODOC_DIR, CONFIG, GRAPH_CACHE, PENDING, atomic_write,
+                                    locked, read_json, write_json)
 
 DEBOUNCE_MS = 600
 # This long after its last batch the daemon runs one with no paths, whatever
@@ -63,7 +64,6 @@ TICK_MS = 30_000
 @dataclass
 class DaemonState:
     epoch_open: bool = False
-    deferred: set[str] = field(default_factory=set)   # code files changed while the epoch was open
     reflected: str | None = None                       # the `ended_at` of the last epoch close reflected
 
 
@@ -121,15 +121,19 @@ class Daemon:
 
     def wakes(self, _change, path: str) -> bool:
         """Whether a filesystem event starts a batch: a code file the index
-        reads, ``activity.json``, a client's inbox file, a log file other than
+        reads, ``activity.json``, ``config.json`` (the roles, and the language
+        ``status.json`` names), a client's inbox file, a log file other than
         this daemon's own session (another writer, or git, changed the logs on
         disk), or its own session file when git took or replaced it (``git
         stash -u``, ``git clean``, a ``stash pop`` that puts it back). The
         daemon's own writes (its appends to its session file, the acks,
         ``offsets.json``, ``atomic_write``'s tmp files) never do, or every
-        batch would start the next."""
+        batch would start the next. The one exception is ``activity.json``:
+        the batch that reflects a close records it there (and closes a stale
+        epoch there), which starts one more batch, and that batch finds
+        nothing to do."""
         rp = Path(path).resolve()
-        if rp == (self.codoc_dir / ACTIVITY).resolve():
+        if rp in ((self.codoc_dir / ACTIVITY).resolve(), (self.codoc_dir / CONFIG).resolve()):
             return True
         if rp.suffix == ".jsonl" and rp.parent == I.inbox_dir(self.codoc_dir).resolve():
             return not rp.name.endswith(".ack.jsonl")
@@ -184,9 +188,9 @@ class Daemon:
         if done:
             notes.append(f"{len(done)} client op(s)")
         # 3. The agent epoch, read every batch, so a daemon started during a
-        # turn defers that turn's files and reflects them when it closes. The
-        # pass that runs because a session ended cites the queued hand-offs, as
-        # an agent's own `codoc_reflect` and a merged commit's trailer do.
+        # turn waits for it and reflects it when it closes. The pass that runs
+        # because a session ended cites the queued hand-offs, as an agent's own
+        # `codoc_reflect` and a merged commit's trailer do.
         under_epoch = False
         ep = read_activity(self.codoc_dir).get("epoch") or {}
         # A session killed without its hooks: close it, as its Stop hook would.
@@ -202,19 +206,20 @@ class Daemon:
             # A close: the epoch this daemon saw open is no longer open, or one
             # it never saw open closed after the last close reflected (a turn
             # can open and close while one batch runs, or while no daemon ran).
-            code |= self.state.deferred | set(epoch_touched_files(self.codoc_dir))
             self.state = DaemonState(reflected=ep.get("ended_at"))
             under_epoch = True
             notes.append("recovered a dead agent session" if stale else "agent session closed")
-        # 4. Reflect. A change set a stopped pass left runs a pass with no
-        # changed file, so the startup batch or the next tick applies it.
+        # 4. Reflect. The pass reads what changed from the index, not from
+        # `code`, so a close runs it even when no changed file woke this batch
+        # (a turn that changed code through a shell names none), and so does a
+        # change set a stopped pass left: the startup batch or the next tick
+        # applies it.
         if self.state.epoch_open:
             if code:
-                self.state.deferred |= code
                 notes.append(f"deferring {len(code)} file(s) for the open session")
             if whole:
                 notes.append("code not reflected: an agent session is open, and the first pass after it ends reflects it")
-        elif code or whole or (self.codoc_dir / PENDING).exists():
+        elif code or whole or under_epoch or (self.codoc_dir / PENDING).exists():
             notes.append(self.reflect(whole=whole, under_epoch=under_epoch, landed=landed))
         if under_epoch:
             note_reflected(self.codoc_dir, self.state.reflected)

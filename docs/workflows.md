@@ -114,7 +114,7 @@ pass caused by a hand edit cites nothing.
    code, so an attach is evidence only of code the build left there
    ([concurrency.md](concurrency.md#10-hand-off-and-realization)). Claude Code's hooks also keep the agent
    epoch open in `.codoc/activity.json` while a turn runs, and the daemon reflects the
-   deferred files with `caused_by` when the epoch closes. A commit whose `Codoc-Handoff`
+   code changed meanwhile with `caused_by` when the epoch closes. A commit whose `Codoc-Handoff`
    trailer names the hand-off and whose `Codoc-Base` trailer names a branch (the hub's
    pull requests carry both, the base being the branch the pull request targets) is
    reflected with `caused_by` when `HEAD` moves over it while `HEAD` is on that branch:
@@ -246,6 +246,9 @@ branches' files and the store is rebuilt from the union
 feature's title and description, and its rationales, in that language. An amend keeps the
 language of the description it changes, a block it adds included, so the loop does not
 leave a description half in one language (`doclang.prompt_directive` tells the model so).
+The daemon wakes on `config.json` and writes the tag it resolved (`CODOC_DOC_LANGUAGE`
+first, `zh` read as `zh-Hans`) into `status.json` as `doc_language`, which the editor and
+the hub show, so they never name a language the daemon is not writing in.
 `codoc translate` rewrites existing prose as `translator:<lang>`, one `Workspace.amend`
 per feature: on the trunk when machines wrote the feature, as one plan when a person wrote
 any of it, the feature has pending intent, or the translation would drop a citation, link

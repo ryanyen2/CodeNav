@@ -86,10 +86,11 @@ cloning.
 **Hooks** (`claude/hook.py`, events `session-start`, `user-prompt`, `pre-tool`,
 `post-tool`, `stop`, `session-end`):
 
-- Open the agent epoch in `activity.json` while a turn runs and record the files it
-  touched. The daemon defers those files and reflects them when the epoch closes, or after
-  900 seconds of silence (its quiet tick notices that with no event that wakes it), citing every
-  queued hand-off in `caused_by`. The editor and the
+- Open the agent epoch in `activity.json` while a turn runs, renewing its lease on each
+  tool call that names a file in the repository. The daemon defers reflecting while the
+  epoch is open and runs one pass when it closes, or after 900 seconds of silence (its quiet
+  tick notices that with no event that wakes it), over every code file changed since the
+  index was last updated, citing every queued hand-off in `caused_by`. The editor and the
   hub do not read the file: they learn that a feature is being built from its
   `realizing` phase in the projection.
 - Tell the session when hand-offs are queued in `realize.md`.

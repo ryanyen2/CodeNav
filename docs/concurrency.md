@@ -210,11 +210,13 @@ name. Ack files are trimmed to their newest 2000 lines when a session opens, and
 `offsets.json` keeps the applier from re-reading lines it has drained.
 
 **The daemon's batch.** File events are debounced (600 ms). A batch starts on a change to
-a code file the index reads, to `activity.json`, to a client's `inbox/<client>.jsonl`, to
-a file in `log/` other than the daemon's own session file, or to its own session file
-when git took or replaced it (`git stash -u`, `git clean`, a `stash pop` that puts it
-back). It never starts on the daemon's own writes (its appends to its session file, acks,
-`offsets.json`), so a batch does not start the next. 30 seconds after the last batch, a
+a code file the index reads, to `activity.json`, to `config.json`, to a client's
+`inbox/<client>.jsonl`, to a file in `log/` other than the daemon's own session file, or
+to its own session file when git took or replaced it (`git stash -u`, `git clean`, a
+`stash pop` that puts it back). It never starts on the daemon's own writes (its appends
+to its session file, acks, `offsets.json`), so a batch does not start the next, with one
+exception: the batch that reflects an agent's close records it in `activity.json` (step
+3), which starts one more batch, and that batch finds nothing to do. 30 seconds after the last batch, a
 batch runs anyway (`TICK_MS`), however many files that start none changed meanwhile, so
 the close of a stale agent epoch and an auto-realize retry do not wait for an edit. The
 daemon takes every file event and filters it itself: watchfiles' timeout runs out only
@@ -236,21 +238,23 @@ For each batch the daemon does, in order:
 3. Read the agent epoch from `activity.json`, every batch, so a daemon started during a
    turn knows it. While a coding agent's session is open, changed code files are
    deferred. When it closes, or after 900 seconds of silence (the daemon then closes it),
-   the deferred files and every file the session touched go to step 4, and that pass
-   cites every queued hand-off. A close is an epoch the daemon saw open that is open no
-   longer, or a closed epoch whose `ended_at` is not the last close reflected, which the
-   daemon never saw open: a turn can open and close while one batch runs, or while no
-   daemon runs (the Stop hook reflects no code). After the pass, the daemon records the
-   close's `ended_at` as `reflected` in `activity.json`, and a daemon starts from that
-   record, so a close is reflected once: a daemon that starts after a turn closed with
-   none running reflects that turn, and one that starts after a reflected close does not
-   reflect it again, so the code changed since (a hand edit, a `git pull`) cites nothing.
-   Every epoch has an id, and only a stop naming it closes it: a realize pass that runs
-   no hooks opens one under its own id and closes it when the pass ends.
-4. Reflect the changed code files that are not deferred: the loop's pass, which writes
-   ops as `loop` and cites the hand-offs step 1 noted. It covers every code file changed
-   since the index was last updated, not only those the batch saw change, so an edit
-   made while no daemon ran is reflected by the next pass. The pass updates the index
+   step 4 runs a pass whether or not a changed file woke the batch, and that pass cites
+   every queued hand-off: the pass reads what changed from the index, so code the turn
+   changed through a shell, which names no file, is reflected too. A close is an epoch
+   the daemon saw open that is open no longer, or a closed epoch whose `ended_at` is not
+   the last close reflected, which the daemon never saw open: a turn can open and close
+   while one batch runs, or while no daemon runs (the Stop hook reflects no code). After
+   the pass, the daemon records the close's `ended_at` as `reflected` in `activity.json`,
+   and a daemon starts from that record, so a close is reflected once: a daemon that
+   starts after a turn closed with none running reflects that turn, and one that starts
+   after a reflected close does not reflect it again, so the code changed since (a hand
+   edit, a `git pull`) cites nothing. Every epoch has an id, and only a stop naming it
+   closes it: a realize pass that runs no hooks opens one under its own id and closes it
+   when the pass ends.
+4. Reflect, unless an epoch is open: the loop's pass, which writes ops as `loop` and
+   cites the hand-offs step 1 noted. It covers every code file changed since the index
+   was last updated, not only those the batch saw change, so an edit made while no
+   daemon ran is reflected by the next pass. The pass updates the index
    before its model call, so it writes the change set it read, and the hand-offs whose
    trailers it cites (`landed`), to `cache/pending.json` before the call and deletes the
    file once it has applied. A file this codoc cannot read counts as empty. A pass that was stopped

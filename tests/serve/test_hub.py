@@ -118,9 +118,23 @@ def test_feed_sends_a_snapshot_then_only_changes_and_this_viewers_acks(tmp_path)
     inbox.ack(cd, "hub-other", "c9", None)
     got = feed.pending()
     assert got == [{"kind": "acks", "acks": [{"cid": "c1", "op": "", "conflict": "unknown_anchor"}]}]
-    (cd / "config.json").write_text(json.dumps({"doc_language": "ja"}))
+    status = json.loads((cd / "status.json").read_text())
+    (cd / "status.json").write_text(json.dumps({**status, "doc_language": "ja"}))   # as the daemon republishes it
     got = feed.pending()
     assert [m["kind"] for m in got] == ["status"] and got[0]["status"]["doc_language"] == "ja"
+
+
+def test_the_hub_shows_the_language_the_daemon_resolved(tmp_path):
+    """The status message carries status.json's tag, never config.json's raw
+    one, and a config.json the hub cannot parse does not drop the message."""
+    from codoc.serve.push import status_message
+    cd = workspace(tmp_path)
+    status = json.loads((cd / "status.json").read_text())
+    (cd / "status.json").write_text(json.dumps({**status, "doc_language": "zh-Hans"}))
+    (cd / "config.json").write_text(json.dumps({"doc_language": "zh"}))
+    assert status_message(cd, "human:gh:alice")["status"]["doc_language"] == "zh-Hans"
+    (cd / "config.json").write_text("{not json")
+    assert status_message(cd, "human:gh:alice")["status"]["doc_language"] == "zh-Hans"
 
 
 def test_a_viewer_keeps_receiving_acks_after_the_daemon_trims_the_ack_file(tmp_path):
