@@ -282,8 +282,8 @@ and `covered(handoff, realized)` is false.
 3. The policy is asked whether this actor may write this op. A denial conflicts `authority`.
 4. A plan-tagged op needs its plan to be open (`plan_not_open`) and its kind to be
    plannable (`not_plannable`).
-5. The handler resolves every anchor, block and mark it will touch. A failure is a
-   conflict, and nothing has been mutated.
+5. The handler resolves every anchor, block and mark it will touch and checks every
+   payload value it will use. A failure is a conflict, and nothing has been mutated.
 6. The handler mutates the state and returns the canonical payload and the inverse. A
    plan-tagged op is appended to its plan's `ops`.
 7. The op is recorded: appended to the op list, the frontier advanced, the head of every
@@ -394,11 +394,12 @@ Target `{fid}`.
 
 `bind.attach` needs a live heading and takes the symbol from any other owner (I8).
 `bind.detach` and `bind.refresh` need `fid` to own the symbol. An op **moves the code**
-(`ops.moved_code`, read off the canonical payload) when it is a detach, an attach that took
-the symbol, or an attach or refresh that changed the hashes; one that sets the hashes the
-binding already had records who reviewed the code and moves nothing. A detach or a refresh
-that moves the code sets `code_at` to the op's clock. `bind.attach` does not: a relocation
-is not drift.
+(`ops.moved_code`, read off the canonical payload) when it is a detach, or an attach or
+refresh that changed the hashes of a binding the feature already had; every such op sets
+`code_at` to its clock. One that sets the hashes the binding already had records who
+reviewed the code. An attach that took the symbol is new coverage or a relocation, not
+drift. An op is **evidence of a build** (`ops.built_code`) when it moved the code or took
+the symbol: a realization settles on these.
 
 ### Plan and watermark ops
 
@@ -449,7 +450,7 @@ Codes are stable identifiers. A conflicted op changes nothing.
 | `plan_not_open` | tagged ops, verdicts | The plan is missing or decided. |
 | `not_plannable` | tagged ops | This kind may not ride in a plan. |
 | `missing:<key>` | any op | A target or payload entry the handler needs is absent. |
-| `malformed` | any op | A value has the wrong type, or `under` places a block that is not a heading. |
+| `malformed` | any op | A value has the wrong type, a pinned rank is not a rank, or `under` places a block that is not a heading. |
 | `bad_anchor` | text ops, split | Not a character reference, or `START` or `END` where a character is needed. |
 | `unknown_anchor` | text ops, split | No field holds the character, or the range ends are reversed. |
 | `range_spans_blocks` | delete, mark | The two ends are in different fields. The client reads again and sends one op per block. |

@@ -64,10 +64,11 @@ def settle(ws: Workspace, res=None, *, sha: str = "") -> list[Op]:
     """Record ``feature.realized`` for each queued feature once an applied
     binding op since its latest hand-off cites that hand-off in
     ``caused_by``, whoever wrote it (an agent's ``codoc_reflect``, or a
-    reflect pass that cited it), on a symbol whose code moved since the
-    hand-off (``ops.moved_code``, by that op or an earlier one: a reflect
-    pass may take the change before the agent reports it). A citing op on
-    code that did not move records a review, not the build. The op may bind
+    reflect pass that cited it), on a symbol a build touched since the
+    hand-off (``ops.built_code``: its code moved or it was newly bound, by
+    that op or an earlier one, since a reflect pass may take the change
+    before the agent reports it). A citing op on code nothing built records a
+    review, not the build. The op may bind
     any feature: a request built
     as a sub-feature binds the new node, and one that changed a symbol another
     feature owns (realize.txt allows it) binds that owner. An op under a plan
@@ -83,7 +84,7 @@ def settle(ws: Workspace, res=None, *, sha: str = "") -> list[Op]:
         latest_handoff = w.handoffs[-1]
         since = [o for o in store.ops[store.position.get(latest_handoff, 0):]
                  if o.conflict is None and o.kind.startswith("bind.") and _taken(store, o)]
-        moved = {o.payload.get("symbol") for o in since if K.moved_code(o.kind, o.payload)}
+        moved = {o.payload.get("symbol") for o in since if K.built_code(o.kind, o.payload)}
         cites = [o for o in since if o.caused_by == latest_handoff and o.payload.get("symbol") in moved]
         if not cites and not (res and res.caused.get(fid) == latest_handoff
                               and _phantom_done(store, fid, latest_handoff, res.removed)):

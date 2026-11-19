@@ -44,6 +44,7 @@ from codoc.calculus.ops import Op, frontier_union, in_frontier
 from codoc.calculus.store import Store
 from codoc.workspace import log as L
 from codoc.workspace.clock import Clock
+from codoc.workspace.epoch import epoch_alive
 from codoc.workspace.layout import atomic_write
 
 def settled_prefix(store: Store) -> int:
@@ -192,15 +193,23 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
     return out
 
 
+class TurnOpen(RuntimeError):
+    """An agent's turn is open: a fold now would re-emit a queued hand-off
+    under a new op id after the turn's build cited the old one, and the build
+    would never settle."""
+
+
 def write_snapshot(codoc_dir: str | Path, store: Store, clock: Clock) -> Path | None:
     """Write ``log/snapshot-<hlc>.jsonl`` folding the settled prefix of the log
     and archive the session files it covers whole. None when nothing is settled
-    enough to fold.
+    enough to fold. Raises ``TurnOpen`` while an agent epoch is open.
 
     A daemonless writer between calls may hold one of the archived files open;
     at its next call it finds the file gone and opens a new session over the
     logs on disk (``Workspace.follow_disk``), so nothing is appended under
     ``log/archive/``."""
+    if epoch_alive(codoc_dir):
+        raise TurnOpen("an agent's turn is open; its build settles when the turn ends. Snapshot after that.")
     cut = settled_prefix(store)
     if cut == 0:
         return None

@@ -24,6 +24,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from codoc.calculus import ops as K
+from codoc.calculus import rank as R
 from codoc.calculus.doc import (
     BUILTIN, HEADING, ITEMS, LAYOUT_KEY, LEVELLED, PARAGRAPH, Block, Layout, clamp_level, empty_content, is_one_line,
     layout_of, level_for,
@@ -416,31 +417,33 @@ def _h_block_add(store: Store, op: Op, touched: set[str]):
     # clone without the kind reads the block the same way (I6).
     layout = layout_of(kind) if kind in BUILTIN or "layout" not in op.payload \
         else Layout.from_json(op.payload["layout"])
-    if LAYOUT_KEY in (op.payload.get("content") or {}):
+    given = _mapping(op.payload, "content")
+    if LAYOUT_KEY in given:
         raise Conflict("reserved_path", LAYOUT_KEY)
-    content = empty_content(layout, op.payload.get("content"))
-    for f, tj in (op.payload.get("texts") or {}).items():
+    content = empty_content(layout, given)
+    for f, tj in _mapping(op.payload, "texts").items():
         if f in layout.text:
             content[f] = Text.from_json(tj)
     # A pinned rank comes from a snapshot or a recorded inverse re-placing a
     # block exactly where it was; a fresh add derives one from its anchor.
-    rank = op.payload.get("rank") or store.rank_after(anchor)
-    if op.payload.get("bound_once"):
-        store.bound_once.add(bid)        # a snapshot restoring a feature that once had code
+    rank = _pinned_rank(op.payload.get("rank")) or store.rank_after(anchor)
     block = Block(bid, kind, rank, level, content, layout=layout, ranked_by=op.payload.get("ranked_by") or op.id,
                   added_by=op.payload.get("added_by") or op.actor,
-                  void={str(k): list(v) for k, v in (op.payload.get("void") or {}).items()},
-                  prior={str(k): [list(e) for e in v] for k, v in (op.payload.get("prior") or {}).items()})
+                  void={str(k): list(v) for k, v in _mapping(op.payload, "void").items()},
+                  prior={str(k): [list(e) for e in v] for k, v in _mapping(op.payload, "prior").items()})
     if op.payload.get("dead"):               # a snapshot restoring a block with its killer
         block.kill(op.payload["dead"], op.payload.get("dead_actor", ""), op.payload.get("dead_at", ""),
                    op.payload.get("dead_in", ""))
     if op.payload.get("detached"):
         block.detached = [dict(e) for e in op.payload["detached"]]
+    # Everything is read; only now does the store change.
+    store.add_block(block)
+    if op.payload.get("bound_once"):
+        store.bound_once.add(bid)        # a snapshot restoring a feature that once had code
     if op.payload.get("code_at") or op.payload.get("realized_at"):
         w = store.watermarks(bid)
         w.code_at = str(op.payload.get("code_at") or "")
         w.realized_at = str(op.payload.get("realized_at") or "")
-    store.add_block(block)
     for f in layout.text:
         store.index_text(bid, f, content[f])
     touched.add(bid)
@@ -451,6 +454,21 @@ def _h_block_add(store: Store, op: Op, touched: set[str]):
     # What a snapshot restored stays in the record, which the next fold replays.
     canonical.update({k: op.payload[k] for k in K.SNAPSHOT_ONLY[K.BLOCK_ADD] if op.payload.get(k)})
     return canonical, [body(K.BLOCK_DELETE, {"bid": bid}, {"ids": [bid]})]
+
+
+def _mapping(payload: dict, key: str) -> dict:
+    """``payload[key]`` when it is a JSON object, ``{}`` when absent."""
+    v = payload.get(key) or {}
+    if not isinstance(v, dict):
+        raise Conflict("malformed", key)
+    return v
+
+
+def _pinned_rank(v) -> str:
+    """A rank a payload pins, checked before anything changes, or ``""``."""
+    if v and not R.valid(v):
+        raise Conflict("malformed", "rank")
+    return v or ""
 
 
 def _h_block_set(store: Store, op: Op, touched: set[str]):
@@ -470,15 +488,15 @@ def _h_block_set(store: Store, op: Op, touched: set[str]):
         prev_kind, prev_level = b.kind, b.level
         # bullet <-> numbered keeps the depth; any other change starts at level 1 unless told.
         keep = prev_level if prev_kind in ITEMS and value in ITEMS else None
-        b.kind = value
-        b.level = level_for(value, op.payload.get("level") or keep)
-        canonical.update({"prev": prev_kind, "prev_level": prev_level, "level": b.level, "_structural": True})
-        back: dict = {"value": prev_kind, "level": prev_level}
+        level = level_for(value, op.payload.get("level") or keep)
         # The undo names the symbols this change took off; what each was bound
         # with comes from the block, as `block.restore` reads it, so no
         # payload, a plan's included, binds code the block never had or says
         # who set its hashes.
         named = _symbols(op.payload.get("bindings"))
+        b.kind, b.level = value, level
+        canonical.update({"prev": prev_kind, "prev_level": prev_level, "level": b.level, "_structural": True})
+        back: dict = {"value": prev_kind, "level": prev_level}
         detached, _ = store.refeature(b, prev_kind, named)
         if detached:
             canonical["detached"] = detached
@@ -520,6 +538,8 @@ def _h_block_set(store: Store, op: Op, touched: set[str]):
 def _symbols(v) -> list[str]:
     """The symbols a kind change's undo names: strings, or the ``symbol`` of
     each entry."""
+    if v is not None and not isinstance(v, list):
+        raise Conflict("malformed", "bindings")
     return [str(e.get("symbol") if isinstance(e, dict) else e) for e in v or [] if isinstance(e, (dict, str))]
 
 
@@ -542,6 +562,7 @@ def _h_block_split(store: Store, op: Op, touched: set[str]):
     existing = store.blocks.get(new)
     if existing is not None and (existing.live or not forced):
         raise Conflict("duplicate_block", new)
+    pinned = _pinned_rank(op.payload.get("rank"))
     was = text.ops()
     tail = text.split(at)
     head_live, tail_live = text.live_len() > 0, tail.live_len() > 0
@@ -550,7 +571,7 @@ def _h_block_split(store: Store, op: Op, touched: set[str]):
     b.content[path] = keep_text
     new_kind = PARAGRAPH if b.kind == HEADING else b.kind
     new_level = b.level if new_kind in ITEMS else 0      # a list item splits into two at the same depth
-    rank = op.payload.get("rank") or (store.rank_before(b.id) if new_first else store.rank_after(b.id))
+    rank = pinned or (store.rank_before(b.id) if new_first else store.rank_after(b.id))
     if existing is not None:
         # A merge's inverse: the merged block comes back as it was, with its
         # own kind and level (a numbered item merged into a bullet stays numbered).
@@ -620,11 +641,13 @@ def _h_block_move(store: Store, op: Op, touched: set[str]):
         # [id, rank, level, ranked_by]; a row without the last is ranked by this op.
         # A plan's restore is always ranked by itself: what it names would decide
         # whether its own reject puts the block back.
-        rows = [(str(i), str(r), int(l), str(rb[0]) if rb and op.plan is None else op.id)
+        rows = [(str(i), _pinned_rank(r), int(l), str(rb[0]) if rb and op.plan is None else op.id)
                 for i, r, l, *rb in op.payload["restore"]]
-        for i, *_ in rows:
+        for i, r, *_ in rows:
             if i not in store.blocks:
                 raise Conflict("no_block", i)
+            if not r:
+                raise Conflict("malformed", "rank")
         prev = [_place(store.blocks[i]) for i, *_ in rows]
         for i, *row in rows:
             b = store.blocks[i]
@@ -724,12 +747,12 @@ def _h_bind_attach(store: Store, op: Op, touched: set[str]):
     _live_feature(store, fid)
     p = op.payload
     key = p["symbol"]
+    fp, th, by = p.get("fingerprint", ""), p.get("types_hash", ""), _set_by(op)
+    prior = store.bindings.get(key)
     # After the payload is read, not before: a malformed attach conflicts, and
     # a feature that never had code must not be remembered as one that lost it
     # (`reflect._emptied` proposes deleting exactly those).
     store.bound_once.add(fid)
-    fp, th, by = p.get("fingerprint", ""), p.get("types_hash", ""), _set_by(op)
-    prior = store.bindings.get(key)
     touched.add(fid)
     # The canonical says what the attach did, never what the payload claimed:
     # a verdict reads `prev_*` to undo a refresh rather than an attach.
@@ -738,9 +761,11 @@ def _h_bind_attach(store: Store, op: Op, touched: set[str]):
         store.bindings[key] = replace(prior, fingerprint=fp, types_hash=th, set_by=by)
         canonical = {**sent, "displaced": None, "prev_fingerprint": prior.fingerprint,
                      "prev_types_hash": prior.types_hash, "prev_set_by": prior.set_by}
+        _code_moved(store, fid, op, canonical)
         return canonical, [body(K.BIND_REFRESH, {"fid": fid}, _hashes(key, prior))]
     store.bindings[key] = Binding(fid, key, fp, th, by)
     canonical = {**sent, "displaced": prior.to_json() if prior else None}
+    _code_moved(store, fid, op, canonical)
     inverse = [body(K.BIND_DETACH, {"fid": fid}, {"symbol": key})]
     if prior:
         touched.add(prior.feature)
@@ -788,9 +813,8 @@ def _h_bind_refresh(store: Store, op: Op, touched: set[str]):
 
 
 def _code_moved(store: Store, fid: str, op: Op, canonical: dict) -> None:
-    """Drift's clock: a detach or a refresh that changed the code under the
-    feature moves ``code_at`` (``ops.moved_code``). An attach does not: a
-    relocation is not drift."""
+    """Drift's clock: every bind op that changed code the feature already had
+    moves ``code_at`` (``ops.moved_code``)."""
     if K.moved_code(op.kind, canonical):
         store.watermarks(fid).code_at = max(store.watermarks(fid).code_at, op.at)
 
@@ -803,6 +827,8 @@ def _h_plan_open(store: Store, op: Op, touched: set[str]):
         raise Conflict("duplicate_plan", pid)
     kind = op.payload.get("kind", "edit")
     target = op.payload.get("target")
+    if target is not None and not isinstance(target, str):
+        raise Conflict("malformed", "target")
     if kind == "delete" and not op.payload.get("opened_by"):
         # A snapshot restoring an accepted delete plan names a heading that is
         # dead by now; only a fresh proposal has to name a live one.
@@ -830,6 +856,14 @@ def _h_plan_open(store: Store, op: Op, touched: set[str]):
 
 # ── watermarks ───────────────────────────────────────────────────────────────
 
+def _frontier(v) -> dict:
+    """A frontier from a payload, ``{session: seq}``, checked before anything
+    changes."""
+    if not isinstance(v, dict) or not all(isinstance(k, str) and type(n) is int for k, n in v.items()):
+        raise Conflict("malformed", "frontier")
+    return dict(v)
+
+
 def _h_feature_handoff(store: Store, op: Op, touched: set[str]):
     fid = op.target["fid"]
     b = store.blocks.get(fid)
@@ -841,15 +875,17 @@ def _h_feature_handoff(store: Store, op: Op, touched: set[str]):
     if "restore" in op.payload:
         # The undo of a hand-off: the frontier goes back and the hand-off op
         # leaves `handoffs`. Its redo is a new hand-off asking the same.
-        undoes = op.payload.get("undoes")
-        w.handoff = dict(op.payload["restore"])
-        if undoes in w.handoffs:
-            w.handoffs.remove(undoes)
+        restore, undoes = _frontier(op.payload["restore"]), op.payload.get("undoes")
+        if undoes is not None and not isinstance(undoes, str):
+            raise Conflict("malformed", "undoes")
         asked = store.by_id.get(undoes) if undoes else None
         redo = {k: asked.payload[k] for k in ("asked", "delete_code") if asked is not None and asked.payload.get(k)}
-        return {"restore": op.payload["restore"], "undoes": undoes, "prev": prev}, \
+        w.handoff = restore
+        if undoes in w.handoffs:
+            w.handoffs.remove(undoes)
+        return {"restore": restore, "undoes": undoes, "prev": prev}, \
             [body(K.FEATURE_HANDOFF, {"fid": fid}, {"covers": prev, **redo})]
-    covers = dict(op.payload.get("covers") or store.frontier)
+    covers = _frontier(op.payload.get("covers") or store.frontier)
     w.handoff = frontier_union(w.handoff, covers)
     w.handoffs.append(op.id)
     canonical = {"covers": covers, "asked": op.payload.get("asked", ""),
@@ -867,12 +903,12 @@ def _h_feature_realized(store: Store, op: Op, touched: set[str]):
         # Realization settles a request. With none there is nothing
         # to settle, and recording a no-op would report it as done.
         raise Conflict("nothing_queued", fid)
-    covers = dict(op.payload.get("covers") or w.handoff)
+    covers = _frontier(op.payload.get("covers") or w.handoff)
+    canonical = {"covers": covers, "sha": op.payload.get("sha", ""),
+                 "files": list(op.payload.get("files") or []), "summary": op.payload.get("summary", "")}
     w.realized = frontier_union(w.realized, covers)
     w.realized_at = max(w.realized_at, op.at)
     touched.add(fid)
-    canonical = {"covers": covers, "sha": op.payload.get("sha", ""),
-                 "files": list(op.payload.get("files") or []), "summary": op.payload.get("summary", "")}
     return canonical, []
 
 

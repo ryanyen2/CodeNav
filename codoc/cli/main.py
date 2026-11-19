@@ -469,12 +469,16 @@ def validate_logs_cmd(paths: list[str] = typer.Argument(None, help="Log files to
 @app.command()
 def snapshot(root: str = ROOT):
     """Fold the logs into one snapshot file and archive the rest."""
-    from codoc.workspace.snapshot import write_snapshot
+    from codoc.workspace.snapshot import TurnOpen, write_snapshot
     cd = _require(root)
     # Under the lock every other daemonless writer takes: a fold moves files,
     # and a second process applying mid-fold would write into a log being rearranged.
     with _applier(cd, "Stop the daemon before snapshotting.") as ws:
-        path = write_snapshot(cd, ws.store, ws.clock)
+        try:
+            path = write_snapshot(cd, ws.store, ws.clock)
+        except TurnOpen as e:
+            typer.echo(f"Not folding: {e}", err=True)
+            raise typer.Exit(1) from None
     if path is None:
         typer.echo("Nothing to fold: the oldest op belongs to a feature with an open plan. "
                    "Accept or reject it, then snapshot again.")

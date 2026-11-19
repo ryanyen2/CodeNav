@@ -323,7 +323,7 @@ def test_two_rejected_plans_that_moved_one_block_leave_it_where_neither_put_it()
 def test_a_plans_restore_form_move_is_put_back_by_a_reject():
     """Whatever op a plan's restore row names as having ranked the block, the
     restore is the op that did, so its reject puts the block back."""
-    for row in (["c", "0", 0], ["c", "0", 0, "g:1"]):
+    for row in (["c", "1", 0], ["c", "1", 0, "g:1"]):
         m, s, ag = Mint(), Store(), Mint("a", "agent:x")
         heading(m, s, "h1", "Top")
         paragraph(m, s, "b", "b", after="h1"); paragraph(m, s, "c", "c", after="b")

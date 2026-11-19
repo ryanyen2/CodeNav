@@ -624,9 +624,10 @@ removed. The paragraph reads `Retries once.`
   hand-off is waiting.
 - The applier writes `feature.realized` as `loop`, and only on evidence: a feature
   settles once an applied binding op since its latest hand-off cites that hand-off in
-  `caused_by`, on a symbol whose code moved since the hand-off (by that op or an earlier
-  one, `ops.moved_code`; a reflect pass may take the change before the agent reports it).
-  A citing op on code that did not move records a review, not the build. The op may bind
+  `caused_by`, on a symbol a build touched since the hand-off (its code moved or it was
+  newly bound, by that op or an earlier one, `ops.built_code`; a reflect pass may take the
+  change before the agent reports it). A citing op on code nothing built records a review,
+  not the build. The op may bind
   any feature: the request built as a sub-feature binds the
   new node, and a request that changed a symbol another feature owns binds that owner.
   An op under a plan counts once a verdict accepted it: an open plan may
@@ -727,7 +728,9 @@ inserted, so the person types them again.
 ## 12. Snapshots
 
 `codoc snapshot` folds the settled prefix of the log into one file. The daemon must be
-stopped; the command runs under the applier lock.
+stopped; the command runs under the applier lock. It refuses while an agent's turn is
+open: a fold re-emits a queued hand-off under a new op id, and the turn's build, which
+cites the old one and settles only when the turn ends, would never settle.
 
 **The cut.** An open plan's verdict undoes the plan's own ops by identity, so those ops
 must stay in the log. The cut is the position of the first op, in apply order, that names

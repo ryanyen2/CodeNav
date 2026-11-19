@@ -161,20 +161,19 @@ def file_chunks(file_str: str, raw: bytes) -> list[tuple]:
 
 
 def canonical_file(sourcedir: str | pathlib.Path, file: str) -> str | None:
-    """``file`` as the index names it: repo-relative POSIX, with ``.`` and
-    ``..`` folded and an absolute path under the root made relative. It is
-    read lexically and never through a symlink, since the walk names a linked
-    file by its link. None when it lies outside the repository."""
-    if os.path.isabs(file):
-        root = pathlib.Path(sourcedir)
-        bases = {os.path.abspath(root), str(root.resolve())}      # the root as given, and as the walk resolves it
-        rels = [os.path.relpath(os.path.normpath(file), base) for base in bases]
-        rel = next((r for r in rels if pathlib.PurePath(r).parts[:1] != ("..",)), None)
-    else:
-        rel = os.path.normpath(file)
-    if rel is None or rel == "." or pathlib.PurePath(rel).parts[:1] == ("..",):
-        return None
-    return pathlib.PurePath(rel).as_posix()
+    """``file`` as the index's walk names it: repo-relative POSIX. A relative
+    path is read against the root and an absolute one as given, ``.`` and
+    ``..`` folded lexically; the root is the nearest ancestor that is the
+    repository, however it was reached (a symlinked parent directory, macOS
+    ``/var`` for ``/private/var``). The part below it is kept as written, so a
+    linked file keeps its link's name, as the walk names it. None when no
+    ancestor is the repository."""
+    root = os.path.realpath(sourcedir)
+    path = pathlib.PurePath(os.path.normpath(os.path.join(root, file)))
+    for base in path.parents:
+        if os.path.realpath(base) == root:
+            return path.relative_to(base).as_posix()
+    return None
 
 
 def code_on_disk(sourcedir: str | pathlib.Path, files: set[str]) -> dict[str, tuple[str, str]]:

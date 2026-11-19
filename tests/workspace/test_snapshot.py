@@ -541,3 +541,20 @@ def test_snapshot_folds_and_rebuilds_identically(tmp_path):
     assert phase(ws3.store, fid) == before_phase
     assert "make it retry twice" in directive(ws3.store, fid) == before_directive
     assert all(o.conflict is None for o in ws3.store.ops), [o.conflict for o in ws3.store.ops if o.conflict]
+
+
+def test_no_fold_while_an_agents_turn_is_open(tmp_path):
+    """A fold re-emits a queued hand-off under a new op id. Mid-turn the
+    agent's build already cites the old one and settles only when the turn
+    ends, so it would never settle: the fold is refused until then."""
+    import pytest
+    from codoc.workspace.epoch import write_activity
+    from codoc.workspace.snapshot import TurnOpen
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed(ws)
+    write_activity(cd, {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": [], "cited": []})
+    with pytest.raises(TurnOpen):
+        write_snapshot(cd, ws.store, ws.clock)
+    ws.close()
+

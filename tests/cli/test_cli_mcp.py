@@ -565,3 +565,39 @@ def test_auto_realize_gives_up_on_a_handoff_after_three_failed_passes(tmp_path, 
     queue.write_text("### ⟨d:s:1⟩ Retry\n\n### ⟨d:s:2⟩ Back-off\n")
     run(daemon)
     assert len(started) == A.MAX_FAILED_PASSES + 1
+
+
+def test_auto_realize_counts_failed_passes_per_handoff(tmp_path, monkeypatch):
+    """A hand-off queued while another keeps failing is not given up on with
+    it: each gets three failed passes of its own."""
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+    from codoc.claude import autorealize as A
+    from codoc.claude import sdk_realize
+    cd = tmp_path / ".codoc"
+    cd.mkdir()
+    queue = cd / "realize.md"
+    queue.write_text("### ⟨d:s:1⟩ Retry\n")
+    started, said, real, now = [], [], subprocess.Popen, [0.0]
+
+    def fake_pass(argv, **kw):
+        started.append(real([sys.executable, "-c", "raise SystemExit(1)"]))
+        return started[-1]
+    monkeypatch.setattr(A.subprocess, "Popen", fake_pass)
+    monkeypatch.setattr(A, "find_claude", lambda: "/usr/bin/true")
+    monkeypatch.setattr(sdk_realize, "sdk_available", lambda: False)
+    run = A.auto_realizer(str(tmp_path), str(cd), clock=lambda: now[0], printer=said.append)
+    daemon = SimpleNamespace(state=SimpleNamespace(epoch_open=False))
+
+    def batch():
+        run(daemon)
+        for proc in started:
+            proc.wait()
+        now[0] += 3600.0                         # past any back-off
+    batch()                                      # s:1 fails once
+    queue.write_text("### ⟨d:s:1⟩ Retry\n\n### ⟨d:s:2⟩ Back-off\n")
+    for _ in range(6):
+        batch()
+    assert len(started) == 4                     # s:1 is given up after 3, s:2 after its own 3
+    assert [m.split(" on ")[1].split(" ")[0] for m in said] == ["d:s:1", "d:s:2"], said

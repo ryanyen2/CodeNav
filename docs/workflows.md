@@ -70,11 +70,13 @@ pass caused by a hand edit cites nothing.
    started for: a pass that ended with its hand-off still queued (one the agent could not
    satisfy, or a build that moved no bound symbol) is not run again for it. After a pass
    that failed (no login, a rate limit) it waits a minute from when that pass ended before
-   the next, doubling with each failure in a row, up to an hour. After three failed passes
-   in a row it says so once and leaves those hand-offs until a new hand-off is queued or the
-   daemon restarts, since a pass that fails after spending spends again. The daemon runs an
-   empty batch after 30 seconds with no file event, so the retry and the close of a stale
-   agent epoch do not wait for an edit.
+   the next, doubling with each failure in a row, up to an hour. A failed pass counts
+   against each hand-off it was started for; a hand-off that three passes in a row failed on
+   is left until the daemon restarts, and the daemon says so once, since a pass that fails
+   after spending spends again. A hand-off queued later gets its own three passes. A
+   `codoc snapshot` records each hand-off again under a new id, so one that was given up on
+   is tried again after a snapshot. The daemon runs an empty batch after 30 seconds with no
+   file event, so the retry and the close of a stale agent epoch do not wait for an edit.
 5. The build cites the hand-off in binding ops, in any of three ways. The agent's
    `codoc_reflect` attaches the symbols it wrote or changed, with `caused_by` the
    hand-off's `d:` id; any agent that runs the MCP server can do this, with or without

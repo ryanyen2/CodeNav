@@ -486,6 +486,23 @@ def test_a_binding_names_a_file_as_the_index_walk_does(tmp_path):
         "link.py::f", "pkg/mod.py::g", "real.py::f"]
 
 
+def test_a_binding_may_reach_the_repository_by_another_path(tmp_path):
+    """The MCP server's root is resolved, while an agent reports paths the way
+    its working directory shows them: through a symlinked parent (VS Code opens
+    the folder as the person named it), or climbing out of the repository and
+    back in. Both name the same file; only a path no ancestor of which is the
+    repository is refused."""
+    import os
+    from codoc.index.app import canonical_file
+    real = tmp_path.resolve() / "real" / "repo"
+    real.mkdir(parents=True)
+    (real / "c.py").write_text("def send():\n    return 1\n")
+    os.symlink(real.parent, tmp_path / "alias")
+    assert canonical_file(real, str(tmp_path / "alias" / "repo" / "c.py")) == "c.py"
+    assert canonical_file(real, "../repo/c.py") == "c.py"
+    assert canonical_file(real, "../elsewhere/c.py") is None
+
+
 def test_a_plan_reports_no_build_so_it_refreshes_nothing(tmp_path):
     """`codoc_propose` describes code not yet written: an owned symbol whose
     code changed is not refreshed under its plan, which would conflict
@@ -544,22 +561,32 @@ def test_the_agent_is_claude_code_unless_codoc_agent_names_another(monkeypatch):
 
 
 def test_an_unbindable_symbol_is_refused_with_the_reason(tmp_path):
-    """A symbol in a file the index excludes (tests/ by default) is defined but
-    cannot be bound, and the refusal says so; a symbol no file defines is
-    refused as undefined."""
+    """A symbol the index's walk leaves out is defined but cannot be bound, and
+    the refusal says why: under an excluded directory (tests/ by default),
+    under a symlinked directory the walk does not enter, or in an excluded
+    file. A symbol no file defines is refused as undefined."""
     cd, ws = workspace(tmp_path)
     ws.close()
     (tmp_path / "c.py").write_text("def send():\n    return 1\n")
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "test_lists.py").write_text("def test_natural_list_conjunction():\n    pass\n")
-    try:
-        excluded = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1",
-                                                "bindings": ["tests/test_lists.py::test_natural_list_conjunction"]}],
+    (tmp_path / "test_root.py").write_text("def test_root():\n    pass\n")
+    (tmp_path / "real").mkdir()
+    (tmp_path / "real" / "lib.py").write_text("def f():\n    return 2\n")
+    (tmp_path / "linked").symlink_to(tmp_path / "real", target_is_directory=True)
+
+    def attach(sym):
+        try:
+            return tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": [sym]}],
                                  root_dir=str(tmp_path))
-        absent = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::nope"]}],
-                               root_dir=str(tmp_path))
-    finally:
-        client.release(cd)
-    assert not excluded["ok"] and "is in a file codoc does not index (index_exclude in .codoc/config.json" in excluded["error"]
-    assert "does not define" not in excluded["error"], excluded
-    assert not absent["ok"] and "the code does not define c.py::nope" in absent["error"], absent
+        finally:
+            client.release(cd)
+    got = {sym: attach(sym) for sym in ("tests/test_lists.py::test_natural_list_conjunction", "test_root.py::test_root",
+                                        "linked/lib.py::f", "c.py::nope")}
+    assert not any(r["ok"] for r in got.values()), got
+    assert "is under tests/, a directory codoc does not index (index_exclude in .codoc/config.json" in \
+        got["tests/test_lists.py::test_natural_list_conjunction"]["error"]
+    assert "is in a file codoc does not index (index_exclude" in got["test_root.py::test_root"]["error"]
+    assert "is under linked/, a symlinked directory the index does not enter" in got["linked/lib.py::f"]["error"]
+    assert all("does not define" not in r["error"] for sym, r in got.items() if sym != "c.py::nope")
+    assert "the code does not define c.py::nope" in got["c.py::nope"]["error"]

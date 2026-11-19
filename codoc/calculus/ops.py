@@ -155,19 +155,25 @@ class Op:
 
 
 def moved_code(kind: str, payload: dict) -> bool:
-    """Whether an applied op, by its canonical payload, says the code under its
-    feature changed: a detach, an attach that took a symbol, or new hashes.
-    A refresh or an attach that sets the hashes a binding already had records
-    who reviewed the code, not a change to it, so it is not drift and not a
-    realization's evidence."""
+    """Whether an applied op, by its canonical payload, says code its feature
+    already had changed: a detach, or an attach or refresh whose hashes differ
+    from the binding's previous ones. Drift's clock (``code_at``) moves on
+    exactly these. An attach that took a symbol is new coverage or a
+    relocation, not a change to code the prose describes; one that sets the
+    hashes a binding already had records who reviewed the code."""
     if kind == BIND_DETACH:
         return True
-    if kind not in (BIND_ATTACH, BIND_REFRESH):
+    if kind not in (BIND_ATTACH, BIND_REFRESH) or "prev_fingerprint" not in payload:
         return False
-    if kind == BIND_ATTACH and "prev_fingerprint" not in payload:
-        return True
     return (payload.get("fingerprint", ""), payload.get("types_hash", "")) \
         != (payload.get("prev_fingerprint", ""), payload.get("prev_types_hash", ""))
+
+
+def built_code(kind: str, payload: dict) -> bool:
+    """Whether an applied op is evidence of a build: it moved code
+    (``moved_code``), or it is an attach that took a symbol, binding code the
+    build wrote."""
+    return moved_code(kind, payload) or kind == BIND_ATTACH and "prev_fingerprint" not in payload
 
 
 def frontier_union(a: dict, b: dict) -> dict:

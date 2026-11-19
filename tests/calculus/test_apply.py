@@ -508,3 +508,60 @@ def test_a_reopen_that_makes_a_dead_block_a_heading_gives_its_code_back_on_resto
     (res,) = invert(s, m, dele)
     assert res.conflict is None and s.blocks["x"].live and s.bindings["c.py::S"].feature == "x"
     assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+MALFORMED = [
+    (K.BLOCK_SET, {"bid": "p1", "path": "kind"}, {"value": HEADING, "level": 2, "bindings": 5}),
+    (K.BLOCK_SET, {"bid": "p1", "path": "kind"}, {"value": HEADING, "level": "x"}),
+    (K.BLOCK_ADD, {"bid": "n1"}, {"kind": PARAGRAPH, "after": "p1", "content": "words"}),
+    (K.BLOCK_ADD, {"bid": "n2"}, {"kind": PARAGRAPH, "after": "p1", "rank": "!"}),
+    (K.BLOCK_ADD, {"bid": "n3"}, {"kind": HEADING, "after": "p1", "bound_once": True, "code_at": "9", "void": 5}),
+    (K.BLOCK_SPLIT, {"bid": "p1", "path": "text"}, {"at": START, "new": "n4", "rank": "!"}),
+    (K.BLOCK_MOVE, {"bid": "p1"}, {"restore": [["p1", "1", 0], ["h1", "!", 1]]}),
+    (K.BIND_ATTACH, {"fid": "h1"}, {"symbol": ["c.py::new"]}),
+    (K.FEATURE_HANDOFF, {"fid": "h1"}, {"restore": {}, "undoes": [1]}),
+    (K.FEATURE_HANDOFF, {"fid": "h1"}, {"covers": {"s": "x"}}),
+    (K.FEATURE_REALIZED, {"fid": "h1"}, {"files": 5}),
+    (K.PLAN_OPEN, {"pid": "P"}, {"target": {"bid": "p1"}}),
+]
+
+
+@pytest.mark.parametrize("kind,target,payload", MALFORMED)
+def test_a_malformed_payload_conflicts_before_anything_changes(kind, target, payload):
+    """Every handler reads and checks its payload before the first change: a
+    conflicted op leaves the store as it was, so the live store and a replay of
+    the log agree."""
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Top")
+    paragraph(m, s, "p1", "body", after="h1")
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h1"}, {"symbol": "c.py::send", "fingerprint": "f", "types_hash": "t"}))
+    apply(s, m.op(K.FEATURE_HANDOFF, {"fid": "h1"}, {}))
+
+    def state(st):
+        return (st.state_fingerprint(), sorted(st.bound_once), sorted(st.open_plans),
+                {f: (w.handoff, w.realized, list(w.handoffs), w.code_at, w.realized_at)
+                 for f, w in st.watermarks_by_fid.items()})
+    before = copy.deepcopy(state(s))
+    op = apply(s, m.op(kind, target, payload))
+    assert op.conflict == "malformed" and state(s) == before
+    assert state(replay(s)) == state(s)
+
+
+def test_code_at_moves_exactly_when_a_bind_op_changed_code_the_feature_had():
+    """Drift and settle read one rule (`ops.moved_code`): a fresh attach is new
+    coverage, a re-attach to the same hashes is a review, and a re-attach or a
+    refresh to new hashes, or a detach, moved the code."""
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Top")
+    clock = lambda: s.watermarks("h1").code_at   # noqa: E731
+    bind = lambda kind, fp: apply(s, m.op(kind, {"fid": "h1"}, {"symbol": "c.py::send", "fingerprint": fp, "types_hash": "t"}))
+    bind(K.BIND_ATTACH, "f1")
+    assert clock() == ""
+    bind(K.BIND_ATTACH, "f1")
+    assert clock() == ""
+    moved = bind(K.BIND_ATTACH, "f2")
+    assert clock() == moved.at and K.moved_code(moved.kind, moved.payload)
+    review = bind(K.BIND_REFRESH, "f2")
+    assert clock() == moved.at and not K.moved_code(review.kind, review.payload)
+    gone = apply(s, m.op(K.BIND_DETACH, {"fid": "h1"}, {"symbol": "c.py::send"}))
+    assert clock() == gone.at

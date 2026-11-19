@@ -151,9 +151,9 @@ codoc.claude.autorealize`, which runs `claude -p --output-format json` and print
 agent's last message. Either engine ends with one line: how the pass ended, its time and
 its cost. `--auto-realize` (`auto_realizer`) starts a pass when no session is live and the
 queue holds a hand-off no finished pass was started for, and backs off after a pass that
-failed (`FAILED_BACKOFF_S`, doubled per failure in a row, at most an hour; after
-`MAX_FAILED_PASSES` in a row it says so and leaves those hand-offs until a new one is
-queued or the daemon restarts), counted from
+failed (`FAILED_BACKOFF_S`, doubled per failed pass in a row, at most an hour; a hand-off
+that `MAX_FAILED_PASSES` passes in a row failed on is said once and left until the daemon
+restarts, counted per hand-off id, so a snapshot's new ids bring it back), counted from
 when the pass ended: each engine's child records its pid, exit code and wall time in
 `.codoc/cache/realize-ended.json` as it exits (`record_end`). The daemon's quiet tick
 (`TICK_MS`, an empty batch after 30 seconds with no file event) runs `after_batch`, so

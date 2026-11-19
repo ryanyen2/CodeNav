@@ -287,14 +287,14 @@ class Compiler:
     def _built(self, sym: str) -> bool:
         """Whether the code under an owned ``sym`` changed since the hand-off
         ``cites``: its hashes now differ from the binding's, or a binding op
-        on it that moved the code (``ops.moved_code``) has applied since the
+        on it that a build made (``ops.built_code``) has applied since the
         hand-off (a reflect pass, the daemon's or this agent's, already took
         the change)."""
         b = self.store.bindings[sym]
         if self.hashes.get(sym, (b.fingerprint, b.types_hash)) != (b.fingerprint, b.types_hash):
             return True
         since = self.store.position.get(self.cites, len(self.store.ops))
-        return any(K.moved_code(o.kind, o.payload) and o.payload.get("symbol") == sym and o.conflict is None
+        return any(K.built_code(o.kind, o.payload) and o.payload.get("symbol") == sym and o.conflict is None
                    for o in self.store.ops[since:])
 
     def _rewrite(self, change: Change, block, spec: BlockSpec) -> str | None:

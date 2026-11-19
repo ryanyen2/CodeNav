@@ -35,9 +35,9 @@ from codoc.workspace.layout import CODOC_DIR, atomic_write
 # After a failed pass the next waits this long from when it ended, doubled for
 # each failure in a row, up to an hour.
 FAILED_BACKOFF_S = 60.0
-# After this many failed passes in a row, the hand-offs they were started for
-# are left alone until a new hand-off is queued or the daemon restarts: a pass
-# that fails after spending (an error result, the turn limit) spends again.
+# A hand-off that this many passes in a row failed on is left alone until the
+# daemon restarts: a pass that fails after spending (an error result, the turn
+# limit) spends again.
 MAX_FAILED_PASSES = 3
 # Where a pass's child records when it ended: the daemon may notice the exit
 # long after it happened, and the back-off counts from the exit.
@@ -143,35 +143,44 @@ def auto_realizer(root_dir: str, codoc_dir: str, *, clock=time.time, printer=pri
     nothing, and its own Stop hook wakes the daemon the moment it ends. A pass
     that failed (a nonzero exit, such as no login or a rate limit) leaves its
     hand-offs to be tried again :data:`FAILED_BACKOFF_S` after it ended, doubled
-    for each failure in a row. After :data:`MAX_FAILED_PASSES` failures in a
-    row those hand-offs are counted as tried, and ``printer`` says so once: a
-    new hand-off starts a pass again, and so does a daemon restart. The
-    daemon's periodic tick runs this between file events, so the retry does
-    not wait for one. ``clock`` is wall time, as the child records it."""
+    for each failed pass in a row. A failed pass counts against each hand-off
+    it was started for, and a hand-off that :data:`MAX_FAILED_PASSES` passes in
+    a row failed on is counted as tried, which ``printer`` says once; a
+    hand-off queued later starts a pass of its own, and a daemon restart forgets
+    the counts. The daemon's periodic tick runs this between file events, so
+    the retry does not wait for one. ``clock`` is wall time, as the child
+    records it."""
     proc: subprocess.Popen | None = None
-    tried: set[str] = set()           # hand-offs a pass that finished was started with
+    tried: set[str] = set()           # hand-offs a pass that finished was started with, or given up on
+    failed: dict[str, int] = {}       # hand-off -> passes in a row that failed on it
     started: list[str] = []
     started_at = 0.0
-    failures, wait_until = 0, 0.0
+    streak, wait_until = 0, 0.0       # failed passes in a row, whatever they were for: the back-off
 
     def run(daemon) -> None:
-        nonlocal proc, started, started_at, failures, wait_until
+        nonlocal proc, started, started_at, streak, wait_until
         if proc is not None:
             if proc.poll() is None:
                 return
             if proc.returncode == 0:
                 tried.update(started)
-                failures = 0
-            elif failures + 1 >= MAX_FAILED_PASSES:
-                tried.update(started)
-                failures = 0
-                printer(f"auto-realize: {MAX_FAILED_PASSES} passes in a row failed (the last exited "
-                        f"{proc.returncode}), so {', '.join('d:' + d for d in started)} will not be retried "
-                        "until a new hand-off is queued or the daemon restarts")
+                for d in started:
+                    failed.pop(d, None)
+                streak = 0
             else:
-                failures += 1
+                streak += 1
                 ended = _ended(codoc_dir, proc.pid) or started_at
-                wait_until = ended + min(FAILED_BACKOFF_S * 2 ** (failures - 1), 3600.0)
+                wait_until = ended + min(FAILED_BACKOFF_S * 2 ** (streak - 1), 3600.0)
+                given_up = []
+                for d in started:
+                    failed[d] = failed.get(d, 0) + 1
+                    if failed[d] >= MAX_FAILED_PASSES and d not in tried:
+                        tried.add(d)
+                        given_up.append(d)
+                if given_up:
+                    printer(f"auto-realize: {MAX_FAILED_PASSES} passes in a row failed on "
+                            f"{', '.join('d:' + d for d in given_up)} (the last exited {proc.returncode}); "
+                            "not retrying until the daemon restarts")
             proc = None
         if daemon.state.epoch_open or clock() < wait_until or realizing_is_fresh(codoc_dir) or epoch_alive(codoc_dir):
             return

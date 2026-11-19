@@ -27,6 +27,12 @@ class RankError(ValueError):
     """A rank request that cannot be satisfied because the bounds are out of order."""
 
 
+def valid(key) -> bool:
+    """Whether ``key`` is a rank this module could have produced: a non-empty
+    string of alphabet digits that does not end in the zero digit."""
+    return isinstance(key, str) and bool(key) and all(c in _INDEX for c in key) and key[-1] != ALPHABET[0]
+
+
 def _digit(key: str, i: int, default: int) -> int:
     return _INDEX[key[i]] if i < len(key) else default
 
