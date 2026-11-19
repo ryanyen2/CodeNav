@@ -158,11 +158,13 @@ The drain, per line:
 3. A `cid` the logs name in a `sub` and the ack file does not is acked from the log (the
    first op it names) and not applied again: the applier stopped between logging it and
    acking it.
-4. `caused_by` is dropped unless the actor is a machine.
+4. `caused_by` is dropped unless the actor is a machine. A `batch` whose first op is
+   another actor's is replaced by a fresh one: an undo sends every inverse in its batch as
+   the undoer, and batch ids are readable in `history.json`.
 5. Provisional anchors are resolved (below).
-6. For an actor with the `suggest` role and no plan tag: a range `text.delete` becomes a
-   `suggest_del` mark over the same range, unless every character in the range was minted
-   by an open plan of that actor. Any plannable op that is not part of a comment is then
+6. For an actor with the `suggest` role and no plan tag: a range `text.delete` outside a
+   comment becomes a `suggest_del` mark over the same range, unless every character in the
+   range was minted by an open plan of that actor. Any plannable op that is not part of a comment is then
    tagged with a plan of that actor, opened or reused by the drain (section 9).
 7. An `ingest` runs the diff in the applier and goes through the machine gate
    (section 7). Any other kind is minted (next `seq`, `tick`, actor) and applied.
@@ -368,7 +370,7 @@ recorded for it.
 |---|---|
 | `owner`, `maintainer` | Everything. |
 | `machine` | Every op, untagged or tagged with any open plan, except the verdict kinds: `plan.accept`, `plan.reject`, `plan.reopen`, `feature.handoff`, `feature.realized`. Two exceptions: `loop` may write `feature.realized`; a machine may reject its own open plan that has no ops. |
-| `suggest` | `plan.open`. Ops tagged with a plan the same actor opened. Comments, as below. A reject of its own open plan that has no ops. Nothing else. |
+| `suggest` | `plan.open`. Ops tagged with a plan the same actor opened, except `bind.*`. Comments, as below. A reject of its own open plan that has no ops. Nothing else. |
 | `none` | Nothing. The hub records it when access is revoked. |
 
 A suggester's comment ops, all untagged:
@@ -385,7 +387,18 @@ decides nothing ([kinds.md](kinds.md#6-comments)). The first message is the bloc
 thread names when that is a comment of the thread, else its earliest message. So only
 the person who started a thread, an owner or a maintainer resolves or reopens it.
 
+A comment needs no verdict, so a contributor's open thread is in every directive of its
+feature (section 10). It is voiced there as theirs, `Contributor <actor> commented on`,
+which the realize prompt reads as a suggestion that never overrides the description or
+the person's own words; only an owner's, a maintainer's or a machine's message is the
+person's note ([kinds.md](kinds.md#6-comments)).
+
 - A suggester's `block.merge` or `block.delete` cannot ride in a plan, so it is refused.
+- A suggester's `bind.*` op is refused, tagged or not. An attach applies at once, and the
+  hub worker confines its agent to the feature's bound files, so it would widen what the
+  agent may edit before any verdict. The editor never sends one. The worker also leaves
+  out a binding any open plan made (`derive.unvetted_symbols`), since a machine's plan
+  may still carry an attach.
 - The check runs once, when the op arrives, and the answer is recorded on the op: a
   refused op is stored with `conflict: "authority"`.
 - Replay does not ask again. A role changed later never removes what someone already
@@ -671,6 +684,9 @@ removed. The paragraph reads `Retries once.`
 
 - `feature.handoff` moves a feature's `handoff` frontier. It is the one gesture that
   turns documentation into a request. Only `owner` and `maintainer` may write it.
+- The directive (`loops/realize.directive`) quotes every open comment thread of the
+  feature, each message voiced by its author's role: a contributor's as their suggestion,
+  never as the person's note (section 7).
 - `feature.realized` moves the `realized` frontier. It conflicts `nothing_queued` when no
   hand-off is waiting.
 - The applier writes `feature.realized` as `loop`, and only on evidence: a feature

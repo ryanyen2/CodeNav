@@ -25,12 +25,13 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from codoc.calculus.derive import queued, title
+from codoc.calculus.derive import queued, title, unvetted_symbols
 from codoc.daemon import client
 from codoc.index.git import BASE_TRAILER, HANDOFF_TRAILER
 from codoc.loops.realize import directive
 from codoc.serve.realize_agent import make_sandboxed_agent
 from codoc.serve.sandbox import out_of_scope_changes
+from codoc.workspace import Roles
 from codoc.workspace.layout import HUB_PRS, STATUS, atomic_write, read_json
 
 # A hand-off whose branch carries the agent's commit but has no pull request
@@ -77,17 +78,21 @@ def pending(codoc_dir: str | Path, store, done: dict[str, str] | None = None) ->
     """The hand-offs this hub may build. A feature with no bindings is not one:
     there is no set of files to confine the agent to, and a contributor's
     accepted proposal must never be a licence to write anywhere. Those stay in
-    the queue for the maintainer, who builds them with a person present."""
+    the queue for the maintainer, who builds them with a person present. A
+    binding an open plan made is the plan's until a verdict
+    (``unvetted_symbols``), so its file is not in the scope."""
     done = read_ledger(codoc_dir) if done is None else done
+    planned = unvetted_symbols(store)
+    roles = Roles.load(codoc_dir)
     out = []
     for fid in queued(store):
         w = store.watermarks(fid)
         hid = w.handoffs[-1] if w.handoffs else ""
-        scope = sorted({b.file for b in store.bindings.values() if b.feature == fid})
+        scope = sorted({b.file for b in store.bindings.values() if b.feature == fid and b.symbol not in planned})
         answer = done.get(hid, "")
         if not hid or (answer and not answer.startswith(BUILT)) or not scope:
             continue
-        out.append(Request(fid, hid, title(store, fid, "rejected") or fid, directive(store, fid), scope))
+        out.append(Request(fid, hid, title(store, fid, "rejected") or fid, directive(store, fid, roles), scope))
     return out
 
 

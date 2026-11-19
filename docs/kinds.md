@@ -157,6 +157,14 @@ resolve a thread ([concurrency.md](concurrency.md#7-roles-and-authority)) read i
 reply that says `open` on a resolved thread, or `both` on a `code` one, neither shows in
 the margin nor reaches the agent.
 
+Each message is voiced by its own author's role (`realize._kind_lines`, from the role
+table). An owner's, a maintainer's or a machine's is `Comment on "…": …`, the person's
+note, which the realize prompt lets win over the description. Anyone else's, a hub
+contributor's on a thread of their own or as a reply in the owner's, is
+`Contributor <actor> commented on "…": …`, which the prompt reads as a suggestion the
+person did not write: followed only where it agrees with the description and the
+person's words, never over them.
+
 ## 7. In the editor
 
 The editor edits headings, paragraphs, list items, and the `source` of a table, diagram or

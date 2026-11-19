@@ -19,7 +19,7 @@ from codoc.calculus.doc import (
 )
 from codoc.calculus.ids import LOOP, OpId, is_human
 from codoc.calculus.inline_md import Span, render
-from codoc.calculus.ops import Op, in_frontier
+from codoc.calculus.ops import BIND_ATTACH, Op, in_frontier
 from codoc.calculus.store import Store
 from codoc.calculus.text import CITE, COMMENT, PROPOSALS, SUGGEST_DEL, SUGGEST_MARK, Mark, Seg, Text, struck_chars
 
@@ -122,6 +122,23 @@ def unvetted_block(store: Store, b: Block) -> bool:
     return b.added_plan in store.open_plans
 
 
+def unvetted_symbols(store: Store) -> set[str]:
+    """The symbols a still-open plan bound: its ``bind.attach`` took them (a
+    refresh of a binding the feature had does not count) and they are still
+    on that feature. Until the verdict such a binding is the plan's, so the
+    hub worker leaves its file out of the agent's write scope."""
+    out = set()
+    for plan in store.open_plans.values():
+        for oid in plan.ops:
+            o = store.by_id.get(oid)
+            if o is None or o.kind != BIND_ATTACH or o.conflict or "prev_fingerprint" in o.payload:
+                continue
+            cur = store.bindings.get(o.payload.get("symbol", ""))
+            if cur is not None and cur.feature == o.target.get("fid"):
+                out.add(cur.symbol)
+    return out
+
+
 def set_value(payload: dict) -> tuple[bool, object]:
     """What a content ``block.set`` wrote, as (absent, value)."""
     return (True, None) if payload.get("unset") else (False, payload.get("value"))
@@ -133,11 +150,12 @@ def without_plans(store: Store, b: Block, path: str, past: tuple[str, ...], undo
     Read modes). ``Block.prior`` keeps each set with the value it replaced. The
     walk goes from the newest set back, starting from the field as it is. A set
     whose plan's status is in ``past`` is taken out: when it wrote the value in
-    hand, the value it replaced is the one in hand now; when the value in hand
-    is already the one it replaced (its own reject put the field back), it is
-    passed. Anything else ends the walk: a person's set, an accepted plan's, one
-    whose plan's status ``past`` leaves out, a value something else wrote since
-    (a lift), and a set whose op a fold archived.
+    hand, the value it replaced is the one in hand now; otherwise a verdict
+    already took it back (its own reject, or the reject of a plan that set the
+    field twice), and it is passed. Anything else ends the walk: a person's
+    set, an accepted plan's, one whose plan's status ``past`` leaves out, and a
+    set whose op a fold archived. A value a lift wrote since matches no set, so
+    it stays.
 
     ``undoing`` is a plan's set a verdict is taking back. The walk starts at it,
     from the value it wrote (the caller checked the field still holds it), and
@@ -156,8 +174,10 @@ def without_plans(store: Store, b: Block, path: str, past: tuple[str, ...], undo
         if was == now:
             continue
         wrote = undoing if undoing is not None and op_id == undoing.id else store.by_id.get(op_id)
-        if wrote is None or set_value(wrote.payload) != now:
+        if wrote is None:
             break
+        if set_value(wrote.payload) != now:
+            continue        # a verdict already took this set back
         now = was
     return now
 

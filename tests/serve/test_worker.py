@@ -19,7 +19,8 @@ from codoc.serve.worker import (
     realize_one,
 )
 from codoc.workspace import Workspace
-from tests.helpers import handoff, seed_loop
+from codoc.workspace import inbox as I
+from tests.helpers import handoff, seed_loop, sub
 
 
 def ready(tmp_path):
@@ -39,6 +40,22 @@ def test_pending_is_one_request_per_uncovered_handoff_with_its_scope(tmp_path):
     assert [(r.fid, r.handoff, r.scope) for r in reqs] == [("h1", ho.id, ["c.py"])]
     assert "retry twice" in reqs[0].text and reqs[0].title == "Client"
     assert pending(cd, ws.store, done={ho.id: "codoc/realize-x"}) == []
+
+
+def test_no_binding_an_open_plan_made_widens_the_agents_scope(tmp_path):
+    """A hub contributor may not attach code (every ``bind.*`` op is refused
+    them), and an agent's attach under its open plan is the plan's until a
+    verdict, so neither puts a file in the scope the agent may edit."""
+    cd, ws, ho = ready(tmp_path)
+    I.submit(cd, "hub-eve", [sub("a1", K.BIND_ATTACH, {"fid": "h1"}, {"symbol": "scripts/release.sh::x"})])
+    assert [o.conflict for o in ws.drain_inbox() if o.kind == K.BIND_ATTACH] == ["authority"]
+    pid = ws.open_plan(actor="agent:x")
+    assert ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"}, "payload": {"symbol": "d.py::f"}}],
+                     actor="agent:x", plan=pid)[0].conflict is None
+    assert [r.scope for r in pending(cd, ws.store)] == [["c.py"]]
+    assert ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor="human:local")[0].conflict is None
+    assert [r.scope for r in pending(cd, ws.store)] == [["c.py", "d.py"]]
+    ws.close()
 
 
 def test_realize_one_opens_a_pr_on_a_branch_and_refuses_out_of_scope(tmp_path):

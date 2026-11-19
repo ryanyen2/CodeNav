@@ -337,7 +337,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToPage>) => {
         case 'history':
             if (m.history) {
                 if (projection) timeline?.setWindow(m.history, projection);
-                const r = undo.onHistory(m.history);
+                const r = undo.onHistory(m.history, actor);
                 if (typeof r === 'string') notify(r);
                 else if (r) submit(r);
             }

@@ -32,17 +32,18 @@ from codoc.calculus.ops import Op, in_frontier
 from codoc.calculus.store import Store, Watermarks, file_of
 from codoc.calculus.text import BOLD, COMMENT, LINK
 from codoc.llm.prompt import format_prompt, load_prompt
-from codoc.workspace import Workspace
+from codoc.workspace import Roles, Workspace
 from codoc.workspace.epoch import epoch_alive
 from codoc.workspace.layout import REALIZE, atomic_write
+from codoc.workspace.roles import OWNER
 
 
-def render_queue(store: Store, root_dir: str = ".", doc_language=None) -> str:
+def render_queue(store: Store, root_dir: str = ".", doc_language=None, roles: Roles | None = None) -> str:
     items = []
     for fid in queued(store):
         w = store.watermarks(fid)
         latest_handoff = w.handoffs[-1] if w.handoffs else ""
-        body = directive(store, fid)
+        body = directive(store, fid, roles)
         items.append(body.replace("### ", f"### ⟨d:{latest_handoff}⟩ ", 1) if latest_handoff else body)
     if not items:
         return ""
@@ -52,7 +53,7 @@ def render_queue(store: Store, root_dir: str = ".", doc_language=None) -> str:
 
 def write_queue(codoc_dir: str | Path, store: Store, root_dir: str = ".", doc_language=None) -> Path | None:
     path = Path(codoc_dir) / REALIZE
-    text = render_queue(store, root_dir, doc_language)
+    text = render_queue(store, root_dir, doc_language, Roles.load(codoc_dir))
     if not text:
         if path.exists():
             path.unlink()
@@ -136,12 +137,15 @@ def _phantom_done(store: Store, fid: str, latest_handoff: str, removed: set[str]
 
 # ── the directive ────────────────────────────────────────────────────────────
 
-def directive(store: Store, fid: str) -> str:
+def directive(store: Store, fid: str, roles: Roles | None = None) -> str:
     """The realize prompt item for a feature: its text in the all-rejected read
     mode (an un-vetted plan never masquerades as the person's intent), what the
     person changed since the last realization, Focus and Consult lines, and
     the person's own words from the hand-off. Words it quotes inside a line
-    of its own go through ``one_line``, so none of them starts a line."""
+    of its own go through ``one_line``, so none of them starts a line.
+    ``roles`` is the workspace's role table, which voices each comment by its
+    author (``_kind_lines``); without it, the defaults (a hub sign-in is a
+    contributor)."""
     b = store.blocks.get(fid)
     if b is None:
         return ""
@@ -172,7 +176,7 @@ def directive(store: Store, fid: str) -> str:
     if consult:
         lines.append("")
         lines.append("Consult: " + ", ".join(f"{one_line(t)} <{one_line(u)}>" for t, u in consult))
-    reads, asks = _kind_lines(store, fid, w)
+    reads, asks = _kind_lines(store, fid, w, roles or Roles())
     for line in reads + asks:
         lines.append("")
         lines.append(line)
@@ -182,14 +186,22 @@ def directive(store: Store, fid: str) -> str:
     return "\n".join(lines)
 
 
-def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[str]]:
+# The roles whose comment is the person's own note; anyone else's is a contributor's.
+_OWN_VOICE = (OWNER, "maintainer", "machine")
+
+
+def _kind_lines(store: Store, fid: str, w: Watermarks, roles: Roles) -> tuple[list[str], list[str]]:
     """What this feature's kind blocks put in front of the agent: every
     in-flow block's ``consult``, then the directive each block's
     ``lower`` codec derives from what changed since the last realization. An
     out-of-flow block (a comment) is not prose the agent reads, only a
     request, which its own codec words. Its ``status``, ``scope`` and
     ``anchor_text`` are the thread's, read from the thread's first message
-    (``derive.first_message``), as the margin shows them. A kind this process
+    (``derive.first_message``), as the margin shows them. Each message is
+    voiced by its own author: one an owner, a maintainer or a machine added is
+    the person's note, and anyone else's (a hub contributor's) is marked as a
+    contributor's suggestion (``contributor``), so a reply in an owner's
+    thread is not read as the owner's. A kind this process
     has no code for says its Text fields' words under its name. A block an
     open plan added says nothing (``unvetted_block``)."""
     reads: list[str] = []
@@ -207,6 +219,7 @@ def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[
         if b.kind == COMMENT:
             head = registry.plain(first_message(store, b) or b, store)
             new.update({k: head.get(k) for k in ("status", "scope", "anchor_text")})
+            new["contributor"] = "" if roles.role(b.added_by) in _OWN_VOICE else b.added_by
         if b.layout.flow and (said := kind.consult(new)):
             reads.append(said)
         if kind.lower is None:

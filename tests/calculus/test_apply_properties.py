@@ -619,3 +619,40 @@ def test_a_fold_carries_the_code_a_reopen_kept_on_a_dead_heading():
     undo = m.op(inv["kind"], inv["target"], inv["payload"])
     assert apply(f, Op.from_json(copy.deepcopy(undo.to_json()))).conflict is None and apply(s, undo).conflict is None
     assert s.bindings["a"].feature == "x" and f.state_fingerprint() == s.state_fingerprint()
+
+
+@pytest.mark.parametrize("seed", range(200))
+def test_rejecting_every_plan_on_a_field_in_any_order_restores_it_fuzz(seed):
+    """Several plans set one JSON field, interleaved, some rejected on the way.
+    While one is open the ``rejected`` read is the field from before the plans;
+    rejecting the rest in any order puts that value back."""
+    from codoc.calculus.derive import rejected_content
+    rng = random.Random(seed)
+    m, s = Mint(f"r{seed}"), Store()
+    heading(m, s, "h1", "Root")
+    paragraph(m, s, "p1", "text", after="h1")
+    if rng.random() < 0.5:
+        apply(s, m.op(K.BLOCK_SET, {"bid": "p1", "path": "note"}, {"value": "orig"}))
+
+    def note(content):
+        return content.get("note", ("absent",))
+
+    start = note(s.blocks["p1"].content)
+    for i in range(rng.randint(2, 4)):
+        apply(s, m.op(K.PLAN_OPEN, {"pid": f"P{i}"}, {"kind": "edit", "target": "p1"}, actor=AGENT))
+    for step in range(rng.randint(2, 10)):
+        if not s.open_plans:
+            break
+        pid = rng.choice(sorted(s.open_plans))
+        if rng.random() < 0.7:
+            pl = {"unset": True} if rng.random() < 0.2 else {"value": rng.choice(["a", "b", "c", f"x{step}"])}
+            apply(s, m.op(K.BLOCK_SET, {"bid": "p1", "path": "note"}, pl, actor=AGENT, plan=pid))
+        else:
+            apply(s, m.op(K.PLAN_REJECT, {"pid": pid}, {}))
+    b = s.blocks["p1"]
+    if any(e[2] in s.open_plans for e in b.prior.get("note", [])):
+        assert note(rejected_content(s, b)) == start, seed
+    for pid in rng.sample(sorted(s.open_plans), len(s.open_plans)):
+        apply(s, m.op(K.PLAN_REJECT, {"pid": pid}, {}))
+    assert note(b.content) == start, (seed, b.prior)
+    assert replay(s).state_fingerprint() == s.state_fingerprint()

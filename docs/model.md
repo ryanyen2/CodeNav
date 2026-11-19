@@ -645,16 +645,19 @@ A field that is not Text carries no plan tag, so its value from before the plans
 from `prior`, which keeps each set with the value it replaced, by one rule
 (`without_plans`). The walk goes from the newest set back, starting from the field as it
 is. A set of a plan being taken out gives back the value it replaced when it wrote the
-value in hand, and is passed when the value in hand is already the one it replaced (its
-own reject put the field back). A person's set, an accepted plan's, a value something else
-wrote since (a lift), and a set whose op a fold archived end the walk. The `rejected` mode
+value in hand, and is passed otherwise, since a verdict already took it back (its own
+reject put the field back, or a reject of a plan that set the field twice put back the
+value from before that plan). A person's set, an accepted plan's, and a set whose op a fold
+archived end the walk; a value a lift wrote since matches no set, so it stays. The `rejected` mode
 (`rejected_content(b)`) takes out every open and rejected plan's set while an open plan
 has one on the field, which reads as the owner's value; with no plan open it reads the
 field as it is. A reject's undo of a content set takes out that set and every rejected
 plan's set under it ([concurrency.md](concurrency.md#9-plans-and-verdicts)). `unvetted_block(b)`
 holds when an open plan added `b` (`added_plan`); such a block says nothing in the
 `rejected` mode, the directive
-leaves it out, and the lift pass leaves it alone. The export, the directive, the kind
+leaves it out, and the lift pass leaves it alone. `unvetted_symbols()` are the symbols an
+open plan's `bind.attach` took and still holds; the hub worker leaves their files out of
+the agent's write scope until a verdict. The export, the directive, the kind
 codecs and the lift read `rejected_content`, so a url a suggester proposed is not fetched
 and not put in front of the agent before a verdict, and the owner's block is shown and
 fetched as the owner left it meanwhile.

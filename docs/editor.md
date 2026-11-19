@@ -121,7 +121,9 @@ not undone, newest op first, as batch `u-<batch>`; ⇧⌘Z and ⌘Y undo that ba
 (`u-u-<batch>`) (`calc/window.ts`, `nextUndo`). It waits while any submission is unacked. A
 batch is this page's when the page submitted it, not when its actor is the viewer's: a
 teammate's batch merged through git and the person's own `codoc accept` in a terminal are
-never offered. The page keeps its batch ids in the webview's state (`setState`; on the hub, the tab's
+never offered. Within such a batch only the viewer's own ops are undone, so another actor's
+op naming the batch is never sent back as the viewer's (the drain also gives such an op a
+fresh batch, docs/concurrency.md section 4). The page keeps its batch ids in the webview's state (`setState`; on the hub, the tab's
 `sessionStorage`), so a reload still undoes them; an editor opened fresh has nothing to undo.
 
 **The viewer.** `status.actor` is the person the page writes as: `human:<git config

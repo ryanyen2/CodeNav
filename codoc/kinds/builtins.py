@@ -224,8 +224,12 @@ def _comment_line(c: dict) -> str:
     is what voices them as a comment, and a model that meets a line of their
     words on its own may read it as the directive's (a ``Consult:`` or an
     ``Author asked:``) whatever marks it. A comment is a sentence or two, so
-    its line breaks cost little."""
-    return f"Comment on \"{one_line(c.get('anchor_text') or '')}\": {one_line((c.get('body') or '').strip())}"
+    its line breaks cost little. A contributor's (``contributor``, set by
+    ``realize._kind_lines`` from the role table) is voiced as theirs, which
+    realize.txt reads as a suggestion, never as the person's note."""
+    said = f"on \"{one_line(c.get('anchor_text') or '')}\": {one_line((c.get('body') or '').strip())}"
+    by = c.get("contributor")
+    return f"Contributor {one_line(str(by))} commented {said}" if by else f"Comment {said}"
 
 
 def comment_lower(old: dict, new: dict, ctx: LowerContext) -> str | None:

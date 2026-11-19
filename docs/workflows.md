@@ -86,7 +86,9 @@ pass caused by a hand edit cites nothing.
 2. A hand-off records `feature.handoff`. Its `covers` defaults to the applier's frontier,
    so it includes the edits flushed in the same batch.
 3. The applier writes every queued hand-off into `.codoc/realize.md`, as `loops/realize.py`'s
-   `directive` renders it.
+   `directive` renders it. An open comment thread is in it, each message voiced by its
+   author: a hub contributor's as their suggestion, not the person's note
+   ([concurrency.md](concurrency.md#7-roles-and-authority)).
 4. A coding agent builds it: `/codoc:realize` in Claude Code, `codoc realize`
    (`--engine sdk` or `cli`), or `codoc watch --auto-realize`. On the hub, the worker
    opens a pull request (section 3.6). `codoc realize` runs the agent with
@@ -225,7 +227,8 @@ question. It reads with `codoc_tree` and `codoc_context` and writes nothing.
   `maintain` is `maintainer`; `read` or `triage` is `suggest`; no permission is `none`.
   The hub records it in `config.json` under `human:gh:<login>`.
 - Their submissions go to `inbox/hub-<login>.jsonl`. A suggester's untagged edit becomes a
-  plan of theirs in the drain; their comments stay untagged.
+  plan of theirs in the drain; their comments stay untagged and reach the directive
+  voiced as a contributor's suggestion.
 - With GitHub configured, the worker builds each hand-off that has no realization and no
   pull request yet, on its own worktree, with a sandboxed agent, and opens a pull request.
   Its commit names the hand-off in a `Codoc-Handoff` trailer and the branch the pull

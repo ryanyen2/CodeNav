@@ -26,7 +26,7 @@ SUGGEST = "suggest"
 NONE = "none"                  # recorded on revocation: not a role, the absence of one
 COMMENT = "comment"
 # The ops a comment is made of, besides the `block.add` that mints it.
-_COMMENT_EDITS = frozenset({K.TEXT_INSERT, K.TEXT_DELETE, K.TEXT_MARK, K.BLOCK_SET})
+_COMMENT_EDITS = frozenset({K.TEXT_INSERT, K.TEXT_DELETE, K.TEXT_RESTORE, K.TEXT_MARK, K.BLOCK_SET})
 
 
 def _withdrawing_own_empty_plan(store: Store, op: Op) -> bool:
@@ -133,7 +133,12 @@ class Roles:
       land a stranger's words when the maintainer accepts it. A contributor does not
       have to tag anything themselves: the drain opens the plan and tags their
       ops, turning a deletion into the plan's ``suggest_del``. What
-      it cannot carry under a plan (a merge, a block delete) stays refused.
+      it cannot carry under a plan (a merge, a block delete) stays refused,
+      and so does every ``bind.*`` op: an attach applies at once, and the hub
+      worker confines its agent to the feature's bound files, so a
+      suggester's attach would widen what the agent may edit before any
+      verdict. The editor never sends one; bindings are the loop's, the
+      agents' and the owners'.
       Nothing untagged but a comment: taking back words they proposed is the
       plan getting smaller, so it rides in the plan like everything else
       (``ops.PLANNABLE`` carries ``text.delete``/``text.restore`` for exactly
@@ -196,6 +201,8 @@ class Roles:
             return None
         if op.kind == K.PLAN_OPEN:
             return None
+        if op.kind.startswith("bind."):
+            return f"{role} may not write {op.kind}"
         if _withdrawing_own_empty_plan(store, op):
             return None
         if is_comment_op(store, op.kind, op.target, op.payload):
