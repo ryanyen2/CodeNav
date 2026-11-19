@@ -8,20 +8,20 @@ def get_adapter(language: str) -> LanguageAdapter:
     adapters = {
         "python": PythonAdapter,
         "typescript": TypeScriptAdapter,
-        "tsx": TypeScriptAdapter,
+        "tsx": lambda: TypeScriptAdapter("tsx"),
     }
-    cls = adapters.get(language.lower())
-    if cls is None:
+    make = adapters.get(language.lower())
+    if make is None:
         raise ValueError(
             f"No adapter for language: {language!r}. Supported: {list(adapters)}"
         )
-    return cls()
+    return make()
 
 
 EXTENSIONS = {
     ".py": "python",
     ".ts": "typescript",
-    ".tsx": "typescript",
+    ".tsx": "tsx",
     ".mts": "typescript",
     ".cts": "typescript",
 }

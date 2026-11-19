@@ -238,13 +238,15 @@ For each batch the daemon does, in order:
    deferred. When it closes, or after 900 seconds of silence (the daemon then closes it),
    the deferred files and every file the session touched go to step 4, and that pass
    cites every queued hand-off. A close is an epoch the daemon saw open that is open no
-   longer, or a closed epoch whose `ended_at` the daemon has not reflected, which it never
-   saw open: a turn can open and close while one batch runs. A close already in
-   `activity.json` when the daemon starts counts as a close: the turn may have ended
-   while no daemon ran, and the Stop hook reflects no code. A pass over a turn the daemon
-   before it reflected finds no changed code. Every epoch has
-   an id, and only a stop naming it closes it: a realize pass that runs no hooks opens one
-   under its own id and closes it when the pass ends.
+   longer, or a closed epoch whose `ended_at` is not the last close reflected, which the
+   daemon never saw open: a turn can open and close while one batch runs, or while no
+   daemon runs (the Stop hook reflects no code). After the pass, the daemon records the
+   close's `ended_at` as `reflected` in `activity.json`, and a daemon starts from that
+   record, so a close is reflected once: a daemon that starts after a turn closed with
+   none running reflects that turn, and one that starts after a reflected close does not
+   reflect it again, so the code changed since (a hand edit, a `git pull`) cites nothing.
+   Every epoch has an id, and only a stop naming it closes it: a realize pass that runs
+   no hooks opens one under its own id and closes it when the pass ends.
 4. Reflect the changed code files that are not deferred: the loop's pass, which writes
    ops as `loop` and cites the hand-offs step 1 noted. It covers every code file changed
    since the index was last updated, not only those the batch saw change, so an edit

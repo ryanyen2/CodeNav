@@ -13,6 +13,9 @@ by the same rules: ``canonical_file`` names it as the walk names it,
 ``why_not_indexed`` says whether the walk reads it (the daemon asks this of
 every changed file), and ``code_on_disk`` hashes its chunks as the app does
 (``file_chunks``).
+
+A file whose parse has errors and has lost a definition that is still in the
+file keeps the chunks the index had for it (``_hidden_by_a_syntax_error``).
 """
 from __future__ import annotations
 
@@ -20,6 +23,7 @@ import codecs
 import json
 import os
 import pathlib
+import re
 from typing import AsyncIterator
 
 import cocoindex as coco
@@ -28,7 +32,7 @@ from cocoindex.resources.file import FileLike, PatternFilePathMatcher
 from cocoindex.resources.id import generate_id
 
 from codoc.index.lang import EXTENSIONS, detect_language, get_adapter
-from codoc.index.reader import _lance_path
+from codoc.index.reader import ChunkRow, _lance_path, read_all_chunks
 from codoc.index.schema import LANCE_DB, LANCE_TABLE_NAME, CodeChunk
 from codoc.index.tree_walk import walk as tree_walk
 
@@ -145,19 +149,23 @@ _BOMS = ((codecs.BOM_UTF32_LE, "utf-32-le"), (codecs.BOM_UTF32_BE, "utf-32-be"),
          (codecs.BOM_UTF16_LE, "utf-16-le"), (codecs.BOM_UTF16_BE, "utf-16-be"), (codecs.BOM_UTF8, "utf-8-sig"))
 
 
+def _decode(raw: bytes) -> str:
+    """A file's bytes as text: by their byte-order mark, else as UTF-8, with
+    undecodable bytes replaced and line endings kept as they are."""
+    encoding = next((enc for bom, enc in _BOMS if raw.startswith(bom)), "utf-8")
+    return raw.decode(encoding, "replace")
+
+
 def file_chunks(file_str: str, raw: bytes) -> list[tuple]:
     """The chunks the index keeps for one file's bytes, each with its
     ``tree_walk`` hashes: the one way codoc reads a source file, for the index
-    and for an agent's evidence alike. The bytes are decoded by their
-    byte-order mark, else as UTF-8, with undecodable bytes replaced and line
-    endings kept as they are. The symbol is a row's key: its id is
-    ``generate_id(symbol)``, and the change set and the bindings are keyed by
-    it. A class can define a name twice (a property's getter and setter, a
-    redefinition), and a second row with the same id is a "target state already
-    declared" error that drops the whole file, so the first chunk per symbol is
-    kept."""
-    encoding = next((enc for bom, enc in _BOMS if raw.startswith(bom)), "utf-8")
-    source = raw.decode(encoding, "replace")
+    and for an agent's evidence alike, decoded by ``_decode``. The symbol is a
+    row's key: its id is ``generate_id(symbol)``, and the change set and the
+    bindings are keyed by it. A class can define a name twice (a property's
+    getter and setter, a redefinition), and a second row with the same id is a
+    "target state already declared" error that drops the whole file, so the
+    first chunk per symbol is kept."""
+    source = _decode(raw)
     adapter = get_adapter(detect_language(file_str))
     seen: set[str] = set()
     out = []
@@ -235,6 +243,22 @@ def code_on_disk(sourcedir: str | pathlib.Path, files: set[str]) -> dict[str, tu
     return out
 
 
+def _hidden_by_a_syntax_error(file_str: str, raw: bytes, found: set[str]) -> list[ChunkRow]:
+    """The chunks the index holds for ``file_str`` when a syntax error hid one
+    of them, else none. One is hidden when the parse has errors and lost it
+    (``found`` is what it kept) while its name is still in the file: an
+    autosave of a half-typed call swallows the function after it. Removed, the
+    chunk would be detached, and the pass that sees it again cannot tell it is
+    the same code. A definition that was deleted takes its name with it."""
+    source = _decode(raw)
+    if not get_adapter(detect_language(file_str)).parse(source).root_node.has_error:
+        return []
+    held = read_all_chunks(_codoc_dir, files={file_str})
+    lost = {r.symbol.split("::", 1)[1].rsplit(".", 1)[-1] for r in held if r.symbol not in found}
+    hidden = any(re.search(rf"(?<![\w$]){re.escape(name)}(?![\w$])", source) for name in lost)
+    return held if hidden else []
+
+
 @coco.fn(memo=True)
 async def _process_file(
     file: FileLike,
@@ -244,7 +268,14 @@ async def _process_file(
     # The walk yields only files the index reads (`_SourceMatcher`).
     file_str = _repo_relative(pathlib.Path(file.file_path.path), sourcedir)
     lang = detect_language(file_str)
-    for c, walk_result in file_chunks(file_str, await file.read()):
+    raw = await file.read()
+    chunks = file_chunks(file_str, raw)
+    held = _hidden_by_a_syntax_error(file_str, raw, {c.symbol for c, _ in chunks})
+    if held:
+        for r in held:
+            target.declare_row(row=CodeChunk(**vars(r)))
+        return
+    for c, walk_result in chunks:
         target.declare_row(
             row=CodeChunk(
                 id=await generate_id(c.symbol), file=file_str, symbol=c.symbol, language=lang, source=c.source,

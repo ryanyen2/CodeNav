@@ -12,15 +12,18 @@ Schema (version 1)::
       "epoch": {"id": "ep-<session_id>", "open": true, "started_at": "<iso>", "ended_at": null},
       "touched": ["src/theme.py"],
       "cited": ["s-3f9a:12"],
-      "realize_seen": 2
+      "realize_seen": 2,
+      "reflected": "<iso>"
     }
 
 ``touched`` is the repo-relative files the turn's tools read or wrote.
 ``cited`` is the hand-offs the turn's MCP calls cited in ``caused_by``. Both
 reset when the epoch opens. ``realize_seen`` is the size of the realize queue
-the hooks last announced to the session. ``open`` is a lease, not a flag: a
-session that is hard-killed never runs the hook that would clear it, so a
-reader trusts it only while the file keeps being written (``epoch_alive``,
+the hooks last announced to the session. ``reflected`` is the ``ended_at`` of
+the last close a daemon reflected, so a daemon that starts later does not
+reflect it again. ``open`` is a lease, not a flag: a session that is
+hard-killed never runs the hook that would clear it, so a reader trusts it
+only while the file keeps being written (``epoch_alive``,
 ``EPOCH_STALE_SECONDS``).
 
 Every write is a read-modify-write under one lock, so two hooks firing
@@ -165,6 +168,16 @@ def note_queue_size(codoc_dir: str | Path, n: int) -> bool:
         if n != seen:
             write_json(activity_path(codoc_dir), {**data, "realize_seen": n})
         return n > seen
+
+
+def note_reflected(codoc_dir: str | Path, ended_at: str) -> None:
+    """Record that a daemon reflected the close ``ended_at``, if it is still
+    the close in the file: a turn that reopened the epoch since is left
+    alone, so the write does not renew its lease."""
+    with _lock(codoc_dir):
+        data = read_activity(codoc_dir)
+        if ended_at and (data.get("epoch") or {}).get("ended_at") == ended_at:
+            write_json(activity_path(codoc_dir), {**data, "reflected": ended_at})
 
 
 def close_epoch(codoc_dir: str | Path, expected_id: str, *,

@@ -23,7 +23,7 @@ def make(tmp_path, changesets: list):
     (root / ".codoc").mkdir(parents=True)
     calls: list[bool] = []          # one entry per reflect pass: whether it rebuilt the graph
 
-    def changeset(root_dir, codoc_dir, whole):
+    def changeset(root_dir, codoc_dir, whole, bindings):
         calls.append(whole)
         return changesets.pop(0) if changesets else ChangeSet()
 
@@ -69,7 +69,7 @@ def test_a_daemon_started_during_an_agent_turn_reflects_the_turn_when_it_closes(
     d.process_batch([str(d.codoc_dir / "activity.json")])
     d.ws.close()
 
-    again = Daemon.start(d.root, changeset=lambda _r, _c, whole: calls.append(whole) or ChangeSet(
+    again = Daemon.start(d.root, changeset=lambda _r, _c, whole, _b: calls.append(whole) or ChangeSet(
         modified=[ChunkRef("c.py::send", "f9", "t1")]), propose=lambda *a, **k: [], printer=lambda *_: None)
     assert "opened" in again.process_batch([])
     close_epoch(again.codoc_dir, "ep-1")
@@ -651,7 +651,7 @@ def test_a_daemon_started_after_a_turn_went_silent_reflects_that_turn(tmp_path):
     (root / ".codoc").mkdir(parents=True)
     calls: list[bool] = []
 
-    def changeset(_root, _codoc, whole):
+    def changeset(_root, _codoc, whole, _bindings):
         calls.append(whole)
         return ChangeSet(modified=[ChunkRef("c.py::send", "f2", "t1")])
     write_activity(root / ".codoc", {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": ["c.py"]})
@@ -669,7 +669,7 @@ def test_a_daemon_started_after_a_turn_closed_reflects_that_turn(tmp_path):
     (root / ".codoc").mkdir(parents=True)
     calls: list[bool] = []
 
-    def changeset(_root, _codoc, whole):
+    def changeset(_root, _codoc, whole, _bindings):
         calls.append(whole)
         return ChangeSet(modified=[ChunkRef("c.py::send", "f2", "t1")])
     write_activity(root / ".codoc", {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": ["c.py"]})
@@ -678,27 +678,54 @@ def test_a_daemon_started_after_a_turn_closed_reflects_that_turn(tmp_path):
     assert "agent session closed" in d.process_batch([]) and calls == [False]
 
 
-def test_a_pass_over_a_turn_the_daemon_before_reflected_writes_nothing(tmp_path):
-    """A starting daemon cannot tell a turn that closed while none ran from
-    one the daemon before it reflected, so it reflects both. For the second
-    the index has nothing new: no model call, no op, and the hand-off the
-    turn did not build stays queued."""
-    from codoc.calculus.derive import queued
+def _a_turn_a_daemon_reflected(tmp_path):
+    """A repository whose last agent turn, which touched c.py, a daemon
+    reflected when it closed; that daemon has since exited."""
     root = tmp_path / "repo"
     cd = root / ".codoc"
     cd.mkdir(parents=True)
-    ws = Workspace(cd)
-    seed_loop(ws)
-    handoff(ws, "h1", actor="human:local")
-    ws.close()
+    d = Daemon(root, changeset=lambda *a: ChangeSet(), propose=lambda *a, **k: [], printer=lambda *_: None)
+    seed_loop(d.ws)
     write_activity(cd, {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": ["c.py"]})
     close_epoch(cd, "ep-1")
-    asked: list = []
-    d = Daemon(root, changeset=lambda *a: ChangeSet(), propose=lambda *a, **k: asked.append(a) or [],
-               printer=lambda *_: None)
-    ops = len(d.ws.store.ops)
-    assert "reflect" in d.process_batch([])
-    assert asked == [] and len(d.ws.store.ops) == ops and queued(d.ws.store) == ["h1"]
+    assert "agent session closed" in d.process_batch([str(cd / "activity.json")])
+    d.ws.close()
+    return root, cd
+
+
+def test_a_close_a_daemon_reflected_is_not_reflected_again_so_a_later_hand_edit_cites_nothing(tmp_path):
+    """A hand-off is queued after the turn, and the person edits c.py by hand
+    while no daemon runs. The daemon that starts next reads the close as
+    reflected, so the pass over the hand edit cites nothing and settles
+    nothing (docs/concurrency.md, section 10)."""
+    from codoc.calculus.derive import queued
+    root, cd = _a_turn_a_daemon_reflected(tmp_path)
+    ws = Workspace(cd)
+    handoff(ws, "h1", actor="human:local")
+    ws.close()
+    (root / "c.py").write_text("def send(): ...\n")
+    d = Daemon(root, changeset=lambda *a: ChangeSet(modified=[ChunkRef("c.py::send", "f2", "t1")]),
+               propose=lambda *a, **k: [], printer=lambda *_: None)
+    assert "closed" not in d.process_batch([])
+    assert "reflect" in d.process_batch([str(root / "c.py")])
+    assert [o.caused_by for o in d.ws.store.ops if o.kind == K.BIND_REFRESH] == [None]
+    assert queued(d.ws.store) == ["h1"]
+
+
+def test_a_restart_after_a_reflected_close_writes_nothing_for_a_deleted_feature(tmp_path):
+    """The pass a close runs settles a deleted heading whose hand-off did not
+    ask for its code to go, whatever the pass found (``realize._phantom_done``).
+    So a restart that took the reflected close for a new one would settle a
+    deletion handed off after the turn, which no agent saw."""
+    root, cd = _a_turn_a_daemon_reflected(tmp_path)
+    ws = Workspace(cd)
+    ws.submit([{"kind": K.BLOCK_DELETE, "target": {"bid": "h1"}, "payload": {}}], actor="human:local")
+    handoff(ws, "h1", actor="human:local")
+    ws.close()
+    d = Daemon(root, changeset=lambda *a: ChangeSet(), propose=lambda *a, **k: [], printer=lambda *_: None)
+    n = len(d.ws.store.ops)
+    d.process_batch([])
+    assert d.ws.store.ops[n:] == []
 
 
 def test_a_lease_that_names_its_process_holds_while_the_process_lives(tmp_path):

@@ -26,6 +26,28 @@ The excludes are:
   `examples/`): they are code, but the tree describes what the product does, and every
   indexed file costs a bootstrap call. `"index_exclude": []` indexes them.
 
+A pass reads what changed from the chunk index (`codoc/index/changes.py`): the index
+before and after it is brought up to date, compared over every file. Two cases differ:
+
+- No index before the update. The index (`.codoc/lancedb`, `.codoc/cocoindex.db`) is not
+  tracked, so a fresh clone starts without one, and so does a reset. The change set is
+  then a baseline, compared with the bindings: a bound chunk whose hashes differ from its
+  binding is changed, a bound symbol the code no longer defines is removed, and no chunk
+  is added, since nothing tells code written since the last pass from code a person
+  detached. The graph is built whole. Code that arrived unbound while there was no index
+  (a commit by someone not running codoc) is therefore not placed.
+- A file that does not parse. An autosave in the middle of typing a call can make the
+  parser fold the function after it into a syntax error. A chunk lost that way would be
+  detached, and the pass that sees it again cannot tell it is the same code. So when a
+  file's parse has errors and has lost a chunk whose name is still in the file, the index
+  keeps the chunks it had for that file until a parse hides none (`index/app.py`). A
+  deleted definition takes its name with it and is removed. Limit: a definition deleted
+  while its name is still in the file (a call left behind) stays indexed until the name
+  goes or the file parses. The bundled TypeScript grammar reads some newer syntax as
+  errors (`accessor`, `using`, `in`/`out` variance annotations, `export type *`, import
+  attributes), so a file that uses it never parses. A `.tsx` file is parsed with the TSX
+  grammar, since the TypeScript one reads JSX as errors.
+
 `codoc sync` runs one pass without a daemon. A pass, in `codoc/loops/reflect.py`:
 
 | step | ops, all by `loop` | lands |

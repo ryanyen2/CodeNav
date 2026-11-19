@@ -477,7 +477,7 @@ def test_a_binding_names_a_file_as_the_index_walk_does(tmp_path):
     assert canonical_file(tmp_path, "../elsewhere.py") is None
     walk = subprocess.run(
         [sys.executable, "-c", "import json, sys; from codoc.index.changes import compute_changeset; "
-         "print(json.dumps(sorted(c.symbol for c in compute_changeset(sys.argv[1], sys.argv[1] + '/.codoc').added)))",
+         "print(json.dumps(sorted(r.symbol for r in compute_changeset(sys.argv[1], sys.argv[1] + '/.codoc').rows)))",
          str(tmp_path)], capture_output=True, text=True, timeout=120,
         env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])})
     assert walk.returncode == 0, walk.stderr

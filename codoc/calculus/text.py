@@ -8,8 +8,8 @@ is still a position an insert, a split or a comment can name.
 
 Every mutation is by character identity, never by offset, and a character
 identity is held by exactly one Text at a time (a merge moves segments, it
-does not copy them). Offsets exist only at the edges: ``ref_at`` /
-``offset_of`` translate for the editor and for ``ingest``.
+does not copy them). Offsets exist only at the edge: ``ref_at`` names the
+live character at an offset, for ``ingest``.
 
 Two ways to name characters, and they are not interchangeable:
 
@@ -206,13 +206,6 @@ class Text:
                 return s.ref(offset - seen)
             seen += len(s.chars)
         raise IndexError(offset)
-
-    def offset_of(self, ref: CharRef) -> int | None:
-        """Live offset of a character, or None when it is dead."""
-        i, off = self.locate(ref)
-        if not self.segs[i].live:
-            return None
-        return sum(len(s.chars) for s in self.segs[:i] if s.live) + off
 
     def first_ref(self) -> CharRef | None:
         return self.segs[0].first if self.segs else None

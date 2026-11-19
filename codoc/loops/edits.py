@@ -69,10 +69,6 @@ class Change:
     structural: bool = False
     refused: str | None = None
 
-    @property
-    def empty(self) -> bool:
-        return not (self.bodies or self.rewrites or self.strikes)
-
 
 def validate(raw) -> str | None:
     """Why ``raw`` cannot be compiled, or None. Shape only: ids are checked

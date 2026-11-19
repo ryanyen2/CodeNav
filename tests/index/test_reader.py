@@ -67,6 +67,7 @@ def test_compute_changeset_reads_source_only_for_the_files_that_changed(tmp_path
 
     monkeypatch.setattr(diff_mod, "read_all_chunks", fake_read)
     monkeypatch.setattr(diff_mod, "update_index", lambda *a, **k: None)
+    monkeypatch.setattr(diff_mod, "has_current_table", lambda _: True)
 
     cs = diff_mod.compute_changeset("root", str(tmp_path))
     assert calls == [(None, False), (None, False), ({"a.py"}, True)]

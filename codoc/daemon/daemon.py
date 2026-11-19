@@ -14,7 +14,9 @@ Per debounced batch of filesystem events it does, in order:
 3. read the agent epoch (``activity.json``): while a coding agent's session is
    open, changed code files are deferred, since the agent is mid-edit; when it
    closes, or after ``EPOCH_STALE_SECONDS`` of silence, they and every file
-   the session touched go to step 4, and that pass cites every queued hand-off;
+   the session touched go to step 4, and that pass cites every queued
+   hand-off; the close is then recorded as reflected in ``activity.json``, so
+   a daemon that starts later does not reflect it again;
 4. reflect the changed code files that are not deferred, citing the hand-offs
    of step 1: every code file changed since the index was last updated, not
    only those the batch saw change;
@@ -42,7 +44,9 @@ from codoc.loops.realize import settle_if_idle
 from codoc.workspace import Roles, Workspace
 from codoc.workspace import inbox as I
 from codoc.workspace import log as L
-from codoc.workspace.epoch import EPOCH_STALE_SECONDS, close_epoch, epoch_age, epoch_touched_files, read_activity
+from codoc.workspace.epoch import (
+    EPOCH_STALE_SECONDS, close_epoch, epoch_age, epoch_touched_files, note_reflected, read_activity,
+)
 from codoc.workspace.layout import ACTIVITY, APPLIER_LOCK, CODOC_DIR, GRAPH_CACHE, atomic_write, locked
 
 DEBOUNCE_MS = 600
@@ -58,7 +62,7 @@ TICK_MS = 30_000
 class DaemonState:
     epoch_open: bool = False
     deferred: set[str] = field(default_factory=set)   # code files changed while the epoch was open
-    ended_at: str | None = None                        # the `ended_at` of the last epoch close this daemon reflected
+    reflected: str | None = None                       # the `ended_at` of the last epoch close reflected
 
 
 class Daemon:
@@ -76,10 +80,9 @@ class Daemon:
         for p in self.ws.problems:
             printer(f"▸ log problem: {p.path}:{p.line}: {p.reason}")
         self.graph = Graph.load(self.codoc_dir / GRAPH_CACHE)
-        # A close already in activity.json counts as a close: the turn may have
-        # ended while no daemon ran, and a pass over one a daemon before this
-        # one reflected finds no changed code.
-        self.state = DaemonState()
+        # The close a daemon before this one reflected is not a close again;
+        # one that ended while no daemon ran is (the Stop hook reflects no code).
+        self.state = DaemonState(reflected=read_activity(self.codoc_dir).get("reflected"))
         self.say = printer
         self.after_batch = after_batch       # called with the daemon after every watched batch
         self._changeset = changeset
@@ -189,14 +192,14 @@ class Daemon:
             ep = read_activity(self.codoc_dir).get("epoch") or {}
         if ep.get("open"):
             if not self.state.epoch_open:
-                self.state = DaemonState(epoch_open=True, ended_at=self.state.ended_at)
+                self.state = DaemonState(epoch_open=True, reflected=self.state.reflected)
                 notes.append("agent session opened")
-        elif self.state.epoch_open or ep.get("ended_at") not in (None, self.state.ended_at):
+        elif self.state.epoch_open or ep.get("ended_at") not in (None, self.state.reflected):
             # A close: the epoch this daemon saw open is no longer open, or one
-            # it never saw open was closed since its last close (a turn can
-            # open and close while one batch runs).
+            # it never saw open closed after the last close reflected (a turn
+            # can open and close while one batch runs, or while no daemon ran).
             code |= self.state.deferred | set(epoch_touched_files(self.codoc_dir))
-            self.state = DaemonState(ended_at=ep.get("ended_at"))
+            self.state = DaemonState(reflected=ep.get("ended_at"))
             under_epoch = True
             notes.append("recovered a dead agent session" if stale else "agent session closed")
         # 4. Reflect.
@@ -206,6 +209,8 @@ class Daemon:
                 notes.append(f"deferring {len(code)} file(s) for the open session")
             else:
                 notes.append(self.reflect(under_epoch=under_epoch, landed=landed))
+        if under_epoch:
+            note_reflected(self.codoc_dir, self.state.reflected)
         # 5. Settle what the drain landed, and a session that just closed.
         settle_if_idle(self.ws, sha=sha, now=now)
         # 6. Publish (the publisher skips the write when nothing moved).
@@ -217,7 +222,8 @@ class Daemon:
         was last updated (``index_code``; ``whole`` rebuilds the graph)."""
         from codoc.kinds.lift import lift_pass
         from codoc.loops.reflect import reflect
-        cs = index_code(self.root, self.codoc_dir, self.graph, whole=whole, changeset=self._changeset)
+        cs = index_code(self.root, self.codoc_dir, self.graph, whole=whole, bindings=self.ws.store.bindings,
+                        changeset=self._changeset)
         res = reflect(self.ws, cs, self.graph, propose=self._propose or _propose(),
                       doc_language=workspace_doc_language(self.codoc_dir), under_epoch=under_epoch, landed=landed)
         settle_if_idle(self.ws, res, sha=head(self.root)[0])
@@ -269,15 +275,17 @@ class Daemon:
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-def index_code(root: str | Path, codoc_dir: str | Path, graph: Graph, *, whole: bool = False, changeset=None):
+def index_code(root: str | Path, codoc_dir: str | Path, graph: Graph, *, whole: bool = False,
+               bindings: dict | None = None, changeset=None):
     """Bring the chunk index up to date, update the code graph from it, and
     cache the graph where every reader loads it. The graph re-extracts the
-    edges of the files whose chunks changed; ``whole`` builds it from every
-    chunk instead (``codoc init``, ``codoc sync``). ``changeset(root,
-    codoc_dir, whole)`` stands in for the index in tests. Returns the change
-    set."""
-    cs = (changeset or _changeset)(str(root), str(codoc_dir), whole)
-    if whole:
+    edges of the files whose chunks changed; ``whole``, or a baseline change
+    set compared with ``bindings`` (``compute_changeset``), builds it from
+    every chunk instead (``codoc init``, ``codoc sync``, a fresh clone).
+    ``changeset(root, codoc_dir, whole, bindings)`` stands in for the index
+    in tests. Returns the change set."""
+    cs = (changeset or _changeset)(str(root), str(codoc_dir), whole, bindings)
+    if whole or cs.baseline:
         graph.rebuild(cs.rows)
     else:
         graph.update(cs.rows, cs.touched_files())
@@ -285,9 +293,9 @@ def index_code(root: str | Path, codoc_dir: str | Path, graph: Graph, *, whole: 
     return cs
 
 
-def _changeset(root: str, codoc_dir: str, whole: bool):
+def _changeset(root: str, codoc_dir: str, whole: bool, bindings: dict | None):
     from codoc.index.changes import compute_changeset
-    return compute_changeset(root, codoc_dir, all_sources=whole)
+    return compute_changeset(root, codoc_dir, all_sources=whole, bindings=bindings)
 
 
 def _propose():
