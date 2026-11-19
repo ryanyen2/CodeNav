@@ -32,7 +32,7 @@ def test_closes_matching_stale_epoch(tmp_path):
     healed = json.loads(activity_path(codoc_dir).read_text())
     assert healed["epoch"]["open"] is False
     assert healed["epoch"]["ended_at"]  # stamped
-    # `touched` is preserved so the caller can still fold those files into Loop A.
+    # `touched` is preserved so the caller can still fold those files into the reflect pass.
     assert "src/a.py" in healed["touched"]
 
 
