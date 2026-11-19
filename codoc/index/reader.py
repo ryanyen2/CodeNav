@@ -29,10 +29,10 @@ class ChunkRow:
 
     id: int
     file: str
-    symbol_path: str
+    symbol: str
     language: str
     source: str
-    tokens_hash: str
+    fingerprint: str
     types_hash: str
     start_byte: int
     end_byte: int
@@ -42,10 +42,10 @@ class ChunkRow:
         return cls(
             id=raw["id"],
             file=raw["file"],
-            symbol_path=raw["symbol_path"],
+            symbol=raw["symbol"],
             language=raw.get("language", ""),
             source=raw.get("source", ""),
-            tokens_hash=raw.get("tokens_hash", ""),
+            fingerprint=raw.get("fingerprint", ""),
             types_hash=raw.get("types_hash", ""),
             start_byte=raw.get("start_byte", 0),
             end_byte=raw.get("end_byte", 0),
@@ -114,7 +114,7 @@ async def _open_table(codoc_dir: str | Path):
     return await conn.open_table(LANCE_TABLE_NAME)
 
 
-_BASE_COLUMNS = ["id", "file", "symbol_path", "language", "tokens_hash",
+_BASE_COLUMNS = ["id", "file", "symbol", "language", "fingerprint",
                  "types_hash", "start_byte", "end_byte"]
 
 

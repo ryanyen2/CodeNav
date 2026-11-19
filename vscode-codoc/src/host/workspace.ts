@@ -91,10 +91,10 @@ export function statusBarView(ws: Workspace, hasExecs: boolean): { text: string;
     const st = ws.status;
     const n = st.features ?? 0;
     switch (st.state) {
-        case 'queued': return { text: `$(rocket) codoc: ${st.pending ?? 0} to build`, tooltip: st.detail ?? 'handed off; run /codoc:sync or Build now', command: 'codoc.realize', warn: true };
+        case 'queued': return { text: `$(rocket) codoc: ${st.pending ?? 0} to build`, tooltip: st.detail ?? 'handed off; run /codoc:realize in Claude Code, or Build now', command: 'codoc.realize', warn: true };
         case 'edited': return { text: `$(edit) codoc: ${st.pending ?? 0} edited`, tooltip: st.detail ?? 'hand off with ⌘S in the tree', command: 'codoc.open', warn: false };
         case 'proposed': return { text: `$(comment-discussion) codoc: ${st.pending ?? 0} proposed`, tooltip: st.detail ?? 'plans await your verdict', command: 'codoc.open', warn: false };
-        case 'realizing': return { text: '$(sync~spin) codoc: building', tooltip: st.detail ?? 'an agent is implementing', command: 'codoc.open', warn: false };
+        case 'realizing': return { text: '$(sync~spin) codoc: building', tooltip: st.detail ?? 'an agent is building', command: 'codoc.open', warn: false };
         default: return { text: `$(book) codoc: ${n} features`, tooltip: 'in step with the code', command: 'codoc.open', warn: false };
     }
 }

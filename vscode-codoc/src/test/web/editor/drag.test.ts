@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 
-import { block, ids, kinds, mount, posIn, select, shadowFaults, texts, type Mounted } from './harness';
+import { moveBlock } from '../../../web/editor/commands';
+import { block, ids, kinds, mount, perform, posIn, select, shadowFaults, texts, type Mounted } from './harness';
 
 describe('moving a block', () => {
     it('takes what the heading dominates with it, as one block.move', () => {
         const m = mount([block('h1', 'heading', 'A'), block('p1', 'paragraph', 'a-body'), block('h2', 'heading', 'B'), block('p2', 'paragraph', 'b-body')]);
-        m.handle.moveBlock('h2', 'START');
+        perform(m, s => moveBlock(s, 'h2', 'START'));
         m.handle.flush();
         expect(ids(m.view.state.doc)).toEqual(['heading:h2', 'paragraph:p2', 'heading:h1', 'paragraph:p1']);
         expect(kinds(m.submitted)).toEqual(['block.move']);

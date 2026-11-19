@@ -8,7 +8,7 @@ kind, internal}``. Traversal follows ``internal == 1`` edges only.
 from __future__ import annotations
 
 import json
-from collections import defaultdict, deque
+from collections import defaultdict
 from pathlib import Path
 
 from codoc.index.extract import extract_edges, extract_edges_for_changed
@@ -80,20 +80,9 @@ class Graph:
             out.extend(e["src_symbol"] for e in self.edges_in(symbol) if kinds is None or e["kind"] in kinds)
         return out
 
-    def ego(self, symbols: set[str], hops: int = 1, kinds: set[str] | None = None) -> set[str]:
-        visited = set(symbols)
-        frontier = set(symbols)
-        for _ in range(hops):
-            nxt: set[str] = set()
-            for s in frontier:
-                for a in self.neighbors(s, kinds):
-                    if a not in visited:
-                        visited.add(a)
-                        nxt.add(a)
-            frontier = nxt
-            if not frontier:
-                break
-        return visited
+    def ego(self, symbols: set[str]) -> set[str]:
+        """``symbols`` and every symbol one edge away from them, either way."""
+        return set(symbols).union(*(self.neighbors(s) for s in symbols))
 
     def neighbor_feature(self, symbol: str, owner_of) -> str | None:
         """The feature owning most of ``symbol``'s neighbours; ``owner_of(symbol)``
@@ -104,47 +93,6 @@ class Graph:
             if f:
                 count[f] = count.get(f, 0) + 1
         return max(count, key=count.get) if count else None
-
-    def entry_points(self) -> list[str]:
-        src, dst = set(), set()
-        for e in self.all_edges():
-            if e["kind"] != "call":
-                continue
-            src.add(e["src_symbol"])
-            if e.get("dst_symbol"):
-                dst.add(e["dst_symbol"])
-        return sorted(src - dst)
-
-    def topological_order(self) -> list[str]:
-        fwd: dict[str, list[str]] = defaultdict(list)
-        rev: dict[str, list[str]] = defaultdict(list)
-        indeg: dict[str, int] = defaultdict(int)
-        syms: set[str] = set()
-        for e in self.all_edges():
-            kind, s, d = e["kind"], e["src_symbol"], e.get("dst_symbol")
-            if kind not in ("call", "contain") or not d:
-                continue
-            syms.update((s, d))
-            if kind == "contain":
-                fwd[s].append(d)
-                indeg[d] += 1
-                indeg.setdefault(s, 0)
-            else:
-                rev[d].append(s)
-                indeg[s] += 1
-                indeg.setdefault(d, 0)
-        q = deque(sorted(s for s in syms if indeg.get(s, 0) == 0))
-        order: list[str] = []
-        while q:
-            s = q.popleft()
-            order.append(s)
-            for n in sorted(fwd.get(s, []) + rev.get(s, [])):
-                indeg[n] -= 1
-                if indeg[n] == 0:
-                    q.append(n)
-        done = set(order)
-        order.extend(sorted(s for s in syms if s not in done))
-        return order
 
     # ── cache ──────────────────────────────────────────────────────────────
     def dumps(self) -> str:

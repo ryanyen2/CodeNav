@@ -15,7 +15,7 @@ import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 
 import { PHASE_CHANNEL, PHASE_LABEL, paintsFor, theirEdits, type Paint } from '../calc/claims';
-import { NO_WATERMARKS, type Phase, type Projection, type Watermarks } from '../calc/projection';
+import type { Phase, Projection } from '../calc/projection';
 import { REPLACED } from './commands';
 import { sameStructure } from './guards';
 
@@ -207,23 +207,19 @@ export class Paints {
                 if (block.type.name === 'heading') fid = bid;
                 this.featureOf.set(bid, fid);
                 const pb = byId.get(bid);
-                if (pb) this.byBlock.set(bid, paintsFor(pb, projection, fid, this.watermarks(fid), history, viewer));
+                if (pb) this.byBlock.set(bid, paintsFor(pb, projection, fid, history, viewer));
             });
         } else {
             for (const bid of this.dirty) {
                 if (!this.featureOf.has(bid)) continue;
                 const fid = this.featureOf.get(bid) ?? null;
                 const pb = projection.blocks.find(b => b.id === bid);
-                if (pb) this.byBlock.set(bid, paintsFor(pb, projection, fid, this.watermarks(fid), history, viewer));
+                if (pb) this.byBlock.set(bid, paintsFor(pb, projection, fid, history, viewer));
                 else this.byBlock.delete(bid);
             }
         }
         this.all = false;
         this.dirty.clear();
         return this.byBlock;
-    }
-
-    private watermarks(fid: string | null): Watermarks {
-        return (fid && this.shown.projection.watermarks?.[fid]) || NO_WATERMARKS;
     }
 }

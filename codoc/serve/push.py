@@ -8,7 +8,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from codoc.workspace import log as L
+from codoc.workspace import inbox
 from codoc.workspace.layout import CONFIG, HISTORY, PROJECTION, STATUS
 from codoc.workspace.roles import NONE, Roles
 
@@ -31,10 +31,11 @@ def _stamp(path: Path) -> tuple[float, int] | None:
 
 
 def status_message(codoc_dir: Path, actor: str = "") -> dict | None:
-    """The status the editor reads, plus the three facts only the host knows:
-    the tree's language, who this viewer is (undo inverts their batches), and
-    what they may write. A contributor's edits ride as a plan of theirs, so
-    the page must not offer them a verdict or a hand-off on somebody else's."""
+    """The status the editor reads, plus the facts only the host knows: the
+    tree's language, who this viewer is (undo inverts their batches), what they
+    may write, and that the hub has no terminal to build in. A contributor's
+    edits ride as a plan of theirs, so the page must not offer them a verdict
+    or a hand-off on somebody else's."""
     st = _read(codoc_dir / STATUS)
     if st is None:
         return None
@@ -46,7 +47,7 @@ def status_message(codoc_dir: Path, actor: str = "") -> dict | None:
     from codoc.workspace.roles import OWNER
     role = Roles.from_config(cfg).role(actor) if actor else OWNER
     return {"kind": "status", "status": {**status, "doc_language": cfg.get("doc_language", "en"),
-                                         "actor": actor, "role": role}}
+                                         "actor": actor, "role": role, "terminal": False}}
 
 
 def history_message(codoc_dir: str | Path) -> dict | None:
@@ -70,14 +71,14 @@ class Feed:
     def __init__(self, codoc_dir: str | Path, client: str, replay: int = REPLAY_ACKS) -> None:
         self.dir = Path(codoc_dir)
         self.client = client
-        self.actor = L.actor_for(client, self.dir) or ""
+        self.actor = inbox.actor_for(client, self.dir) or ""
         self.sent: dict[str, str] = {}
         self.stamps: dict[str, tuple[float, int] | None] = {}
-        ack = L.inbox_dir(self.dir) / f"{client}.ack.jsonl"
+        ack = inbox.inbox_dir(self.dir) / f"{client}.ack.jsonl"
         size = ack.stat().st_size if ack.exists() else 0
         self.ack_offset = size
         if size and replay:
-            # Count back from the end of the last COMPLETE line, not from the
+            # Count back from the end of the last complete line, not from the
             # end of the file: a daemon caught mid-append leaves a half-written
             # tail, and subtracting the complete lines from the file's size
             # lands the offset that many bytes inside the oldest replayed line,
@@ -88,7 +89,7 @@ class Feed:
             self.ack_offset = whole - sum(len(line) + 1 for line in complete[-replay:])
 
     def pending(self) -> list[dict]:
-        # Acks FIRST, which is the order on disk: the daemon acks during the
+        # Acks first, which is the order on disk: the daemon acks during the
         # drain and publishes afterwards. A projection ahead of the ack that
         # releases a block is skipped for that block (the page is right about a
         # block it still holds), so sending the projection first would make the
@@ -130,7 +131,7 @@ class Feed:
         return True
 
     def _acks(self) -> list[dict]:
-        path = L.inbox_dir(self.dir) / f"{self.client}.ack.jsonl"
+        path = inbox.inbox_dir(self.dir) / f"{self.client}.ack.jsonl"
         if not path.exists():
             return []
         # A file shorter than where we stopped has been rotated (`rotate_acks`
@@ -160,7 +161,7 @@ async def event_source(codoc_dir: str | Path, client: str, *, is_disconnected=No
     """Async generator of SSE events; polls the few files it cares about (a
     watch on ``.codoc`` would also wake on every index write).
 
-    The door is re-asked every tick, because a stream is a long-lived READ of
+    The door is re-asked every tick, because a stream is a long-lived read of
     the whole tree: a door checked only at connect would let a collaborator
     removed from the repository keep receiving every projection for as long as
     the browser held the tab open. It asks two questions: the tracked roles
@@ -169,7 +170,7 @@ async def event_source(codoc_dir: str | Path, client: str, *, is_disconnected=No
     their next request meets the door.
     """
     feed = Feed(codoc_dir, client)
-    actor = L.actor_for(client, codoc_dir)
+    actor = inbox.actor_for(client, codoc_dir)
     while True:
         if still_allowed is not None and not still_allowed():
             return

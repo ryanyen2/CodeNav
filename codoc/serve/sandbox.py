@@ -1,12 +1,12 @@
-"""The enforced sandbox policy for a hub-triggered realize run.
+"""The sandbox policy for a realize run the hub starts.
 
-A remote-triggered realization runs with the maintainer's keys on a git worktree,
-so its filesystem + tool scope must be an ENFORCED boundary, not a prompt
-instruction. This module is the pure, fully-tested policy:
+A realization a remote contributor asked for runs with the maintainer's keys on a
+git worktree, so the files and tools it may use are enforced by code, not asked
+for in the prompt. This module is that policy, as pure functions:
 
-  • ``ALLOWED_TOOLS``: a minimal set; Bash (arbitrary shell) is excluded.
+  • ``ALLOWED_TOOLS``: a small set; Bash (arbitrary shell) is excluded.
   • ``edit_allowed``: an Edit/Write target must be inside the directive's
-    ``Edit only:`` scope AND outside the denylist (.github/, .claude/, .codoc/,
+    ``Edit only:`` scope and outside the denylist (.github/, .claude/, .codoc/,
     .mcp.json, the package manifest/lockfiles), the paths a malicious suggestion
     would use to persist (workflow injection, hook/MCP registration, dependency
     confusion) past PR review.
@@ -24,8 +24,8 @@ instruction. This module is the pure, fully-tested policy:
   • ``can_use_tool``: the decision itself; ``out_of_scope_changes`` is the
     post-run gate that fails PR creation when the agent wrote outside scope.
 
-This is the policy. The live wiring installs it as the SDK's **PreToolUse
-hook** (``realize_agent._run_sandboxed_sdk``), not as ``can_use_tool``: an
+``realize_agent._run_sandboxed_sdk`` installs it as the SDK's PreToolUse hook,
+not as ``can_use_tool``: an
 ``allowed_tools`` entry naming a whole tool auto-approves it before the
 permission callback runs, so listing the tools this module guards is what would
 stop it from ever being asked about them.
@@ -61,8 +61,8 @@ _SECRET_GLOBS = (".env", ".env.*", "*.pem", "*.key", "*.keystore", "id_rsa", "id
                  "hosts.yml", ".netrc", ".npmrc", ".pypirc", ".pgpass", ".htpasswd",
                  "credentials", "credentials.*", "secrets", "secrets.*", "*.secrets",
                  "token", "token.*", "*.token", "*.jks", "*.p12", "service-account*.json")
-# `.codoc` (the control dir, dot kept) holds the App/token caches → never readable
-# by the agent. NOT `codoc` (the source package), which the agent legitimately edits.
+# `.codoc` (the control directory, with its dot) holds the token caches, so the agent
+# never reads it. `codoc` without the dot is a source package the agent may edit.
 _SECRET_DIRS = (".codoc",)
 
 
@@ -150,12 +150,12 @@ def can_use_tool(tool_name: str, tool_input: dict | None, *,
         return False, f"tool '{tool_name}' is not permitted for remote-originated realization"
     target = ""
     if tool_input:
-        # A GLOB takes its target in `pattern` too, and a pattern that names a
+        # A Glob takes its target in `pattern` too, and a pattern that names a
         # place (absolute, or climbing out with `..`) lists files anywhere.
         # `Read` still refuses them, so what leaks is names, and a boundary that
         # answers "no" to the contents has no business answering "yes" to the
         # listing. Only the static prefix is a path; the glob part is not. A
-        # GREP's `pattern` is a regex and means nothing of the sort: reading it
+        # Grep's `pattern` is a regex and names no place: reading it
         # as a path refused an agent searching for `/api/message`.
         target = tool_input.get("file_path") or tool_input.get("path") or ""
         if not target and tool_name == "Glob":

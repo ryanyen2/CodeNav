@@ -1,7 +1,7 @@
 /**
  * shell.ts: one command line for the integrated terminal.
  *
- * codoc's long-running commands (`realize`, `sync`, `serve`) run in a terminal
+ * codoc's long-running commands (`realize`, `serve`) run in a terminal
  * so the person can watch and interrupt them, which means an argument vector
  * has to become text a shell reads back as the same arguments.
  *

@@ -13,12 +13,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from codoc.calculus import ops as K
-from codoc.calculus.ids import MACHINE_KINDS, actor_kind
+from codoc.calculus.ids import LOOP, MACHINE_KINDS, actor_kind
 from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
 from codoc.calculus.text import AnchorError
 from codoc.workspace.config import read_config
-from codoc.workspace.log import hub_actor
+from codoc.workspace.inbox import hub_actor
 
 OWNER = "owner"
 SUGGEST = "suggest"
@@ -51,7 +51,7 @@ def deleted_ops(store: Store, target: dict, payload: dict) -> set[str]:
     try:
         start, end = _ref(payload["from"]), _ref(payload["to"])
         block, path = store.locate_char(start, (str(target.get("bid") or ""), str(target.get("path") or "text")))
-        return block.text(path).ops_between(start, end)
+        return {o for o, _ in block.text(path).live_chars_between(start, end)}
     except (AnchorError, KeyError, IndexError, TypeError, ValueError):
         return set()
 
@@ -88,14 +88,6 @@ def is_comment_op(store: Store, kind: str, target: dict, payload: dict) -> bool:
     return b is not None and b.kind == COMMENT
 
 
-def minted_by(store: Store, bid: str) -> str:
-    """The actor whose ``block.add`` put this block there."""
-    for o in store.ops_on([bid]):
-        if o.kind == K.BLOCK_ADD and o.conflict is None:
-            return o.actor
-    return ""
-
-
 def _own_comment(store: Store, op: Op) -> bool:
     """Whether a contributor writing inside a comment is writing their own.
 
@@ -114,8 +106,9 @@ def _own_comment(store: Store, op: Op) -> bool:
     if b is None:
         return False
     if op.kind == K.BLOCK_SET and op.target.get("path") == "status":
-        return minted_by(store, str(b.content.get("thread") or bid)) == op.actor
-    return minted_by(store, bid) == op.actor
+        first = store.blocks.get(str(b.content.get("thread") or bid))
+        return first is not None and first.added_by == op.actor
+    return b.added_by == op.actor
 
 
 @dataclass
@@ -144,7 +137,7 @@ class Roles:
 
     A comment is writable untagged by anyone: it hangs off words rather than
     standing among them, and there is nothing for a maintainer to accept. What
-    a contributor may write there is their OWN: a new comment (which is what a
+    a contributor may write there is their own: a new comment (which is what a
     reply is) and the words of one they minted. Deleting somebody else's words,
     or resolving a thread they did not start, is answering for them.
     """
@@ -172,7 +165,7 @@ class Roles:
             return "machine"
         # A git person (`human:<email>`, `human:local`) can push to the
         # repository, which is where trust in a merged log comes from. A hub
-        # sign-in (`log.hub_actor`) cannot, so it is what the hub recorded.
+        # sign-in (`inbox.hub_actor`) cannot, so it is what the hub recorded.
         if kind == "human" and not actor.startswith(hub_actor("")):
             return OWNER
         return self.default
@@ -189,7 +182,7 @@ class Roles:
         if role in (OWNER, "maintainer"):
             return None
         if role == "machine":
-            if op.kind in K.VERDICTS and not (op.kind == K.FEATURE_REALIZED and op.actor == "loop") \
+            if op.kind in K.OWNER_ONLY and not (op.kind == K.FEATURE_REALIZED and op.actor == LOOP) \
                     and not _withdrawing_own_empty_plan(store, op):
                 return f"{op.actor} may not write {op.kind}"
             return None

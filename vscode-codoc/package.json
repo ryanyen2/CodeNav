@@ -49,20 +49,16 @@
         "title": "codoc: Start the daemon"
       },
       {
-        "command": "codoc.sync",
-        "title": "codoc: Sync"
-      },
-      {
         "command": "codoc.realize",
-        "title": "codoc: Implement queued changes now"
+        "title": "codoc: Build now"
       },
       {
         "command": "codoc.serve.start",
-        "title": "codoc: Share — start the deployed hub (browser editor)"
+        "title": "codoc: Start the hub (the tree in a browser)"
       },
       {
         "command": "codoc.serve.startTunnel",
-        "title": "codoc: Share remotely — start the hub over a tunnel"
+        "title": "codoc: Start the hub over a tunnel"
       },
       {
         "command": "codoc.open",
@@ -105,12 +101,12 @@
       {
         "id": "codocSetup",
         "title": "Get started with codoc",
-        "description": "Provision codoc and open your codebase as a navigable feature tree — in one click.",
+        "description": "Set up codoc and open your codebase as a document of features.",
         "steps": [
           {
             "id": "setup",
             "title": "Set up codoc",
-            "description": "Install the Python core, index your repo, and start the managed daemon — no terminal, no manual pip.\n[Set up codoc](command:codoc.setup)",
+            "description": "Install the Python core, choose a model provider, build the first feature tree and start the daemon.\n[Set up codoc](command:codoc.setup)",
             "media": {
               "markdown": "media/walkthrough/setup.md"
             },
@@ -121,7 +117,7 @@
           {
             "id": "open-tree",
             "title": "Open your feature tree",
-            "description": "Navigate your codebase as a tree of intent — jump to code, author titles/descriptions, steer the agent.\n[Open your feature tree](command:codoc.open)",
+            "description": "Read the codebase as a document of features, edit it, hand your edits to the agent and review what it built.\n[Open your feature tree](command:codoc.open)",
             "media": {
               "markdown": "media/walkthrough/open-tree.md"
             },

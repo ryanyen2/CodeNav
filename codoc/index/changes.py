@@ -1,8 +1,8 @@
 """What changed in the code: a diff of the chunk index before and after an update.
 
 ``compute_changeset`` snapshots the ``code_chunks`` table, runs an incremental
-``update_index``, snapshots again, keys both by ``(file, symbol_path)`` and
-compares ``tokens_hash`` to classify every chunk as added, removed or modified.
+``update_index``, snapshots again, keys both by ``symbol`` and compares
+``fingerprint`` to classify every chunk as added, removed or modified.
 Deterministic; relocations are recognised later, by the reflect pass.
 """
 from __future__ import annotations
@@ -15,18 +15,21 @@ from codoc.index.runner import update_index
 
 @dataclass
 class ChunkRef:
-    """A chunk involved in a change. ``source`` is the new source for
-    added/modified, or the pre-change source for removed (best-effort).
+    """A chunk involved in a change. ``source`` is the new source for an added
+    or modified chunk, the old one for a removed chunk.
 
-    ``fingerprint`` is the chunk's ``tokens_hash`` (content identity, move-
-    invariant); ``types_hash`` is its AST-shape identity (rename-invariant).
-    Together they let the reflect pass recognise a remove+add pair as a relocation."""
+    ``fingerprint`` is the chunk's content, wherever it sits; ``types_hash`` is
+    its shape, whatever its names. Together they let the reflect pass
+    recognise a removed and an added chunk as one that moved or was renamed."""
 
-    file: str
-    symbol_path: str
+    symbol: str
     fingerprint: str = ""
-    source: str = ""
     types_hash: str = ""
+    source: str = ""
+
+    @property
+    def file(self) -> str:
+        return self.symbol.split("::", 1)[0]
 
 
 @dataclass
@@ -35,9 +38,6 @@ class ChangeSet:
     removed: list[ChunkRef] = field(default_factory=list)
     modified: list[ChunkRef] = field(default_factory=list)
     rows: list[ChunkRow] = field(default_factory=list)  # post-update index snapshot
-
-    def is_empty(self) -> bool:
-        return not (self.added or self.removed or self.modified)
 
     def touched_files(self) -> set[str]:
         return {c.file for c in (self.added + self.removed + self.modified)}
@@ -70,18 +70,17 @@ def compute_changeset(
         light = read_all_chunks(codoc_dir, with_source=False)
         all_new_rows = [r for r in light if r.file not in file_scope] + new_rows
 
-    old_by_key = {(r.file, r.symbol_path): r for r in old_rows}
-    new_by_key = {(r.file, r.symbol_path): r for r in new_rows}
+    old_by_symbol = {r.symbol: r for r in old_rows}
+    new_by_symbol = {r.symbol: r for r in new_rows}
 
     cs = ChangeSet(rows=all_new_rows)
-    for key in set(old_by_key) | set(new_by_key):
-        file, symbol_path = key
-        old = old_by_key.get(key)
-        new = new_by_key.get(key)
-        if old is None and new is not None:
-            cs.added.append(ChunkRef(file, symbol_path, new.tokens_hash, new.source, new.types_hash))
-        elif old is not None and new is None:
-            cs.removed.append(ChunkRef(file, symbol_path, old.tokens_hash, old.source, old.types_hash))
-        elif old is not None and new is not None and old.tokens_hash != new.tokens_hash:
-            cs.modified.append(ChunkRef(file, symbol_path, new.tokens_hash, new.source, new.types_hash))
+    for symbol in old_by_symbol.keys() | new_by_symbol.keys():
+        old = old_by_symbol.get(symbol)
+        new = new_by_symbol.get(symbol)
+        if old is None:
+            cs.added.append(ChunkRef(symbol, new.fingerprint, new.types_hash, new.source))
+        elif new is None:
+            cs.removed.append(ChunkRef(symbol, old.fingerprint, old.types_hash, old.source))
+        elif old.fingerprint != new.fingerprint:
+            cs.modified.append(ChunkRef(symbol, new.fingerprint, new.types_hash, new.source))
     return cs

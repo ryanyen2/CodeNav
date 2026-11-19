@@ -7,7 +7,7 @@ works with its feature tree.
 |---|---|---|
 | hooks | `hooks/hooks.json` | tell the codoc daemon when an agent session starts and ends and which files it touched, so the daemon reflects the session's code changes once, when it closes |
 | skill | `skills/codoc-intent/SKILL.md` | how to read and update the tree through the MCP tools |
-| commands | `commands/codoc/{sync,plan,ask}.md` | `/codoc:sync` builds queued edits, `/codoc:plan` proposes a change as tree edits, `/codoc:ask` answers a question as a reading path over the tree |
+| commands | `commands/codoc/{realize,plan,ask}.md` | `/codoc:realize` builds the queued hand-offs, `/codoc:plan` proposes a change as tree edits, `/codoc:ask` answers a question in chat as a reading path over the tree |
 | MCP server | registered at Claude Code's local scope | the `codoc_*` tools |
 
 The hooks and the `mcp__codoc__*` permission go in the untracked

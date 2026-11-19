@@ -39,15 +39,12 @@ from codoc.calculus import ops as K
 from codoc.calculus.apply import replay_recorded
 from codoc.calculus.derive import reads_its_ops
 from codoc.calculus.doc import layout_entry
-from codoc.calculus.ids import START
-from codoc.calculus.ops import Op, frontier_union
+from codoc.calculus.ids import IMPORT, START
+from codoc.calculus.ops import Op, frontier_union, in_frontier
 from codoc.calculus.store import Store
 from codoc.workspace import log as L
 from codoc.workspace.clock import Clock
 from codoc.workspace.layout import atomic_write
-
-SNAPSHOT_ACTOR = "import"
-
 
 def settled_prefix(store: Store) -> int:
     """How many of ``store.ops`` may be folded: everything before the oldest op
@@ -56,18 +53,15 @@ def settled_prefix(store: Store) -> int:
     A feature with no proposal open on it is finished: its ops are history and
     the state they produced is enough, because every other reader reads state
     (``derive.reads_its_ops`` says which and why). Stopping at the oldest op of
-    any feature that is NOT is conservative, not exact (the cut lands at that
-    feature's creation rather than at the oldest op its verdict will need), and
-    it is one linear pass more each time a plan is found in flight across the
-    cut, where replaying
-    forward to test each prefix would be quadratic. An exact cut would be worth
-    having only if a tree commonly had an old open plan and much newer work; it
-    does not.
+    any feature that is not is conservative: the cut lands at that feature's
+    creation rather than at the oldest op its verdict will need. It costs one
+    linear pass more each time a plan is found in flight across the cut, where
+    replaying forward to test each prefix would be quadratic.
     """
     live: set[str] = set()
     for b in list(store.blocks.values()):
         if b.kind == "heading" and reads_its_ops(store, b.id):
-            live.update(x.id for x in store.feature_body(b.id))
+            live.update(x.id for x in store.body(b.id))
             live.add(b.id)
     for p in store.open_plans.values():
         live.update(p.ops)
@@ -112,7 +106,7 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
     def emit(kind, target, payload, **extra):
         nonlocal seq
         seq += 1
-        d = {"id": f"{session}:{seq}", "at": clock.tick(), "actor": SNAPSHOT_ACTOR, "batch": session,
+        d = {"id": f"{session}:{seq}", "at": clock.tick(), "actor": IMPORT, "batch": session,
              "kind": kind, "target": target, "payload": payload}
         d.update(extra)
         out.append(d)
@@ -126,6 +120,10 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
         # moves they name are what this fold takes away.
         payload = {"kind": b.kind, "level": b.level, "after": prev, "rank": b.rank, "ranked_by": b.ranked_by,
                    "content": content, "texts": texts, **layout_entry(b.kind, b.layout)}
+        if b.added_by:
+            payload["added_by"] = b.added_by       # who may write into a comment they added
+        if b.prior:
+            payload["prior"] = {k: [list(e) for e in v] for k, v in b.prior.items()}    # what `lower` compares against
         if b.void:
             payload["void"] = {k: list(v) for k, v in b.void.items()}
         if not b.live:
@@ -142,7 +140,7 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
             payload["detached"] = [dict(e) for e in b.detached]
         if b.id in store.bound_once:
             # That this feature ever had code is state, not history: the reflect
-            # pass proposes deleting a feature that HAD code and has none now,
+            # pass proposes deleting a feature that had code and has none now,
             # and after a fold there is no `bind.attach` left to read.
             payload["bound_once"] = True
         w = store.watermarks_by_fid.get(b.id)
@@ -169,7 +167,7 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
         # It names the verdict it folded: the plan keeps it, and the blocks
         # above already hold what that verdict did.
         emit(K.PLAN_ACCEPT if p.status == "accepted" else K.PLAN_REJECT, {"pid": p.id}, {"verdict": p.verdict},
-             actor=p.decided_by or SNAPSHOT_ACTOR)
+             actor=p.decided_by or IMPORT)
     for fid, w in store.watermarks_by_fid.items():
         if fid not in store.blocks:
             continue
@@ -180,7 +178,7 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
                 if asked is not None and asked.payload.get(k):
                     payload[k] = asked.payload[k]
             emit(K.FEATURE_HANDOFF, {"fid": fid}, payload,
-                 actor=asked.actor if asked is not None else SNAPSHOT_ACTOR)
+                 actor=asked.actor if asked is not None else IMPORT)
         if w.realized:
             # A realization settles a request, so there has to be one to settle
             # or `nothing_queued` refuses it, and a person may undo a hand-off
@@ -190,14 +188,19 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
             emit(K.FEATURE_REALIZED, {"fid": fid}, {"covers": w.realized})
             if not w.handoff:
                 # …and then take the stand-in request back, as the person did.
-                emit(K.FEATURE_HANDOFF, {"fid": fid}, {"restore": {}, "handoff": ""})
+                emit(K.FEATURE_HANDOFF, {"fid": fid}, {"restore": {}, "undoes": ""})
     return out
 
 
 def write_snapshot(codoc_dir: str | Path, store: Store, clock: Clock) -> Path | None:
     """Write ``log/snapshot-<hlc>.jsonl`` folding the settled prefix of the log
     and archive the session files it covers whole. None when nothing is settled
-    enough to fold."""
+    enough to fold.
+
+    A daemonless writer between calls may hold one of the archived files open;
+    at its next call it finds the file gone and opens a new session over the
+    logs on disk (``Workspace.follow_head``), so nothing is appended under
+    ``log/archive/``."""
     cut = settled_prefix(store)
     if cut == 0:
         return None
@@ -217,21 +220,13 @@ def write_snapshot(codoc_dir: str | Path, store: Store, clock: Clock) -> Path | 
     atomic_write(path, "".join([json.dumps(header) + "\n"] + [json.dumps(o, ensure_ascii=False) + "\n" for o in ops]))
     archive = d / L.ARCHIVE_DIR
     archive.mkdir(exist_ok=True)
-    # Only a file the fold covers WHOLE and whose writer has CLOSED: one that
-    # also holds ops after the cut is still the log (and the frontier keeps its
-    # folded half from applying twice), and one still open belongs to a live
-    # applier: moving it would send that applier's next op to `log/archive/`,
-    # which no rebuild reads.
+    # Only a file the fold covers whole: one that also holds ops after the cut
+    # is still the log, and the frontier keeps its folded half from applying twice.
     for old in L.list_sessions(codoc_dir):
         sess = L.read_session(old)
-        if sess.valid and sess.closed and sess.ops and all(_covered(o.id, frontier) for o in sess.ops):
+        if sess.valid and sess.ops and all(in_frontier(o.id, frontier) for o in sess.ops):
             old.replace(archive / old.name)
     for old_snap in L.list_snapshots(codoc_dir):
         if old_snap != path:
             old_snap.replace(archive / old_snap.name)
     return path
-
-
-def _covered(op_id: str, frontier: dict) -> bool:
-    sid, _, seq = op_id.rpartition(":")
-    return int(seq) <= frontier.get(sid, -1)

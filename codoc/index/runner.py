@@ -12,14 +12,6 @@ from datetime import timedelta
 from pathlib import Path
 
 
-def _lance_path(codoc_dir: Path) -> Path:
-    return codoc_dir / "lancedb"
-
-
-def _cocoindex_db_path(codoc_dir: Path) -> Path:
-    return codoc_dir / "cocoindex.db"
-
-
 # How long a superseded table version is kept before optimize may reclaim it.
 # Not zero: a concurrent reader (the daemon, a CLI one-shot) may hold a
 # newly superseded version open (lancedb#3086). Not long either: the window is
@@ -62,19 +54,15 @@ def update_index(
 
     Persists chunks to ``{codoc_dir}/lancedb`` and tracks memoization state in
     ``{codoc_dir}/cocoindex.db``. Safe to call repeatedly: files whose
-    fingerprint is unchanged are skipped; killed runs resume from the last
+    content is unchanged are skipped; killed runs resume from the last
     committed component.
     """
     codoc_path = Path(codoc_dir).resolve()
     codoc_path.mkdir(parents=True, exist_ok=True)
 
-    # cocoindex and the app's lifespan read where to write from the environment.
-    os.environ["COCOINDEX_DB"] = str(_cocoindex_db_path(codoc_path))
-    os.environ["CODOC_LANCE_PATH"] = str(_lance_path(codoc_path))
-
     from codoc.index.app import make_app
 
-    app = make_app(Path(sourcedir).resolve())
+    app = make_app(Path(sourcedir).resolve(), codoc_path)
     app.update_blocking(report_to_stdout=report_to_stdout)
 
     _maintain_table(codoc_path)

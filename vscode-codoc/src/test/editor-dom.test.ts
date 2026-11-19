@@ -15,8 +15,9 @@ import * as fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { kindOf, type Projection, type Submission } from '../web/calc/projection';
+import { deleteFeature, moveBlock } from '../web/editor/commands';
 import { newThreadOps } from '../web/editor/comments';
-import { key, mountProj, paste, pasteText, posIn, select, shadowFaults, typeRule, typeText, type Mounted } from './web/editor/harness';
+import { key, mountProj, paste, pasteText, perform, posIn, select, shadowFaults, typeRule, typeText, type Mounted } from './web/editor/harness';
 
 const TRIP = process.env.CODOC_ROUNDTRIP ?? '';
 const PHASE = process.env.CODOC_ROUNDTRIP_PHASE ?? 'R1';
@@ -141,8 +142,8 @@ function gesture(m: Mounted, r: () => number, step: number, seed: number): strin
     if (g === 3) { select(m.view, from, to); key(m.view, 'Delete', 46); return `del ${from}-${to}`; }
     if (g === 4) { select(m.view, r() < 0.5 ? from : to, to); key(m.view, 'Enter', 13); return `enter ${from}-${to}`; }
     if (g === 5) { select(m.view, from, r() < 0.5 ? from : to); paste(m, [`P${step}`, `Q${step}`]); return `paste ${from}-${to}`; }
-    if (g === 6 && heads.length > 1) { const h = heads[Math.floor(r() * heads.length)]; m.handle.deleteFeature(h.bid); return `deleteFeature ${h.bid}`; }
-    if (g === 7 && heads.length > 1) { const h = heads[Math.floor(r() * heads.length)]; const after = r() < 0.3 ? 'START' : blocks[Math.floor(r() * blocks.length)].bid; m.handle.moveBlock(h.bid, after as 'START'); return `move ${h.bid} after ${after}`; }
+    if (g === 6 && heads.length > 1) { const h = heads[Math.floor(r() * heads.length)]; perform(m, (s, env) => deleteFeature(s, env, h.bid)); return `deleteFeature ${h.bid}`; }
+    if (g === 7 && heads.length > 1) { const h = heads[Math.floor(r() * heads.length)]; const after = r() < 0.3 ? 'START' : blocks[Math.floor(r() * blocks.length)].bid; perform(m, s => moveBlock(s, h.bid, after)); return `move ${h.bid} after ${after}`; }
     if (g === 8 && heads.length) { const h = heads[Math.floor(r() * heads.length)]; select(m.view, h.start); key(m.view, 'Tab', 9, { shiftKey: r() < 0.5 }); return `relevel ${h.bid}`; }
     if (g === 9) { if (!paras.length) return 'noop'; const pp = paras[Math.floor(r() * paras.length)]; select(m.view, pp.start); typeText(m.view, '##'); const at = posIn(m.view, pp.bid, 2); m.view.someProp('handleTextInput', f => f(m.view, at, at, ' ', () => m.view.state.tr)); return `## ${pp.bid}`; }
     if (g === 10) {

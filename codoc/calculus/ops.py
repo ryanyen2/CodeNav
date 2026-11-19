@@ -47,25 +47,22 @@ KINDS = frozenset({
     FEATURE_HANDOFF, FEATURE_REALIZED,
 })
 
-# Ops a plan may carry. A plan proposes and never destroys: its deletions are
-# ``suggest_del`` marks, so ``text.delete``, ``block.delete`` and ``block.merge``
-# are not here. ``bind.attach`` is here because a proposed node's bindings are
-# part of the proposal: rejecting it detaches them. Each kind here has an
-# inverse that ``plan.reject`` applies.
-# `text.delete` and `text.restore` are here for one case only, and the handler
-# enforces it: a plan taking back words IT proposed. That is the proposal
-# getting smaller, not a second act on the trunk, and it is why a suggester
-# needs no untagged op at all. A plan may not delete anybody else's
-# characters: `suggest_del` is how a proposal asks for that.
+# Ops a plan may carry. A plan proposes and never destroys: it asks for words
+# to go with ``suggest_del`` marks, so ``block.delete`` and ``block.merge`` are
+# not here. ``bind.attach`` is here because a proposed node's bindings are part
+# of the proposal: rejecting it detaches them. ``text.delete`` and
+# ``text.restore`` are here only for a plan's own words (the handler holds them
+# to those), so a suggester can take back what they proposed without an
+# untagged op.
 PLANNABLE = frozenset({TEXT_INSERT, TEXT_DELETE, TEXT_RESTORE, TEXT_MARK,
                        BLOCK_ADD, BLOCK_SET, BLOCK_SPLIT, BLOCK_MOVE, BIND_ATTACH})
 
-# Verdicts and hand-offs: ``owner`` or ``maintainer`` only. ``feature.realized``
-# is emitted by the daemon on evidence, never by an agent; the shipped policy
-# denies it to every ``agent:*`` actor.
-VERDICTS = frozenset({PLAN_ACCEPT, PLAN_REJECT, PLAN_REOPEN, FEATURE_HANDOFF, FEATURE_REALIZED})
+# Ops only an ``owner`` or ``maintainer`` may write: verdicts and hand-offs.
+# ``feature.realized`` is also the loop's, which settles it on evidence.
+OWNER_ONLY = frozenset({PLAN_ACCEPT, PLAN_REJECT, PLAN_REOPEN, FEATURE_HANDOFF, FEATURE_REALIZED})
 
-# A plan's verdicts and their undo: the ops that turn a plan's status.
+# A plan's verdicts and their undo: the ops that turn a plan's status, and the
+# ones whose canonical payload carries ``steps``.
 TURNS = frozenset({PLAN_ACCEPT, PLAN_REJECT, PLAN_REOPEN})
 
 # Ops that change the set of plans or a plan's status, whatever blocks they touch.
@@ -74,22 +71,35 @@ PLAN_KINDS = TURNS | {PLAN_OPEN}
 STRUCTURAL = frozenset({BLOCK_ADD, BLOCK_SPLIT, BLOCK_MERGE, BLOCK_MOVE, BLOCK_DELETE, BLOCK_RESTORE})
 
 # Payload fields only a snapshot writes: a plan's archived ops, text with its
-# original authors, a block's death, its detached bindings, its watermarks and
-# the move that ranked it.
-# The applier honours them so a fold can rebuild state; from any other writer
-# they would let one actor claim another's words or ops.
+# original authors, who added a block, its death, its detached bindings, the
+# values the author's unrealized sets replaced, its watermarks and the move that
+# ranked it. The
+# applier honours them so a fold can rebuild state; from any other writer they
+# would let one actor claim another's words or ops.
 SNAPSHOT_ONLY = {
-    BLOCK_ADD: ("texts", "dead", "dead_actor", "dead_at", "dead_in", "detached", "bound_once", "code_at", "realized_at",
-                "ranked_by", "void"),
+    BLOCK_ADD: ("texts", "added_by", "dead", "dead_actor", "dead_at", "dead_in", "detached", "prior", "bound_once",
+                "code_at", "realized_at", "ranked_by", "void"),
     PLAN_OPEN: ("ops", "opened_by"),
     PLAN_ACCEPT: ("verdict",),
     PLAN_REJECT: ("verdict",),
 }
 
 
+# The payload keys that hold a character anchor.
+ANCHOR_KEYS = ("after", "from", "to", "start", "end", "at")
+
+
+class Conflict(Exception):
+    """An op that cannot apply. ``code`` is the stable identifier the log
+    records (docs/model.md, Conflict codes)."""
+    def __init__(self, code: str, detail: str = ""):
+        super().__init__(code if not detail else f"{code}: {detail}")
+        self.code = code
+
+
 class OpBody(TypedDict):
     """An op without identity, provenance or tag: what an inverse records and
-    what a client submits. An inverse is a list of bodies applied IN ORDER (a
+    what a client submits. An inverse is a list of bodies applied in order (a
     displacing attach undoes as "detach, then re-attach the prior owner"). An
     undo is the person's own untagged op, so an inverse carries no ``plan`` and
     no ``caused_by``."""

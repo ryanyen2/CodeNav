@@ -17,7 +17,7 @@ describe('the margin', () => {
             { submit: ops => posted.push(...ops), build: () => undefined, newBid: () => 'c-new', featureOf: () => 'h' });
         const p = proj([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one two'), block('p2', 'paragraph', 'three'),
             { id: 'c1', kind: 'comment', level: 0, rank: 'z', head: 1, fields: { thread: 'c1', anchor: 'p2', anchor_text: 'three',
-              scope: 'code', status: 'open', body: { text: 'tighten this', spans: [], suggest_del: [],
+              scope: 'code', status: 'open', body: { text: 'tighten this', spans: [],
               runs: [{ op: 'o', k0: 0, start: 0, end: 12, actor: 'human:gh:bob', at: '1', plan: null }] } } }]);
         (p.blocks[2].fields.text as TextField).spans.push({ kind: 'comment', attrs: { block: 'c1' }, start: 0, end: 5 });
         margin.update(p);

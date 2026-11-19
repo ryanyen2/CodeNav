@@ -6,6 +6,7 @@ from pathlib import Path
 from codoc.calculus import ops as K
 from codoc.workspace import Workspace
 from codoc.workspace import log as L
+from codoc.workspace import inbox as I
 from codoc.workspace.snapshot import write_snapshot
 from tests.helpers import T, refs, seed
 
@@ -20,7 +21,7 @@ def test_ingest_of_identical_text_reports_the_same_thing_on_both_paths(tmp_path)
     client.release(cd)
     # simulate the daemon path: submit + drain + read the ack the way client.ingest does
     ws = Workspace(cd)
-    L.submit(cd, "agent-claude-code", [L.Submission(cid="c1", kind="ingest", target={"bid": "p1", "path": "text"},
+    I.submit(cd, "agent-claude-code", [I.Submission(cid="c1", kind="ingest", target={"bid": "p1", "path": "text"},
                                       payload={"base_text": "Retries once.", "new_md": "Retries once."})])
     ws.drain_inbox()
     ack = client.wait_for_acks(cd, "agent-claude-code", ["c1"], 0.2)[0]
@@ -158,6 +159,6 @@ def test_a_writer_that_waited_for_the_lock_while_a_daemon_started_uses_its_inbox
     monkeypatch.setattr(client, "locked", a_daemon_starts_meanwhile)
     got = client.write(cd, client="cli", wait_s=0, bodies=[{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
                                                            "payload": {"after": list(r[-1]), "text": " X."}}])
-    assert not got[0]["op"] and (L.inbox_dir(cd) / "cli.jsonl").exists()
+    assert not got[0]["op"] and (I.inbox_dir(cd) / "cli.jsonl").exists()
     assert T(Workspace(cd, readonly=True).store, "p1") == "Retries once."
     client.release(cd)

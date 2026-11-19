@@ -27,8 +27,6 @@ interrupted run can be run again.
 """
 from __future__ import annotations
 
-import json
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -39,7 +37,6 @@ from codoc.doclang import DocLanguage, detect_prose_language, norm_key, prose_le
 from codoc.llm.passes import propose_translations
 from codoc.loops.context import description_blocks
 from codoc.workspace import Workspace
-from codoc.workspace.layout import TRANSLATE, atomic_write
 
 BATCH = 12
 PROSE_BLOCKS = PROSE | {TABLE}
@@ -105,45 +102,30 @@ def translate_tree(ws: Workspace, codoc_dir: str | Path, *, language: DocLanguag
     taken: dict[str | None, set[str]] = {}
     for i, h in enumerate(heads):
         taken.setdefault(parent_of(heads, i), set()).add(norm_key(items[h.id]["title"]))
-    remaining = list(pending)
 
-    def progress(running: bool) -> None:
-        if dry_run:
-            return
-        atomic_write(Path(codoc_dir) / TRANSLATE, json.dumps({
-            "running": running, "target": lang.code, "target_name": lang.name,
-            "total": len(pending), "translated": res.translated, "planned": res.planned,
-            "skipped": [s.__dict__ for s in res.skipped], "pending": remaining, "at": time.time()}))
-
-    progress(bool(pending))
-    try:
-        for start in range(0, len(pending), BATCH):
-            batch = pending[start:start + BATCH]
-            try:
-                got = propose([items[f] for f in batch], lang, repo_name=repo_name, config=config)
-                res.calls += 1
-            except Exception as exc:  # noqa: BLE001 (one bad batch must not sink the run)
-                got = {}
-                for fid in batch:
-                    res.skipped.append(Skipped(fid, items[fid]["title"], f"batch failed: {exc}"))
+    for start in range(0, len(pending), BATCH):
+        batch = pending[start:start + BATCH]
+        try:
+            got = propose([items[f] for f in batch], lang, repo_name=repo_name, config=config)
+            res.calls += 1
+        except Exception as exc:  # noqa: BLE001 (one bad batch must not sink the run)
+            got = {}
             for fid in batch:
-                if fid not in got:
-                    if not any(s.feature_id == fid for s in res.skipped):
-                        res.skipped.append(Skipped(fid, items[fid]["title"], "no translation returned"))
-                    continue
-                new_title, new_blocks = got[fid]
-                reason = _check(items[fid], new_title, new_blocks, lang, taken.setdefault(_parent(heads, fid), set()))
-                if reason is None and not dry_run:
-                    reason = _write(ws, fid, new_title, new_blocks, actor, lang, res)
-                if reason:
-                    res.skipped.append(Skipped(fid, items[fid]["title"], reason))
-                else:
-                    res.translated += 1
-            remaining = [f for f in remaining if f not in batch]
-            progress(True)
-            say(f"  · translated {res.translated}/{len(pending)}")
-    finally:
-        progress(False)
+                res.skipped.append(Skipped(fid, items[fid]["title"], f"batch failed: {exc}"))
+        for fid in batch:
+            if fid not in got:
+                if not any(s.feature_id == fid for s in res.skipped):
+                    res.skipped.append(Skipped(fid, items[fid]["title"], "no translation returned"))
+                continue
+            new_title, new_blocks = got[fid]
+            reason = _check(items[fid], new_title, new_blocks, lang, taken.setdefault(_parent(heads, fid), set()))
+            if reason is None and not dry_run:
+                reason = _write(ws, fid, new_title, new_blocks, actor, lang, res)
+            if reason:
+                res.skipped.append(Skipped(fid, items[fid]["title"], reason))
+            else:
+                res.translated += 1
+        say(f"  · translated {res.translated}/{len(pending)}")
     return res
 
 
@@ -176,7 +158,7 @@ def _check(item: dict, new_title: str, new_blocks: dict[str, str], lang: DocLang
 def _write(ws: Workspace, fid: str, new_title: str, new_blocks: dict[str, str], actor: str, lang: DocLanguage,
            res: TranslateResult) -> str | None:
     """Write the feature's translation as one amend, all of it or none
-    (trunk or plan is ``must_propose``'s call). Returns why nothing was
+    (trunk or plan is the machine gate's call, in ``Workspace.amend``). Returns why nothing was
     written, or None."""
     rewrites = [(fid, "text", new_title, None)]
     for bid, md in new_blocks.items():

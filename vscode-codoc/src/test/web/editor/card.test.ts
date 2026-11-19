@@ -18,12 +18,12 @@ function chart(head = 1, title = 'Q3 sales', runs = [{ op: 'k:1', text: title, a
     return {
         id: 'k', kind: 'chart', level: 0, rank: 'k', head,
         fields: {
-            title: { text: runs.map(r => r.text).join(''), spans: [], suggest_del: [], runs: runs.map(r => {
+            title: { text: runs.map(r => r.text).join(''), spans: [], runs: runs.map(r => {
                 const start = at;
                 at += Array.from(r.text).length;
                 return { op: r.op, k0: 0, start, end: at, actor: r.actor, at: '1', plan: null };
             }) },
-            caption: { text: '', runs: [], spans: [], suggest_del: [] },
+            caption: { text: '', runs: [], spans: [] },
             spec: { type: 'bar', series: [1, 2, 3] },
         },
         layout: { text: ['title', 'caption'], flow: true, export: true },
@@ -142,7 +142,7 @@ describe('a block of a kind this editor does not know', () => {
 
     it('has no Text fields without a layout', () => {
         expect(textPaths({ id: 'i', kind: 'image', level: 0, rank: 'i', head: 1,
-                           fields: { caption: { text: 'c', runs: [], spans: [], suggest_del: [] } } })).toEqual([]);
+                           fields: { caption: { text: 'c', runs: [], spans: [] } } })).toEqual([]);
     });
 });
 
@@ -153,7 +153,7 @@ describe('a pasted `codoc:` fence with no `$layout`', () => {
 
     it('splits by the layout of a block of the kind on the page, and sends that layout', () => {
         const img: ProjectedBlock = { id: 'i', kind: 'image', level: 0, rank: 'i', head: 1, layout,
-                                      fields: { asset: 'b.png', alt: { text: '', runs: [], spans: [], suggest_del: [] }, caption: { text: '', runs: [], spans: [], suggest_del: [] } } };
+                                      fields: { asset: 'b.png', alt: { text: '', runs: [], spans: [] }, caption: { text: '', runs: [], spans: [] } } };
         const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', ''), img]);
         m.view.dispatch(m.view.state.tr.setSelection(TextSelection.create(m.view.state.doc, posIn(m.view, 'p', 0))));
         pasteText(m, fence);

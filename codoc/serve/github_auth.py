@@ -1,15 +1,14 @@
 """github_auth.py: the live GitHub edge for the hub's authorization.
 
-``auth.py`` is the pure decision layer (permission→capability, sessions, the
-``authorize`` gate). This module is the thin LIVE edge that talks to GitHub and
-plugs into that layer:
+``auth.py`` makes the decisions (permission to role, sessions, the ``authorize``
+gate). This module is the part that talks to GitHub for it:
 
   • the OAuth authorization-code web flow: a visitor signs in on github.com and
     the hub exchanges the returned code for a short-lived user token, held only
     long enough to read their login;
-  • the collaborator-permission check, run with the MAINTAINER / App-installation
-    token (NEVER the visitor's), because ``GET /repos/{owner}/{repo}/collaborators/
-    {login}/permission`` requires the caller to have push access .
+  • the collaborator-permission check, run with the maintainer's or the App
+    installation's token, never the visitor's, because ``GET /repos/{owner}/{repo}/
+    collaborators/{login}/permission`` requires the caller to have push access.
 
 HTTP is injected (``http_get`` / ``http_post`` callables), so URL-building and
 response-parsing are unit-testable without network; the live default uses ``httpx``
@@ -17,9 +16,9 @@ response-parsing are unit-testable without network; the live default uses ``http
 ``docs/serve-deployment.md``):
 
     CODOC_GITHUB_CLIENT_ID / CODOC_GITHUB_CLIENT_SECRET  the OAuth App
-    CODOC_GITHUB_TOKEN     a token WITH PUSH ACCESS to the repo (App installation
-                           token or a maintainer PAT), used ONLY for the
-                           collaborator-permission call, never handed to any agent
+    CODOC_GITHUB_TOKEN     a token with push access to the repo (an App installation
+                           token or a maintainer's personal token), used only for the
+                           collaborator-permission call and never handed to an agent
     CODOC_SERVE_REPO       owner/repo being served
     CODOC_GITHUB_API       API base (default https://api.github.com; set for GHE)
     CODOC_GITHUB_WEB       OAuth base (default https://github.com; set for GHE)

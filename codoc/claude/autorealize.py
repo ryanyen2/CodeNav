@@ -1,15 +1,16 @@
-"""Unattended realize: ``codoc watch --auto-realize``.
+"""Starting a realize pass: ``codoc realize`` and ``codoc watch --auto-realize``.
 
-By default a hand-off waits in ``.codoc/realize.md`` for the person's own
-Claude Code session to run ``/codoc:sync``. With ``--auto-realize`` the daemon
-starts a pass itself whenever work is queued and no session is live, so
-accepting a plan with nobody at the keyboard still lands code.
+A hand-off waits in ``.codoc/realize.md`` until an agent builds it. A person's
+own Claude Code session does that with ``/codoc:realize``. ``codoc realize``
+starts a pass in the foreground, and with ``--auto-realize`` the daemon starts
+one whenever work is queued and no session is live, so a plan accepted with
+nobody at the keyboard still lands code.
 
-Two engines (``spawn_realize(engine=…)``): the Claude Agent SDK runner
-(:mod:`codoc.claude.sdk_realize`, preferred when installed: it prints one line
-per action and feeds ``activity.json``) and a plain ``claude -p "/codoc:sync"``.
-Either way the agent uses the MCP server and commands the repository already
-has installed.
+Both go through :func:`start_realize`. Two engines: the Claude Agent SDK
+runner (:mod:`codoc.claude.sdk_realize`, chosen by ``auto`` when it is
+installed: it prints one line per action and records the files it touches in
+``activity.json``) and ``claude -p "/codoc:realize"``. Either way the agent
+uses the MCP server and commands the repository already has installed.
 """
 from __future__ import annotations
 
@@ -25,9 +26,42 @@ from codoc.daemon.publish import REALIZE_OWNER_ENV, realizing_is_fresh, write_re
 from codoc.workspace.layout import REALIZE
 
 
+class EngineMissing(RuntimeError):
+    """The engine asked for is not installed. The message says what to install."""
+
+
 def find_claude() -> str | None:
-    """Locate the ``claude`` CLI on PATH, or None if it isn't installed."""
+    """The ``claude`` CLI on PATH, or None when it is not installed."""
     return shutil.which("claude")
+
+
+def start_realize(root_dir: str, codoc_dir: str, *, engine: str = "auto", permission_mode: str = "acceptEdits",
+                  detail: str) -> subprocess.Popen:
+    """Start a realize pass in ``root_dir`` and return its process.
+
+    ``sdk`` runs ``python -m codoc.claude.sdk_realize``; ``cli`` runs ``claude -p
+    "/codoc:realize"``; ``auto`` takes the SDK when it is importable. The pass
+    takes the realizing lease with ``detail`` and is named its owner in the
+    child's environment, so its own agent does not read the lease as another
+    pass's and stand down. Raises :class:`EngineMissing` when the engine is not
+    installed."""
+    from codoc.claude.sdk_realize import resolve_engine, sdk_available
+
+    if resolve_engine(engine) == "sdk":
+        if not sdk_available():
+            raise EngineMissing("claude-agent-sdk is not installed. Run pip install 'codoc[sdk]', or use --engine cli")
+        argv = [sys.executable, "-m", "codoc.claude.sdk_realize", root_dir, permission_mode]
+    else:
+        claude = find_claude()
+        if claude is None:
+            raise EngineMissing("the `claude` CLI is not on PATH")
+        argv = [claude, "-p", "/codoc:realize", "--permission-mode", permission_mode]
+    owner = uuid.uuid4().hex
+    try:
+        write_realizing(codoc_dir, detail=detail, owner=owner)
+    except OSError:  # status is advisory
+        pass
+    return subprocess.Popen(argv, cwd=root_dir, env={**os.environ, REALIZE_OWNER_ENV: owner}, stdin=subprocess.DEVNULL)
 
 
 def should_spawn(codoc_dir: str, *, in_flight: bool) -> bool:
@@ -46,50 +80,6 @@ def should_spawn(codoc_dir: str, *, in_flight: bool) -> bool:
     return not epoch_alive(codoc_dir)
 
 
-def spawn_realize(root_dir: str, codoc_dir: str, *, engine: str = "auto") -> subprocess.Popen | None:
-    """Start an unattended realize pass in ``root_dir``.
-
-    ``sdk`` runs ``python -m codoc.claude.sdk_realize``; ``cli`` runs
-    ``claude -p "/codoc:sync"``; ``auto`` prefers the SDK when it is
-    importable. Returns the Popen handle (so the caller can tell when it has
-    finished), or None if the chosen engine isn't available. Takes the
-    realizing lease, naming the pass as its owner in the child's environment."""
-    from codoc.claude.sdk_realize import resolve_engine, sdk_available
-
-    engine = resolve_engine(engine)
-    owner = uuid.uuid4().hex
-    env = {**os.environ, REALIZE_OWNER_ENV: owner}
-
-    if engine == "sdk":
-        if not sdk_available():
-            return None
-        # stdout/stderr inherit: the runner's per-action lines land in the
-        # daemon's terminal.
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "codoc.claude.sdk_realize", root_dir],
-            cwd=root_dir, env=env,
-            stdin=subprocess.DEVNULL,
-        )
-        detail = "implementing (sdk): codoc watch --auto-realize"
-    else:
-        claude = find_claude()
-        if claude is None:
-            return None
-        proc = subprocess.Popen(
-            [claude, "-p", "/codoc:sync"],
-            cwd=root_dir, env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-        )
-        detail = "implementing (headless): codoc watch --auto-realize"
-    try:
-        write_realizing(codoc_dir, detail=detail, owner=owner)
-    except Exception:  # noqa: BLE001 (status is advisory)
-        pass
-    return proc
-
-
 def auto_realizer(root_dir: str, codoc_dir: str):
     """A callable for ``Daemon(after_batch=…)``: after each batch, start a pass
     if one should run and the last one this started has finished."""
@@ -100,6 +90,9 @@ def auto_realizer(root_dir: str, codoc_dir: str):
         in_flight = proc is not None and proc.poll() is None
         if daemon.state.epoch_open or not should_spawn(codoc_dir, in_flight=in_flight):
             return
-        proc = spawn_realize(root_dir, codoc_dir)
+        try:
+            proc = start_realize(root_dir, codoc_dir, detail="building: codoc watch --auto-realize")
+        except EngineMissing:
+            proc = None
 
     return run

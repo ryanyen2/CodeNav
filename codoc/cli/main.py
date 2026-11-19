@@ -4,9 +4,10 @@
     codoc watch       the daemon: reflect code into the tree, apply edits, publish
     codoc status      where the tree and the code stand
     codoc sync        one pass: drain edits, reflect changed code, publish
-    codoc realize     implement the queued hand-offs now, foreground
+    codoc realize     build the queued hand-offs now, in the foreground
     codoc handoff     hand a feature's edits to the agent (the CLI's ⌘S)
     codoc accept      accept a plan            codoc reject   reject a plan
+    codoc done        mark a hand-off built when the build moved no bound symbol
     codoc history     one feature's history and attribution
     codoc lang        show or set the authoring language
     codoc translate   rewrite an existing tree into that language
@@ -14,7 +15,7 @@
     codoc snapshot    fold the logs into one file
     codoc validate-logs   check log files this workspace did not write
     codoc serve       the hub: serve the tree to GitHub-authorized people
-    codoc install-hooks
+    codoc install-hooks   the Claude Code hooks, /codoc:* commands and MCP server, for this machine
 """
 from __future__ import annotations
 
@@ -62,9 +63,22 @@ def _applier(cd: Path, refusal: str):
 
 def _write_gitignore(cd: Path) -> None:
     (cd / ".gitignore").write_text(
-        "# codoc: the log, the config, the export and the media blocks reference travel with\n"
-        "# the repo; caches, channels and local state do not.\n"
-        "*\n!.gitignore\n!config.json\n!tree.codoc\n!log/\n!log/**\n!media/\n!media/**\n", encoding="utf-8")
+        "# codoc: the log, the config and the media blocks reference travel with the repo;\n"
+        "# the export, caches, channels and local state do not.\n"
+        "*\n!.gitignore\n!config.json\n!log/\n!log/**\n!media/\n!media/**\n", encoding="utf-8")
+
+
+def _default_branch(root: str) -> str:
+    """The branch the hub's pull requests target: the one origin's HEAD names,
+    else the branch checked out, else ``main``."""
+    import subprocess
+    from codoc.index.git import head
+    try:
+        ref = subprocess.run(["git", "-C", root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+                             capture_output=True, text=True, timeout=30).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        ref = ""
+    return ref.removeprefix("origin/") or head(root)[1] or "main"
 
 
 def _version(show: bool) -> None:
@@ -134,19 +148,14 @@ def init(root: str = ROOT,
 
 
 def _bootstrap(root: str, cd: Path, *, organize: bool):
+    from codoc.daemon.daemon import index_code
     from codoc.daemon.publish import publish
     from codoc.doclang import workspace_doc_language
     from codoc.index.graph import Graph
-    from codoc.index.reader import read_all_chunks
-    from codoc.index.runner import update_index
     from codoc.loops.bootstrap import BootstrapResult, bootstrap
     from codoc.workspace import Workspace
-    from codoc.workspace.layout import GRAPH_CACHE, atomic_write
-    update_index(root, str(cd))
-    rows = read_all_chunks(str(cd))
     graph = Graph()
-    graph.rebuild(rows)
-    atomic_write(cd / GRAPH_CACHE, graph.dumps())
+    rows = index_code(root, cd, graph).rows
     ws = Workspace(cd)
     try:
         if not rows:
@@ -178,13 +187,12 @@ def watch(root: str = ROOT,
 @app.command()
 def status(root: str = ROOT):
     """Where the tree and the code stand."""
-    from codoc.calculus.derive import open_plans
+    from codoc.calculus.derive import offered_plans
     from codoc.daemon import client
-    from codoc.mcp.tools import read_status
     cd = _require(root)
-    st = read_status(str(cd))
+    st = client.queue_status(cd)
     typer.echo(f"{st['state']}  ·  {st['features']} features  ·  {st['queued']} queued  ·  "
-               f"{st['edited']} edited  ·  {st['proposals']} proposal(s)")
+               f"{st['edited']} edited  ·  {st['plans']} plan(s)")
     for q in st["queued_list"]:
         typer.echo(f"  queued  {q['feature_id']}  {q['title']}")
     for q in st["reported_list"]:          # cited this turn; settles when the turn ends
@@ -192,7 +200,7 @@ def status(root: str = ROOT):
     for e in st["edited_list"]:
         typer.echo(f"  edited  {e['feature_id']}  {e['title']}")
     # The id is what `codoc accept` and `codoc reject` take.
-    for p in open_plans(client.read(cd).store):
+    for p in offered_plans(client.read(cd).store):
         typer.echo(f"  plan    {p.id}  {p.actor}  {(p.note or p.kind).splitlines()[0]}")
     if st["dead_cites"]:
         typer.echo(f"  {st['dead_cites']} citation(s) no longer resolve to code")
@@ -284,8 +292,7 @@ def accept(plan: str, root: str = ROOT,
     if pl is not None and pl.kind != "delete":
         fids = accept_handoffs(ws.store, pl) if build is None else plan_features(ws.store, pl) if build else []
     for fid in fids:
-        bodies.append({"kind": K.FEATURE_HANDOFF, "target": {"fid": fid},
-                       "payload": {"asked": f"Build the plan {plan}."}})
+        bodies.append({"kind": K.FEATURE_HANDOFF, "target": {"fid": fid}, "payload": {}})
     _report(client.write(cd, client="cli", root_dir=root, bodies=bodies), "accepted")
 
 
@@ -317,11 +324,10 @@ def reject(plan: str, root: str = ROOT):
 @app.command()
 def history(feature: str, root: str = ROOT, limit: int = typer.Option(15, "--limit")):
     """One feature's history (who, when, what) and current attribution."""
-    from codoc.mcp.tools import read_history
     from codoc.daemon import client
     cd = _require(root)
     fid = _resolve_feature(client.read(cd).store, feature)
-    h = read_history(str(cd), fid, limit)
+    h = client.read_history(cd, fid, limit)
     typer.echo(f"{h['title']}  ⟨{fid}⟩")
     for e in h["ops"]:
         extra = f"  {e['text']!r}" if e.get("text") else ""
@@ -333,10 +339,13 @@ def history(feature: str, root: str = ROOT, limit: int = typer.Option(15, "--lim
 @app.command()
 def lang(tag: str = typer.Argument("", help="BCP-47 tag to set; omit to show."), root: str = ROOT):
     """Show or set the language the tree is authored in (.codoc/config.json, tracked)."""
-    from codoc.doclang import resolve, workspace_doc_language
+    from codoc.doclang import is_language_tag, resolve, workspace_doc_language
     from codoc.workspace.config import write_config
     cd = _require(root)
     if tag:
+        if not is_language_tag(tag):
+            typer.echo(f"✗ {tag!r} is not a BCP 47 language tag", err=True)
+            raise typer.Exit(2)
         write_config(cd, doc_language=resolve(tag).code)
         typer.echo(f"✓ authoring language: {resolve(tag).name}. Existing prose is unchanged; "
                    "run `codoc translate` to convert it.")
@@ -368,7 +377,7 @@ def translate(root: str = ROOT, to: str = typer.Option("", "--to"), dry_run: boo
 def rebuild(root: str = ROOT):
     """Replay the logs into the cache and re-publish the derived files."""
     from codoc.daemon.publish import publish
-    from codoc.workspace.validate import refused_verdicts
+    from codoc.workspace.validate import refused_ops
     cd = _require(root)
     with _applier(cd, "A daemon is watching; it rebuilds when HEAD moves. Stop it to rebuild by hand.") as ws:
         ws.rebuild()
@@ -378,13 +387,13 @@ def rebuild(root: str = ROOT):
             typer.echo(f"  ⚠ {p.path}:{p.line}: {p.reason}")
         # A signal, not a gate: a recorded answer stands whatever the table says
         # today, so a count here means a log carries work this table would refuse.
-        for actor, n in sorted(refused_verdicts(ws.store, ws.roles).items()):
+        for actor, n in sorted(refused_ops(ws.store, ws.roles).items()):
             typer.echo(f"  ⚠ {n} applied op(s) by {actor} the roles table would refuse today")
 
 
 @app.command("validate-logs")
 def validate_logs_cmd(paths: list[str] = typer.Argument(None, help="Log files to check; default: what a merge would add."),
-                      root: str = ROOT, base: str = typer.Option("origin/main", "--base", help="Merge base to diff against.")):
+                      root: str = ROOT, base: str = typer.Option("origin/HEAD", "--base", help="Merge base to diff against.")):
     """Check a pull request's session logs against the tracked roles table.
 
     A log file is a capability: replay honours the answer recorded in it, so a
@@ -433,25 +442,19 @@ def snapshot(root: str = ROOT):
 @app.command()
 def realize(root: str = ROOT, engine: str = typer.Option("auto", "--engine", help="auto | sdk | cli"),
             permission_mode: str = typer.Option("acceptEdits", "--permission-mode")):
-    """Implement the queued hand-offs now, in the foreground."""
-    import subprocess
-    from codoc.claude.autorealize import find_claude
-    from codoc.claude.sdk_realize import resolve_engine, run_sdk_realize, sdk_available
+    """Build the queued hand-offs now, in the foreground."""
+    from codoc.claude.autorealize import EngineMissing, start_realize
     cd = _require(root)
     if not (cd / REALIZE).exists():
         typer.echo("Nothing queued. Edit the tree and hand off (⌘S in the editor, or `codoc handoff`).")
         raise typer.Exit(0)
-    engine = resolve_engine(engine)
-    if engine == "sdk":
-        if not sdk_available():
-            typer.echo("claude-agent-sdk is not installed. Run pip install 'codoc[sdk]' or --engine cli", err=True)
-            raise typer.Exit(2)
-        raise typer.Exit(run_sdk_realize(root, str(cd), permission_mode=permission_mode, printer=typer.echo))
-    claude = find_claude()
-    if claude is None:
-        typer.echo("`claude` CLI not found on PATH.", err=True)
+    try:
+        proc = start_realize(root, str(cd), engine=engine, permission_mode=permission_mode,
+                             detail="building: codoc realize")
+    except EngineMissing as e:
+        typer.echo(str(e), err=True)
         raise typer.Exit(2)
-    raise typer.Exit(subprocess.call([claude, "-p", "/codoc:sync"], cwd=root))
+    raise typer.Exit(proc.wait())
 
 
 @app.command(name="install-hooks")
@@ -504,7 +507,7 @@ def serve(root: str = ROOT,
                 # With GitHub configured the server decides what is built: each
                 # hand-off becomes a PR from a sandboxed agent on a worktree.
                 from codoc.serve.worker import Worker
-                base = os.environ.get("CODOC_SERVE_BASE", "main")
+                base = os.environ.get("CODOC_SERVE_BASE") or _default_branch(root)
                 typer.echo(f"Each hand-off: an agent builds it, its branch is pushed and a PR opened against {base} "
                            "(--no-prs turns this off).")
                 worker = Worker(root, str(cd), base=base, printer=typer.echo).start()

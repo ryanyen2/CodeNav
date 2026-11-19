@@ -3,9 +3,10 @@
  *
  * `ensureUv` finds `uv` on PATH or runs its standalone installer.
  * `provisionCodoc` installs Python 3.11 and the wheel shipped in `bundled/`
- * into an isolated `uv tool` environment, then asks uv where the console
- * scripts are and caches those paths in global state. `cachedExecutables`
- * reads the cache, and answers undefined when a cached file is gone.
+ * into an isolated `uv tool` environment, then asks uv where the `codoc`
+ * script is and caches that path in global state. `cachedCodoc` reads the
+ * cache, and answers undefined when the cached file is gone. (`codoc
+ * install-hooks` finds `codoc-mcp` beside the interpreter it runs under.)
  *
  * The `codoc.serverPath` setting replaces the installed `codoc` with another
  * binary, for developing the Python side against this extension.
@@ -22,15 +23,14 @@ import * as path from 'node:path';
 
 import { output } from '../output';
 import {
-    CodocExecutables, CODOC_PYTHON_VERSION,
-    executablePaths, findBundledWheel, shouldReresolve, uvInstalledPath,
+    CODOC_PYTHON_VERSION,
+    codocPath, findBundledWheel, shouldReresolve, uvInstalledPath,
     uvInstallerCommand, uvPythonInstallArgs, uvToolDirBinArgs, uvToolInstallArgs,
     uvVersionArgs,
 } from './paths';
 
-/** Global-state keys for the cached executable paths. */
+/** The global-state key for the cached `codoc` path. */
 const KEY_CODOC = 'codoc.exec.codoc';
-const KEY_CODOC_MCP = 'codoc.exec.codocMcp';
 
 export class WorkspaceUntrustedError extends Error {
     constructor() {
@@ -133,13 +133,13 @@ function bundledWheelPath(context: vscode.ExtensionContext): string {
 }
 
 /** Install Python and the bundled wheel under a cancellable progress
- *  notification, and return the paths of the installed scripts. */
-export async function provisionCodoc(context: vscode.ExtensionContext, uvPath: string): Promise<CodocExecutables> {
+ *  notification, and return the path of the installed `codoc`. */
+export async function provisionCodoc(context: vscode.ExtensionContext, uvPath: string): Promise<string> {
     assertTrusted();
     const wheel = bundledWheelPath(context);
     return vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Setting up codoc', cancellable: true },
-        async (progress, token): Promise<CodocExecutables> => {
+        async (progress, token): Promise<string> => {
             progress.report({ message: `installing Python ${CODOC_PYTHON_VERSION}…` });
             const py = await run(uvPath, uvPythonInstallArgs(), { token });
             if (py.code !== 0) {
@@ -150,37 +150,33 @@ export async function provisionCodoc(context: vscode.ExtensionContext, uvPath: s
             if (tool.code !== 0) {
                 throw new Error(`uv tool install failed (exit ${tool.code}). See the codoc output channel.`);
             }
-            progress.report({ message: 'resolving executable paths…' });
-            return resolvePaths(context, uvPath, token);
+            progress.report({ message: 'finding the codoc executable…' });
+            return resolvePath(context, uvPath, token);
         },
     );
 }
 
-/** Ask uv where the console scripts are and cache the answer. */
-async function resolvePaths(context: vscode.ExtensionContext, uvPath: string, token: vscode.CancellationToken): Promise<CodocExecutables> {
+/** Ask uv where the `codoc` script is and cache the answer. */
+async function resolvePath(context: vscode.ExtensionContext, uvPath: string, token: vscode.CancellationToken): Promise<string> {
     const res = await run(uvPath, uvToolDirBinArgs(), { token });
     if (res.code !== 0) {
         throw new Error(`uv tool dir --bin failed (exit ${res.code}). See the codoc output channel.`);
     }
-    const execs = executablePaths(res.stdout, process.platform);
-    await context.globalState.update(KEY_CODOC, execs.codoc);
-    await context.globalState.update(KEY_CODOC_MCP, execs.codocMcp);
-    output().appendLine(`resolved codoc=${execs.codoc}  codoc-mcp=${execs.codocMcp}`);
-    return withServerPath(execs);
+    const codoc = codocPath(res.stdout, process.platform);
+    await context.globalState.update(KEY_CODOC, codoc);
+    output().appendLine(`resolved codoc=${codoc}`);
+    return withServerPath(codoc);
 }
 
-/** The cached executable paths, or undefined when either is uncached or no
- *  longer on disk, which means setup has to run. */
-export function cachedExecutables(context: vscode.ExtensionContext): CodocExecutables | undefined {
+/** The cached `codoc` path, or undefined when it is uncached or no longer on
+ *  disk, which means setup has to run. */
+export function cachedCodoc(context: vscode.ExtensionContext): string | undefined {
     const codoc = context.globalState.get<string>(KEY_CODOC);
-    const codocMcp = context.globalState.get<string>(KEY_CODOC_MCP);
     if (shouldReresolve(codoc, !!codoc && fs.existsSync(codoc))) return undefined;
-    if (shouldReresolve(codocMcp, !!codocMcp && fs.existsSync(codocMcp))) return undefined;
-    return withServerPath({ codoc: codoc!, codocMcp: codocMcp! });
+    return withServerPath(codoc!);
 }
 
 /** Apply the `codoc.serverPath` setting: when set, it is the `codoc` to run. */
-function withServerPath(execs: CodocExecutables): CodocExecutables {
-    const override = vscode.workspace.getConfiguration('codoc').get<string>('serverPath')?.trim();
-    return override ? { ...execs, codoc: override } : execs;
+function withServerPath(codoc: string): string {
+    return vscode.workspace.getConfiguration('codoc').get<string>('serverPath')?.trim() || codoc;
 }

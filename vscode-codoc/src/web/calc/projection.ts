@@ -38,13 +38,10 @@ export interface Span {
     end: number;
 }
 
-export interface SuggestDel { plan: string; start: number; end: number }
-
 export interface TextField {
     text: string;
     runs: Run[];
     spans: Span[];
-    suggest_del: SuggestDel[];
 }
 
 export interface ProjectedBlock {
@@ -61,16 +58,18 @@ export interface ProjectedBlock {
 
 export interface Layout { text: string[]; flow: boolean; export: boolean }
 
-/** What a block's runs do not say: the code channel and a plan's mark toggles. */
+/** One thing drawn on a feature's prose (`derive.feature_claims`): the person's
+ *  ink, an open plan's words, cuts and mark toggles, or what the code added or removed. */
 export interface Claim {
     bid: string;
     path: string;
-    start: number;
+    start: number;      // live offsets, half-open; a removal is zero-width at its place
     end: number;
-    channel: 'plan' | 'code';
-    stage: 'added' | 'removed' | 'marked' | 'unmarked';
+    channel: 'human' | 'plan' | 'code';
+    stage: 'unsent' | 'sent' | 'open' | 'added' | 'removed' | 'marked' | 'unmarked';
     actor: string;
     text: string;
+    plan?: string;      // the plan, on the plan channel
 }
 
 export interface PlanInfo {
@@ -82,12 +81,10 @@ export interface PlanInfo {
     status: string;
     /** The features accepting this plan hands off; empty for a plan by the loop,
      *  a translator or a suggester, and for a delete plan. */
-    handoff?: string[];
+    hands_off?: string[];
 }
 
 export type Phase = 'synced' | 'edited' | 'queued' | 'realizing' | 'proposed' | 'drifted' | 'planned';
-
-export interface Watermarks { handoff: Record<string, number>; realized: Record<string, number> }
 
 export interface Projection {
     /** Changes whenever the daemon rebuilds its store; `head` is comparable only within one. */
@@ -101,14 +98,22 @@ export interface Projection {
     plans: PlanInfo[];
     bindings: { by_feature: Record<string, string[]> };   // feature -> the symbols it owns
     claims: Record<string, Claim[]>;
-    /** Per feature, the hand-off and realized frontiers (absent when neither). */
-    watermarks?: Record<string, Watermarks>;
+    /** Features with work under way whatever their phase shows: queued, or the
+     *  subject of a plan offered for a verdict. */
+    in_flight?: string[];
     /** The layout each plugin kind registered in this checkout gives a new block. */
     kinds?: Record<string, Layout>;
 }
 
-export const NO_WATERMARKS: Watermarks = { handoff: {}, realized: {} };
+/** Whether a frontier already contains an op: `session:seq` with `seq` at or
+ *  below what the frontier records for that session. */
+export function inFrontier(op: string, frontier: Record<string, number>): boolean {
+    const i = op.lastIndexOf(':');
+    return i > 0 && Number(op.slice(i + 1)) <= (frontier[op.slice(0, i)] ?? -1);
+}
 
+/** The deepest heading and list level. */
+export const MAX_LEVEL = 6;
 /** List items: prose with an indent `level`. */
 export const ITEMS: ReadonlySet<string> = new Set(['bullet', 'numbered']);
 /** Body kinds holding one line of inline text in field `text`. */

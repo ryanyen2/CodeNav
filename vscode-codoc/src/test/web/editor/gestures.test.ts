@@ -3,7 +3,9 @@ import { Fragment, Slice } from '@tiptap/pm/model';
 import { AllSelection } from '@tiptap/pm/state';
 import { describe, expect, it } from 'vitest';
 
-import { block, ids, key, kindBlock, kinds, mount, paste, pasteSlice, posIn, select, shadowFaults, texts, typeText } from './harness';
+import { deleteFeature } from '../../../web/editor/commands';
+import { block, ids, key, kindBlock, kinds, mount, paste, pasteSlice, pasteText, perform, posIn, select, shadowFaults, shape, texts, typeText }
+    from './harness';
 
 describe('a selection across paragraphs', () => {
     it('typed over: the page changes only if the ops say so', () => {
@@ -116,7 +118,7 @@ describe('the `## ` rule', () => {
 describe('deleting a feature', () => {
     it('is refused when it would empty the tree, and the shadows stand', () => {
         const m = mount([block('h', 'heading', 'Only'), block('p', 'paragraph', 'body')]);
-        m.handle.deleteFeature('h');
+        perform(m, (s, env) => deleteFeature(s, env, 'h'));
         expect(ids(m.view.state.doc)).toEqual(['heading:h', 'paragraph:p']);
         expect(shadowFaults(m)).toEqual([]);
         select(m.view, posIn(m.view, 'p', 4));
@@ -133,7 +135,28 @@ describe('a paste of several paragraphs', () => {
         expect(paste(m, ['first', 'second'])).toBe(true);
         m.handle.flush();
         expect(shadowFaults(m)).toEqual([]);
-        expect(texts(m.view.state.doc)).toEqual(['T', 'helfirstorld', 'second']);
+        expect(texts(m.view.state.doc)).toEqual(['T', 'helfirst', 'secondorld']);
+    });
+
+    it('keeps the pasted lines in the order they were copied, with the words after the caret last', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', 'Retries once.')]);
+        select(m.view, posIn(m.view, 'p', 8));                       // "Retries |once."
+        pasteText(m, 'at most\ntwice, then');
+        m.handle.flush();
+        expect(texts(m.view.state.doc)).toEqual(['T', 'Retries at most', 'twice, thenonce.']);
+        expect(kinds(m.submitted)).toEqual(['text.insert', 'block.split', 'text.insert']);
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it('at the start of a block puts the pieces before it, and the last joins it', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', ' once.')]);
+        select(m.view, posIn(m.view, 'p', 0));
+        pasteText(m, '```\nx = 1\n```\n\nRetries');
+        m.handle.flush();
+        expect(shape(m.view.state.doc)).toEqual(['heading:1', 'code', 'paragraph']);
+        expect(texts(m.view.state.doc)).toEqual(['T', 'x = 1', 'Retries once.']);
+        expect(ids(m.view.state.doc)[2]).toBe('paragraph:p');
+        expect(shadowFaults(m)).toEqual([]);
     });
 
     it('submits every client id its provisional refs name', () => {

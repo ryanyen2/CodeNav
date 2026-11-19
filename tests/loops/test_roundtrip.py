@@ -29,8 +29,8 @@ from pathlib import Path
 import pytest
 
 from codoc.calculus import ops as K
-from codoc.workspace import log as L
-from codoc.workspace.log import Submission
+from codoc.workspace import inbox as I
+from codoc.workspace.inbox import Submission
 from codoc.daemon.publish import publish
 from codoc.workspace import Workspace
 
@@ -52,11 +52,11 @@ def _drain(base: Path, wd: Path, subs: list[dict]) -> tuple[Workspace, list[dict
     """The editor's submissions through the real applier, as the daemon drains
     them; returns the workspace and the acks it wrote, in order."""
     shutil.copytree(base, wd)
-    L.submit(wd, "ide", [Submission(cid=s["cid"], kind=s["kind"], target=s["target"], payload=s["payload"],
+    I.submit(wd, "ide", [Submission(cid=s["cid"], kind=s["kind"], target=s["target"], payload=s["payload"],
                                     batch=s.get("batch") or "", plan=s.get("plan")) for s in subs])
     w = Workspace(wd)
     w.drain_inbox()
-    acks = [json.loads(line) for line in (L.inbox_dir(wd) / "ide.ack.jsonl").read_text().splitlines()]
+    acks = [json.loads(line) for line in (I.inbox_dir(wd) / "ide.ack.jsonl").read_text().splitlines()]
     return w, acks[-len(subs):] if subs else []
 BASE = [
     ("h1", "heading", 1, "Client"), ("p1", "paragraph", 0, "Retries once before giving up."),
@@ -101,11 +101,11 @@ def test_the_real_editors_ops_replay_to_the_page_it_showed(tmp_path):
         rec = json.loads(f.read_text())
         wd = tmp_path / f"replay-{rec['seed']}" / ".codoc"
         shutil.copytree(cd, wd)
-        L.submit(wd, "ide", [Submission(cid=s["cid"], kind=s["kind"], target=s["target"], payload=s["payload"],
+        I.submit(wd, "ide", [Submission(cid=s["cid"], kind=s["kind"], target=s["target"], payload=s["payload"],
                                         batch=s.get("batch") or "", plan=s.get("plan")) for s in rec["subs"]])
         w = Workspace(wd)
         w.drain_inbox()
-        acks = [json.loads(line) for line in (L.inbox_dir(wd) / "ide.ack.jsonl").read_text().splitlines()]
+        acks = [json.loads(line) for line in (I.inbox_dir(wd) / "ide.ack.jsonl").read_text().splitlines()]
         got = _page(w.store)
         w.close()
         refused = [(a["cid"], a["conflict"]) for a in acks if a.get("conflict")]

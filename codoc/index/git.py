@@ -1,16 +1,16 @@
 """What git knows about the code: the commit and branch at HEAD, the hand-offs new commits
 realize, and what recent commits said about a file.
 
-``head_sha`` anchors a hand-off to the commit the work starts from, so a reader
-can later diff what the agent did. ``handoffs_landed`` reads the hand-off ids
-commits name in a trailer, so a pull request merged into the branch it names
-cites its hand-off by identity. ``commit_rationales`` gives a bootstrap pass
-the commit messages, where a repository routinely records why a change was made: code says
-what a program does, and a model asked for the reason with only code in front
-of it invents one.
+``head`` and ``head_sha`` let an applier notice ``HEAD`` move and stamp a
+``feature.realized`` with the commit it was settled at. ``handoffs_landed``
+reads the hand-off ids commits name in a trailer, so a pull request merged
+into the branch it names cites its hand-off by identity. ``commit_rationales``
+gives a bootstrap pass the commit messages, where a repository records why a
+change was made: code says what a program does, and a model asked for the
+reason with only code in front of it invents one.
 
-Everything here is advisory and fails soft: no git binary, not a repository, no
-commits or a hung invocation all yield ``""`` or ``[]``, never an error.
+Everything here fails soft: no git binary, not a repository, no commits or a
+hung invocation all yield ``""`` or ``[]``, never an error.
 """
 from __future__ import annotations
 
@@ -28,11 +28,10 @@ _GIT_TIMEOUT_S = 5
 def _git(root_dir: str | Path, *args: str) -> str:
     """One git invocation under ``root_dir``, or ``""`` for any failure at all.
 
-    The catch is as broad as that sentence on purpose. This runs on the
-    hand-off path, and an optional provenance lookup must not stop queued work
-    from reaching the agent. A wrapped ``Popen`` raises ``AttributeError``, not
-    ``OSError``, and a decoding failure raises neither, so enumerating
-    exception types would mean guessing.
+    It catches every exception, because the daemon's batch and the settle step
+    call it, and a failed git lookup must not stop either. A wrapped ``Popen``
+    raises ``AttributeError``, not ``OSError``, and a decoding failure raises
+    neither, so a list of exception types would miss some.
     """
     try:
         proc = subprocess.run(
@@ -60,8 +59,7 @@ def head(root_dir: str | Path) -> tuple[str, str]:
 
 
 def head_sha(root_dir: str | Path) -> str:
-    """The commit a hand-off starts from, or ``""`` when there is no "before"
-    to diff against."""
+    """The commit at ``HEAD``, or ``""`` when there is none."""
     return head(root_dir)[0]
 
 
@@ -92,20 +90,23 @@ def handoffs_landed(root_dir: str | Path, old: str, new: str, branch: str) -> fr
 
 # ── commit messages ──────────────────────────────────────────────────────────
 
-# The scan window is the one number worth understanding: rationale from 600
-# commits ago is not why the code looks like it does today, so scanning deeper
-# would cost time to surface mostly-misleading context.
+# Rationale from 600 commits ago is not why the code looks as it does today,
+# so the scan stops there.
 _LOG_SCAN_COMMITS = 600     # how far back one repo-wide scan reads
 _LOG_MAX_CHARS = 4_000_000  # hard stop on a pathological log payload
 _LOG_TTL_S = 120.0          # a pass every few seconds must not re-shell out
 _PER_FILE_COMMITS = 3       # per file: the newest few explain the shape
 _MAX_COMMITS = 8            # across one call
-_SUBJECT_CHARS = 140        # written for Latin prose; the caller's ``cap`` rescales
+# Character counts written for Latin prose; the caller's ``rescale`` ports them
+# to the script of the text at hand.
+_SUBJECT_CHARS = 140
 _BODY_CHARS = 320
+_MIN_SUBJECT_CHARS = 12     # shorter cannot state a reason ("fix bug", "update")
 
-# Subjects that match carry no rationale: they describe the edit, not its
-# reason. Including them teaches the model that this evidence is noise, which
-# is worse than no evidence.
+# Subjects that describe the edit rather than its reason: git's own (merge,
+# revert, fixup!, squash!) and common English ones. Including them teaches the
+# model that this evidence is noise, which is worse than no evidence. A subject
+# in another language passes unless it starts with one of these words.
 _NOISE_SUBJECT = re.compile(
     r"^\s*(wip\b|fixup!|squash!|revert\s+\"|merge\s+(branch|pull|remote)\b"
     r"|bump\b|release\s+v?\d|version\s+v?\d"
@@ -115,8 +116,6 @@ _NOISE_SUBJECT = re.compile(
     r"|clean\s?up\.?$|cleanup\b|tidy\b|nit\b|minor\b|misc\b|small\s+fix)",
     re.IGNORECASE,
 )
-# A subject this short cannot state a reason ("fix bug", "update").
-_MIN_SUBJECT_CHARS = 12
 
 # Body lines that are metadata, not reasoning. The colon is required:
 # "Fixes: #412" is a trailer, while "Fixes applied from the review:" is the
@@ -207,25 +206,21 @@ def _body_gist(body: str) -> str:
     return " ".join(kept).strip()
 
 
-def _is_noise(subject: str) -> bool:
-    return len(subject) < _MIN_SUBJECT_CHARS or bool(_NOISE_SUBJECT.match(subject))
-
-
 def commit_rationales(
     root_dir: str | Path,
     files: set[str] | list[str],
     *,
     per_file: int = _PER_FILE_COMMITS,
     limit: int = _MAX_COMMITS,
-    cap: Callable[[int, str], int] = lambda chars, _text: chars,
+    rescale: Callable[[int, str], int] = lambda chars, _text: chars,
 ) -> list[dict]:
     """Recent commits that touched ``files``, newest first, noise filtered, as
     ``{files, subject, why?}``.
 
     A commit that touched several of the requested files appears once, listing
-    them. ``cap(chars, text)`` rescales a character cap written for Latin prose
-    to the script of ``text`` (``doclang.char_budget``); the default applies
-    the cap as written.
+    them. ``rescale(chars, text)`` ports a character count written for Latin
+    prose to the script of ``text`` (``doclang.char_budget``); the default
+    keeps it as written.
     """
     wanted = {str(f) for f in files}
     if not wanted:
@@ -243,11 +238,11 @@ def commit_rationales(
         # old history crowd out every other file's recent one.
         for f in hits:
             budget[f] -= 1
-        if _is_noise(subject):
+        if len(subject) < rescale(_MIN_SUBJECT_CHARS, subject) or _NOISE_SUBJECT.match(subject):
             continue
-        entry: dict = {"files": sorted(hits), "subject": subject[:cap(_SUBJECT_CHARS, subject)]}
+        entry: dict = {"files": sorted(hits), "subject": subject[:rescale(_SUBJECT_CHARS, subject)]}
         gist = _body_gist(body)
         if gist:
-            entry["why"] = gist[:cap(_BODY_CHARS, gist)].rstrip()
+            entry["why"] = gist[:rescale(_BODY_CHARS, gist)].rstrip()
         out.append(entry)
     return out

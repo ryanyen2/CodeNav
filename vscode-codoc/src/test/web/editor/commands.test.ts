@@ -12,7 +12,7 @@ function block(id: string, kind: 'heading' | 'paragraph', text: string, level = 
     const n = Array.from(text).length;
     return { id, kind, level, rank: id, head: 1,
              fields: { text: { text, runs: n ? [{ op: op ?? `s:${id}`, k0: 0, start: 0, end: n, actor, at: '1', plan: null }] : [],
-                               spans: [], suggest_del: [] } } };
+                               spans: [] } } };
 }
 
 function proj(blocks: ProjectedBlock[]): Projection {
@@ -73,18 +73,18 @@ describe('structural commands', () => {
     });
 
     it('Tab moves a heading in place one level deeper with its range; drag moves a heading with everything it dominates', () => {
-        const { doc, shadows } = docFrom(schema, proj([block('a', 'heading', 'A'), block('p', 'paragraph', 'x'),
+        const { doc } = docFrom(schema, proj([block('a', 'heading', 'A'), block('p', 'paragraph', 'x'),
                                                         block('b', 'heading', 'B', 2), block('q', 'paragraph', 'y'), block('c', 'heading', 'C')]));
         const state = at(EditorState.create({ schema, doc }), 1);
-        const r = indent(state, env(shadows), 1)!;
+        const r = indent(state, 1)!;
         expect(r.ops).toEqual([{ kind: 'block.move', target: { bid: 'a' }, payload: { after: 'START', level_delta: 1 } }]);
         const levels: number[] = [];
         r.tr.doc.forEach(n => { if (n.type.name === 'heading') levels.push(n.attrs.level); });
         expect(levels).toEqual([2, 3, 1]);
-        const m = moveBlock(state, env(shadows), 'a', 'c')!;
+        const m = moveBlock(state, 'a', 'c')!;
         expect(m.ops).toEqual([{ kind: 'block.move', target: { bid: 'a' }, payload: { after: 'c', level_delta: 0 } }]);
         expect(ids(m.tr.doc)).toEqual(['heading:c', 'heading:a', 'paragraph:p', 'heading:b', 'paragraph:q']);
-        expect(moveBlock(state, env(shadows), 'a', 'b')).toBeNull();   // cannot move under itself
+        expect(moveBlock(state, 'a', 'b')).toBeNull();   // cannot move under itself
     });
 
     it('deleting a feature removes its own body and promotes children; the applier detaches', () => {

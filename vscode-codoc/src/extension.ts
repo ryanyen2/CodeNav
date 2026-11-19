@@ -24,7 +24,7 @@ import { output } from './host/output';
 import { CodocEditorProvider } from './host/provider';
 import { DEFAULT_HUB_PORT, serveArgs } from './host/serve-manager';
 import { bootstrapCredentials } from './host/setup/credentials';
-import { ProvisionCancelledError, WorkspaceUntrustedError, cachedExecutables, ensureUv, provisionCodoc } from './host/setup/provision';
+import { ProvisionCancelledError, WorkspaceUntrustedError, cachedCodoc, ensureUv, provisionCodoc } from './host/setup/provision';
 import { commandLine } from './host/shell';
 import { Workspace, statusBarView } from './host/workspace';
 
@@ -60,18 +60,18 @@ async function runSetup(context: vscode.ExtensionContext, state: Workspace): Pro
         log.appendLine('codoc: checking for uv…');
         const uv = await ensureUv();
         log.appendLine('codoc: installing the codoc core…');
-        const execs = await provisionCodoc(context, uv);
+        const codoc = await provisionCodoc(context, uv);
         log.appendLine('codoc: choosing the provider…');
         await bootstrapCredentials(rootDir);
         log.appendLine('codoc: indexing the repo and building the feature tree…');
         if (!state.initialized) {
             await vscode.window.withProgress(
                 { location: vscode.ProgressLocation.Notification, title: 'codoc: indexing your repo and building the feature tree…' },
-                () => runCodoc(execs.codoc, ['init', '--root', rootDir], rootDir),
+                () => runCodoc(codoc, ['init', '--root', rootDir], rootDir),
             );
         }
         log.appendLine('codoc: starting the daemon…');
-        startDaemon(execs.codoc, rootDir);
+        startDaemon(codoc, rootDir);
         await vscode.commands.executeCommand('setContext', 'codoc.ready', true);
         void vscode.window.showInformationMessage('codoc is set up.', 'Open Tree').then(c => { if (c === 'Open Tree') void vscode.commands.executeCommand('codoc.open'); });
     } catch (err) {
@@ -92,21 +92,25 @@ export function activate(context: vscode.ExtensionContext): void {
 
     /** Run a codoc command in a terminal, where the person can watch and interrupt it. */
     const term = (name: string, args: string[], cwd = state.rootDir) => {
-        const codoc = cachedExecutables(context)?.codoc;
+        const codoc = cachedCodoc(context);
         if (!codoc || !cwd) { void vscode.window.showWarningMessage('codoc is not set up yet. Run "codoc: Set up codoc".'); return; }
         const t = vscode.window.createTerminal({ name: `codoc ${name}`, cwd });
         t.show(true);
         t.sendText(commandLine([codoc, ...args]));
     };
 
+    const setLanguage = (root: string, tag: string): Promise<void> => {
+        const codoc = cachedCodoc(context);
+        return codoc ? runCodoc(codoc, ['lang', tag, '--root', root], root) : Promise.reject(new Error('codoc is not set up yet'));
+    };
     context.subscriptions.push(vscode.window.registerCustomEditorProvider(
-        CodocEditorProvider.viewType, new CodocEditorProvider(context, root => term('realize', ['realize'], root)),
+        CodocEditorProvider.viewType, new CodocEditorProvider(context, root => term('realize', ['realize'], root), setLanguage),
         { webviewOptions: { retainContextWhenHidden: true }, supportsMultipleEditorsPerDocument: false }));
 
     const reconcileDaemon = (): void => {
         if (!vscode.workspace.isTrusted || !state.rootDir || !state.initialized) return;
-        const execs = cachedExecutables(context);
-        if (execs) startDaemon(execs.codoc, state.rootDir);
+        const codoc = cachedCodoc(context);
+        if (codoc) startDaemon(codoc, state.rootDir);
     };
     reconcileDaemon();
     const daemonTicker = setInterval(reconcileDaemon, DAEMON_RECONCILE_MS);
@@ -117,7 +121,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
     const bar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
     const paint = () => {
-        const v = statusBarView(state, !!cachedExecutables(context));
+        const v = statusBarView(state, !!cachedCodoc(context));
         bar.text = v.text; bar.tooltip = v.tooltip; bar.command = v.command;
         bar.backgroundColor = v.warn ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
         bar.show();
@@ -133,9 +137,9 @@ export function activate(context: vscode.ExtensionContext): void {
             if (!state.rootDir) return;
             // A person asked, so try again whatever happened last time.
             resetDaemonBackoff();
-            const execs = cachedExecutables(context);
-            if (!execs) { void vscode.commands.executeCommand('codoc.setup'); return; }
-            if (!startDaemon(execs.codoc, state.rootDir)) void vscode.window.showInformationMessage('A codoc daemon is already running for this repo.');
+            const codoc = cachedCodoc(context);
+            if (!codoc) { void vscode.commands.executeCommand('codoc.setup'); return; }
+            if (!startDaemon(codoc, state.rootDir)) void vscode.window.showInformationMessage('A codoc daemon is already running for this repo.');
         }),
         vscode.commands.registerCommand('codoc.open', async () => {
             if (!state.codocDir) { void vscode.window.showInformationMessage('Open a folder with a .codoc workspace, or run "codoc: Set up codoc".'); return; }
@@ -145,7 +149,6 @@ export function activate(context: vscode.ExtensionContext): void {
             if (!fs.existsSync(uri.fsPath)) fs.writeFileSync(uri.fsPath, '', 'utf8');
             await vscode.commands.executeCommand('vscode.openWith', uri, CodocEditorProvider.viewType);
         }),
-        vscode.commands.registerCommand('codoc.sync', () => term('sync', ['sync'])),
         vscode.commands.registerCommand('codoc.realize', () => term('realize', ['realize'])),
         vscode.commands.registerCommand('codoc.serve.start', () => serve(false)),
         vscode.commands.registerCommand('codoc.serve.startTunnel', () => serve(true)),
@@ -155,7 +158,7 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     // A folder with neither a tree nor an installed core: offer setup once per activation.
-    if (state.rootDir && !state.initialized && !cachedExecutables(context) && vscode.workspace.isTrusted) {
+    if (state.rootDir && !state.initialized && !cachedCodoc(context) && vscode.workspace.isTrusted) {
         void vscode.window.showInformationMessage('codoc can index this repo and build a feature tree for it.', 'Set up codoc')
             .then(c => { if (c === 'Set up codoc') void vscode.commands.executeCommand('codoc.setup'); });
     }

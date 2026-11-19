@@ -1,15 +1,14 @@
 """Expose the hub over a Cloudflare named tunnel.
 
-The hub binds localhost; remote reach is provided by an OUTBOUND tunnel, so no
-inbound port is opened and the home machine has no public IP. The default is a
-Cloudflare named Tunnel + Cloudflare Access (deny-by-default, GitHub OIDC at the
-edge); the origin still validates the Access JWT AND runs the collaborator check
-(defense in depth; see ``codoc/serve/auth.py``). Tailscale Funnel/Serve is the
-stronger-isolation alternative when every collaborator can join the tailnet.
+The hub binds localhost; remote reach is an outbound tunnel, so no inbound port
+is opened and the machine needs no public IP. The default is a Cloudflare named
+tunnel behind Cloudflare Access (deny by default, GitHub sign-in at the edge); the
+hub still checks the Access token and the collaborator permission itself
+(``codoc/serve/auth.py``). Tailscale Funnel or Serve isolates more when every
+collaborator can join the tailnet.
 
-This module only builds the launcher argv + spawns it; the tunnel + Access policy
-themselves are configured out of band (documented in ``docs/serve-deployment.md``).
-The argv builder is pure + tested; the spawn is a thin, documented wrapper.
+This module builds the ``cloudflared`` argv and starts it; the tunnel and its
+Access policy are configured outside codoc (``docs/serve-deployment.md``).
 """
 from __future__ import annotations
 
@@ -17,7 +16,7 @@ import subprocess
 
 
 def cloudflared_command(port: int, *, config: str | None = None) -> list[str]:
-    """argv for ``cloudflared`` forwarding ONLY the hub's local port.
+    """argv for ``cloudflared`` forwarding the hub's local port and nothing else.
 
     A named-tunnel ``config`` (recommended: a stable hostname bound to one local
     service, gated by Access) runs via ``tunnel run``; without one, a quick ad-hoc

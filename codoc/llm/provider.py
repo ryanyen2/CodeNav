@@ -1,15 +1,14 @@
-"""LLM provider configuration and the one ``complete()`` call, env-var driven.
+"""Which model codoc's passes run on, and the clients that call it.
 
-Four providers: OpenAI, Anthropic, Ollama, and Claude Code.
+**Choosing.** ``get_llm_config`` reads the environment, after filling the
+variables it leaves unset from a ``.env`` (``_fill_from_dotenv``). The provider
+is ``CODOC_PROVIDER`` when set; otherwise ``openai`` when ``OPENAI_API_KEY`` is
+set, else ``anthropic`` when ``ANTHROPIC_API_KEY`` is set, else ``claude``.
+``fast_llm_config`` picks the cheaper model for the high-volume passes.
 
-The default, keyless path is **Claude Code** (provider ``claude``): it reuses the
-user's existing Claude login by shelling out to the ``claude`` CLI in headless
-JSON mode, with no separate API key. Users who prefer a managed API set an OpenAI
-key (provider ``openai``) or an Anthropic key (provider ``anthropic``).
-
-Provider resolution (``get_llm_config``) when ``CODOC_PROVIDER`` is unset:
-``OPENAI_API_KEY`` present → ``openai``; else ``ANTHROPIC_API_KEY`` present →
-``anthropic``; else → ``claude``. An explicit ``CODOC_PROVIDER`` always wins.
+**Calling.** ``complete`` sends one prompt to OpenAI, Anthropic, Ollama, or
+Claude Code. Claude Code (provider ``claude``, the default) needs no API key: it
+runs the ``claude`` CLI in headless JSON mode under the user's Claude login.
 
 Environment variables:
     CODOC_PROVIDER          LLM provider: "openai" | "anthropic" | "ollama" | "claude"
@@ -19,10 +18,10 @@ Environment variables:
     OPENAI_API_KEY          API key for OpenAI (required when provider=openai)
     ANTHROPIC_API_KEY       API key for Anthropic (required when provider=anthropic)
     CODOC_BASE_URL          Override base URL (e.g. for local OpenAI-compatible servers)
-    CODOC_TEMPERATURE       Float  (default 0.2). Set it EMPTY to send no
-                            temperature at all, which newer reasoning models
-                            (gpt-5.6-luna) require: they accept only their own
-                            default and answer 400 to every value, including it.
+    CODOC_TEMPERATURE       Float  (default 0.2). Set it empty to send no
+                            temperature at all, which some reasoning models
+                            require: they accept only their own default and
+                            answer 400 to every value, including it.
     CODOC_MAX_TOKENS        Int    (default 16000)
     CODOC_REASONING_EFFORT  "low" | "medium" | "high"  (sent only when set)
     CODOC_VERBOSITY         "low" | "medium" | "high"  (sent only when set)
@@ -32,36 +31,37 @@ Environment variables:
 
 from __future__ import annotations
 
+import functools
 import os
 import sys
 from dataclasses import dataclass, replace
 
 from dotenv import dotenv_values, find_dotenv
 
-# Load the repo's .env from the CURRENT WORKING DIRECTORY, not from this module's
-# install location. Bare load_dotenv()/find_dotenv() walk up from the *caller's
-# file* (site-packages for an installed codoc), so they never find the project
-# .env and the user's CODOC_PROVIDER choice is silently ignored. codoc is always
-# run with cwd = the repo (the daemon, the Claude Code hooks, `codoc init --root
-# <repo>` all set it), so usecwd=True is the right anchor.
-#
-# codoc runs against ARBITRARY user repos, so the repo's .env is treated as a
-# FALLBACK only: it fills in config the user has not already set in their real
-# environment, and never OVERRIDES the shell. Overriding would let any checked-in
-# .env win over the user's actual intent (and bill a foreign key). Two
-# redirect/logging vars are refused from a repo .env entirely: a repo has no
-# legitimate reason to point codoc's API base URL elsewhere (key exfiltration) or
-# force prompt logging on, but an arbitrary/adversarial repo could. Set those in
-# the shell if you genuinely need them.
+# A repository's .env may not redirect codoc's API calls (a base URL would
+# send the key elsewhere) or turn on prompt logging. Set these in the shell.
 _UNTRUSTED_FROM_DOTENV = frozenset({
     "CODOC_BASE_URL", "OPENAI_BASE_URL", "ANTHROPIC_BASE_URL", "CODOC_LOG_PROMPTS",
 })
-_dotenv_path = find_dotenv(usecwd=True)
-if _dotenv_path:
-    for _k, _v in dotenv_values(_dotenv_path).items():
-        if _v is None or _k in _UNTRUSTED_FROM_DOTENV:
-            continue
-        os.environ.setdefault(_k, _v)
+
+
+@functools.cache
+def _fill_from_dotenv() -> None:
+    """Set each variable the environment leaves unset from the ``.env`` nearest
+    the working directory, once per process.
+
+    codoc runs from the repository (the daemon, the hooks, the MCP server), and
+    the editor's setup writes the chosen provider into the repository's
+    ``.env``. ``usecwd`` matters: without it ``find_dotenv`` starts from the
+    calling file, which is in site-packages. The file only fills gaps, so a
+    checked-in ``.env`` never overrides the shell, and the variables in
+    ``_UNTRUSTED_FROM_DOTENV`` are never taken from it.
+    """
+    path = find_dotenv(usecwd=True)
+    if path:
+        for k, v in dotenv_values(path).items():
+            if v is not None and k not in _UNTRUSTED_FROM_DOTENV:
+                os.environ.setdefault(k, v)
 
 
 # ---------------------------------------------------------------------------
@@ -75,33 +75,30 @@ class LLMConfig:
     model: str
     api_key: str | None = None
     base_url: str | None = None
-    # None means "send no temperature at all", which is what newer reasoning
-    # models want: they accept only their own default and 400 on anything else.
+    # None sends no temperature, for a model that accepts only its own default.
     temperature: float | None = 0.2
     # Reasoning models spend completion budget on hidden reasoning, so the
-    # budget must comfortably exceed the visible JSON we want back.
+    # budget must comfortably exceed the visible JSON.
     max_tokens: int = 16000
     # How hard a reasoning model thinks, and how much prose it returns. Sent only
     # when set, because a model that does not know the field rejects the call.
     reasoning_effort: str | None = None
     verbosity: str | None = None
+    timeout: float = 300.0       # seconds before a network call is abandoned
 
 
-# Per-provider default model when CODOC_MODEL is unset. The OpenAI default makes
-# no sense for the Claude paths: the ``claude`` CLI takes the ``sonnet`` alias,
-# while the Anthropic API needs a concrete model id.
+# Each provider's model when CODOC_MODEL is unset. The ``claude`` CLI takes an
+# alias; the Anthropic API needs a model id.
 _DEFAULT_MODELS = {
     "openai": "gpt-5.4-mini",
     "anthropic": "claude-sonnet-4-6",
     "claude": "sonnet",
 }
 
-# The FAST tier for structured-extraction calls (the per-save tree update, the
-# per-file bootstrap pass): they output small JSON op lists against explicit
-# rules. A fast model does this well at a fraction of the cost, and these are
-# the two highest-volume call sites in the system. The organization pass and
-# anything judgment-heavy stay on the standard tier. ``CODOC_MODEL`` (explicit
-# user choice) overrides both tiers; ``CODOC_MODEL_FAST`` overrides only this.
+# The fast tier, for the passes that run most often and return short JSON op
+# lists against explicit rules: the reflect pass, the bootstrap's brief and
+# per-file passes. The organization and translate passes stay on the standard
+# tier. ``CODOC_MODEL`` overrides both tiers; ``CODOC_MODEL_FAST`` only this one.
 _FAST_MODELS = {
     "openai": "gpt-5.4-mini",
     "anthropic": "claude-haiku-4-5",
@@ -110,11 +107,8 @@ _FAST_MODELS = {
 
 
 def fast_llm_config(base: LLMConfig | None = None) -> LLMConfig:
-    """The config for high-volume extraction calls (tree update, bootstrap file).
-
-    Resolution: ``CODOC_MODEL_FAST`` > explicit ``CODOC_MODEL`` (a user who
-    pinned a model gets it everywhere) > the provider's fast default.
-    """
+    """The config for the fast tier: ``CODOC_MODEL_FAST``, else ``CODOC_MODEL``
+    (a model pinned for everything), else the provider's fast default."""
     cfg = base or get_llm_config()
     fast = os.environ.get("CODOC_MODEL_FAST")
     if fast:
@@ -130,17 +124,16 @@ def fast_llm_config(base: LLMConfig | None = None) -> LLMConfig:
 
 
 def _is_claude_family_model(model: str) -> bool:
-    """Whether a model name belongs to the Claude family (so it can run on the
-    ``claude`` CLI / Anthropic API but NOT on OpenAI, and vice-versa)."""
+    """Whether a model name belongs to the Claude family, which runs on the
+    ``claude`` CLI and the Anthropic API and not on OpenAI."""
     m = model.lower()
     return any(tag in m for tag in ("sonnet", "opus", "haiku", "claude"))
 
 
 def _model_fits_provider(provider: str, model: str) -> bool:
-    """Whether ``model`` can actually run on ``provider``. A cross-family mismatch
-    (e.g. a globally-exported ``CODOC_MODEL=gpt-…`` leaking onto the keyless Claude
-    path) is rejected so we fall back to the provider's default instead of handing
-    an unusable model name to the CLI/API."""
+    """Whether ``model`` can run on ``provider``. A ``CODOC_MODEL=gpt-…`` exported
+    for another tool, met on the ``claude`` provider, does not fit, and the
+    caller falls back to the provider's default."""
     if provider in ("claude", "anthropic"):
         return _is_claude_family_model(model)
     if provider == "openai":
@@ -167,15 +160,8 @@ def _temperature_from_env() -> float | None:
 
 
 def _resolve_provider() -> str:
-    """Pick the LLM provider, honoring an explicit choice and otherwise inferring
-    one from which key is present. Keyless Claude Code is the final fallback.
-
-    An explicit ``CODOC_PROVIDER`` always wins (the VS Code setup writes it). With
-    none set we infer: an ``OPENAI_API_KEY`` means the user opted into OpenAI, an
-    ``ANTHROPIC_API_KEY`` means the Anthropic API; with no key at all we default to
-    ``claude`` (Claude Code, no key) so a fresh install never crashes demanding an
-    OpenAI key.
-    """
+    """``CODOC_PROVIDER`` when set (the editor's setup writes it); else the
+    provider whose key is set; else ``claude``, which needs no key."""
     explicit = os.environ.get("CODOC_PROVIDER")
     if explicit:
         return explicit
@@ -187,35 +173,26 @@ def _resolve_provider() -> str:
 
 
 def get_llm_config() -> LLMConfig:
-    """Build LLMConfig from environment variables.
-
-    Provider defaults to keyless Claude Code unless a key or explicit
-    ``CODOC_PROVIDER`` selects otherwise (see :func:`_resolve_provider`). The
-    model and api_key both track the resolved provider.
-    """
+    """The config the environment describes, with a ``.env`` filling its gaps.
+    The model and the key follow the provider."""
+    _fill_from_dotenv()
     provider = _resolve_provider()
     default_model = _DEFAULT_MODELS.get(provider, "gpt-5.4-mini")
     model = os.environ.get("CODOC_MODEL") or default_model
     if not _model_fits_provider(provider, model):
         # A stray cross-family CODOC_MODEL can't run on this provider; ignore it.
         model = default_model
-    if provider == "anthropic":
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-    else:
-        # The e2e/eval suites gate on `get_llm_config().api_key` being the OpenAI
-        # key, so keep this field the OpenAI key for every non-Anthropic provider.
-        api_key = os.environ.get("OPENAI_API_KEY")
+    key_var = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}.get(provider)
     return LLMConfig(
         provider=provider,
         model=model,
-        api_key=api_key,
+        api_key=os.environ.get(key_var) if key_var else None,
         base_url=os.environ.get("CODOC_BASE_URL"),
-        # An empty CODOC_TEMPERATURE means "send none", which is how a caller
-        # says so for a model that refuses every value including the one it uses.
         temperature=_temperature_from_env(),
         max_tokens=int(os.environ.get("CODOC_MAX_TOKENS", "16000")),
         reasoning_effort=os.environ.get("CODOC_REASONING_EFFORT") or None,
         verbosity=os.environ.get("CODOC_VERBOSITY") or None,
+        timeout=float(os.environ.get("CODOC_LLM_TIMEOUT", "300")),
     )
 
 
@@ -227,13 +204,12 @@ def complete(
 ) -> str:
     """Call the configured LLM and return the raw response string.
 
-    ``prefix_parts`` are STABLE prompt segments (frozen instructions, the
-    feature-tree titles) that precede the volatile ``prompt``. Callers order
-    them most-stable-first; the provider layer uses that for prompt
-    caching: Anthropic gets them as system blocks with ``cache_control``
-    breakpoints (cache reads bill ~0.1×), OpenAI relies on automatic
-    prefix caching, and the other providers concatenate them. Semantics are
-    identical everywhere: the model sees prefix_parts + prompt in order.
+    ``prefix_parts`` are the stable prompt segments (the instructions, the
+    feature titles) that precede the per-call ``prompt``, most stable first,
+    so a provider can cache them: Anthropic gets them as system blocks with
+    ``cache_control`` breakpoints, OpenAI caches a repeated prefix on its own,
+    and the other providers concatenate them. Every provider shows the model
+    ``prefix_parts`` then ``prompt``, in order.
     """
     if config is None:
         config = get_llm_config()
@@ -265,15 +241,13 @@ def _joined(parts: list[str], prompt: str) -> str:
     return "\n\n".join(parts + [prompt]) if parts else prompt
 
 
-# One connect/read timeout + bounded retries on every network path: an unset
-# timeout let a wedged connection hang a loop pass (and the daemon behind it)
-# indefinitely.
-_LLM_TIMEOUT_S = float(os.environ.get("CODOC_LLM_TIMEOUT", "300"))
+# Every network path has a timeout (``LLMConfig.timeout``) and bounded retries:
+# a wedged connection would otherwise hang a loop pass and the daemon behind it.
 _LLM_RETRIES = 2
 
 
-# Models that turned out to accept only their default temperature. Filled in as
-# the API says so; see the retry in _complete_openai.
+# Models the API said accept only their default temperature; see the retry in
+# _complete_openai.
 _REFUSES_TEMPERATURE: set[str] = set()
 
 
@@ -283,17 +257,17 @@ def _complete_openai(prompt: str, config: LLMConfig, parts: list[str]) -> str:
     except ImportError as exc:
         raise ImportError("openai package is required for provider='openai'. Run: pip install openai") from exc
 
-    kwargs: dict = {"timeout": _LLM_TIMEOUT_S, "max_retries": _LLM_RETRIES}
+    kwargs: dict = {"timeout": config.timeout, "max_retries": _LLM_RETRIES}
     if config.api_key is not None:
         kwargs["api_key"] = config.api_key
     if config.base_url is not None:
         kwargs["base_url"] = config.base_url
 
     client = openai.OpenAI(**kwargs)
-    # A stable prefix + volatile tail in ONE user message: OpenAI's automatic
-    # prefix caching (≥1024 tokens) needs byte-identical leading content, which
-    # is exactly what prefix_parts provide. prompt_cache_key pins requests from
-    # this workspace to the same cache shard.
+    # The stable prefix and the per-call tail in one user message: OpenAI's
+    # automatic prefix caching (from 1024 tokens) needs byte-identical leading
+    # content, which prefix_parts are. prompt_cache_key routes this workspace's
+    # requests to the same cache shard.
     extra: dict = {}
     # Only against the stock OpenAI endpoint: strictly-validating compatible
     # servers (some Azure API versions, local proxies behind CODOC_BASE_URL)
@@ -325,17 +299,17 @@ def _complete_openai(prompt: str, config: LLMConfig, parts: list[str]) -> str:
         except openai.BadRequestError as exc:
             # Some reasoning models accept only the default temperature and 400
             # on any other. Learn it from the API rather than from a list of
-            # model names, which goes stale the week after it is written, and
-            # remember it so this costs one refused call per model per process.
+            # model names, and remember it, so it costs one refused call per
+            # model per process.
             if "temperature" not in str(exc) or "temperature" not in kwargs:
                 raise
             _REFUSES_TEMPERATURE.add(config.model)
             kwargs.pop("temperature")
             return client.chat.completions.create(**kwargs)
 
-    # Reasoning models (GPT-5 family) spend completion budget on hidden reasoning;
-    # if the visible answer gets truncated (finish_reason == "length"), retry once
-    # with a larger budget so we don't return half a JSON object.
+    # A reasoning model spends completion budget on hidden reasoning. When the
+    # visible answer is cut off (finish_reason "length"), retry once with a
+    # larger budget rather than return half a JSON object.
     budget = config.max_tokens
     for attempt in range(2):
         response = _send(budget)
@@ -363,16 +337,13 @@ def _complete_ollama(prompt: str, config: LLMConfig, parts: list[str]) -> str:
 
 
 def _complete_anthropic(prompt: str, config: LLMConfig, parts: list[str]) -> str:
-    """Complete via the Anthropic API using an explicit ``ANTHROPIC_API_KEY``.
+    """Complete through the Anthropic API with ``ANTHROPIC_API_KEY``. The model
+    is an API id (``claude-sonnet-4-6``), not a CLI alias.
 
-    This is the *managed-API* path (the user pasted an Anthropic key in setup), as
-    opposed to the keyless ``claude`` provider that reuses a Claude Code login. The
-    model must be a concrete API id (e.g. ``claude-sonnet-4-6``), not a CLI alias.
-
-    Stable prefix parts become system blocks, each with a ``cache_control``
-    breakpoint (max 4 allowed; we use ≤2): consecutive loop passes re-send the
-    same frozen instructions + titles and pay ~0.1× for them on a hit. Below the
-    model's minimum cacheable length the API ignores the marker, which is harmless.
+    The first two prefix parts become system blocks with a ``cache_control``
+    breakpoint (the API allows four), so consecutive passes that resend the
+    same instructions and titles read them from the cache. Below the model's
+    minimum cacheable length the API ignores the marker.
     """
     try:
         import anthropic
@@ -381,7 +352,7 @@ def _complete_anthropic(prompt: str, config: LLMConfig, parts: list[str]) -> str
             "provider='anthropic' needs the anthropic package. Run: pip install 'codoc[anthropic]'"
         ) from exc
 
-    kwargs: dict = {"timeout": _LLM_TIMEOUT_S, "max_retries": _LLM_RETRIES}
+    kwargs: dict = {"timeout": config.timeout, "max_retries": _LLM_RETRIES}
     if config.api_key is not None:
         kwargs["api_key"] = config.api_key
     if config.base_url is not None:
@@ -403,20 +374,17 @@ def _complete_anthropic(prompt: str, config: LLMConfig, parts: list[str]) -> str
             for part in parts[:2]
         ] + [{"type": "text", "text": part} for part in parts[2:]]
     message = client.messages.create(**create_kwargs)
-    # Concatenate the text blocks of the response (tool/thinking blocks, if any,
-    # carry no .text and are skipped). This is the same raw-text contract as the others.
+    # The text blocks of the response, concatenated; any other block is skipped.
     return "".join(
         block.text for block in message.content if getattr(block, "type", None) == "text"
     )
 
 
-# The minimal identity every keyless completion runs under, REPLACING Claude
-# Code's default agent system prompt. Measured on this machine: the default
-# session context was ~37K tokens ingested per call (system prompt + tool
-# schemas + user config), none of it read back: $0.075/call on Haiku. With the
-# override + an empty toolset a completion is ~1-2K tokens ($0.0016) and the
-# stable prefix (this preamble + prefix_parts) gets cross-spawn prompt-cache
-# hits (verified: second identical call billed cache_creation=0).
+# The system prompt every ``claude`` completion runs under, in place of Claude
+# Code's agent prompt. The agent prompt, tool schemas and user config add about
+# 37K tokens to every call, none of them used here; without them a completion
+# is 1K to 2K tokens, and the stable prefix (this preamble and prefix_parts) is
+# read from the prompt cache across spawns.
 _CLAUDE_MIN_SYSTEM = (
     "You are codoc's structured code-analysis engine. Follow the user message "
     "exactly and return output only in the format it requests."
@@ -424,27 +392,23 @@ _CLAUDE_MIN_SYSTEM = (
 
 
 def _complete_claude(prompt: str, config: LLMConfig, parts: list[str]) -> str:
-    """Complete via the user's existing Claude credentials by shelling out to the
-    ``claude`` CLI in headless JSON mode, with no separate API key.
+    """Complete through the ``claude`` CLI in headless JSON mode, under the
+    user's Claude login, with no API key.
 
-    Why the CLI and not the ``anthropic`` SDK: the subscription OAuth token Claude
-    Code stores is *not* a general API key, so only the ``claude`` binary can reuse
-    that login. Guards that make the reuse correct and cheap:
+    The CLI and not the ``anthropic`` SDK, because the OAuth token Claude Code
+    stores is not an API key; only the ``claude`` binary can use it.
 
-    * **never ``--bare``**: bare mode skips the OAuth/keychain read, forcing a key.
-    * **drop ``ANTHROPIC_API_KEY``** from the child env: if present it
-      overrides the subscription and bills the wrong account.
-    * **neutral cwd**: run from a temp dir so codoc's *own* repo hooks / MCP /
-      CLAUDE.md don't load (heavy, and risks the reflection re-triggering codoc).
-    * **minimal context**: ``--system-prompt-file`` replaces the default agent
-      system prompt with a small codoc preamble + the caller's stable
-      prefix_parts, and ``--disallowedTools "*"`` drops every tool schema. The
-      stable prefix lands in the system block, so consecutive calls (the loop's
-      cadence) hit Claude Code's automatic prompt cache across spawns.
+    * No ``--bare``: bare mode skips the keychain read and so demands a key.
+    * No ``ANTHROPIC_API_KEY`` in the child's environment: when present it
+      overrides the login and bills another account.
+    * A temporary directory as the working directory, so the repository's own
+      hooks, MCP server and CLAUDE.md do not load (they are heavy, and a hook
+      could start codoc again).
+    * ``--system-prompt-file`` replaces the agent prompt with
+      ``_CLAUDE_MIN_SYSTEM`` and the prefix parts, and ``--disallowedTools "*"``
+      drops every tool schema.
 
-    Returns the model's text (the JSON envelope's ``result``); codoc's
-    ``parse_solution`` extracts the structured payload exactly as for OpenAI, so
-    the prompt contract is unchanged.
+    Returns the model's text, the JSON envelope's ``result``.
     """
     import json as _json
     import shutil
@@ -479,10 +443,10 @@ def _complete_claude(prompt: str, config: LLMConfig, parts: list[str]) -> str:
     if config.model:
         cmd += ["--model", config.model]
 
-    # The prompt is built from repo/tree.codoc content (attacker-influenceable in a
-    # shared repo). Deliver it on STDIN, never argv: a flag-shaped prompt can't be
-    # re-lexed into CLI options (so the tool/turn caps hold), and the prompt
-    # (source snippets) never appears in `ps`/process listings.
+    # The prompt holds repository content, which anyone with write access to a
+    # shared repository controls. It goes on stdin, never argv: a flag-shaped
+    # prompt cannot be read as CLI options (so the tool and turn caps hold), and
+    # source snippets do not appear in `ps`.
     sf = tempfile.NamedTemporaryFile(
         "w", suffix=".txt", prefix="codoc-sys-", delete=False
     )
@@ -495,11 +459,11 @@ def _complete_claude(prompt: str, config: LLMConfig, parts: list[str]) -> str:
         proc = subprocess.run(
             cmd + ["--system-prompt-file", system_file],
             input=prompt, capture_output=True, text=True,
-            cwd=tempfile.gettempdir(), env=env, timeout=_LLM_TIMEOUT_S,
+            cwd=tempfile.gettempdir(), env=env, timeout=config.timeout,
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
-            f"`claude -p` timed out after {_LLM_TIMEOUT_S:.0f}s"
+            f"`claude -p` timed out after {config.timeout:.0f}s"
         ) from exc
     finally:
         try:

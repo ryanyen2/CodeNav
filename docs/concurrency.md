@@ -29,10 +29,10 @@ One process applies ops at a time. It is called the applier.
 - With a daemon alive, no other process applies. A writer appends to
   `.codoc/inbox/<client>.jsonl` and reads the answer from `.codoc/inbox/<client>.ack.jsonl`.
 - With no daemon, a writer is the applier for one call. It takes an exclusive lock on
-  `.codoc/applier.lock`. If `HEAD` moved since its last turn it rebuilds and starts a new
-  session, as the daemon does; otherwise it rebuilds only if a log file other than its
-  own session's changed size. Then it applies, publishes the derived files, and releases
-  the lock.
+  `.codoc/applier.lock`. If `HEAD` moved since its last turn, or git took its session
+  file, it rebuilds and starts a new session, as the daemon does (section 5); otherwise
+  it rebuilds only if a log file other than its own session's changed size. Then it
+  applies, publishes the derived files, and releases the lock.
 - The lock is held per call. Held for the life of a process, it would leave every other
   writer submitting to an inbox that no daemon drains. `codoc translate`,
   `codoc rebuild` and `codoc sync` hold it for their whole run (a sync builds its store
@@ -51,15 +51,14 @@ One process applies ops at a time. It is called the applier.
 
 ```
 .codoc/
-  config.json                  tracked    doc_language, roles
-  tree.codoc                   tracked    the Markdown export; derived
+  config.json                  tracked    doc_language, roles, index_exclude
   log/<session>.jsonl          tracked    the op log, one file per session
   log/snapshot-<hlc>.jsonl     tracked    a folded prefix of the log
   log/archive/                 tracked    files a snapshot folded
   inbox/<client>.jsonl         ignored    submissions, client to applier
   inbox/<client>.ack.jsonl     ignored    answers, applier to client
   inbox/offsets.json           ignored    how far each inbox file has been drained
-  projection.json, history.json, status.json, realize.md      ignored    derived
+  tree.codoc, projection.json, history.json, status.json, realize.md    ignored    derived
   activity.json, watch.pid, applier.lock                      ignored    local state
 ```
 
@@ -67,16 +66,17 @@ A session file:
 
 ```
 {"header": 1, "session": "s-3f9a…", "opened": <HLC>}
-{"id": "s-3f9a…:1", "at": <HLC>, "actor": …, "kind": …, "target": …, "payload": …, …}
+{"id": "s-3f9a…:1", "at": <HLC>, "actor": …, "kind": …, "target": …, "payload": …, …, "sub": ["ide", "k1"]}
 …
-{"closed": 1}
 ```
 
 - One op per line, as recorded: canonical payload, inverse, conflict.
+- An op minted while applying a client submission names it: `sub: [client, cid]`
+  (section 4, Exactly once). Ops the applier writes on its own account around a
+  submission (opening the plan a write rides in, taking back a plan nothing landed
+  under) carry none.
 - The file is created by the session's first op. A session that writes nothing leaves no file.
 - Each op is flushed when written and the file is synced once per batch.
-- The `closed` line is written when the writer is done with the file: on rotation, at
-  exit, and when the daemon or the MCP server is stopped by a signal.
 
 A file is checked when it is read:
 
@@ -107,12 +107,14 @@ The node is the writer's session id, which is unique per writer and names no mac
 A submission is one JSON line:
 
 ```
-{ cid, kind, target, payload, batch?, plan?, base?, caused_by? }
+{ cid, kind, target, payload, batch?, plan?, base?, caused_by?, at }
 ```
 
 `cid` is the client's own id for it. `kind` is an op kind, or `ingest` with
-`target: {bid, path}` and `payload: {base_text, new_md}`. A client appends a batch with
-one write, so concurrent writers interleave whole lines.
+`target: {bid, path}` and `payload: {base_text, new_md}`. `at` is the wall-clock time of
+the append in milliseconds, stamped by the writer (`inbox.submit`, the editor host; the hub
+stamps its users' lines itself). A client appends a batch with one write, so concurrent
+writers interleave whole lines.
 
 The inbox file name decides the actor:
 
@@ -129,12 +131,20 @@ lines are never applied; restart the agent so it runs the current server.
 The `gh:` prefix keeps a GitHub login named `local` or `import` from arriving as the
 maintainer's identity.
 
-The drain, per client, per line:
+**Order.** The drain reads the complete lines of every inbox after its remembered byte
+offset (an unterminated last line waits for the next drain) and applies them in the order
+they were appended: every client of a checkout appends on one machine, the hub included,
+so their `at` stamps share one clock, and the files are merged by `at`, each keeping its
+own line order. A person's edit queued a moment before an agent's amend of the same words
+is therefore applied first, and the machine gate sees it.
 
-1. Read the complete lines after the remembered byte offset. An unterminated last line
-   waits for the next drain.
-2. A line that is not a valid submission is acked with an error.
-3. A `cid` already acked is skipped: no op, no second ack.
+The drain, per line:
+
+1. A line that is not a valid submission is acked with an error.
+2. A `cid` already acked is skipped: no op, no second ack.
+3. A `cid` the logs name in a `sub` and the ack file does not is acked from the log (the
+   first op it names) and not applied again: the applier stopped between logging it and
+   acking it.
 4. `caused_by` is dropped unless the actor is a machine.
 5. Provisional anchors are resolved (below).
 6. For an actor with the `suggest` role and no plan tag: a range `text.delete` becomes a
@@ -143,21 +153,21 @@ The drain, per client, per line:
    tagged with a plan of that actor, opened or reused by the drain (section 9).
 7. An `ingest` runs the diff in the applier and goes through the machine gate
    (section 7). Any other kind is minted (next `seq`, `tick`, actor) and applied.
-8. The recorded op is appended to the session file.
+8. The recorded op is appended to the session file, naming the submission (`sub`).
 9. The ack is written: `{cid, op, conflict}`. For an ingest, `op` is the first op it
    minted, `conflict` is the refusal if there was one, and `status: "unchanged"` marks a
    write that asked for nothing.
-10. The offset moves past the line.
 
-After a client's lines, every plan the drain opened that has no ops is withdrawn. A
-submission that raises is acked `refused: …` and the drain continues with the next line.
+After the lines, every plan the drain opened that has no ops is withdrawn and the offsets
+move past every line read. A submission that raises is acked `refused: …` and the drain
+continues with the next line.
 
 ```mermaid
 flowchart TD
     L[inbox line] --> V{valid submission?}
     V -- no --> E[ack with an error]
-    V -- yes --> S{cid acked before?}
-    S -- yes --> K[skip]
+    V -- yes --> S{cid acked,<br/>or named in the log?}
+    S -- yes --> K[skip; ack from the log<br/>if not acked yet]
     S -- no --> R[resolve provisional anchors]
     R --> G{suggester, no plan tag,<br/>not a comment?}
     G -- yes --> T[a delete becomes suggest_del over the characters it names;<br/>tag with the actor's plan]
@@ -182,50 +192,67 @@ submitted as `cid`. The drain resolves these against the acks it has given that 
 mapped through the normalisation. An anchor that does not resolve is left as it is and
 the op conflicts `bad_anchor`.
 
-**Idempotency.** An acked `cid` is never applied twice. Ack files are trimmed to their
-newest 2000 lines when a session opens, and `offsets.json` keeps the applier from
-re-reading lines it has drained.
+**Idempotency.** An acked `cid` is never applied twice, and neither is one the logs
+name. Ack files are trimmed to their newest 2000 lines when a session opens, and
+`offsets.json` keeps the applier from re-reading lines it has drained.
 
 **The daemon's batch.** File events are debounced (600 ms). A batch starts on a change to
 a code file the index reads, to `activity.json`, or to a client's `inbox/<client>.jsonl`,
 never on a file the daemon writes itself (acks, `offsets.json`), so a batch does not start
 the next. For each batch the daemon does, in order:
 
-1. If `HEAD` moved: rebuild the store from the log files now on disk and start a new
-   session. Note the hand-offs that the commits in `old..new` name in a `Codoc-Handoff`
-   trailer, each from a commit whose `Codoc-Base` trailer names the branch `HEAD` is on
-   now. The commit and the branch are read in one git call. A merge, a pull with or
-   without rebase, and a checkout of the base count the commit; a checkout or a pull of
-   a hub pull request's own branch, and a detached `HEAD`, note none.
+1. If `HEAD` moved (its commit or its branch), or git took the session file: rebuild the
+   store from the log files now on disk and start a new session (section 5). Note the
+   hand-offs that the commits in `old..new` name in a `Codoc-Handoff` trailer, each from
+   a commit whose `Codoc-Base` trailer names the branch `HEAD` is on now. The commit and
+   the branch are read in one git call. A merge, a pull with or without rebase, and a
+   checkout of the base count the commit; a checkout or a pull of a hub pull request's
+   own branch, and a detached `HEAD`, note none.
 2. Reload the roles from `config.json`, then drain every inbox from its saved offset.
    This runs on every batch, including the first one at startup and `codoc sync`, so
    submissions written while no daemon ran are applied.
-3. Read the agent epoch from `activity.json`. While a coding agent's session is open,
-   changed code files are held. When it closes, or after 900 seconds of silence, they
-   are released to step 4, and that pass cites every queued hand-off.
-4. Reflect the changed code files that are not held: the loop's pass, which writes ops as
-   `loop` and cites the hand-offs step 1 noted.
+3. Read the agent epoch from `activity.json`, every batch, so a daemon started during a
+   turn knows it. While a coding agent's session is open, changed code files are
+   deferred. When it closes, or after 900 seconds of silence, the deferred files and
+   every file the session touched go to step 4, and that pass cites every queued
+   hand-off.
+4. Reflect the changed code files that are not deferred: the loop's pass, which writes
+   ops as `loop` and cites the hand-offs step 1 noted.
 5. Unless an agent epoch is open, settle hand-offs (section 10).
 6. Publish the derived files.
 
 **Exactly once.** Every writer mints random client ids (a per-page prefix in the editor, a
 uuid in the CLI and the MCP server), and the drain reads each inbox line once, from the
-offset it stored. A `cid` is read again only if a client appends the same line again; the
-newest 2000 acks per client are kept to answer that with the same op.
+offset it stored. A `cid` is read again if a client appends the same line again, and the
+newest 2000 acks per client are kept to answer that with the same op. It is also read
+again when the applier stopped (a signal, a kill, a crash) after logging a submission's
+ops and before writing its ack or the offset: the logged ops name the submission
+(`sub`), so the next drain acks it from the log and applies nothing. A submission whose
+ops were not all logged when the applier stopped keeps the ones that were.
 
 ## 5. Sessions
 
 - A session is one applier's run between rotations. Its id is random.
 - One session file has one writer and many actors: the person, the loop and the agents
   appear in it in the order they wrote.
-- The applier (the daemon, or a writer with no daemon) closes its session and opens a new
-  one when `HEAD` moves (a commit, a checkout, a pull, a rebase). The daemon also closes
-  it when it exits.
-- `HEAD` is checked at the start of each daemon batch and each daemonless call. A commit
-  made while a long pass runs (a reflect pass waiting on a model) is seen at the next
-  batch, so that pass's ops still go to the file the commit may have recorded. The next
-  commit records them; a merge of two branches is unaffected, because each branch's
-  files are its own.
+- The applier (the daemon, or a writer with no daemon) rebuilds from the logs on disk,
+  closes its session and opens a new one (`Workspace.follow_head`) when:
+  - `HEAD` moved: its commit or its branch (a commit, a checkout, a pull, a rebase,
+    `checkout -b`). A commit may have recorded the session file, and a checkout changes
+    which files are on disk.
+  - The session file is gone or replaced: `git stash -u`, `git clean`, VS Code's
+    "Discard All Changes", a checkout that removed it, a fold that archived it. The
+    person took those edits out of the working tree, so the store follows; words typed
+    after it land in the new file. A submission anchored on characters that went with
+    the file conflicts `unknown_anchor`.
+- Both are checked at the start of each daemon batch and each daemonless call, before
+  anything applies. A commit made while a long pass runs (a reflect pass waiting on a
+  model) is seen at the next batch, so that pass's ops still go to the file the commit
+  may have recorded. The next commit records them; a merge of two branches is
+  unaffected, because each branch's files are its own.
+- A log file another hand adds without moving `HEAD` (a `git stash pop` of a session
+  file) is read by a daemonless writer at its next call, and by the daemon at its next
+  rebuild.
 - A read-only open replays the logs and writes nothing.
 
 **Actors.** The local person is `human:<email>`, the `git config user.email` of the
@@ -351,6 +378,7 @@ where the write lands:
 | The trunk refuses it because it would drop a mark a person placed. | A plan. |
 | The write changes nothing. | Nothing. |
 | The feature's phase is `edited`, `queued` or `planned`. | A plan. The document wins. |
+| The writer is a translator. | A plan when a person wrote any live word of the block, else trunk. A translation replaces every word, so `deleted_fraction` says nothing. |
 | `deleted_fraction` is above 0.15 and a person wrote any live word of the block. | A plan. |
 | `deleted_fraction` is above 0.5. | A plan. |
 | Otherwise. | Trunk. |
@@ -603,19 +631,23 @@ removed. The paragraph reads `Retries once.`
 
 ## 11. Git
 
-Tracked: `config.json`, `tree.codoc`, and everything under `log/`. Everything else in
-`.codoc/` is ignored.
+Tracked: `config.json`, everything under `log/`, and `media/`. Everything else in
+`.codoc/` is ignored, `tree.codoc` included: the daemon rewrites it on every edit, and a
+tracked file it rewrites makes git refuse a pull, a checkout or a `stash pop` over the
+person's uncommitted words.
 
 - **One file per session.** Two branches whose sessions wrote different files never
   conflict in git; a merge keeps both files.
 - **The daemon does not append to a committed file.** It checks `HEAD` at the start of
   every batch, before it applies anything, and starts a new session when `HEAD` has
-  moved. Two branches forked from one commit therefore do not share an open file.
+  moved. It never writes to a file it has rotated away from, so a commit leaves no
+  tracked log modified. Two branches forked from one commit do not share an open file.
 - **A merge is a rebuild.** After a merge, a checkout or a pull the set of files on disk
   has changed. The daemon rebuilds when it sees `HEAD` move; `codoc rebuild` does the
   same by hand. The merged ops land by their character anchors, in the order of section 6.
-- **`tree.codoc`** is derived. A textual conflict in it does not reach the store, and the
-  next publish rewrites the file from the log.
+- **Uncommitted words** are in an untracked session file, which a checkout, a pull and a
+  stash without `-u` leave alone, as they leave uncommitted code. `stash -u`, `clean`
+  and a discard take it; the daemon then rebuilds without those words (section 5).
 - **Rebase and squash** keep the log files, since they are tree content. The commit id
   in `feature.realized` (`sha`) may then name a commit that is gone.
 - **A pull request** from someone else carries their session files. Run
@@ -674,7 +706,7 @@ store as the folded ops left it:
 
 | op | one per | carries | actor |
 |---|---|---|---|
-| `block.add` | block, live or dead | `rank`, `level`, the full Text of each Text field (segments with actors, clocks and killers; marks), other fields, `dead`, `dead_actor`, `dead_at`, `dead_in`, `detached`, `bound_once`, `code_at`, `realized_at`, `ranked_by`, `void` | `import` |
+| `block.add` | block, live or dead | `rank`, `level`, the full Text of each Text field (segments with actors, clocks and killers; marks), other fields, `added_by`, `dead`, `dead_actor`, `dead_at`, `dead_in`, `detached`, `prior`, `bound_once`, `code_at`, `realized_at`, `ranked_by`, `void` | `import` |
 | `bind.attach` | binding | the hashes | `import` |
 | `plan.open` | plan | `kind`, `target`, `note`, `ops`, `opened_by`, `build` | the plan's actor |
 | `plan.accept` or `plan.reject` | plan | `verdict`, the op it folded; it sets the plan's status and verdict and does nothing else | the actor who decided |
@@ -692,10 +724,11 @@ every time, and a re-emitted hand-off would be taken back. A `block.add` keeps w
 restored in its record, so a second fold, which replays the first one's records, keeps
 it too.
 
-**The archive.** A session file moves to `log/archive/` when it is valid, its writer
-closed it, and every op in it is inside the frontier. Older snapshots move there too. A
-file that also holds ops after the cut stays in `log/`; the frontier keeps its folded
-ops from applying twice.
+**The archive.** A session file moves to `log/archive/` when it is valid and every op in
+it is inside the frontier. Older snapshots move there too. A file that also holds ops
+after the cut stays in `log/`; the frontier keeps its folded ops from applying twice. A
+daemonless writer that holds an archived file open finds it gone at its next call and
+opens a new session (section 5), so nothing is appended under `log/archive/`.
 
 **What a fold keeps.** `state_fingerprint` and every view of the document are equal
 before and after. A segment carries its author, its clock and its killer's; a mark
@@ -753,8 +786,6 @@ It adopts each new projection block by block.
 
 ## Not built
 
-- A git merge driver that regenerates `tree.codoc`. A textual conflict in it is resolved
-  by hand, or by the next publish.
 - Log validation inside the hub. `codoc validate-logs` is a manual step before a merge.
 - A setting to log a hash of the hand-off prompt in place of its text. The prompt and
   every actor's login are in the committed log.

@@ -7,7 +7,7 @@
  *   card.ts        the card for a kind without a node type, and its text areas
  *   keymap.ts      which key runs which gesture
  *   commands.ts    the gestures: each emits its ops and changes the document
- *   paste.ts       what a paste brings, as Markdown blocks or the clipboard's own
+ *   paste.ts       what a paste brings, and the ops that put it on the page
  *   guards.ts      refuses unrecorded structural changes; keeps the page NFC
  *   outbox.ts      records transactions into ops, batches them, takes acks,
  *                  and says which blocks are held
@@ -38,7 +38,7 @@ import { newBid, newCid } from '../calc/ids';
 import { isOneLine, isProvisional, kindOf, pathOf, textField, type Ack, type CharRef, type Projection, type Submission } from '../calc/projection';
 import { scalarOffset } from '../calc/recorder';
 import { adopter, type Adopt } from './adoption';
-import { RECORDED, deleteFeature, deleteSelection, moveBlock, pasteBlocks, selectedBlocks, type Env } from './commands';
+import { RECORDED, deleteSelection, moveBlock, selectedBlocks, type Env } from './commands';
 import { Paints, REPAINT, listNumbers, type Shown } from './decorations';
 import { dragPlugin } from './drag';
 import { FindWidget, findPlugin } from './find';
@@ -46,7 +46,7 @@ import { nfcGuard, sameStructure, structureGuard } from './guards';
 import { gestureKeys } from './keymap';
 import { LinkInput, Menus } from './menus';
 import { Outbox } from './outbox';
-import { clipboardPieces } from './paste';
+import { clipboardPieces, pasteBlocks } from './paste';
 import { cardView, type CardFields } from './card';
 import { cardFence, codocSchema } from './schema';
 
@@ -78,8 +78,6 @@ export interface EditorHandle {
     find(replace: boolean): void;
     /** The selection as a comment anchor: its block, its words, and the first and last character. */
     selectionAnchor(): { bid: string; text: string; start: CharRef; end: CharRef } | null;
-    deleteFeature(fid: string): void;
-    moveBlock(bid: string, afterBid: string | 'START', levelDelta?: number): void;
 }
 
 export function mountEditor(container: HTMLElement, proj: Projection, host: EditorHost): EditorHandle {
@@ -118,7 +116,7 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             paints.plugin,
             listNumbers(),
             findPlugin(),
-            dragPlugin((bid, after) => { const g = moveBlock(view.state, env, bid, after); if (g) view.dispatch(g.tr); }),
+            dragPlugin((bid, after) => { const g = moveBlock(view.state, bid, after); if (g) view.dispatch(g.tr); }),
         ],
     });
 
@@ -229,14 +227,6 @@ export function mountEditor(container: HTMLElement, proj: Projection, host: Edit
             const a = scalarOffset($f.parent, $f.parentOffset), b = scalarOffset($t.parent, $t.parentOffset);
             if (b <= a) return null;
             return { bid, text: sh.chars.slice(a, b).join(''), start: sh.ref(a), end: sh.ref(b - 1) };
-        },
-        deleteFeature(fid) {
-            const g = deleteFeature(view.state, env, fid);
-            if (g) view.dispatch(g.tr);
-        },
-        moveBlock(bid, after, delta = 0) {
-            const g = moveBlock(view.state, env, bid, after, delta);
-            if (g) view.dispatch(g.tr);
         },
     };
 }

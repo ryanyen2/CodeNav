@@ -1,11 +1,17 @@
-from typing import Protocol, runtime_checkable
+import ctypes
+import functools
+import pathlib
+import warnings
 from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
+
+import tree_sitter as ts
 
 
 @dataclass
 class Chunk:
     """A named, addressable unit of code extracted from a file."""
-    symbol_path: str        # e.g. "pkg/file.py::ClassName.method_name"
+    symbol: str             # the chunk's key, e.g. "pkg/file.py::ClassName.method_name"
     file: str               # repo-relative posix path
     start_byte: int
     end_byte: int
@@ -26,40 +32,39 @@ class LanguageAdapter(Protocol):
     language: str           # e.g. "python", "typescript"
 
     def extract_chunks(self, file: str, source: str) -> list[Chunk]:
-        """Extract all top-level and nested entity chunks from source.
-        Each function, class, method, and module-level statement group becomes a chunk.
-        Returns chunks with populated symbol_path, file, start/end bytes, source."""
+        """Every function, class and method in ``source`` as a chunk, plus one
+        ``__module__`` chunk for the module-level statements."""
         ...
 
     @property
     def comment_node_kinds(self) -> set[str]:
-        """Return the set of tree-sitter node type names that are comments for this language.
+        """The tree-sitter node types that are comments in this language.
         ``tree_walk`` drops these when it fingerprints a chunk."""
         ...
 
-    def resolve_symbol_path(self, source: str, symbol_path: str) -> tuple[int, int] | None:
-        """Given source text and a symbol path (e.g. "file.py::ClassName.method"),
-        return (start_byte, end_byte) of the named entity, or None if not found."""
-        ...
-
-    def run_ts_query(
-        self, source: str, query_str: str,
-        scope: tuple[int, int] | None = None,
-    ) -> list[tuple[int, int]]:
-        """Run a tree-sitter query against source (optionally scoped to a byte range).
-        Returns list of (start_byte, end_byte) for all matches (capture group 0)."""
-        ...
-
     def references_in_chunk(self, chunk_source: str, file: str) -> list[SymbolRef]:
-        """Return all symbols referenced from within chunk_source (imports, calls, inherits, type refs).
-        Used for binding-graph derivation."""
+        """Every symbol ``chunk_source`` references (imports, calls, base
+        classes, type annotations), for the dependency graph."""
         ...
 
     def parse(self, source: str):
-        """Return the tree-sitter parse tree for source."""
+        """The tree-sitter parse tree for ``source``."""
         ...
 
-    def token_stream(self, source: str, exclude_comment_nodes: bool = True) -> list[str]:
-        """Return ordered list of token texts (leaves of the parse tree), optionally excluding comments.
-        Used by fingerprinting."""
-        ...
+
+@functools.cache
+def parser(name: str) -> ts.Parser:
+    """A tree-sitter parser for the grammar ``name``.
+
+    ``tree_sitter_languages`` ships precompiled grammars in ``languages.so``,
+    built against the tree-sitter 0.20 API. Loading the library with ctypes
+    gives the raw ``TSLanguage`` pointer, which the 0.25 binding accepts.
+    """
+    import tree_sitter_languages
+
+    lib = ctypes.cdll.LoadLibrary(str(pathlib.Path(tree_sitter_languages.__file__).parent / "languages.so"))
+    fn = getattr(lib, f"tree_sitter_{name}")
+    fn.restype = ctypes.c_void_p
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return ts.Parser(ts.Language(fn()))

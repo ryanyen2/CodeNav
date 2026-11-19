@@ -1,9 +1,9 @@
 """The hub's realize worker: a hand-off becomes a pull request.
 
 On the maintainer's machine a hand-off is built by the person's own session
-(`/codoc:sync`). On the hub nobody is at a terminal, so the server decides:
+(`/codoc:realize`). On the hub nobody is at a terminal, so the server decides:
 every feature whose hand-off is not yet covered by a realization, and whose
-hand-off has no pull request yet, is realized **off the live tree** on its own
+hand-off has no pull request yet, is realized off the live tree, on its own
 git worktree and branch, by an agent under the enforced sandbox
 (`realize_agent`: no shell, edits confined to the feature's bound files,
 secrets unreadable, GitHub tokens scrubbed from its environment), and only the
@@ -25,10 +25,10 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from codoc.calculus.derive import title
+from codoc.calculus.derive import queued, title
 from codoc.daemon import client
 from codoc.index.git import BASE_TRAILER, HANDOFF_TRAILER
-from codoc.loops.realize import directive, queued
+from codoc.loops.realize import directive
 from codoc.serve.realize_agent import make_sandboxed_agent
 from codoc.serve.sandbox import out_of_scope_changes
 from codoc.workspace.layout import HUB_PRS, STATUS, atomic_write
@@ -45,7 +45,7 @@ def branch_name(handoff_id: str) -> str:
     return f"codoc/realize-{safe}"
 
 
-def pr_create_command(branch: str, title_text: str, body: str, *, base: str = "main") -> list[str]:
+def pr_create_command(branch: str, title_text: str, body: str, *, base: str) -> list[str]:
     """``gh pr create`` argv: always a feature branch against ``base``, never a
     push to the base branch."""
     return ["gh", "pr", "create", "--base", base, "--head", branch, "--title", title_text, "--body", body]
@@ -103,7 +103,7 @@ class Result:
     built: bool = False          # the agent ran and its work is committed: retry from the push, not the model
 
 
-def realize_one(req: Request, worktree: str, *, run, agent, base: str = "main", root: str | None = None,
+def realize_one(req: Request, worktree: str, *, run, agent, base: str, root: str | None = None,
                 resume: bool = False) -> Result:
     """Worktree → sandboxed agent → scope gate → commit → push → PR. Every git
     and gh call is checked: a worktree git refused is not a worktree to run an
@@ -175,7 +175,7 @@ def _published_head(codoc_dir: str) -> int | None:
         return None
 
 
-def process_ready(root_dir: str, codoc_dir: str, *, base: str = "main", run=_run, agent=None,
+def process_ready(root_dir: str, codoc_dir: str, *, base: str, run=_run, agent=None,
                   store=None, printer=print, retry: list[str] | None = None) -> list[str]:
     """Realize every ready hand-off once; returns the hand-off ids that got a PR.
     Hand-offs left unanswered by a transient failure are appended to ``retry``,
@@ -256,7 +256,7 @@ def _cleanup(worktree: str, branch: str, run, root: str | None = None, *, keep_b
 class Worker:
     """A background thread that calls :func:`process_ready` on an interval."""
 
-    def __init__(self, root_dir: str, codoc_dir: str, *, base: str = "main", interval: float = 15.0, printer=print) -> None:
+    def __init__(self, root_dir: str, codoc_dir: str, *, base: str, interval: float = 15.0, printer=print) -> None:
         self.root_dir, self.codoc_dir, self.base, self.interval, self.printer = root_dir, codoc_dir, base, interval, printer
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None

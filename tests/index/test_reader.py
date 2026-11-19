@@ -19,8 +19,8 @@ lancedb = pytest.importorskip("lancedb")
 def _make_index(codoc_dir: Path) -> None:
     db = lancedb.connect(str(codoc_dir / "lancedb"))
     rows = [
-        {"id": i, "file": f, "symbol_path": f"{f}::{sym}", "language": "python",
-         "source": f"def {sym}(): ...", "tokens_hash": f"tok{i}", "types_hash": f"ty{i}",
+        {"id": i, "file": f, "symbol": f"{f}::{sym}", "language": "python",
+         "source": f"def {sym}(): ...", "fingerprint": f"tok{i}", "types_hash": f"ty{i}",
          "start_byte": 0, "end_byte": 10}
         for i, (f, sym) in enumerate([("a.py", "foo"), ("a.py", "bar"), ("b.py", "baz")])
     ]
@@ -30,7 +30,7 @@ def _make_index(codoc_dir: Path) -> None:
 def test_files_filter_pushed_down(tmp_path):
     _make_index(tmp_path)
     rows = read_all_chunks(tmp_path, files={"a.py"})
-    assert sorted(r.symbol_path for r in rows) == ["a.py::bar", "a.py::foo"]
+    assert sorted(r.symbol for r in rows) == ["a.py::bar", "a.py::foo"]
     assert read_all_chunks(tmp_path, files=set()) == []
     assert len(read_all_chunks(tmp_path)) == 3
 
@@ -39,7 +39,7 @@ def test_source_column_droppable(tmp_path):
     _make_index(tmp_path)
     light = read_all_chunks(tmp_path, with_source=False)
     assert all(r.source == "" for r in light)
-    assert all(r.tokens_hash for r in light)  # identity columns intact
+    assert all(r.fingerprint for r in light)  # identity columns intact
     assert all(r.source for r in read_all_chunks(tmp_path))
 
 

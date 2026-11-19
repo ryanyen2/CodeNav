@@ -7,7 +7,8 @@
  * the host's messages (wire.ts). The first projection mounts the editor. Each
  * later one is adopted by the editor and redraws the tree rows, the toolbar
  * and the margin. Toolbar buttons and the page's own keys (hand off, undo,
- * find) submit ops or ask the host for something.
+ * find) submit ops or ask the host for something; what undo needs to know is
+ * kept in undo.ts.
  *
  * The page is the same in a VS Code webview and in a browser tab on the hub.
  * `acquireVsCodeApi` is VS Code's in the first and web/hub.ts's in the second.
@@ -17,11 +18,11 @@ import './app.css';
 import type { HostToPage, PageToHost } from '../../wire';
 import { PHASE_CHANNEL, PHASE_LABEL, theirEdits } from '../calc/claims';
 import { newBatch, newBid, newCid } from '../calc/ids';
-import type { Ack, OpBody, Phase, Projection, Submission } from '../calc/projection';
-import { nextUndo, type HistoryWindow } from '../calc/window';
+import type { OpBody, Phase, Projection, Submission } from '../calc/projection';
 import { Margin, type Thread } from './comments';
 import { mountEditor, type EditorHandle } from './editor';
 import { Timeline } from './timeline';
+import { Undo } from './undo';
 
 declare function acquireVsCodeApi(): { postMessage(m: unknown): void; getState?(): unknown; setState?(s: unknown): void };
 
@@ -35,63 +36,7 @@ let margin: Margin | null = null;
 let timeline: Timeline | null = null;
 /** Who the daemon says this viewer is (`status.actor`); only their words are inked. */
 let actor = '';
-/** The batches this page sent, oldest first. ⌘Z inverts only these: never a
- *  teammate's batch merged through git, nor the person's own `codoc accept` in
- *  a terminal. Kept in the page's state, so a reload of the page still knows
- *  them; a page opened fresh has nothing to undo. */
-const SENT_KEPT = 500;
-const restored = api.getState?.() as { sent?: unknown } | undefined;
-const sent = new Set<string>(Array.isArray(restored?.sent) ? restored.sent : []);
-let pendingUndo: 'undo' | 'redo' | null = null;
-/** Batch → the client ids it submitted that the daemon has not answered. Undo
- *  waits for these, because it must choose from a window that already carries
- *  the person's newest work. A batch leaves this map by its acks and not by
- *  appearing in the window: the window omits refused ops and holds only the
- *  newest 200, so a batch can be answered and never show up there. */
-const inFlight = new Map<string, Set<string>>();
-
-/** An undo sent and not yet answered: its batch, what it undoes, the newest history
- *  position when it was sent, and the blocks the undone batch touched. */
-type Undoing = { batch: string; what: string; pos: number; blocks: Set<string> };
-const undoing = new Map<string, Undoing>();
-/** Undo batches the daemon refused. The next undo moves past them. One is offered again
- *  only when it may now succeed: its refusal was not final, and someone else has since
- *  changed a block it touches, or, for a split undo refused because a block sits between
- *  (`not_adjacent`), removed or moved a block. Typing or adding blocks elsewhere does not
- *  count, so an agent writing in another feature cannot make every ⌘Z resend it. */
-const refusedUndo = new Map<string, Undoing & { conflict: string }>();
-/** Ops that can take away the block between a split's two halves. */
-const REORDER = new Set(['block.delete', 'block.move', 'block.merge']);
-/** Refusals no later change answers: the undo can never apply. */
-const FINAL = new Set(['authority', 'verdict_folded', 'not_current_verdict', 'plan_not_open']);
-/** The blocks an entry changed: its text snapshots and the blocks its inverse names. */
-const touchedBy = (e: HistoryWindow['ops'][number]): string[] => [
-    ...Object.keys(e.blocks),
-    ...e.inverse.flatMap(o => [o.target.bid, o.target.into, ...((o.payload as { ids?: unknown }).ids as string[] ?? [])]),
-].filter((x): x is string => typeof x === 'string');
-/** Why an undo was refused, in the person's words; any other code is shown as it is. */
-const WHY_NOT: Record<string, string> = {
-    verdict_folded: 'it is in a snapshot now',
-    not_current_verdict: 'the proposal was decided again since',
-    plan_open: 'the proposal is open again',
-    plan_not_open: 'the proposal was decided since',
-    authority: 'your role does not allow it',
-};
-
-function retire(acks: Ack[]): void {
-    for (const a of acks) {
-        for (const [b, cids] of inFlight) {
-            if (cids.delete(a.cid) && !cids.size) inFlight.delete(b);
-        }
-        const u = undoing.get(a.cid);
-        if (!u) continue;
-        undoing.delete(a.cid);
-        if (a.conflict && !refusedUndo.has(u.batch)) {
-            refusedUndo.set(u.batch, { ...u, conflict: a.conflict });
-            notify(`Could not ${u.what}: ${WHY_NOT[a.conflict] ?? a.conflict}.`);
-        }
-    }
-}
+const undo = new Undo(api);
 let projection: Projection | null = null;
 let status: Record<string, unknown> = {};
 let history = false;
@@ -99,6 +44,9 @@ let selected: string | null = null;
 let language = 'en';
 let notice = '';
 let noticeTimer: number | undefined;
+const MAC = navigator.platform.toUpperCase().includes('MAC');
+/** A shortcut as this platform writes it: ⌘S on a Mac, Ctrl+S elsewhere. */
+const shortcut = (key: string): string => (MAC ? `⌘${key}` : `Ctrl+${key}`);
 
 const LANGUAGES: Array<[string, string]> = [['en', 'English'], ['zh-Hans', '中文（简体）'], ['zh-Hant', '中文（繁體）'], ['ja', '日本語'], ['ko', '한국어'],
     ['es', 'Español'], ['fr', 'Français'], ['de', 'Deutsch'], ['pt', 'Português']];
@@ -205,11 +153,11 @@ function renderToolbar(proj: Projection): void {
     }
     if (edited && decides()) {
         const hand = el('button', 'codoc-btn codoc-btn-human', `Hand off (${edited})`);
-        hand.title = 'send your edits to the agent (⌘S)';
+        hand.title = `send your edits to the agent (${shortcut('S')})`;
         hand.addEventListener('click', handoffAll);
         toolbar.append(hand);
     }
-    if (queued && decides()) {
+    if (queued && decides() && terminal()) {
         const run = el('button', 'codoc-btn', 'Build now');
         run.title = 'run codoc realize in a terminal';
         run.addEventListener('click', () => send({ kind: 'realize' }));
@@ -223,6 +171,12 @@ function renderToolbar(proj: Projection): void {
  *  not offer either. */
 function decides(): boolean {
     return (typeof status.role === 'string' ? status.role : 'owner') !== 'suggest';
+}
+
+/** Whether the host can run `codoc realize` and open code: VS Code can, the hub
+ *  cannot. A host that does not say is taken to be VS Code. */
+function terminal(): boolean {
+    return status.terminal !== false;
 }
 
 function renderStatus(): void {
@@ -249,13 +203,7 @@ function notify(text: string): void {
 
 // ── actions ──────────────────────────────────────────────────────────────────
 function submit(subs: Submission[]): void {
-    for (const s of subs) {
-        const cids = inFlight.get(s.batch) ?? new Set<string>();
-        cids.add(s.cid);
-        inFlight.set(s.batch, cids);
-        sent.add(s.batch);
-    }
-    api.setState?.({ sent: [...sent].slice(-SENT_KEPT) });
+    undo.track(subs);
     send({ kind: 'submit', subs });
 }
 
@@ -269,31 +217,30 @@ function submitOps(ops: OpBody[]): void {
 }
 
 /** A hand-off of `fid`. No `covers`: the applier fills it with its own
- *  frontier, which includes the ops flushed before it. */
-const handoff = (fid: string, asked?: string): OpBody =>
-    ({ kind: 'feature.handoff', target: { fid }, payload: asked ? { asked } : {} });
+ *  frontier, which includes the ops flushed before it. No `asked` either: that
+ *  is for words the person types to go with a hand-off, and the page has none. */
+const handoff = (fid: string): OpBody => ({ kind: 'feature.handoff', target: { fid }, payload: {} });
 
 /** Accept or reject plans, in one batch. Accepting also hands off each feature
- *  the plan lists in `handoff`, so what was accepted gets built. */
+ *  the plan lists in `hands_off`, so what was accepted gets built. */
 function verdicts(pids: string[], accept: boolean): void {
     const ops: OpBody[] = pids.map(pid => ({ kind: accept ? 'plan.accept' : 'plan.reject', target: { pid }, payload: {} }));
     if (accept) {
-        const asked = new Map<string, string[]>();
-        for (const p of projection?.plans ?? []) {
-            if (pids.includes(p.id)) for (const fid of p.handoff ?? []) asked.set(fid, [...(asked.get(fid) ?? []), `Build the plan ${p.id}.`]);
-        }
-        for (const [fid, asks] of asked) ops.push(handoff(fid, asks.join(' ')));
+        const fids = new Set<string>();
+        for (const p of projection?.plans ?? []) if (pids.includes(p.id)) for (const fid of p.hands_off ?? []) fids.add(fid);
+        for (const fid of fids) ops.push(handoff(fid));
     }
     submitOps(ops);
 }
 
-/** Build it: hand the thread's feature off with the comment as the request, then run the build. */
+/** Build it: hand the thread's feature off, and run the build where there is a
+ *  terminal. The thread itself is the request: an open comment reaches the
+ *  agent's directive through the comment kind. */
 function buildThread(t: Thread): void {
-    const fid = projection && featureOfBlock(t.anchor);
+    const fid = featureOfBlock(t.anchor);
     if (!fid) return;
-    if (!decides()) { notify('your note is saved; a maintainer hands the feature off'); return; }
-    submitOps([handoff(fid, t.messages.map(m => m.body).join(' '))]);
-    send({ kind: 'realize' });
+    submitOps([handoff(fid)]);
+    if (terminal()) send({ kind: 'realize' });
 }
 
 function featureOfBlock(bid: string): string | null {
@@ -329,46 +276,18 @@ function reveal(fid: string): void {
     dom?.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
 
-/** Undo or redo: ask for the history window, and invert a batch when it arrives (`applyUndo`). */
-function undo(redo: boolean): void {
+/** Undo or redo: ask for the history window; `Undo.onHistory` answers when it arrives. */
+function askUndo(redo: boolean): void {
     editor?.flush();
-    pendingUndo = redo ? 'redo' : 'undo';
+    undo.ask(redo);
     send({ kind: 'history' });
 }
 
-function applyUndo(w: HistoryWindow): void {
-    if (!pendingUndo) return;
-    for (const e of w.ops) inFlight.delete(e.batch);
-    if (inFlight.size) return;                    // something sent is still unanswered; its ack asks again
-    const redo = pendingUndo === 'redo';
-    for (const [b, r] of refusedUndo) {
-        const changed = w.ops.some(e => !sent.has(e.batch) && e.pos > r.pos
-            && (touchedBy(e).some(x => r.blocks.has(x)) || (r.conflict === 'not_adjacent' && REORDER.has(e.kind))));
-        if (!FINAL.has(r.conflict) && changed) refusedUndo.delete(b);
-    }
-    const next = nextUndo(w, sent, redo, new Set(refusedUndo.keys()));
-    pendingUndo = null;
-    if (!next) { notify(redo ? 'nothing to redo' : 'nothing to undo'); return; }
-    const subs = next.ops.map(op => ({ cid: newCid(), batch: next.batch, ...op }));
-    // What the person did in the original batch, by its op kinds, for the notice if the daemon refuses.
-    const original = next.batch.replace(/^(u-)+/, '');
-    const entries = w.ops.filter(e => e.batch === original || e.batch === next.batch.slice(2));
-    const kinds = new Set(entries.filter(e => e.batch === original).map(e => e.kind));
-    const blocks = new Set(entries.flatMap(touchedBy));
-    const did = kinds.has('plan.accept') ? 'accepting the proposal' : kinds.has('plan.reject') ? 'rejecting the proposal'
-        : kinds.has('feature.handoff') ? 'the hand-off' : 'the edit';
-    const what = `${redo ? 'redo' : 'undo'} ${did}`;
-    const pos = Math.max(0, ...w.ops.map(e => e.pos));
-    for (const s of subs) undoing.set(s.cid, { batch: next.batch, what, pos, blocks });
-    submit(subs);
-}
-
 document.addEventListener('keydown', ev => {
-    const mac = navigator.platform.toUpperCase().includes('MAC');
-    const mod = mac ? ev.metaKey : ev.ctrlKey;
+    const mod = MAC ? ev.metaKey : ev.ctrlKey;
     if (mod && ev.key.toLowerCase() === 's') { ev.preventDefault(); handoffAll(); }
-    else if (mod && ev.key.toLowerCase() === 'z') { ev.preventDefault(); undo(ev.shiftKey); }
-    else if (mod && ev.key.toLowerCase() === 'y') { ev.preventDefault(); undo(true); }
+    else if (mod && ev.key.toLowerCase() === 'z') { ev.preventDefault(); askUndo(ev.shiftKey); }
+    else if (mod && ev.key.toLowerCase() === 'y') { ev.preventDefault(); askUndo(true); }
     else if (mod && ev.key.toLowerCase() === 'f') { ev.preventDefault(); editor?.find(ev.altKey); }
     else if (mod && ev.key.toLowerCase() === 'h') { ev.preventDefault(); editor?.find(true); }
 });
@@ -391,7 +310,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToPage>) => {
                 editor = mountEditor(page, proj, {
                     submit,
                     onFeature: fid => { if (fid && fid !== selected) select(fid); },
-                    openCite: symbol => send({ kind: 'open-cite', symbol }),
+                    openCite: symbol => { if (terminal()) send({ kind: 'open-cite', symbol }); else notify('the code opens in the editor, not on the hub'); },
                     onConflict: (bid, conflict) => notify(bid ? `an edit could not apply (${conflict}); the block was reloaded` : conflict),
                     actor: () => actor,
                 });
@@ -412,22 +331,31 @@ window.addEventListener('message', (ev: MessageEvent<HostToPage>) => {
             paint('the tree pane', () => renderTree(proj));
             paint('the toolbar', () => { renderToolbar(proj); renderStatus(); });
             paint('the margin', () => margin?.update(proj));
-            if (history || pendingUndo) send({ kind: 'history' });
+            if (history || undo.waiting) send({ kind: 'history' });
             return;
         }
         case 'history':
             if (m.history) {
                 if (projection) timeline?.setWindow(m.history, projection);
-                applyUndo(m.history);
+                const r = undo.onHistory(m.history);
+                if (typeof r === 'string') notify(r);
+                else if (r) submit(r);
             }
             return;
         case 'acks':
-            if (m.acks) { retire(m.acks); editor?.ack(m.acks); }
-            if (pendingUndo) send({ kind: 'history' });
+            if (m.acks) {
+                const refused = undo.onAcks(m.acks);
+                if (refused) notify(refused);
+                editor?.ack(m.acks);
+            }
+            if (undo.waiting) send({ kind: 'history' });
             return;
         case 'status':
             status = m.status ?? {};
-            if (typeof status.doc_language === 'string') language = status.doc_language;
+            if (typeof status.doc_language === 'string') {
+                language = status.doc_language;
+                document.documentElement.lang = language;
+            }
             if (typeof status.actor === 'string' && status.actor !== actor) {
                 actor = status.actor;
                 editor?.repaint();

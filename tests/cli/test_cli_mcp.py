@@ -44,7 +44,7 @@ def test_status_handoff_history_and_verdicts_via_cli(tmp_path):
     # An agent proposes an amend; the person rejects it from the CLI.
     st = client.read(cd).store
     client_id = next(h.id for h in st.headings() if "HTTP client" in tools.title(st, h.id))
-    body = st.feature_body(client_id)
+    body = st.body(client_id)
     res = tools.propose(str(cd), ops=[{"kind": "amend", "feature_id": client_id,
                                        "blocks": [{"id": body[1].id, "text": "Sends requests over HTTP/2."}]}],
                         note="http2", root_dir=str(root))
@@ -81,19 +81,14 @@ def test_reflect_attaches_and_repairs_and_closes_the_queue(tmp_path):
     assert "net/client.py::Client.retry" in st.bindings
     assert "three times" in tools.description(st, client_id)
     assert any(o.caused_by == ho and o.kind == "bind.attach" for o in st.ops)
-    status = tools.read_status(str(cd))
+    status = client.queue_status(str(cd))
     assert status["doc_language"]["code"] == "en"
 
 
-def test_walkthrough_and_tree_reads(tmp_path):
+def test_tree_read(tmp_path):
     root, cd = seeded(tmp_path)
     t = tools.read_tree(str(cd))
     assert len(t["features"]) == 4 and all("blocks" in f for f in t["features"])
-    fid = t["features"][0]["id"]
-    w = tools.walkthrough(str(cd), question="where do requests go?", steps=[{"feature_id": fid, "note": "start here", "quote": "nope"}])
-    assert w["ok"] and w["labels"] == ["1"] and w["unresolved_quotes"]
-    assert tools.read_walkthrough_tool(str(cd))["walkthrough"]["question"] == "where do requests go?"
-    assert tools.clear_walkthrough_tool(str(cd))["cleared"]
 
 
 def test_rebuild_and_snapshot_cli(tmp_path):
@@ -109,11 +104,11 @@ def test_accepting_a_plan_from_the_shell_hands_its_feature_off(tmp_path):
     """`codoc accept` sends `feature.handoff` for every feature the plan
     touches in the same batch as the verdict, so the accepted feature is
     queued. The applier never adds a hand-off to a verdict; the sender does."""
-    from codoc.loops.realize import queued
+    from codoc.calculus.derive import queued
     root, cd = seeded(tmp_path)
     st = client.read(cd).store
     fid = next(h.id for h in st.headings() if "HTTP client" in tools.title(st, h.id))
-    body = st.feature_body(fid)
+    body = st.body(fid)
     res = tools.propose(str(cd), ops=[{"kind": "amend", "feature_id": fid,
                                        "blocks": [{"id": body[1].id, "text": "Sends requests over HTTP/2."}]}],
                         note="http2", root_dir=str(root))
@@ -124,14 +119,16 @@ def test_accepting_a_plan_from_the_shell_hands_its_feature_off(tmp_path):
     assert st.plans[res["plan_id"]].status == "accepted"
     assert queued(st) == [fid], "accepting the plan did not queue the build"
     assert "HTTP/2" in tools.description(st, fid, "rejected")
+    # `asked` is the person's own words; accepting a plan says nothing in them.
+    assert not any(line.startswith("Author asked:") for line in (cd / "realize.md").read_text().splitlines())
 
 
 def test_no_build_takes_the_words_without_the_work(tmp_path):
-    from codoc.loops.realize import queued
+    from codoc.calculus.derive import queued
     root, cd = seeded(tmp_path)
     st = client.read(cd).store
     fid = next(h.id for h in st.headings() if "HTTP client" in tools.title(st, h.id))
-    body = st.feature_body(fid)
+    body = st.body(fid)
     res = tools.propose(str(cd), ops=[{"kind": "amend", "feature_id": fid,
                                        "blocks": [{"id": body[1].id, "text": "Sends requests over HTTP/2."}]}],
                         note="http2", root_dir=str(root))
@@ -144,7 +141,7 @@ def test_no_build_takes_the_words_without_the_work(tmp_path):
 def test_accepting_a_plan_that_adds_features_queues_each_of_them(tmp_path):
     """An `add` plan names no target — the headings it proposes do not exist
     when it opens — so handing off its target alone queued nothing at all."""
-    from codoc.loops.realize import queued
+    from codoc.calculus.derive import queued
     root, cd = seeded(tmp_path)
     res = tools.propose(str(cd), ops=[{"kind": "add_node", "title": "Retry policy", "description": "How often."},
                                       {"kind": "add_node", "title": "Back-off", "description": "How long."}],
@@ -199,3 +196,59 @@ def test_init_that_stops_at_the_install_says_the_document_is_built(tmp_path, mon
     r = runner.invoke(app, ["init", "--root", str(root)])
     assert r.exit_code == 1 and "The document is built; only the install stopped" in r.output, r.output
     assert "settings.local.json does not parse" in r.output
+
+
+def test_a_foreground_realize_holds_the_lease_its_agent_runs_under(tmp_path, monkeypatch):
+    """`codoc realize --engine cli` takes the realizing lease and names its
+    `claude -p` the owner, as a pass the daemon starts does; without the name,
+    the agent reads the lease as another pass's and stands down."""
+    import subprocess
+    from codoc.claude import autorealize
+    from codoc.daemon.publish import REALIZE_OWNER_ENV
+    root, cd = seeded(tmp_path)
+    runner.invoke(app, ["handoff", "HTTP client", "--root", str(root)])
+    started = []
+
+    class Child:
+        def __init__(self, argv, **kw):
+            started.append((argv, kw["env"]))
+
+        def wait(self):
+            return 0
+    monkeypatch.setattr(autorealize, "find_claude", lambda: "/bin/claude")
+    monkeypatch.setattr(subprocess, "Popen", Child)
+    r = runner.invoke(app, ["realize", "--engine", "cli", "--root", str(root)])
+    assert r.exit_code == 0, r.output
+    [(argv, env)] = started
+    assert argv == ["/bin/claude", "-p", "/codoc:realize", "--permission-mode", "acceptEdits"]
+    status = json.loads((cd / "status.json").read_text())
+    assert status["state"] == "realizing" and status["owner"] == env[REALIZE_OWNER_ENV]
+
+
+def test_the_hubs_pull_requests_target_the_repositorys_default_branch(tmp_path, monkeypatch):
+    """Origin's HEAD, else the branch checked out, else `main`: a `master` or
+    `trunk` repository is not given pull requests against a branch it lacks."""
+    import subprocess
+    from codoc.cli.main import _default_branch
+    for k, v in {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t",
+                 "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}.items():
+        monkeypatch.setenv(k, v)
+    root = tmp_path / "repo"
+
+    def git(*argv):
+        subprocess.run(["git", "-C", str(root), *argv], check=True, capture_output=True)
+    assert _default_branch(str(tmp_path)) == "main"                   # not a repository
+    root.mkdir()
+    git("init", "-q", "-b", "trunk")
+    git("commit", "-q", "--allow-empty", "-m", "init")
+    assert _default_branch(str(root)) == "trunk"
+    git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
+    assert _default_branch(str(root)) == "master"
+
+
+def test_lang_takes_a_tag_and_writes_it_normalized(tmp_path):
+    root, cd = seeded(tmp_path)
+    r = runner.invoke(app, ["lang", "not a tag", "--root", str(root)])
+    assert r.exit_code == 2 and not (cd / "config.json").exists()
+    r = runner.invoke(app, ["lang", "zh", "--root", str(root)])
+    assert r.exit_code == 0 and json.loads((cd / "config.json").read_text())["doc_language"] == "zh-Hans"

@@ -48,7 +48,7 @@ SKETCH = """Sends a prepared request over a pooled connection.
 
 
 def kinds(store: Store, fid: str) -> list[tuple[str, int]]:
-    return [(b.kind, b.level) for b in store.feature_body(fid)[1:]]
+    return [(b.kind, b.level) for b in store.body(fid)[1:]]
 
 
 def test_add_node_writes_the_description_as_blocks_and_binds_the_code():
@@ -107,7 +107,7 @@ def test_list_levels_in_an_amend_are_read_from_the_indentation_shown():
     s, m = Store(), Mint()
     ch = Compiler(s).compile({"kind": "add_node", "title": "Retry", "description": "- top\n    - nested"})
     land(s, m, ch)
-    top, nested = [b.id for b in s.feature_body(ch.target)[1:]]
+    top, nested = [b.id for b in s.body(ch.target)[1:]]
     amend = Compiler(s).compile({"kind": "amend", "feature_id": ch.target, "blocks": [
         {"id": nested, "text": "    - nested"}, {"text": "    - sibling"}, {"id": top, "text": "    - top, now nested"}]})
     land(s, m, amend)
@@ -169,7 +169,7 @@ def _seeded():
                     "Holds edits waiting to be built.\n\n- Writes in place.\n- A missing file is an empty queue.\n\n| a | b |\n|---|---|\n| 1 | 2 |"})
     land(s, m, ch)
     fid = ch.target
-    return s, m, fid, [b.id for b in s.feature_body(fid)[1:]]
+    return s, m, fid, [b.id for b in s.body(fid)[1:]]
 
 
 def test_amend_rewrites_named_blocks_adds_new_ones_and_strikes():
@@ -179,7 +179,6 @@ def test_amend_rewrites_named_blocks_adds_new_ones_and_strikes():
         {"text": "2. Rename it over the old file."},                         # new block after b1
         {"id": b2, "delete": True},
         {"id": table, "text": "| a | b |\n|---|---|\n| 1 | 3 |"},
-        {"id": "b-000000000000", "text": "ignored: not a block of this feature"},
     ]})
     assert change.refused is None and change.structural
     assert change.strikes == [b2]
@@ -192,6 +191,14 @@ def test_amend_rewrites_named_blocks_adds_new_ones_and_strikes():
     # a strike only exists under a plan
     marks = strike_bodies(s, change.strikes, "p-1")
     assert [(b["target"]["bid"], b["payload"]["kind"], b["payload"]["attrs"]) for b in marks] == [(b2, "suggest_del", {"plan": "p-1"})]
+
+
+def test_an_amend_naming_a_block_outside_the_description_is_refused_whole():
+    """A mistyped block name would otherwise drop that entry's words unseen."""
+    s, m, fid, (para, *_rest) = _seeded()
+    change = Compiler(s).compile({"kind": "amend", "feature_id": fid, "blocks": [
+        {"id": para, "text": "Holds edits."}, {"id": "f3.9", "text": "Lost words."}]})
+    assert change.refused == "f3.9: not a block of this feature's description"
 
 
 def test_amend_that_only_rewords_is_not_structural():
@@ -210,10 +217,10 @@ def test_a_new_block_that_follows_no_named_block_goes_at_the_end_of_the_body():
     land(s, m, Compiler(s).compile({"kind": "amend", "feature_id": fid, "blocks": [{"text": "- Last."}]}))
     land(s, m, Compiler(s).compile({"kind": "amend", "feature_id": fid, "blocks": [
         {"id": b1, "text": "- Writes in place."}, {"text": "- After the first item."}]}))
-    assert [b.id for b in s.feature_body(fid)[1:]][:2] == [para, b1]
+    assert [b.id for b in s.body(fid)[1:]][:2] == [para, b1]
     assert description(s, fid).splitlines()[-1] == "- Last."
     assert "- Writes in place.\n- After the first item.\n- A missing file" in description(s, fid)
-    assert s.feature_of(s.feature_body(fid)[-1].id) == fid
+    assert s.feature_of(s.body(fid)[-1].id) == fid
 
 
 def test_an_indented_new_item_nests_under_the_item_before_it():
@@ -245,8 +252,8 @@ def test_attach_move_retire_and_what_is_refused():
     land(s, m, mv)
     assert [(title(s, h.id), h.level) for h in s.headings()] == [("Queue", 1), ("Other", 2)]
     assert c.compile({"kind": "move_node", "feature_id": fid, "parent_id": other.target}).refused == "a feature cannot move under itself"
-    assert c.compile({"kind": "retire_node", "feature_id": fid}).strikes == [fid, *body]
-    assert c.compile({"kind": "retire_node", "feature_id": "b-nope"}).refused == "unknown feature 'b-nope'"
+    assert c.compile({"kind": "delete_node", "feature_id": fid}).strikes == [fid, *body]
+    assert c.compile({"kind": "delete_node", "feature_id": "b-nope"}).refused == "unknown feature 'b-nope'"
 
 
 def test_validate_names_the_fault():

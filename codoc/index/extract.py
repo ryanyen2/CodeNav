@@ -4,7 +4,7 @@
 the rows of changed files. ``Graph`` holds the result.
 
 Edge kinds:
-  contain:   synthesized from symbol_path nesting (MyClass.method → MyClass)
+  contain:   from the nesting in a symbol's name (f.py::MyClass.method → f.py::MyClass)
   call:      function/method call site
   import:    import statement
   inherit:   base class in class definition
@@ -29,40 +29,29 @@ def _file_to_module(file: str) -> str:
     return m.replace("/", ".")
 
 
-def _build_indices(
-    rows: list[ChunkRow],
-) -> tuple[dict[str, ChunkRow], dict[str, list[ChunkRow]], dict[str, str]]:
-    """Build lookup indices for reference resolution.
+def _build_indices(rows: list[ChunkRow]) -> tuple[dict[str, list[ChunkRow]], dict[str, str]]:
+    """Lookup tables for reference resolution.
 
     Returns:
-        by_symbol      – {symbol_path → ChunkRow}
         by_leaf        – {leaf_name → [ChunkRow]}  (leaf = last dotted part after ::)
         file_to_module – {file → dotted_module_path}
     """
-    by_symbol: dict[str, ChunkRow] = {}
     by_leaf: dict[str, list[ChunkRow]] = {}
     file_to_module: dict[str, str] = {}
 
     for r in rows:
-        by_symbol[r.symbol_path] = r
-
-        if "::" in r.symbol_path:
-            qualified = r.symbol_path.split("::", 1)[1]
-            leaf = qualified.rsplit(".", 1)[-1]
-        else:
-            leaf = r.symbol_path
+        leaf = r.symbol.split("::", 1)[-1].rsplit(".", 1)[-1]
         by_leaf.setdefault(leaf, []).append(r)
 
         if r.file not in file_to_module:
             file_to_module[r.file] = _file_to_module(r.file)
 
-    return by_symbol, by_leaf, file_to_module
+    return by_leaf, file_to_module
 
 
 def _resolve(
     qualified_name: str,
     src_file: str,
-    by_symbol: dict[str, ChunkRow],
     by_leaf: dict[str, list[ChunkRow]],
     file_to_module: dict[str, str],
 ) -> ChunkRow | None:
@@ -70,10 +59,9 @@ def _resolve(
 
     Resolution order:
     1. Strip self/cls/super prefix (method calls).
-    2. Exact symbol_path lookup.
-    3. Leaf-name lookup, preferring the same file.
-    4. Module-prefix match for dotted names.
-    5. First project candidate (best guess).
+    2. Leaf-name lookup, preferring the same file.
+    3. Module-prefix match for dotted names.
+    4. First project candidate (best guess).
     """
     parts = qualified_name.split(".")
     if parts and parts[0] in {"self", "cls", "super"}:
@@ -110,15 +98,15 @@ def _resolve(
 
 
 def _contain_edges(rows: list[ChunkRow]) -> list[dict]:
-    """Synthesize contain edges from symbol_path nesting structure.
+    """Contain edges from the nesting in a symbol's name.
 
     "auth.py::MyClass.login" → src=MyClass.login, dst=MyClass (contain)
     """
     edges = []
     for row in rows:
-        if "::" not in row.symbol_path:
+        if "::" not in row.symbol:
             continue
-        file, qualified = row.symbol_path.split("::", 1)
+        file, qualified = row.symbol.split("::", 1)
         if "." not in qualified:
             continue
         parent_qualified = qualified.rsplit(".", 1)[0]
@@ -126,7 +114,7 @@ def _contain_edges(rows: list[ChunkRow]) -> list[dict]:
         edges.append(
             {
                 "src_file": row.file,
-                "src_symbol": row.symbol_path,
+                "src_symbol": row.symbol,
                 "dst_name": parent_qualified,
                 "dst_symbol": parent_symbol,
                 "dst_file": row.file,
@@ -139,7 +127,6 @@ def _contain_edges(rows: list[ChunkRow]) -> list[dict]:
 
 def _ref_edges_for_rows(
     target_rows: list[ChunkRow],
-    by_symbol: dict[str, ChunkRow],
     by_leaf: dict[str, list[ChunkRow]],
     file_to_module: dict[str, str],
 ) -> list[dict]:
@@ -156,23 +143,23 @@ def _ref_edges_for_rows(
 
         seen: set[tuple[str, str, str]] = set()
         for ref in refs:
-            key = (row.symbol_path, ref.qualified_name, ref.ref_kind)
+            key = (row.symbol, ref.qualified_name, ref.ref_kind)
             if key in seen:
                 continue
             seen.add(key)
 
-            target = _resolve(ref.qualified_name, row.file, by_symbol, by_leaf, file_to_module)
+            target = _resolve(ref.qualified_name, row.file, by_leaf, file_to_module)
             internal = 1 if target is not None else 0
-            dst_symbol = target.symbol_path if target else None
+            dst_symbol = target.symbol if target else None
             dst_file = target.file if target else None
 
-            if dst_symbol == row.symbol_path:
+            if dst_symbol == row.symbol:
                 continue
 
             edges.append(
                 {
                     "src_file": row.file,
-                    "src_symbol": row.symbol_path,
+                    "src_symbol": row.symbol,
                     "dst_name": ref.qualified_name,
                     "dst_symbol": dst_symbol,
                     "dst_file": dst_file,
@@ -185,9 +172,9 @@ def _ref_edges_for_rows(
 
 def extract_edges(rows: list[ChunkRow]) -> list[dict]:
     """Full extraction: contain edges + reference edges for all rows."""
-    by_symbol, by_leaf, file_to_module = _build_indices(rows)
+    by_leaf, file_to_module = _build_indices(rows)
     edges = _contain_edges(rows)
-    edges.extend(_ref_edges_for_rows(rows, by_symbol, by_leaf, file_to_module))
+    edges.extend(_ref_edges_for_rows(rows, by_leaf, file_to_module))
     return edges
 
 
@@ -196,7 +183,7 @@ def extract_edges_for_changed(
     all_rows: list[ChunkRow],
 ) -> list[dict]:
     """Incremental: re-extract only changed rows, resolving against the full symbol table."""
-    by_symbol, by_leaf, file_to_module = _build_indices(all_rows)
+    by_leaf, file_to_module = _build_indices(all_rows)
     edges = _contain_edges(changed_rows)
-    edges.extend(_ref_edges_for_rows(changed_rows, by_symbol, by_leaf, file_to_module))
+    edges.extend(_ref_edges_for_rows(changed_rows, by_leaf, file_to_module))
     return edges

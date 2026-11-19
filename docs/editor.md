@@ -12,8 +12,8 @@ file describes `vscode-codoc/src` as it is. The projection and the ops are defin
 | part | where | does |
 |---|---|---|
 | The page | `src/web/editor/app.ts`, one bundle | Tree pane, toolbar, document, comment margin, status line. Driven by the host's messages. |
-| The VS Code host | `src/host/provider.ts`, a custom editor on `.codoc/tree.codoc` | Posts `projection.json` and `status.json` when they change. Appends the page's submissions to `inbox/ide.jsonl` and posts back the acks from `inbox/ide.ack.jsonl`. Answers a `history` request with `history.json`. Writes `doc_language` to `config.json`. Opens the code a citation names. Runs `codoc realize` in a terminal. |
-| The hub host | `src/web/hub.ts` in the browser, `codoc serve` on the server | The same messages over `POST /api/message` and the SSE stream at `/api/events`. Submissions go to `inbox/hub-<login>.jsonl`. |
+| The VS Code host | `src/host/provider.ts`, a custom editor on `.codoc/tree.codoc` | Posts `projection.json` and `status.json` when they change. Appends the page's submissions to `inbox/ide.jsonl` and posts back the acks from `inbox/ide.ack.jsonl`. Answers a `history` request with `history.json`. Sets the language with `codoc lang <tag>`. Opens the code a citation names. Runs `codoc realize` in a terminal. Adds `terminal: true` to the status. |
+| The hub host | `src/web/hub.ts` in the browser, `codoc serve` on the server | The same messages over `POST /api/message` and the SSE stream at `/api/events`. Submissions go to `inbox/hub-<login>.jsonl`. `realize` and `open-cite` are refused; the status carries `terminal: false`. |
 | The extension | `src/extension.ts`, `src/host/` | Registers the editor and the commands, keeps a daemon running for the repository, shows its status, runs setup. |
 
 The messages between page and host are in `src/wire.ts`. `tree.codoc` is only the file VS
@@ -30,7 +30,7 @@ numbered := text*              attrs: bid, head, level        its number is draw
 source   := text*              attrs: bid, head, kind (table | diagram | code), lang, derived
                                raw text, newlines allowed, no marks
 kindBlock:= atom               attrs: bid, head, kind, fields; a card (card.ts)
-marks    := bold | code | link{href} | cite{symbol} | comment{block} | suggest_del{plan} | plan{pid}
+marks    := bold | code | link{href} | cite{symbol} | comment{block}
 ```
 
 - `bid` is the block id. `head` is the store position of the last op that touched the
@@ -39,13 +39,14 @@ marks    := bold | code | link{href} | cite{symbol} | comment{block} | suggest_d
   Shift-Enter both start a new block, and the applier refuses a newline there.
 - A numbered item's number is computed when drawn: consecutive numbered items at the same
   level count 1, 2, 3; a deeper item between them does not restart the count.
-- A `source` node edits the store's `source` field. Enter inside it types a newline.
+- A `source` node edits the store's `source` field. Enter inside it types a newline, and
+  in a code block Tab indents.
 - Every other projected kind except `comment` is a `kindBlock`: the kind's name, a text
   area per Text field its layout names, and every other field read-only.
 - A comment block is not in the document. It is a card in the margin (section 7).
 - The person sets `bold`, `code`, `link` and `cite`, and the recorder sends them. The
-  projection sets `comment`, `suggest_del` and `plan`; the recorder never sends them. Every
-  mark except `bold` is non-inclusive, so typing at its end is outside it.
+  projection sets `comment`; the recorder never sends it. Every mark except `bold` is
+  non-inclusive, so typing at its end is outside it.
 - A citation is a mark over ordinary text, so its label is editable and attributed.
 - Attribution and plan membership are not in the document. They are read from the
   projection's runs and drawn as decorations.
@@ -73,7 +74,7 @@ unmerged runs. It turns a ProseMirror position into a character identity.
 | A transaction tagged `RECORDED` by a gesture (`commands.ts`) | The gesture's own ops. |
 | A `ReplaceStep` inside one textblock (`calc/recorder.ts`) | `text.delete` of the identities under its range, then `text.insert` after the identity before it; each mark in the inserted slice becomes `text.mark` over the minted range. |
 | `AddMarkStep`, `RemoveMarkStep` | `text.mark` on or off over the identities. |
-| A step the recorder cannot name | The fallback, `reconcile`: the touched block is compared with its shadow and the difference sent as `text.delete` and `text.insert` by the person. |
+| A step the recorder cannot name | The fallback, `reconcile`: the touched block is compared with its shadow and the difference sent as `text.delete` and `text.insert` by the person, with a `text.mark` per mark the page shows on the inserted text. |
 
 The gestures (`commands.ts`, bound in `keymap.ts`):
 
@@ -88,20 +89,21 @@ The gestures (`commands.ts`, bound in `keymap.ts`):
 | ```` ``` ````, ```` ```lang ```` or ```` ```mermaid ```` as a paragraph's whole text, or one row `\| a \| b \|` as its whole text, then Enter | `block.delete` of the paragraph, `block.add` of a code block (with `lang`), a diagram or a table (with that row). A row becomes a table only when the viewer wrote every character of it: unacked, applied for this page, or in a projected run with the viewer's actor (`status.actor`). Another actor's row, and prose such as `\|x\| is the absolute value`, split as usual. |
 | `/` menu | Heading 1-3, Paragraph, Bullet list, Numbered list, Table, Code block, Diagram: `text.delete` of the typed `/query` and `block.set(kind)` or a new block. In a heading, also Delete feature. |
 | Backspace at a list item's start | Above level 1, `block.set(level - 1)`; at level 1, `block.set(kind = paragraph)`. |
-| Backspace at a heading's start | `block.set(kind = paragraph)` when the heading owns no bound code, has no child heading, has no hand-off its realized frontier does not cover, is not the target of an open plan or named in one's `handoff`, and whose phase is `edited`, `synced` or not yet projected, so a stray `# ` is undone in one key; its body joins the feature above. Any other heading (one with code, a theme with children, a feature queued or proposed) is left alone, with the notice "Delete feature from the / menu". |
+| Backspace at a heading's start | `block.set(kind = paragraph)` when the heading owns no bound code, has no child heading, is not in the projection's `in_flight` (queued, or the subject of a plan offered for a verdict), and whose phase is `edited`, `synced` or not yet projected, so a stray `# ` is undone in one key; its body joins the feature above. Any other heading (one with code, a theme with children, a feature queued or proposed) is left alone, with the notice "Delete feature from the / menu". |
 | Backspace at a paragraph's start, Delete at its end, next to a paragraph or item | `block.merge`. When the other block is empty, `block.delete` of it instead, so the block with words keeps its id and kind. |
 | Backspace or Delete in an empty paragraph next to a heading, source or plugin block | `block.delete` of the paragraph. |
 | Typing, Backspace, Delete, Enter or cut over a selection across blocks | `text.delete` at each end, one `block.delete` naming every block wholly inside (so the applier reads each block's feature before any dies), `block.merge` of the two ends when both are heading or prose. Refused with a notice when it crosses a heading that is not wholly selected, or would remove every block or every feature. |
 | What is deleted at the ends of a selection | Backspace, Delete or cut: an end block wholly selected is deleted too, when a block outside the selection remains. Typing, paste, Enter or an IME composition (text follows): a prose end is emptied and kept, a wholly selected source end is deleted, and the text lands in the first kept prose end (the last when the first end is a heading); with none kept, in a new paragraph where the selection was. A heading is never where text lands. |
 | Tab, Shift-Tab on a list item | `block.set(level ± 1)`. |
 | Tab, Shift-Tab on a heading | `block.move` of the heading after the block before it, `level_delta ± 1`: the subtree moves with it. |
-| Tab in a paragraph | Nothing; focus stays in the editor. |
+| Tab, Shift-Tab in a code block | `text.insert` of the block's indent unit (its smallest leading run of spaces, else four) at the start of each line the selection touches, or `text.delete` of up to one unit there. |
+| Tab in a paragraph, a table or a diagram | Nothing; focus stays in the editor. |
 | Mod-B, Mod-E | `text.mark` bold or code, on or off, one per block the selection covers. |
 | Mod-K | An inline field for the URL. Enter sends `text.mark` link; an empty field turns the link off. An address with no scheme gets `https://`. |
-| Paste (`paste.ts`) | The selection is deleted first. Plain text with structure (a block that is not a paragraph, or an inline mark) is read as Markdown (`calc/markdown.ts`): the first heading or prose piece joins the caret's block, every further piece is `block.add`, `text.insert`, `text.mark`. Other text splits into one block per line. Ids in pasted Markdown are ignored; a pasted `codoc:<kind>` fence becomes a code block. |
-| Composition (an IME) | Nothing while composing; one `text.insert` of the composed text when it ends. |
+| Paste (`paste.ts`) | The selection is deleted first. Plain text with structure (a block that is not a paragraph, or an inline mark) is read as Markdown (`calc/markdown.ts`): the first heading or prose piece joins the caret's block, every further piece is `block.add`, `text.insert`, `text.mark`. Other text splits into one block per line. When further pieces follow, the words after the caret go after the last one: `block.split` at the caret (at the block's start, the pieces go before the block), and a last heading or prose piece is a `text.insert` at the start of those words, which keep their block's kind. Ids in pasted Markdown are ignored; a pasted `codoc:<kind>` fence becomes a code block. |
+| Composition (an IME) | Nothing while composing; when it ends, the fallback: one `text.insert` of the composed text, and a `text.mark` per mark the page shows on it (bold after Mod-B). |
 | Drop a drag handle (`drag.ts`) | `block.move`, `level_delta` 0. A heading moves with its range. |
-| `deleteFeature(fid)`, Delete feature in the `/` menu | `block.delete` of the heading, `block.set(level)` per descendant heading, one level up. Refused when it would empty the document. |
+| Delete feature in the `/` menu | `block.delete` of the heading, `block.set(level)` per descendant heading, one level up. Refused when it would empty the document. |
 
 Two plugins in `guards.ts` keep the page and the shadows in step:
 
@@ -113,13 +115,13 @@ Two plugins in `guards.ts` keep the page and the shadows in step:
 **Batches.** Ops wait 350 ms after the last one and leave together as one batch. A verdict,
 a hand-off, an undo and an adoption flush the queue first. The batch is the undo unit.
 
-**Undo.** ProseMirror's history is not installed. ⌘Z asks the host for `history.json` and
-submits the recorded inverses of the newest batch this page sent that is not undone, newest
-op first, as batch `u-<batch>`; ⇧⌘Z and ⌘Y undo that batch (`u-u-<batch>`)
-(`calc/window.ts`, `nextUndo`). It waits while any submission is unacked. A batch is this
-page's when the page submitted it, not when its actor is the viewer's: a teammate's batch
-merged through git and the person's own `codoc accept` in a terminal are never offered.
-The page keeps its batch ids in the webview's state (`setState`; on the hub, the tab's
+**Undo** (`editor/undo.ts`). ProseMirror's history is not installed. ⌘Z asks the host for
+`history.json` and submits the recorded inverses of the newest batch this page sent that is
+not undone, newest op first, as batch `u-<batch>`; ⇧⌘Z and ⌘Y undo that batch
+(`u-u-<batch>`) (`calc/window.ts`, `nextUndo`). It waits while any submission is unacked. A
+batch is this page's when the page submitted it, not when its actor is the viewer's: a
+teammate's batch merged through git and the person's own `codoc accept` in a terminal are
+never offered. The page keeps its batch ids in the webview's state (`setState`; on the hub, the tab's
 `sessionStorage`), so a reload still undoes them; an editor opened fresh has nothing to undo.
 
 **The viewer.** `status.actor` is the person the page writes as: `human:<git config
@@ -154,7 +156,9 @@ re-adopts it from the projection in hand once none of its ops is in flight.
    projection added, dropped or re-ordered are inserted, removed or moved.
 5. When every step is a replacement, the changed blocks are replaced in place. Otherwise
    the document is rebuilt in the projection's order, keeping held nodes.
-6. The caret goes back after the character it sat after, found by identity.
+6. Each end of the selection goes back after the character it sat after, found by
+   identity. When either character is gone, the caret goes where the head was, or to its
+   old offset.
 
 After every ack the projection in hand is adopted again, so a block released by the ack is
 read when the projection already contains its op.
@@ -162,16 +166,19 @@ read when the projection already contains its op.
 ## 7. Drawing
 
 Everything drawn is a decoration from the projection (`calc/claims.ts`,
-`editor/decorations.ts`). `Paints` keeps the paints per block and redraws only the blocks
-whose paints can have changed.
+`editor/decorations.ts`). Every paint on the prose is one of its feature's `claims`
+(model.md, Derived views), so a block shows what the last projection said of it: a block
+moved to another feature takes that feature's paints when the projection that answers the
+move arrives. `Paints` keeps the paints per block and redraws only the blocks whose paints
+can have changed.
 
 | paint | from | drawn as |
 |---|---|---|
-| `ink-unsent`, `ink-sent` | Runs by the viewer with no plan, outside `realized`; sent when inside `handoff`. Another person's words are not inked. | Blue. |
-| `plan-open` | Runs of an open plan. An accepted plan's words are ordinary text; History shows who proposed them. | Gray. |
-| `plan-cut` | `suggest_del` spans. | Struck gray. |
+| `ink-unsent`, `ink-sent` | `human` claims by the viewer (`ink`). Another person's words are not inked. | Blue. |
+| `plan-open` | `open` claims: an open plan's words. An accepted plan's words are ordinary text; History shows who proposed them. | Gray. |
+| `plan-cut` | `removed` plan claims: the characters accepting the plan kills. | Struck gray. |
 | `plan-mark`, `plan-unmark` | `marked`, `unmarked` claims. | A dashed gray underline. |
-| `code-added`, `code-removed` | `ground` claims, where no ink overlaps. Removed words are a widget at their place. | Green, red. |
+| `code-added`, `code-removed` | `code` claims (`ground`), where no ink overlaps. Removed words are a widget at their place. | Green, red. |
 | `author-*` | In History mode, merged runs per actor kind. | One colour per kind. |
 | Phase marker | `phases`, at each heading that is not `synced`. | A glyph with an `aria-label`. An `edited` feature whose `editors` do not include the viewer is a ring titled with who edited it. The tree row's glyph is the same. |
 
@@ -180,9 +187,10 @@ every surface: blue is the person, gray a plan, green and red the code.
 
 **Comments** (`comments.ts`). Threads are grouped by `thread` and drawn as cards in the
 margin beside their anchor block. New thread: select words, press Comment, write.
-A card offers Reply; Resolve, to a viewer who decides or wrote the first message; and Build
-it, which hands off the anchor's feature with the thread's words as `asked` and asks the
-host to run `codoc realize`.
+A card offers Reply; Resolve, to a viewer who decides or wrote the first message; and, to a
+viewer who decides, Build it, which hands off the anchor's feature and, where the host has a
+terminal, asks it to run `codoc realize`. The open thread reaches the agent through the
+comment kind, so the hand-off carries no `asked`; no hand-off from the page does.
 
 **History** (`timeline.ts`). The History toggle turns on author paints and opens a scrubber
 over the window in `history.json`. A position shows every block as it read after that op
@@ -197,19 +205,21 @@ the window. It never writes to the live editor.
 |---|---|
 | Tree pane | One row per heading, indented by level, with a phase glyph. A click scrolls to the heading. |
 | History | Toggles section 7's History. |
-| Language | Sets `doc_language`. |
+| Language | Sets `doc_language`. The page's `lang` follows it. |
 | Comment | Starts a thread on the selected words. |
-| Accept all (n), Reject all (n) | `plan.accept` or `plan.reject` per open plan, in one batch. Accept also sends `feature.handoff` for each feature in the plans' `handoff`. |
+| Accept all (n), Reject all (n) | `plan.accept` or `plan.reject` per open plan, in one batch. Accept also sends `feature.handoff` for each feature in the plans' `hands_off`. |
 | Hand off (n), ⌘S | `feature.handoff` per `edited` feature whose `editors` include the viewer, with no `covers`. |
-| Build now | Asks the host to run `codoc realize`. Shown when a feature is `queued` or `planned`. |
+| Build now | Asks the host to run `codoc realize`. Shown when a feature is `queued` or `planned` and the host has a terminal (`status.terminal`, false on the hub). |
 | ⌘F, ⌘⌥F or ⌘H | Find; Find and Replace (`find.ts`). Matches stay inside a block; a replacement is ordinary typing. |
 | `/` | The block menu (section 4). |
 | Mod-B, Mod-E, Mod-K | Bold, code, link (section 4). |
 | `@` | The citation picker: up to 8 bound symbols from the projection's bindings, filtered by the typed query. A pick replaces `@query` with the symbol's name under a `cite` mark. |
-| Click on a citation | Opens the code. |
+| Click on a citation | Opens the code; on the hub, says the code opens in the editor. |
+
+On Windows and Linux, ⌘ is Ctrl, in the keys and in the labels that name them.
 
 A viewer whose role is `suggest` (from `status.json`) is not offered Accept, Reject, Hand
-off or Build now. Their typing becomes a plan in the drain.
+off, Build now or Build it. Their typing becomes a plan in the drain.
 
 ## 9. Modules
 
@@ -227,11 +237,12 @@ src/web/calc/               pure, no DOM
   adopt.ts                  projection block -> node; the adoption plan
   claims.ts                 paints from runs, plans, claims, phases
   window.ts                 history.json; nextUndo, textAt, shapeAt, wordDiff
-  markdown.ts               block and inline Markdown -> specs and spans; the same cases as
-                            codoc/calculus/block_md.py and inline_md.py
+  markdown.ts               Markdown for paste and copy; the same cases as
+                            codoc/calculus/block_md.py and inline_md.py, except that a
+                            paste keeps each line of prose a paragraph
 src/web/editor/             ProseMirror (TipTap schema)
   schema.ts, keymap.ts, commands.ts, paste.ts, guards.ts, outbox.ts, adoption.ts,
-  decorations.ts, drag.ts, find.ts, menus.ts, comments.ts, timeline.ts,
+  decorations.ts, drag.ts, find.ts, menus.ts, comments.ts, timeline.ts, undo.ts,
   editor.ts (mountEditor), app.ts (the page)
 ```
 
@@ -242,4 +253,3 @@ src/web/editor/             ProseMirror (TipTap schema)
 - A context menu; Delete feature is in the `/` menu only.
 - Pasting HTML lists beyond a basic `li` rule.
 - A viewer-local read cursor that clears `ground` once seen.
-- The `/codoc:ask` walkthrough inside the editor.

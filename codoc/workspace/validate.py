@@ -8,21 +8,26 @@ somebody already wrote. So a log file is a capability: edit the recorded
 accept the plan. `codoc validate-logs` runs these checks over the session
 files a merge would add or change, against the tracked role table.
 
-Five refusals, and nothing else:
+`validate_logs` reports five things about the files themselves:
 
-- an op recorded as a **success** whose `(actor, kind)` the table would refuse,
+- an op recorded as a success whose `(actor, kind)` the table would refuse,
   which is the forged verdict (a withdrawal of the actor's own empty plan is
   judged on every op tagged with that plan a writer recorded as applied);
 - an op in a session file carrying a field only a snapshot writes
   (`ops.SNAPSHOT_ONLY`), which would let it claim another actor's words;
-- a **snapshot** file, which claims a whole state rather than a sequence of ops
+- a snapshot file, which claims a whole state rather than a sequence of ops
   and is legitimate only when the workspace wrote it by folding its own log;
-- a stamp **far ahead of wall time**, which would drag every clock that
-  observes it into the future and order real work behind it;
-- an op **tagged with a plan after that plan's verdict**, recorded as applied,
+- a stamp far ahead of wall time, which would drag every clock that observes
+  it into the future and order real work behind it;
+- an op tagged with a plan after that plan's verdict, recorded as applied,
   which the applier would have refused (`plan_not_open`). The verdicts are the
   workspace's and these files', ordered by clock; one a fold re-emitted is
   stamped with the fold's clock, so it never flags an op written before it.
+
+Two more are about what the merge does to files the workspace already has:
+`base_records` reports a session file that does not start with its merge-base
+version (a recorded answer rewritten), and `codoc validate-logs` reports a
+session file the merge removes or moves (`changed_logs` with `change="D"`).
 
 Everything else a log can be wrong about (a torn tail, an out-of-sequence id,
 an unreadable line) `log.read_session` already reports and the rebuild already
@@ -157,7 +162,7 @@ def changed_logs(root: str | Path, base: str, change: str = "AM") -> list[Path]:
     return out
 
 
-def refused_verdicts(store: Store, roles: Roles) -> dict[str, int]:
+def refused_ops(store: Store, roles: Roles) -> dict[str, int]:
     """Per actor, how many applied ops in the store the table would refuse
     today. Not a gate: a demotion is allowed to leave earlier work standing, so
     this is the signal that says a log carries something the table never would

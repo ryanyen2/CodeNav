@@ -13,7 +13,7 @@ describe('the History scrubber', () => {
         parent.append(dom);
         const tl = new Timeline(parent, () => dom);
         const p: Projection = { head: 9, frontier: {}, phases: {}, plans: [], bindings: { by_feature: {} }, claims: {}, blocks: [
-            { id: 'p1', kind: 'paragraph', level: 0, rank: 'a', head: 1, fields: { text: { text: 'one', runs: [], spans: [], suggest_del: [] } } }] };
+            { id: 'p1', kind: 'paragraph', level: 0, rank: 'a', head: 1, fields: { text: { text: 'one', runs: [], spans: [] } } }] };
         const entry = (pos: number): HistoryWindow['ops'][number] => ({ pos, id: `s:${pos}`, at: `2026-09-18T00:00:0${pos}`,
             actor: 'human:gh:bob', kind: 'text.insert', batch: `b${pos}`, plan: null, caused_by: null, blocks: { p1: { text: `one${pos}` } }, inverse: [] });
         tl.setWindow({ start: 0, head: 2, before: { p1: { text: 'one' } }, ops: [entry(0), entry(1)] }, p);

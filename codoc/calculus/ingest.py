@@ -54,7 +54,6 @@ from codoc.calculus.text import BOLD, CITE, CODE, GROWS_AFTER, LINK, Mark, Text,
 
 VISIBLE_MARKS = frozenset({BOLD, CODE, LINK, CITE})     # the kinds Markdown can express
 PENDING = "$ins"                                        # ["$ins", i, k]: char k of the batch's i-th text.insert
-_ANCHOR_KEYS = ("start", "end", "after", "from", "to", "at")
 
 
 @dataclass
@@ -294,7 +293,7 @@ def concat_bodies(first: list[dict], more: list[dict]) -> list[dict]:
     out = list(first)
     for b in more:
         payload = dict(b["payload"])
-        for key in _ANCHOR_KEYS:
+        for key in K.ANCHOR_KEYS:
             v = payload.get(key)
             if isinstance(v, list) and len(v) == 3 and v[0] == PENDING:
                 payload[key] = [PENDING, v[1] + shift, v[2]]
@@ -337,7 +336,7 @@ def resolve_pending_refs(payload: dict, insert_ids: list[str], *, as_ref=lambda 
     """Replace each ``["$ins", i, k]`` anchor in ``payload`` once the batch's
     i-th insert is known as ``insert_ids[i]``. Mutates ``payload``. An index
     past the inserts seen so far is left as is and fails as an unknown anchor."""
-    for key in _ANCHOR_KEYS:
+    for key in K.ANCHOR_KEYS:
         v = payload.get(key)
         if isinstance(v, list) and len(v) == 3 and v[0] == PENDING and isinstance(v[1], int) and 0 <= v[1] < len(insert_ids):
             payload[key] = as_ref(insert_ids[v[1]], v[2])

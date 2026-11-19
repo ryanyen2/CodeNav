@@ -13,7 +13,7 @@ function block(id: string, kind: 'heading' | 'paragraph', text: string, runs: Ar
     return {
         id, kind, level, rank: id, head,
         fields: { text: { text, runs: runs.map(([op, s, e, actor, plan]) => ({ op, k0: 0, start: s, end: e, actor: actor ?? 'human:a', at: '1', plan: plan ?? null })),
-                          spans, suggest_del: [] } },
+                          spans } },
     };
 }
 
@@ -78,12 +78,12 @@ describe('Recorder', () => {
         expect(scalarOffset(doc.child(0), 3)).toBe(2);
     });
 
-    it('records mark toggles and ignores painted marks', () => {
+    it('records mark toggles and ignores the marks the projection sets', () => {
         const p = proj([block('p', 'paragraph', 'abcd', [['s:1', 0, 4]])]);
         const { doc, shadows } = docFrom(schema, p);
         const state = EditorState.create({ schema, doc });
         const tr = state.tr.addMark(2, 4, schema.marks.cite.create({ symbol: 'f.py::g' }))
-            .addMark(1, 3, schema.marks.plan.create({ pid: 'p1' }));
+            .addMark(1, 3, schema.marks.comment.create({ block: 'c1' }));
         const got = new Recorder(shadows, cid).record(tr.steps, tr.docs);
         expect(got.unhandled).toEqual([]);
         expect(got.ops).toEqual([{ kind: 'text.mark', target: { bid: 'p', path: 'text' },

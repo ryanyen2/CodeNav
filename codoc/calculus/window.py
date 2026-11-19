@@ -26,7 +26,7 @@ what was true entering it and what each op changed:
 - ``ranks``: per block, the rank it held ENTERING the window, folded back from
   each op that displaced one: a move, or a verdict's ``set`` step, read from
   the side the op left (a reopen undid its steps, so that is their ``to``).
-  Each ENTRY's ``ranks`` is the same kind of row for that op alone, read
+  Each entry's ``ranks`` is the same kind of row for that op alone, read
   forward like its ``blocks``: what the page looked like once it had applied.
   What never moved keeps today's rank, which is what it had; a reader folds the
   two together.

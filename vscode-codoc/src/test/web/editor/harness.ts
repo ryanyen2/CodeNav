@@ -11,12 +11,14 @@
  * A test file that imports this needs `@vitest-environment jsdom`.
  */
 import { Fragment, Slice, type Node as PMNode } from '@tiptap/pm/model';
-import { TextSelection } from '@tiptap/pm/state';
+import { TextSelection, type EditorState } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 import { vi } from 'vitest';
 
+import { newBid, newCid } from '../../../web/calc/ids';
 import { kindOf, pathOf, type Projection, type ProjectedBlock, type Submission } from '../../../web/calc/projection';
 import type { Shadow } from '../../../web/calc/shadow';
+import type { Env, Gesture } from '../../../web/editor/commands';
 import { mountEditor, type EditorHandle } from '../../../web/editor/editor';
 
 // `mountEditor` keeps its shadows to itself. Capture the map as `docFrom` builds it.
@@ -50,7 +52,7 @@ export function block(id: string, kind: string, text: string, level = 1, head = 
     const n = Array.from(text).length;
     return { id, kind, level, rank: id, head,
              fields: { [pathOf(kind)]: { text, runs: n ? [{ op: `s:${id}${opn++}`, k0: 0, start: 0, end: n, actor: 'human:a', at: '1', plan: null }] : [],
-                                         spans: [], suggest_del: [] }, ...extra } };
+                                         spans: [] }, ...extra } };
 }
 
 /** A projected paragraph built from runs, so a projection can keep the
@@ -63,12 +65,12 @@ export function para(id: string, head: number, parts: Array<[string, { op: strin
         return { op: r.op, k0: r.k0 ?? 0, start, end: at, actor: r.actor, at: '1', plan: r.plan ?? null };
     });
     return { id, kind: 'paragraph', level: 0, rank: id, head,
-             fields: { text: { text: parts.map(x => x[0]).join(''), runs, spans: [], suggest_del: [] } } };
+             fields: { text: { text: parts.map(x => x[0]).join(''), runs, spans: [] } } };
 }
 
 /** A plugin block, which the editor shows read-only. */
 export function kindBlock(id: string, kind = 'image'): ProjectedBlock {
-    return { id, kind, level: 0, rank: id, head: 1, fields: { asset: 'a.png', caption: { text: '', runs: [], spans: [], suggest_del: [] } } };
+    return { id, kind, level: 0, rank: id, head: 1, fields: { asset: 'a.png', caption: { text: '', runs: [], spans: [] } } };
 }
 
 export const proj = (blocks: ProjectedBlock[], extra: Partial<Projection> = {}): Projection =>
@@ -168,6 +170,12 @@ export function pasteSlice(m: Mounted, slice: Slice, event: Event = new window.E
     const handled = m.view.someProp('handlePaste', f => f(m.view, event as ClipboardEvent, slice)) ?? false;
     if (!handled) m.view.dispatch(m.view.state.tr.replaceSelection(slice));
     return !!handled;
+}
+
+/** Run a command on the page, as the `/` menu and the drag handle do. */
+export function perform(m: Mounted, command: (state: EditorState, env: Env) => Gesture | null): void {
+    const g = command(m.view.state, { shadows: m.shadows, nextBid: newBid, nextCid: newCid, refuse: why => m.conflicts.push(why) });
+    if (g) m.view.dispatch(g.tr);
 }
 
 /** Type `marker` at the start of block `bid`, then a space through the input

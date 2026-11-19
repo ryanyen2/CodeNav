@@ -59,7 +59,9 @@ def ref_to_json(r: CharRef | str):
 # The actor grammar is closed: ``human:<who>``, ``agent:<which>``,
 # ``translator:<lang>``, ``loop`` (the daemon's own passes) and ``import``
 # (the ops a snapshot writes). Everything that decides by actor decides by kind.
-ACTOR_KINDS = frozenset({"human", "agent", "translator", "loop", "import"})
+LOOP = "loop"
+IMPORT = "import"
+ACTOR_KINDS = frozenset({"human", "agent", "translator", LOOP, IMPORT})
 
 
 def actor_kind(actor: str) -> str:
@@ -77,5 +79,5 @@ def is_human(actor: str) -> bool:
 # rewrite prose on their own (the loop, a translator, and a coding agent
 # through ``codoc_reflect``) drop a person's mark. An import writes a tree that
 # has no marks yet, so it is not one of them.
-MACHINE_KINDS = frozenset({"agent", "translator", "loop", "import"})
-REWRITERS = frozenset({"agent", "loop", "translator"})
+MACHINE_KINDS = frozenset({"agent", "translator", LOOP, IMPORT})
+REWRITERS = frozenset({"agent", LOOP, "translator"})

@@ -5,7 +5,7 @@ from codoc.calculus import ops as K
 from codoc.calculus.apply import apply, replay_recorded
 from codoc.calculus.derive import phase
 from codoc.calculus.doc import PARAGRAPH
-from codoc.calculus.export import export_markdown
+from codoc.calculus.derive import export_markdown
 from codoc.calculus.ids import START
 from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
@@ -63,8 +63,8 @@ def test_export_leaves_open_plans_out(tmp_path):
 def test_accepting_a_retire_plan_detaches_and_reopen_restores(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
     seed_loop(ws)
-    retire = lambda c, s, t, **kw: [{"kind": "retire_node", "feature_id": "h1", "rationale": "gone"}]
-    r = reflect(ws, ChangeSet(modified=[chunk("c.py", "c.py::send", "f2", "t1")]), Graph(), propose=retire)
+    retire = lambda c, s, t, **kw: [{"kind": "delete_node", "feature_id": "h1", "rationale": "gone"}]
+    r = reflect(ws, ChangeSet(modified=[chunk("c.py::send", "f2", "t1")]), Graph(), propose=retire)
     acc = ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": r.plans[0]}, "payload": {}}], actor="human:local")[0]
     assert not ws.store.blocks["h1"].live and "c.py::send" not in ws.store.bindings
     ws.submit([dict(b) for b in acc.inverse], actor="human:local")
@@ -85,13 +85,13 @@ def test_a_heading_deleted_under_a_paragraph_plan_and_restored_keeps_the_plan_de
     ws = Workspace(tmp_path / ".codoc"); seed(ws, actor="loop")
     pid = ws.open_plan(actor="loop", kind="edit", target="p1")
     ins(ws, "p1", list(refs(ws, "p1")[-1]), " Proposed.", actor="loop", plan=pid)
-    from codoc.calculus.derive import open_plans, projection
-    assert [p.id for p in open_plans(ws.store)] == [pid]
+    from codoc.calculus.derive import offered_plans, projection
+    assert [p.id for p in offered_plans(ws.store)] == [pid]
     d = ws.submit([{"kind": K.BLOCK_DELETE, "target": {"bid": "h1"}, "payload": {}}], actor=H)[0]
-    assert open_plans(ws.store) == []                      # not offered while its words are dead
+    assert offered_plans(ws.store) == []                      # not offered while its words are dead
     projection(ws.store)                                   # renders without error
     ws.submit([dict(b) for b in d.inverse], actor=H)
-    assert [p.id for p in open_plans(ws.store)] == [pid]   # back with the heading
+    assert [p.id for p in offered_plans(ws.store)] == [pid]   # back with the heading
     assert phase(ws.store, "h1") == "proposed"
     ws.close()
 
@@ -575,3 +575,62 @@ def test_a_redo_also_decides_what_the_plan_gained_after_the_reopen():
     (again,) = invert(s, m, r)
     assert again.conflict is None and T(s, "p1") == "Base." and later.id in again.payload["rejected"]
     assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+def test_a_word_typed_inside_a_proposed_strike_is_not_drawn_struck(tmp_path):
+    """The agent proposes cutting "once"; the person types "X" inside it
+    ("onXce"). Accepting kills exactly the characters the strike listed, so
+    the strike drawn over the page leaves "X" out."""
+    from codoc.calculus.derive import plan_claims
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws, actor=H)
+    t = ws.store.blocks["p1"].text()
+    pid = ws.open_plan(actor="agent:claude-code", kind="edit", target="p1")
+    once = [list(t.ref_at(i)) for i in range(8, 12)]            # "Retries |once|."
+    ws.submit([{"kind": K.TEXT_MARK, "target": {"bid": "p1", "path": "text"},
+                "payload": {"kind": SUGGEST_DEL, "attrs": {}, "start": once[0], "end": once[-1], "on": True}}],
+              actor="agent:claude-code", plan=pid)
+    ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                "payload": {"after": once[1], "text": "X"}}], actor=H)
+    assert T(ws.store, "p1") == "Retries onXce."
+    cuts = [(c.start, c.end, c.text) for c in plan_claims(ws.store, "h1") if c.stage == "removed"]
+    assert cuts == [(8, 10, "on"), (11, 13, "ce")]
+    ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor=H)
+    assert T(ws.store, "p1") == "Retries X."
+
+
+def test_a_plan_whose_target_died_does_not_leave_the_feature_its_words_are_in_proposed(tmp_path):
+    """A plan whose target is dead is not offered, so no surface can decide
+    it; the feature its words landed in is not waiting on a verdict."""
+    from codoc.calculus.derive import offered_plans
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws, actor="loop")
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "h2"}, "payload": {"kind": "heading", "after": "p1"}},
+               {"kind": K.TEXT_INSERT, "target": {"bid": "h2", "path": "text"}, "payload": {"after": START, "text": "B"}}],
+              actor="loop")
+    pid = ws.open_plan(actor="agent:claude-code", target="h2")
+    ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                "payload": {"after": list(ws.store.blocks["p1"].text().last_live_ref()), "text": " Maybe."}}],
+              actor="agent:claude-code", plan=pid)
+    assert phase(ws.store, "h1") == "proposed"
+    ws.submit([{"kind": K.BLOCK_DELETE, "target": {"bid": "h2"}, "payload": {}}], actor=H)
+    assert offered_plans(ws.store) == [] and phase(ws.store, "h1") == "synced"
+
+
+def test_accepting_a_build_plans_strike_without_a_hand_off_leaves_it_the_accepters_edit(tmp_path):
+    """Accepting a plan that asks for code adopts what it proposed, strikes
+    included, as the directive does once a hand-off carries them; until one
+    does, the feature is the accepter's unsent edit."""
+    from codoc.calculus.derive import editors
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws, actor=H)
+    agent = "agent:claude-code"
+    pid = "p-build"
+    ws.submit([{"kind": K.PLAN_OPEN, "target": {"pid": pid}, "payload": {"kind": "edit", "target": "p1", "build": True}}],
+              actor=agent, batch=pid)
+    t = ws.store.blocks["p1"].text()
+    ws.submit([{"kind": K.TEXT_MARK, "target": {"bid": "p1", "path": "text"},
+                "payload": {"kind": SUGGEST_DEL, "attrs": {}, "start": list(t.ref_at(8)), "end": list(t.ref_at(11)), "on": True}}],
+              actor=agent, plan=pid)
+    ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor=H)
+    assert T(ws.store, "p1") == "Retries ." and editors(ws.store, "h1") == [H]

@@ -36,8 +36,14 @@ def test_install_writes_local_settings_registers_locally_and_clears_the_tracked_
         return subprocess.CompletedProcess(argv, 0, "", "")
     monkeypatch.setattr(I, "find_claude", lambda: "claude")
     monkeypatch.setattr(subprocess, "run", fake_run)
+    old_command = root / ".claude" / "commands" / "codoc" / "sync.md"        # what /codoc:realize was called
+    old_command.parent.mkdir(parents=True)
+    old_command.write_text("old")
     for _ in range(2):
-        assert "/codoc:sync" in I.install_hooks(str(root))
+        assert I.install_hooks(str(root)) == ["/codoc:ask", "/codoc:plan", "/codoc:realize"]
+    assert not old_command.exists()
+    skill = (root / ".claude" / "skills" / "codoc-intent" / "SKILL.md").read_text()
+    assert "{{include" not in skill and "## How to write a description" in skill
     local = json.loads((root / LOCAL).read_text())
     assert local["permissions"]["allow"] == ["mcp__codoc__*"]
     commands = [h["command"] for es in local["hooks"].values() for e in es for h in e["hooks"]]

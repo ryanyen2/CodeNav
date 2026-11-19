@@ -40,7 +40,7 @@ targets and anything in backticks stay exactly as they are in the code.
 | `add_node` | `id` (temporary, optional), `parent_id` (optional), `title`, `description`, `bindings` | a new feature |
 | `amend` | `feature_id`, `title` (optional), `blocks` | change a title or a description |
 | `move_node` | `feature_id`, `parent_id` | put a feature under another parent |
-| `retire_node` | `feature_id` | propose removing a feature |
+| `delete_node` | `feature_id` | propose deleting a feature |
 
 - `bindings` is a list of `"file.py::symbol"` strings.
 - `description` is Markdown.
@@ -62,7 +62,7 @@ One call with everything your change implies.
 1. `attach` the symbols you wrote or changed to the feature they belong to. Prefer an existing feature. `add_node` only when nothing covers the new code, and put related new symbols under one node.
 2. `amend` a block only when it says something the code does not do, or when you added a capability the description does not mention. Change that block. Leave the others as they are.
 3. `rationale` is one plain line saying what the edits change in the tree. It is the note on any plan they open. Describe the code as it is, not what changed: no "now", "no longer" or "updated to", in the rationale or in amended text.
-4. When the work came from an item in `.codoc/realize.md`, pass its `d:…` id as `caused_by`. That reports the item and you are done with it. It settles when your turn ends; there is nothing to wait for.
+4. When the work came from a hand-off in `.codoc/realize.md`, pass its `d:…` id as `caused_by`. That reports the hand-off and you are done with it. It settles when your turn ends; there is nothing to wait for.
 
 Where it lands:
 
@@ -70,7 +70,7 @@ Where it lands:
 |---|---|
 | `attach`, `detach` | at once |
 | a small rewording of a block the loop or an agent wrote | at once |
-| a larger rewrite, any change to words a person wrote, a new or removed block, `add_node`, `move_node`, `retire_node` | as a plan the person accepts or rejects in the editor |
+| a larger rewrite, any change to words a person wrote, a new or removed block, `add_node`, `move_node`, `delete_node` | as a plan the person accepts or rejects in the editor |
 | anything on a feature with edits the person has not handed off | as a plan |
 
 Tell the user when you left a plan.
@@ -78,7 +78,7 @@ Tell the user when you left a plan.
 ## Before you change code: `/codoc:plan <task>`
 
 Proposes the change as tree edits with `codoc_propose` and stops. Accepting the
-plan hands the work to you. `/codoc:sync` then builds what is queued.
+plan hands the work to you. `/codoc:realize` then builds what is queued.
 
 ## Writing a description
 

@@ -6,7 +6,7 @@ import random
 from codoc.calculus import ops as K
 from codoc.calculus.apply import apply
 from codoc.calculus.derive import block_entry, live_spans, markdown, plan_claims
-from codoc.calculus.export import export_markdown
+from codoc.calculus.derive import export_markdown
 from codoc.calculus.inline_md import parse
 from codoc.calculus.store import Store
 from codoc.calculus.text import BOLD, CITE, COMMENT, LINK, PROPOSALS, SUGGEST_DEL

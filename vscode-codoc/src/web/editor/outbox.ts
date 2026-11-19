@@ -11,7 +11,8 @@
  * While an IME composition is open the browser rewrites the composed text on
  * every keystroke (n, ni, 你). Nothing is recorded then: the blocks it touches
  * wait in `composed`, and `settle` compares each with its shadow once the
- * composition has ended, so the composed text leaves as one insert.
+ * composition has ended, so the composed text leaves as one insert with the
+ * marks the page shows on it.
  *
  * A block is **held** while the page knows more about it than a projection
  * does: one of its ops is still unanswered, its composition is not settled,
@@ -24,9 +25,8 @@
 import type { Node as PMNode } from '@tiptap/pm/model';
 import type { Transaction } from '@tiptap/pm/state';
 
-import { inFrontier } from '../calc/claims';
 import { newBatch, newCid } from '../calc/ids';
-import type { Ack, OpBody, Submission } from '../calc/projection';
+import { inFrontier, type Ack, type OpBody, type Submission } from '../calc/projection';
 import { Recorder, reconcile } from '../calc/recorder';
 import type { Shadow } from '../calc/shadow';
 import type { CardFields } from './card';
@@ -51,8 +51,9 @@ export class Outbox {
     /** The ops the daemon applied for this page that no adopted projection covers yet. */
     readonly applied = new Set<string>();
 
-    /** `onHoldChange` is told each block whose hold changed, so its paints can be redrawn. */
-    /** `cards` holds the field shadows of card blocks (card.ts), which an ack resolves too. */
+    /** `onHoldChange` is told each block whose hold changed, so its paints can
+     *  be redrawn. `cards` holds the field shadows of card blocks (card.ts),
+     *  which an ack resolves too. */
     constructor(private readonly shadows: Map<string, Shadow>,
                 private readonly submit: (subs: Submission[]) => void,
                 private readonly onHoldChange: (bid: string) => void,

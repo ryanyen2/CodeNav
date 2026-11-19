@@ -7,8 +7,8 @@
  * node; it draws a card in the margin beside the anchor block. Everything a
  * card does is ordinary ops by the person: a new thread is `block.add` +
  * `text.insert` (the body) + `text.mark(comment)`; a reply is another block;
- * Resolve is `block.set(status)`; Build it is a hand-off of the anchor's
- * feature with the comment as what the author asked.
+ * Resolve is `block.set(status)`; Build it hands off the anchor's feature,
+ * and the open thread is the request the agent reads with it.
  */
 import type { EditorView } from '@tiptap/pm/view';
 
@@ -92,13 +92,14 @@ export function resolveOps(t: Thread): OpBody[] {
 
 export interface MarginHost {
     submit(ops: OpBody[]): void;
-    /** Hand the anchor's feature off with the comment as the request, then build. */
+    /** Hand the anchor's feature off, and build it. */
     build(thread: Thread): void;
     newBid(): string;
     featureOf(bid: string): string | null;
     /** The viewer, and whether they answer for the tree. A contributor may
-     *  resolve only a thread they started. The applier refuses the rest, and a
-     *  button whose refusal reloads the card is worse than no button. */
+     *  resolve only a thread they started and may not hand off. The applier
+     *  refuses the rest, and a button whose refusal reloads the card is worse
+     *  than no button. */
     me?(): { actor: string; decides: boolean };
 }
 
@@ -192,7 +193,7 @@ export class Margin {
             const me = this.host.me?.() ?? { actor: '', decides: true };
             btn(actions, 'Reply', () => post(t.scope));
             if (me.decides || t.messages[0]?.actor === me.actor) btn(actions, 'Resolve', () => { this.host.submit(resolveOps(t)); });
-            if (t.scope === 'code' || t.scope === 'both') btn(actions, 'Build it', () => this.host.build(t), 'codoc-btn-human');
+            if (me.decides) btn(actions, 'Build it', () => this.host.build(t), 'codoc-btn-human');
         } else {
             btn(actions, 'Comment', () => post('code'));
             btn(actions, 'Comment + prose', () => post('both'), '', 'also bring the description in line');

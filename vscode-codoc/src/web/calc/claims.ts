@@ -1,15 +1,14 @@
 /**
  * claims.ts: what to draw, from what the projection says.
  *
- * Every visual claim on the prose is read off the projection: a run's actor
- * and whether its op is inside the realized frontier give the human channel
- * (ink); the daemon's `claims` give the code channel (ground) and a plan's mark
- * toggles; `plan` runs and `suggest_del` spans give the rest of the plan
- * channel (opacity). One palette on every
- * surface: blue is the person, gray a plan, green and red the code. Pure and
- * DOM-free; the editor turns `Paint`s into decorations at scalar → position.
- * A block's paints come from its edited field: `source` for a table, a
- * diagram or a code block, `text` otherwise.
+ * Every paint on the prose is one of the daemon's claims (`derive.feature_claims`):
+ * the person's ink, an open plan's words, cuts and mark toggles, and what the
+ * code added or removed. Only the viewer's own ink is drawn: another person's
+ * words are not the viewer's to hand off. One palette on every surface: blue
+ * is the person, gray a plan, green and red the code. Pure and DOM-free; the
+ * editor turns `Paint`s into decorations at scalar → position. A block's
+ * paints come from its edited field: `source` for a table, a diagram or a code
+ * block, `text` otherwise.
  */
 import { isBuiltin, pathOf, textField, type Claim, type Phase, type ProjectedBlock, type Projection, type TextField } from './projection';
 
@@ -22,97 +21,47 @@ export interface Paint {
     end: number;
     cls: Ink;
     title: string;      // hover text and aria-description
-    text?: string;      // removed text, for the widget
+    text?: string;      // removed text, for the widget; the words a mark toggle covers
 }
 
 const HUMAN = 'human:';
 
-/** Whether a frontier already contains an op: `session:seq` with `seq` at or
- *  below what the frontier records for that session. */
-export function inFrontier(op: string, frontier: Record<string, number>): boolean {
-    const i = op.lastIndexOf(':');
-    return i > 0 && Number(op.slice(i + 1)) <= (frontier[op.slice(0, i)] ?? -1);
-}
-
-/** The viewer's own words that the code does not yet say: pulsing until they
- *  are handed off, steady once they are. The two watermarks are the whole
- *  distinction. There is no separate "not yet acked" case, because a run
- *  reaches the projection only after its op has been applied. Another
- *  person's words are not the viewer's to hand off, so they are not inked. */
-export function inkPaints(b: ProjectedBlock, f: TextField, realized: Record<string, number>,
-                          handoff: Record<string, number>, viewer: string): Paint[] {
-    const out: Paint[] = [];
-    let cur: Paint | null = null;
-    for (const r of f.runs) {
-        if (r.actor !== viewer || r.plan) { cur = null; continue; }
-        if (inFrontier(r.op, realized)) { cur = null; continue; }
-        const cls: Ink = inFrontier(r.op, handoff) ? 'ink-sent' : 'ink-unsent';
-        if (cur && cur.cls === cls && cur.end === r.start) { cur.end = r.end; continue; }
-        cur = { bid: b.id, start: r.start, end: r.end, cls, title: cls === 'ink-sent' ? 'yours, handed off' : 'yours, not yet handed off' };
-        out.push(cur);
+/** The paint for one claim. */
+export function paintOf(c: Claim, plans: Projection['plans']): Paint {
+    const at = { bid: c.bid, start: c.start, end: c.end };
+    if (c.channel === 'human') {
+        return c.stage === 'sent' ? { ...at, cls: 'ink-sent', title: 'yours, handed off' }
+            : { ...at, cls: 'ink-unsent', title: 'yours, not yet handed off' };
     }
-    return out;
-}
-
-/** An open plan's words (gray) and the words it proposes to cut (struck).
- *  The projection lists only open plans: a decided plan's words are ordinary
- *  text, and History still says who proposed them. */
-export function planPaints(b: ProjectedBlock, f: TextField, plans: Projection['plans']): Paint[] {
-    const status = new Map(plans.map(p => [p.id, p]));
-    const out: Paint[] = [];
-    for (const r of f.runs) {
-        const p = r.plan ? status.get(r.plan) : undefined;
-        if (!p) continue;
-        out.push({ bid: b.id, start: r.start, end: r.end, cls: 'plan-open',
-                   title: `${r.actor} proposed this${p.note ? `: ${p.note}` : ''}` });
+    if (c.channel === 'code') {
+        return c.stage === 'removed' ? { ...at, cls: 'code-removed', title: 'the code no longer says this', text: c.text }
+            : { ...at, cls: 'code-added', title: 'the code now says this' };
     }
-    for (const s of f.suggest_del) {
-        const p = status.get(s.plan);
-        out.push({ bid: b.id, start: s.start, end: s.end, cls: 'plan-cut', title: `${p?.actor ?? 'a plan'} proposes removing this` });
+    if (c.stage === 'open') {
+        const note = plans.find(p => p.id === c.plan)?.note;
+        return { ...at, cls: 'plan-open', title: `${c.actor} proposed this${note ? `: ${note}` : ''}` };
     }
-    return out;
+    if (c.stage === 'removed') return { ...at, cls: 'plan-cut', title: `${c.actor} proposes removing this` };
+    // A mark toggle's text is `<mark>:<words>`.
+    const [kind, ...rest] = c.text.split(':');
+    const marked = c.stage === 'marked';
+    return { ...at, cls: marked ? 'plan-mark' : 'plan-unmark', text: rest.join(':'),
+             title: `${c.actor} proposes ${marked ? 'marking' : 'unmarking'} this as ${kind}` };
 }
 
-/** A plan's proposed mark changes on words that are already there: the
- *  document shows what it says today (the rejected read mode), and these say
- *  what the verdict would do to it. */
-export function markPaints(claims: Claim[] | undefined): Paint[] {
-    if (!claims) return [];
-    return claims.filter(c => c.channel === 'plan' && (c.stage === 'marked' || c.stage === 'unmarked')).map(c => {
-        const [kind, ...rest] = c.text.split(':');
-        return {
-            bid: c.bid, start: c.start, end: c.end,
-            cls: (c.stage === 'marked' ? 'plan-mark' : 'plan-unmark') as Ink,
-            title: `${c.actor} proposes ${c.stage === 'marked' ? 'marking' : 'unmarking'} this as ${kind}`,
-            text: rest.join(':'),
-        };
-    });
-}
-
-/** What the code loop added (green) or removed (red) since the viewer's cursor. */
-function groundPaints(claims: Claim[] | undefined): Paint[] {
-    if (!claims) return [];
-    return claims.filter(c => c.channel === 'code').map(c => ({
-        bid: c.bid, start: c.start, end: c.end,
-        cls: c.stage === 'removed' ? 'code-removed' as Ink : 'code-added' as Ink,
-        title: c.stage === 'removed' ? 'the code no longer says this' : 'the code now says this',
-        text: c.stage === 'removed' ? c.text : undefined,
-    }));
-}
-
-/** All paints for one block. Ink wins over ground where both claim a range
- *  (the person's words are theirs, whatever the code did around them). */
-export function paintsFor(b: ProjectedBlock, proj: Projection, fid: string | null,
-                          watermarks: { handoff: Record<string, number>; realized: Record<string, number> },
-                          history = false, viewer = ''): Paint[] {
+/** All paints for one block, from its feature's claims. Ink wins over ground
+ *  where both claim a range (the person's words are theirs, whatever the code
+ *  did around them). */
+export function paintsFor(b: ProjectedBlock, proj: Projection, fid: string | null, history = false, viewer = ''): Paint[] {
     // A card (a kind without a node type) holds its words in text areas, which take no paints.
     const f = isBuiltin(b.kind) ? textField(b, pathOf(b.kind)) : null;
     if (!f) return [];
-    const ink = inkPaints(b, f, watermarks.realized, watermarks.handoff, viewer);
-    const plan = planPaints(b, f, proj.plans);
-    const mine = fid ? proj.claims[fid]?.filter(c => c.bid === b.id) : undefined;
-    const ground = groundPaints(mine).filter(g => !ink.some(i => i.start < g.end && g.start < i.end));
-    return [...(history ? authorPaints(b, f) : []), ...ground, ...plan, ...markPaints(mine), ...ink];
+    const mine = (fid ? proj.claims[fid] ?? [] : [])
+        .filter(c => c.bid === b.id && (c.channel !== 'human' || c.actor === viewer))
+        .map(c => paintOf(c, proj.plans));
+    const ink = mine.filter(p => p.cls.startsWith('ink-'));
+    const ground = mine.filter(p => p.cls.startsWith('code-') && !ink.some(i => i.start < p.end && p.start < i.end));
+    return [...(history ? authorPaints(b, f) : []), ...ground, ...mine.filter(p => p.cls.startsWith('plan-')), ...ink];
 }
 
 /** The margin marker and row glyph for a feature's phase: one palette. */
@@ -131,7 +80,7 @@ export const PHASE_LABEL: Record<Phase, string> = {
 export function theirEdits(proj: Projection, fid: string, viewer: string): string {
     const who = proj.editors?.[fid] ?? [];
     return proj.phases[fid] === 'edited' && !who.includes(viewer)
-        ? `edited by ${who.join(', ')}, not yet handed off; your ⌘S does not send it` : '';
+        ? `edited by ${who.join(', ')}, not yet handed off; your hand-off does not send it` : '';
 }
 
 export const PHASE_CHANNEL: Record<Phase, 'human' | 'plan' | 'code' | 'none'> = {

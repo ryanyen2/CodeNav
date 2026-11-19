@@ -64,7 +64,7 @@ def blocked_ip(ip: str) -> bool:
 
 
 def _host_is_safe(hostname: str) -> bool:
-    """True iff EVERY address ``hostname`` resolves to is public/routable."""
+    """Whether every address ``hostname`` resolves to is public."""
     try:
         infos = socket.getaddrinfo(hostname, None)
     except OSError:

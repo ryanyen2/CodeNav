@@ -16,14 +16,12 @@
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { type EditorState, Selection, TextSelection, type Transaction } from '@tiptap/pm/state';
 
-import { ITEMS, PROSE, SOURCE, START, isBuiltin, isOneLine, isProvisional, kindOf, nfc, pathOf, type CharRef, type Layout, type OpBody,
-         type Projection, type Span } from '../calc/projection';
-import { inlineNodes } from '../calc/adopt';
-import { parseInline } from '../calc/markdown';
-import { SENT_MARKS, deleteOf, scalarOffset } from '../calc/recorder';
+import { ITEMS, MAX_LEVEL, PROSE, SOURCE, START, isOneLine, isProvisional, kindOf, nfc, pathOf, type CharRef, type OpBody,
+         type Projection } from '../calc/projection';
+import { deleteOf, scalarOffset } from '../calc/recorder';
 import { Shadow } from '../calc/shadow';
 import type { CardFields } from './card';
-import { MAX_LEVEL, clampLevel } from './schema';
+import { clampLevel } from './schema';
 
 /** Transaction meta: the ops that record this transaction. The recorder skips
  *  a transaction that carries it, and the structural guard lets it through.
@@ -53,41 +51,25 @@ export interface Env {
     cards?: CardFields;
 }
 
-/** One block as it arrives in a paste: inline Markdown already read into
- *  plain `text` and `spans` for a heading or prose kind, raw text for a source
- *  kind, whose `content` holds `lang` or `derived`. A block of any other kind
- *  has every field of its `codoc:` fence in `content`, Text fields as inline
- *  Markdown, and the fence's `layout` when it carried one. */
-export interface Piece { kind: string; level: number; text: string; spans: Span[]; content: Record<string, unknown>; layout?: Layout }
-
 function blockAt(state: EditorState, pos: number): { node: PMNode; pos: number; index: number } | null {
     const $p = state.doc.resolve(pos);
     if ($p.depth < 1) return null;
     return { node: $p.node(1), pos: $p.before(1), index: $p.index(0) };
 }
 
-function done(tr: Transaction, ops: OpBody[], cids: string[] = []): Gesture {
+/** A gesture's transaction, tagged with its ops. */
+export function done(tr: Transaction, ops: OpBody[], cids: string[] = []): Gesture {
     return { tr: tr.setMeta(RECORDED, ops).setMeta(GESTURE_CIDS, cids).setMeta('addToHistory', false), ops, cids };
 }
 
-/** The position right after the top-level block with this id. */
-function blockEnd(doc: PMNode, bid: string): number {
-    let end = doc.content.size;
-    doc.forEach((n, p) => { if (n.attrs.bid === bid) end = p + n.nodeSize; });
-    return end;
-}
-
-const isLevelled = (kind: string): boolean => kind === 'heading' || ITEMS.has(kind);
+export const isLevelled = (kind: string): boolean => kind === 'heading' || ITEMS.has(kind);
 
 /** Node attributes for a heading or prose block of `kind`. */
-const lineAttrs = (kind: string, bid: string, head: number, level: number) =>
+export const lineAttrs = (kind: string, bid: string, head: number, level: number) =>
     (isLevelled(kind) ? { bid, head, level } : { bid, head });
 
 /** A `text.delete` of the first `n` characters of a block, by identity. */
 const dropStart = (bid: string, shadow: Shadow, n: number): OpBody => deleteOf({ bid, path: 'text' }, shadow.delete(0, n));
-
-/** The UTF-16 length of the first `n` scalars of `text`. */
-const units = (text: string, n: number): number => Array.from(text).slice(0, n).join('').length;
 
 /** The top-level blocks a selection touches, with the part of each it covers. */
 export function selectedBlocks(state: EditorState): Array<{ node: PMNode; pos: number; index: number; from: number; to: number }> {
@@ -452,7 +434,7 @@ export function paragraphAfter(state: EditorState, env: Env): Gesture | null {
  * it already is, after the block before it, with `level_delta`, which the
  * applier applies to every heading in the range. Anything else: null.
  */
-export function indent(state: EditorState, env: Env, delta: 1 | -1): Gesture | null {
+export function indent(state: EditorState, delta: 1 | -1): Gesture | null {
     const b = blockAt(state, state.selection.from);
     if (!b) return null;
     const kind = kindOf(b.node);
@@ -464,7 +446,7 @@ export function indent(state: EditorState, env: Env, delta: 1 | -1): Gesture | n
         return done(tr, [{ kind: 'block.set', target: { bid, path: 'level' }, payload: { value: level } }]);
     }
     const after = b.index > 0 ? state.doc.child(b.index - 1).attrs.bid as string : START;
-    const g = moveBlock(state, env, bid, after, delta);
+    const g = moveBlock(state, bid, after, delta);
     if (!g) return null;
     const { anchor, head } = state.selection;
     g.tr.setSelection(TextSelection.create(g.tr.doc, anchor, head));
@@ -486,7 +468,7 @@ function dominatedRange(doc: PMNode, index: number): [number, number] {
 }
 
 /** Move a block (with what it dominates) to directly after `afterBid` (or START). */
-export function moveBlock(state: EditorState, _env: Env, bid: string, afterBid: string, levelDelta = 0): Gesture | null {
+export function moveBlock(state: EditorState, bid: string, afterBid: string, levelDelta = 0): Gesture | null {
     const doc = state.doc;
     let idx = -1, afterIdx = -1;
     doc.forEach((n, _pos, i) => { if (n.attrs.bid === bid) idx = i; if (n.attrs.bid === afterBid) afterIdx = i; });
@@ -546,145 +528,4 @@ export function deleteFeature(state: EditorState, env: Env, fid: string): Gestur
     tr = tr.delete(start, stop);
     for (let i = idx; i < end; i++) env.shadows.delete(doc.child(i).attrs.bid as string);
     return done(tr, ops);
-}
-
-/**
- * A paste, as ops. The selection is deleted first (`deleteSelection`). In a
- * source block the pieces' text lands as lines. Otherwise a first piece that
- * is a heading or prose joins the caret's block as typed text would, with its
- * marks, and an empty paragraph takes that piece's kind; every further piece
- * is a block of its own after it. The person is the author of all of it.
- * Pieces are NFC (paste.ts), as the applier records text.
- */
-export function pasteBlocks(state: EditorState, env: Env, pieces: Piece[]): Gesture | null {
-    if (!pieces.length) return null;
-    const ops: OpBody[] = [];
-    const cids: string[] = [];
-    let tr = state.tr;
-    if (!state.selection.empty) {
-        const cut = deleteSelection(state, env, true);
-        if (!cut) return null;
-        ops.push(...cut.ops);
-        tr = cut.tr;
-    }
-    const $at = tr.doc.resolve(tr.selection.from);
-    const host = $at.depth >= 1 ? $at.node(1) : null;
-    const bid = host?.attrs.bid as string | undefined;
-    const shadow = bid ? env.shadows.get(bid) : undefined;
-    if (!host || !bid || !shadow) return ops.length ? done(tr, ops) : null;
-    const hostKind = kindOf(host);
-    const off = scalarOffset(host, $at.parentOffset);
-    const caret = tr.selection.from;
-    const insertHere = (text: string, path: string): string => {
-        const cid = env.nextCid();
-        ops.push({ kind: 'text.insert', target: { bid, path }, payload: { after: shadow.anchorBefore(off), text } });
-        cids.push(cid);
-        shadow.insert(off, text, cid);
-        tr = tr.insertText(text, caret);
-        return cid;
-    };
-
-    if (SOURCE.has(hostKind)) {
-        const text = pieces.map(p => p.text).join('\n');
-        if (text) insertHere(text, 'source');
-        return done(tr.setSelection(TextSelection.create(tr.doc, caret + text.length)), ops, cids);
-    }
-
-    let rest = pieces;
-    let end = caret;
-    const first = pieces[0];
-    if (isOneLine(first.kind)) {
-        rest = pieces.slice(1);
-        const wasEmpty = shadow.length === 0;
-        if (first.text) {
-            const cid = insertHere(first.text, 'text');
-            for (const s of first.spans) {
-                if (!SENT_MARKS.has(s.kind) || s.end <= s.start) continue;
-                ops.push({ kind: 'text.mark', target: { bid, path: 'text' }, payload: {
-                    kind: s.kind, attrs: s.attrs, start: ['$cid', cid, s.start] as CharRef, end: ['$cid', cid, s.end - 1] as CharRef, on: true } });
-                tr = tr.addMark(caret + units(first.text, s.start), caret + units(first.text, s.end), state.schema.marks[s.kind].create(s.attrs));
-            }
-            end = caret + first.text.length;
-        }
-        if (wasEmpty && hostKind === 'paragraph' && first.kind !== 'paragraph') {
-            const lvl = isLevelled(first.kind) ? clampLevel(first.level) : 0;
-            ops.push({ kind: 'block.set', target: { bid, path: 'kind' }, payload: lvl ? { value: first.kind, level: lvl } : { value: first.kind } });
-            tr = tr.setNodeMarkup($at.before(1), state.schema.nodes[first.kind], lineAttrs(first.kind, bid, host.attrs.head as number, lvl));
-        }
-    }
-
-    // The rest arrive as blocks after it. Each position is read from the
-    // document as it stands, never mapped: a position computed before the cut
-    // and mapped through a mapping that includes the cut is shifted twice.
-    let after = bid;
-    for (const p of rest) {
-        const nb = env.nextBid();
-        if (!isBuiltin(p.kind)) {
-            // A card. Its fields split by a layout: the fence's, else the one the
-            // projection says the kind registers, else a block of that kind on the
-            // page. The add records the layout it was split by, as
-            // ingest.block_bodies does; knowing none, it sends every field as JSON
-            // and no layout.
-            const proj = env.projection?.();
-            const known = p.layout ?? proj?.kinds?.[p.kind] ?? proj?.blocks.find(b => b.kind === p.kind && b.layout)?.layout;
-            const split = known ?? { text: [], flow: true, export: true };
-            const json = Object.fromEntries(Object.entries(p.content).filter(([k]) => !split.text.includes(k)));
-            const payload: Record<string, unknown> = { kind: p.kind, after, ...(Object.keys(json).length ? { content: json } : {}),
-                                                       ...(known ? { layout: known } : {}) };
-            ops.push({ kind: 'block.add', target: { bid: nb }, payload });
-            const fields: Record<string, unknown> = { ...json };
-            const shadows = new Map<string, Shadow>();
-            for (const path of split.text) {
-                const md = p.content[path];
-                const t = typeof md === 'string' ? parseInline(md) : { text: '', spans: [] };
-                const sh = new Shadow();
-                shadows.set(path, sh);
-                fields[path] = { text: t.text, runs: [], spans: t.spans, suggest_del: [] };
-                if (!t.text) continue;
-                const cid = env.nextCid();
-                ops.push({ kind: 'text.insert', target: { bid: nb, path }, payload: { after: START, text: t.text } });
-                cids.push(cid);
-                sh.insert(0, t.text, cid);
-                for (const s of t.spans) {
-                    if (!SENT_MARKS.has(s.kind) || s.end <= s.start) continue;
-                    ops.push({ kind: 'text.mark', target: { bid: nb, path }, payload: {
-                        kind: s.kind, attrs: s.attrs, start: ['$cid', cid, s.start] as CharRef, end: ['$cid', cid, s.end - 1] as CharRef, on: true } });
-                }
-            }
-            // The card reads these shadows, not the fields' runs, which this page has not seen yet.
-            env.cards?.set(nb, { from: fields, shadows });
-            tr = tr.insert(blockEnd(tr.doc, after), state.schema.nodes.kindBlock.create({ bid: nb, head: 0, kind: p.kind, fields, layout: split }));
-            after = nb;
-            continue;
-        }
-        const lvl = isLevelled(p.kind) ? clampLevel(p.level) : 0;
-        const source = SOURCE.has(p.kind);
-        const payload: Record<string, unknown> = { kind: p.kind, after };
-        if (lvl) payload.level = lvl;
-        if (source && Object.keys(p.content).length) payload.content = p.content;
-        ops.push({ kind: 'block.add', target: { bid: nb }, payload });
-        const ranges = p.spans.filter(s => SENT_MARKS.has(s.kind)).map(s => ({ ...s, name: s.kind }));
-        const node = source
-            ? state.schema.nodes.source.create({ bid: nb, head: 0, kind: p.kind, lang: p.content.lang ?? null, derived: p.content.derived === true },
-                                               p.text ? state.schema.text(p.text) : undefined)
-            : state.schema.nodes[p.kind].create(lineAttrs(p.kind, nb, 0, lvl), inlineNodes(state.schema, p.text, ranges));
-        const sh = new Shadow();
-        env.shadows.set(nb, sh);
-        if (p.text) {
-            const cid = env.nextCid();
-            ops.push({ kind: 'text.insert', target: { bid: nb, path: pathOf(p.kind) }, payload: { after: START, text: p.text } });
-            cids.push(cid);
-            sh.insert(0, p.text, cid);
-            for (const s of ranges) {
-                ops.push({ kind: 'text.mark', target: { bid: nb, path: 'text' }, payload: {
-                    kind: s.kind, attrs: s.attrs, start: ['$cid', cid, s.start] as CharRef, end: ['$cid', cid, s.end - 1] as CharRef, on: true } });
-            }
-        }
-        const pos = blockEnd(tr.doc, after);
-        tr = tr.insert(pos, node);
-        end = pos + node.nodeSize - 1;
-        after = nb;
-    }
-    tr = tr.setSelection(TextSelection.create(tr.doc, Math.min(end, tr.doc.content.size)));
-    return done(tr, ops, cids);
 }

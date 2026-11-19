@@ -1,7 +1,7 @@
 """Hand-off, the queue, settling, and the directive."""
 from codoc.calculus import ops as K
 from codoc.calculus.apply import apply
-from codoc.calculus.derive import phase
+from codoc.calculus.derive import phase, queued
 from codoc.calculus.ops import covered
 from codoc.calculus.store import Store
 from codoc.calculus.text import BOLD
@@ -9,7 +9,6 @@ from codoc.index.changes import ChangeSet, ChunkRef
 from codoc.index.graph import Graph
 from codoc.loops.realize import (
     directive,
-    queued,
     render_queue,
     settle,
     write_queue,
@@ -37,7 +36,7 @@ def test_handoff_queues_directive_and_reflect_under_it_realizes(tmp_path):
     assert f"⟨d:{ho.id}⟩" in md and "Focus:" in md and "Author asked: make the client retry three times" in md
     assert write_queue(tmp_path / ".codoc", ws.store) is not None
     # The agent implements; the reflect pass cites the hand-off via caused_by.
-    cs = ChangeSet(modified=[ChunkRef("c.py", "c.py::send", "f9", "t1")])
+    cs = ChangeSet(modified=[ChunkRef("c.py::send", "f9", "t1")])
     r = reflect(ws, cs, Graph(), propose=lambda *a, **k: [], under_epoch=True)
     assert r.caused == {"h1": ho.id}
     assert any(o.caused_by == ho.id for o in r.ops if o.kind == K.BIND_REFRESH)
@@ -123,10 +122,10 @@ def test_a_hand_edit_never_settles_a_request_but_a_closed_epoch_does(tmp_path):
     ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
                 "payload": {"after": list(t.last_live_ref()), "text": " Retry five times."}}], actor="human:local")
     handoff(ws, "h1", actor="human:local", asked="retry five times")
-    r = reflect(ws, ChangeSet(modified=[chunk("c.py", "c.py::send", "f2", "t1")]), Graph(), propose=lambda *a, **k: [])
+    r = reflect(ws, ChangeSet(modified=[chunk("c.py::send", "f2", "t1")]), Graph(), propose=lambda *a, **k: [])
     assert r.caused == {} and settle(ws, r, sha="typo") == []
     assert phase(ws.store, "h1") == "queued"
-    r = reflect(ws, ChangeSet(modified=[chunk("c.py", "c.py::send", "f3", "t1")]), Graph(), propose=lambda *a, **k: [],
+    r = reflect(ws, ChangeSet(modified=[chunk("c.py::send", "f3", "t1")]), Graph(), propose=lambda *a, **k: [],
                 under_epoch=True)
     assert len(settle(ws, r, sha="built")) == 1
     w = ws.store.watermarks("h1")
@@ -151,7 +150,7 @@ def test_request_built_while_the_person_kept_typing_settles(tmp_path):
     a = ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": list(t.last_live_ref()), "text": " Do A."}}], actor="human:local")[0]
     handoff(ws, "h1", actor="human:local", asked="do A")
     ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": [a.id, 5], "text": " And B later."}}], actor="human:local")
-    r = reflect(ws, ChangeSet(modified=[chunk("c.py", "c.py::send", "f2", "t1")]), Graph(), propose=lambda *a, **k: [], under_epoch=True)
+    r = reflect(ws, ChangeSet(modified=[chunk("c.py::send", "f2", "t1")]), Graph(), propose=lambda *a, **k: [], under_epoch=True)
     done = settle(ws, r, sha="built")
     w = ws.store.watermarks("h1")
     assert len(done) == 1 and covered(w.handoff, w.realized) and phase(ws.store, "h1") == "edited"
@@ -170,12 +169,12 @@ def test_a_deleted_bound_feature_with_delete_code_can_be_settled(tmp_path):
     ws = Workspace(cd); seed(ws)
     ws.submit([{"kind": K.BLOCK_DELETE, "target": {"bid": "h1"}, "payload": {}}], actor=H)
     ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {"delete_code": True}}], actor=H)
-    assert R.queued(ws.store) == ["h1"]
+    assert queued(ws.store) == ["h1"]
     # the agent deletes send(); the epoch closes; the reflect pass runs under it
-    cs = ChangeSet(removed=[ChunkRef("c.py", "c.py::send", "f1", "t1")])
+    cs = ChangeSet(removed=[ChunkRef("c.py::send", "f1", "t1")])
     res = reflect(ws, cs, Graph(), propose=lambda *a, **k: [], under_epoch=True)
     R.settle(ws, res, sha="abc")
-    assert R.queued(ws.store) == [], "the phantom's removal was implemented and it is still queued"
+    assert queued(ws.store) == [], "the phantom's removal was implemented and it is still queued"
     ws.close()
 
 

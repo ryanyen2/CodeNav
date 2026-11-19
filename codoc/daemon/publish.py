@@ -1,6 +1,6 @@
 """The derived files an applier writes after a turn (docs/model.md, Derived views).
 
-    tree.codoc        the Markdown export (tracked)
+    tree.codoc        the Markdown export
     projection.json   what the editor and the hub render
     history.json      the timeline window: the last ops, each touched block's
                       text after them, and their recorded inverses
@@ -28,13 +28,15 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from codoc.calculus.derive import block_entry, feature_claims, open_plans, phase, projection
-from codoc.calculus.export import export_markdown, export_spec
+from codoc.calculus.derive import (
+    block_entry, export_markdown, export_spec, feature_claims, offered_plans, phase, projection, queued,
+)
 from codoc.calculus.store import Store
 from codoc.calculus.window import history_window
-from codoc.loops.realize import queued, write_queue
+from codoc.doclang import workspace_doc_language
+from codoc.loops.realize import write_queue
+from codoc.workspace.inbox import local_actor
 from codoc.workspace.layout import EXPORT, HISTORY, PROJECTION, REALIZE, STATUS, atomic_write
-from codoc.workspace.log import local_actor
 
 HISTORY_WINDOW = 200
 REALIZING_LEASE_SECONDS = 300
@@ -49,12 +51,11 @@ class Publisher:
     """The derived files for one workspace, written incrementally."""
     codoc_dir: Path
     root_dir: str = "."
-    doc_language: object = None
     _entries: dict[str, tuple] = field(default_factory=dict)    # bid -> (key, entry)
     _specs: dict[str, tuple] = field(default_factory=dict)      # bid -> (key, export spec)
     _phases: dict[str, tuple] = field(default_factory=dict)     # fid -> (key, phase)
     _claims: dict[str, tuple] = field(default_factory=dict)     # fid -> (key, claims)
-    _written: tuple | None = None                               # (store.pos, realizing lease)
+    _written: tuple | None = None                               # (store.pos, lease fresh)
 
     # ── cache keys ─────────────────────────────────────────────────────────
     @staticmethod
@@ -63,7 +64,7 @@ class Publisher:
 
     @staticmethod
     def _feature_key(store: Store, fid: str, realizing: set[str]) -> tuple:
-        heads = [store.block_head.get(b, 0) for b in store.body_ids(fid)]
+        heads = [store.block_head.get(b.id, 0) for b in store.body(fid)]
         return (store.structural_head, max(heads, default=0), store.plans_head, fid in realizing)
 
     def _memo(self, cache: dict, key: tuple, ident: str, compute):
@@ -97,15 +98,17 @@ class Publisher:
             self._specs, self._block_key(s, b.id), b.id, lambda: export_spec(s, b)))
 
     # ── files ──────────────────────────────────────────────────────────────
-    def publish(self, store: Store, *, realizing: set[str] = frozenset(), force: bool = False) -> dict:
-        """Write every derived file. Returns the status. Nothing is written
-        when neither the store nor the realizing lease has moved since the last
-        publish, unless ``force`` (a rebuild can change the tree without
-        changing the op count)."""
+    def publish(self, store: Store, *, force: bool = False) -> dict:
+        """Write every derived file. Returns the status. While another pass
+        holds the realizing lease, every queued feature reads as being built.
+        Nothing is written when neither the store nor the lease has moved since
+        the last publish, unless ``force`` (a rebuild can change the tree
+        without changing the op count)."""
         fresh = realizing_is_fresh(self.codoc_dir)
-        stamp = (store.pos, tuple(sorted(realizing)), fresh)
+        stamp = (store.pos, fresh)
         if not force and stamp == self._written:
             return read_status(self.codoc_dir)
+        realizing = set(queued(store)) if fresh else set()
         keys = self._feature_keys(store, realizing)
         phases = self.phases(store, realizing, keys)
         atomic_write(self.codoc_dir / PROJECTION,
@@ -116,8 +119,8 @@ class Publisher:
         path = self.codoc_dir / EXPORT
         if not path.exists() or path.read_text(encoding="utf-8") != text:
             atomic_write(path, text)
-        write_queue(self.codoc_dir, store, self.root_dir, self.doc_language)
-        status = write_status(self.codoc_dir, store, phases=phases, realizing=bool(realizing) or None)
+        write_queue(self.codoc_dir, store, self.root_dir, workspace_doc_language(self.codoc_dir))
+        status = write_status(self.codoc_dir, store, phases=phases)
         self._written = stamp
         return status
 
@@ -178,41 +181,36 @@ def renew_realizing(codoc_dir: str | Path) -> bool:
 
 
 def write_status(codoc_dir: str | Path, store: Store, *, phases: dict[str, str] | None = None,
-                 realizing: bool | None = None, detail: str = "") -> dict:
+                 detail: str = "") -> dict:
     """Derive the workspace state and write it. A fresh realizing lease is
-    preserved untouched (rewriting it would renew a lease this call only checked)."""
+    left untouched: rewriting the file would renew a lease this call only
+    checked, and a pass that died would hold it for as long as anything
+    published."""
     path = Path(codoc_dir) / STATUS
-    if realizing is None:
-        if realizing_is_fresh(codoc_dir):
-            return read_status(codoc_dir)
-        realizing = False
+    if realizing_is_fresh(codoc_dir):
+        return read_status(codoc_dir)
     phases = phases if phases is not None else {h.id: phase(store, h.id) for h in store.headings()}
     q = queued(store)
     edited = sum(1 for p in phases.values() if p == "edited")
-    proposals = len(open_plans(store))
-    if realizing:
-        state, pending = "realizing", len(q)
-    elif q:
+    proposals = len(offered_plans(store))
+    if q:
         state, pending = "queued", len(q)
-        detail = detail or f"{len(q)} change(s) ready to implement. Run /codoc:sync or codoc realize"
+        detail = detail or f"{len(q)} hand-off(s) ready to build. Run /codoc:realize or codoc realize"
     elif edited:
         state, pending = "edited", edited
         detail = detail or f"{edited} feature(s) with unsent edits. Hand off to build"
     elif proposals:
         state, pending = "proposed", proposals
-        detail = detail or f"{proposals} proposal(s) awaiting your verdict"
+        detail = detail or f"{proposals} plan(s) awaiting your verdict"
     else:
         state, pending = "synced", len(phases)
     d = {"version": 2, "state": state, "pending": pending, "detail": detail, "head": store.pos,
          "features": len(phases), "at": time.time(), "actor": local_actor(Path(codoc_dir).parent)}
-    if realizing and (owner := read_status(codoc_dir).get("owner")):
-        d["owner"] = owner              # the lease stays the pass's own across this rewrite
     atomic_write(path, json.dumps(d))
     return d
 
 
-def publish(codoc_dir: str | Path, store: Store, *, root_dir: str = ".", realizing: set[str] = frozenset(),
-            doc_language=None) -> dict:
+def publish(codoc_dir: str | Path, store: Store, *, root_dir: str = ".") -> dict:
     """One-shot publish for a process that holds no ``Publisher`` (the CLI, a
     client applying without a daemon)."""
-    return Publisher(Path(codoc_dir), root_dir, doc_language).publish(store, realizing=realizing, force=True)
+    return Publisher(Path(codoc_dir), root_dir).publish(store, force=True)

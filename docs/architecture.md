@@ -20,19 +20,21 @@ A package imports only packages to its left in this order: `calculus`, `index`,
 | `rank.py` | Base-62 fractional order keys. |
 | `ops.py` | The `Op` record, the op kinds, frontiers. |
 | `store.py` | `Store`: blocks, ops, bindings, plans, watermarks and the indexes the views use. |
-| `apply.py` | `apply(store, op)`: the handlers, inverses, verdicts. |
+| `apply.py` | `apply(store, op)`: the handlers and their inverses. |
+| `verdict.py` | `plan.accept`, `plan.reject` and `plan.reopen`: the steps a verdict takes, computed from the plan's ops. |
 | `ingest.py` | `ingest` and `block_bodies`. |
 | `inline_md.py`, `block_md.py` | The Markdown form, inline and block. |
-| `derive.py` | The views: description, attribution, ink, ground, plan claims, phase, history, projection. |
+| `scripts.py` | Which characters belong to which writing script, and whether it spaces its words. |
+| `derive.py` | The views: description, attribution, ink, ground, plan claims, phase, history, projection, and `tree.codoc`. |
 | `window.py` | The timeline window in `history.json`. |
-| `export.py` | `tree.codoc`. |
 | **`workspace/`** | The `.codoc` directory. |
 | `layout.py` | File names, atomic write, tolerant read, `flock`. |
 | `config.py` | `config.json`. |
 | `clock.py` | The hybrid logical clock. |
-| `log.py` | Session files, their checks, replay order, the inbox and acks, inbox name to actor. |
+| `log.py` | Session files: reading and checking them, replay order, the writer. |
+| `inbox.py` | The client inbox and acks, drain offsets, inbox name to actor, what a submission may assert (`client_payload`, `resolve_provisional`). |
 | `roles.py` | The role table and the policy `apply` asks. |
-| `workspace.py` | `Workspace`: rebuild, `submit`, `ingest` and the machine gate, `drain_inbox`, session rotation. |
+| `workspace.py` | `Workspace`: rebuild, `follow_head` (a new session when `HEAD` moves or git takes the session file), `submit`, `ingest` and the machine gate, `drain_inbox`. |
 | `snapshot.py` | `codoc snapshot`. |
 | `validate.py` | `codoc validate-logs`. |
 | **`index/`** | The code, read without the document. |
@@ -42,22 +44,22 @@ A package imports only packages to its left in this order: `calculus`, `index`,
 | `changes.py` | The change set of one index update. |
 | `extract.py`, `graph.py`, `flows.py` | The dependency graph over chunks, cached as JSON. |
 | `git.py` | `HEAD` (commit and branch), the hand-offs commit trailers name, and what recent commits said about a file. |
-| **`doclang.py`** | The authoring language: tags, detection, character budgets. |
-| **`llm/`** | `provider.py` (which model, `complete()`), `prompt.py` (templates in `codoc/prompts/`, JSON out), `passes.py` (one function per prompt). |
+| **`doclang.py`** | The authoring language: its profiles (tags, the prompt directive) and the script-aware text helpers (detection, title keys, character budgets). |
+| **`llm/`** | `provider.py` (which model, `complete()`, the `.env` fallback), `prompt.py` (templates in `codoc/prompts/`, JSON out), `passes.py` (one function per prompt). |
 | **`kinds/`** | The kind registry, the shipped kinds, `write.py` (content to ops), `lift.py` (the lift pass), `fetch_guard.py`. See [kinds.md](kinds.md). |
 | **`loops/`** | |
 | `context.py` | What a pass or an agent read is shown: the ego graph over bindings, the title outline. |
-| `edits.py` | Tree edits (`attach`, `detach`, `add_node`, `amend`, `move_node`, `retire_node`) compiled to op bodies and ingests. Writes nothing. |
+| `edits.py` | Tree edits (`attach`, `detach`, `add_node`, `amend`, `move_node`, `delete_node`) compiled to op bodies and ingests. Writes nothing. |
 | `bootstrap.py`, `reflect.py`, `realize.py`, `translate.py` | The loops in [workflows.md](workflows.md). |
 | **`daemon/`** | |
 | `daemon.py` | `codoc watch`: the per-batch order in [concurrency.md](concurrency.md#4-a-submissions-path). |
-| `client.py` | How another process writes and reads: the inbox when a daemon is alive, else the applier under `applier.lock`. |
+| `client.py` | How another process writes and reads: the inbox when a daemon is alive, else the applier under `applier.lock`; `settle_if_idle`, which every applier settles through; `queue_status` and `read_history`, the reads the CLI and the MCP tools share. |
 | `publish.py` | The derived files and the realizing lease in `status.json`. |
-| `epoch.py` | `activity.json`, the agent epoch. |
+| `epoch.py` | `activity.json`, the agent epoch: every write a locked read-modify-write. |
 | `pidfile.py` | `watch.pid`. |
 | **`claude/`** | Section 2. |
 | **`cli/main.py`** | The `codoc` command. |
-| **`mcp/`** | `server.py` (FastMCP over stdio, `codoc-mcp`), `tools.py`, `walkthrough.py`. |
+| **`mcp/`** | `server.py` (FastMCP over stdio, `codoc-mcp`), `tools.py`. |
 | **`serve/`** | Section 3. |
 
 ## 2. The coding agent
@@ -67,8 +69,9 @@ hooks name this machine's interpreter, so they go in the untracked
 `.claude/settings.local.json`, with the permission rule `mcp__codoc__*` (without it a
 headless `claude -p` is denied every codoc tool). The MCP server is registered at Claude
 Code's local scope with `claude mcp add --scope local`; when `claude` is not on PATH the
-install prints that command to run later. The `codoc-intent` skill and the `/codoc:sync`,
-`/codoc:plan` and `/codoc:ask` commands are copied into `.claude/`. Codoc's own entries in a
+install prints that command to run later. The `codoc-intent` skill and the `/codoc:realize`,
+`/codoc:plan` and `/codoc:ask` commands are copied into `.claude/`, and an installed
+`/codoc:*` command the plugin no longer ships is removed. Codoc's own entries in a
 tracked `.claude/settings.json` or `.mcp.json`, where an older install put them, are
 removed, the server only once the local registration succeeds. A settings file that does
 not parse, or holds the wrong type where codoc writes, stops the install before it writes
@@ -79,21 +82,21 @@ cloning.
 `post-tool`, `stop`, `session-end`):
 
 - Open the agent epoch in `activity.json` while a turn runs and record the files it
-  touched. The daemon holds those files and reflects them when the epoch closes, or after
+  touched. The daemon defers those files and reflects them when the epoch closes, or after
   900 seconds of silence, citing every queued hand-off in `caused_by`. The editor and the
   hub do not read the file: they learn that a feature is being built from its
   `realizing` phase in the projection.
 - Tell the session when hand-offs are queued in `realize.md`.
-- At `stop`, when the turn's MCP calls cite some queued items but not all, block the stop
-  once and name the rest, so an item built but not reported is reported or explained. A
+- At `stop`, when the turn's MCP calls cite some queued hand-offs but not all, block the stop
+  once and name the rest, so a hand-off built but not reported is reported or explained. A
   turn that never touched the queue just ends. The MCP server records each hand-off a
   call cites in the epoch's `cited` list (`epoch.note_cited`), daemon or not, once an op
   of the call has landed (applied or planned), so a call that errored cites nothing. The
-  epoch's open resets it. The hooks read and write `activity.json` outside the lock, so a
-  hook write can drop a citation; then the stop is blocked once more than it should be,
-  and `stop_hook_active` ends it.
+  epoch's open resets it. Every writer of `activity.json` (the hooks, the MCP server, an
+  SDK realize pass) goes through the locked functions in `daemon/epoch.py`, so none drops
+  another's write.
 - At `stop` with no daemon alive and something queued, start a detached
-  `python -m codoc.daemon.client` that settles what the epoch held back and exits
+  `python -m codoc.daemon.client` that settles what could not settle while the epoch was open, and exits
   ([concurrency.md](concurrency.md#1-processes)).
 - The MCP tools take a hand-off as the queue shows it (`d:<op id>`) or as the op id.
 - Never raise and never open the workspace; they read published files only.
@@ -112,27 +115,33 @@ wrote the op: an agent's `codoc_reflect`, the pass after a Claude Code epoch clo
 the pass over a commit whose `Codoc-Handoff` trailer names the hand-off, read when
 `HEAD` moves over it while on the branch its `Codoc-Base` trailer names. While an epoch
 is open the build is in progress, so the feature stays
-queued until the epoch closes; `codoc_status` lists an item the epoch's `cited` names
-under `reported_list`, and its state is `reported` when every queued item is.
+queued until the epoch closes; `codoc_status` lists a hand-off the epoch's `cited` names
+under `reported_list`, and its state is `reported` when every queued hand-off is.
 Code written by hand settles with `codoc done`.
 
 | tool | does |
 |---|---|
 | `codoc_context` | Read: with `files`, the features bound in them, one hop along the code graph, their parents and children; with `feature_id`, that feature, the features under it and the features owning a symbol one call, import or inheritance away from their code, in either direction. |
-| `codoc_tree`, `codoc_status`, `codoc_history` | Read: the tree, the queue and phases, one feature's ops and attribution. |
+| `codoc_tree`, `codoc_status`, `codoc_history` | Read: the tree and its open plans; the queue of hand-offs, phases and the number of open plans; one feature's ops and attribution. |
 | `codoc_reflect` | Tree edits. `attach`, `detach` and a rewording `amend` land on the trunk (an `amend` through the machine gate); anything else becomes one plan. |
 | `codoc_propose` | Tree edits as one plan. |
 | `codoc_write_block` | Content for a kind block ([kinds.md](kinds.md#4-how-content-becomes-ops)). |
-| `codoc_realize_progress` | Renews the realizing lease with "implementing n of m", as the MCP server's own lease (`CODOC_REALIZE_OWNER`), so the agent's status does not read it as another pass. |
-| `codoc_walkthrough`, `codoc_walkthrough_read`, `codoc_walkthrough_clear` | The `/codoc:ask` overlay in `ask.json`. |
+| `codoc_realize_progress` | Renews the realizing lease with "building n of m", as the MCP server's own lease (`CODOC_REALIZE_OWNER`), so the agent's status does not read it as another pass. |
 
 Every edit is compiled against the current tree before anything is written; if one is
 refused, nothing is written.
 
-**Realize engines.** `codoc realize` runs `/codoc:sync` through the Claude Agent SDK
-(`claude/sdk_realize.py`, the `sdk` extra) or `claude -p` (`--engine cli`).
-`codoc watch --auto-realize` (`claude/autorealize.py`) starts a pass when work is queued
-and no session is live.
+**Realize engines.** `codoc realize` and `codoc watch --auto-realize` start a pass through
+`claude/autorealize.py`'s `start_realize`: `/codoc:realize` through the Claude Agent SDK
+(`claude/sdk_realize.py`, the `sdk` extra) or `claude -p` (`--engine cli`), with
+`--permission-mode` (`acceptEdits` by default) for either. It takes the realizing lease and
+names the child its owner in `CODOC_REALIZE_OWNER`. `--auto-realize` starts a pass when work
+is queued and no session is live.
+
+**Commands.** `/codoc:realize` builds the queue (`state` decides what it does, from
+`codoc_status`); `/codoc:plan <task>` proposes the change with `codoc_propose` and stops;
+`/codoc:ask <question>` answers in chat as a numbered reading path over existing features,
+read with `codoc_tree` and `codoc_context`, and writes nothing.
 
 ## 3. The hub
 
@@ -142,8 +151,8 @@ and no session is live.
 | module | role |
 |---|---|
 | `supervise.py` | Claims the repository with `.codoc/serve.lock` and supervises one daemon. |
-| `app.py` | Routes: GitHub sign-in, `/api/whoami`, `/api/events` (SSE), `/api/message` (a `submit` appends to `inbox/hub-<login>.jsonl`), `/api/media/<name>`, the page. |
-| `push.py` | The SSE channel: `projection`, `status`, this viewer's `acks`. |
+| `app.py` | Routes: GitHub sign-in, `/api/whoami`, `/api/events` (SSE), `/api/message` (a `submit` appends to `inbox/hub-<login>.jsonl`; `set-language` writes the normalized tag for a maintainer; `realize` and `open-cite` are refused with a reason), `/api/media/<name>`, the page. |
+| `push.py` | The SSE channel: `projection`, `status` (with `terminal: false`, so the page offers no Build now), this viewer's `acks`. |
 | `auth.py`, `github_auth.py` | Sessions, and collaborator permission to role, written to `config.json`. Re-checked on a cadence. |
 | `ratelimit.py` | Requests per login. |
 | `worker.py` | Each hand-off with no realization and no pull request is built on its own worktree and branch, and the worker opens the pull request. The commit names the hand-off in a `Codoc-Handoff` trailer and the branch the pull request targets in a `Codoc-Base` trailer, so the pass of a daemon on that branch over the merged commit cites it. |
@@ -152,15 +161,21 @@ and no session is live.
 
 ## 4. Environment variables
 
+When `llm/provider.py` first resolves a provider in a process, it sets each variable the
+environment leaves unset from the `.env` nearest the working directory (the editor's
+setup writes the chosen provider there). It never overrides the shell, and never takes
+`CODOC_BASE_URL`, `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` or `CODOC_LOG_PROMPTS` from
+the file.
+
 | variable | read by | effect |
 |---|---|---|
 | `CODOC_PROVIDER` | `llm/provider.py` | `openai`, `anthropic`, `ollama` or `claude`. Unset: `openai` when `OPENAI_API_KEY` is set, else `anthropic` when `ANTHROPIC_API_KEY` is set, else `claude` (the Claude Code login). |
 | `CODOC_MODEL`, `CODOC_MODEL_FAST`, `CODOC_BASE_URL`, `CODOC_TEMPERATURE`, `CODOC_MAX_TOKENS`, `CODOC_REASONING_EFFORT`, `CODOC_VERBOSITY`, `CODOC_LLM_TIMEOUT` | `llm/provider.py` | The model and its call settings. |
 | `CODOC_LOG_PROMPTS` | `llm/provider.py` | `1` logs every prompt. |
-| `CODOC_LANCE_PATH`, `CODOC_INDEX_RETENTION_S` | `index/` | The chunk table's location; how long old index versions are kept. |
+| `CODOC_INDEX_RETENTION_S` | `index/runner.py` | How long a superseded version of the chunk table is kept (60 seconds). |
 | `CODOC_DOC_LANGUAGE` | `doclang.py` | Overrides `doc_language` for one process. |
 | `CODOC_AGENT` | `mcp/tools.py` | The coding agent the MCP server writes as, `agent:<name>`; `claude-code` when unset. |
 | `CODOC_REALIZE_OWNER` | `daemon/publish.py` | Marks the realize pass that holds the lease, so its own agent does not stand down. |
 | `CODOC_GITHUB_CLIENT_ID`, `CODOC_GITHUB_CLIENT_SECRET`, `CODOC_GITHUB_TOKEN`, `CODOC_SERVE_REPO`, `CODOC_GITHUB_API`, `CODOC_GITHUB_WEB` | `serve/` | GitHub sign-in and permission checks. |
-| `CODOC_SERVE_PR`, `CODOC_SERVE_BASE` | `cli/main.py` | `0` turns off the pull-request worker, as `codoc serve --no-prs` does; the base branch (`main`). |
+| `CODOC_SERVE_PR`, `CODOC_SERVE_BASE` | `cli/main.py` | `0` turns off the pull-request worker, as `codoc serve --no-prs` does; the branch its pull requests target (default: the branch origin's `HEAD` names, else the branch checked out, else `main`). |
 | `CODOC_CONSULT_ALLOWLIST`, `CODOC_STATIC_DIR`, `CODOC_TUNNEL_CONFIG` | `serve/` | Consult URLs the hub's agent may fetch; the bundle; the tunnel config. |

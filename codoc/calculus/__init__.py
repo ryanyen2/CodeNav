@@ -16,11 +16,12 @@ Module map:
 - ``store``:   the in-memory state the applier mutates.
 - ``apply``:   ``apply(store, op)``: total, deterministic, O(touched blocks),
                records canonical payloads, inverses and conflicts.
+- ``verdict``: ``plan.accept``, ``plan.reject`` and ``plan.reopen``, and the
+               steps a verdict records.
 - ``ingest``:  whole new text for one field → ops; the only module where a diff
                decides what changed.
 - ``inline_md``, ``block_md``: the Markdown codecs for text and for blocks.
 - ``derive``:  pure views over the store: what a feature says, who wrote which
-               word, the three channels, the phase, the projection.
-- ``export``:  the document as ``tree.codoc``.
+               word, the three channels, the phase, the projection, the export.
 - ``window``:  the timeline window: the last ops and the text around them.
 """

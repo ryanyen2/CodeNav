@@ -15,9 +15,9 @@ from tests.helpers import T, seed
 REPO = Path(__file__).resolve().parents[2]
 
 
-def test_a_stopped_server_closes_its_session_log(tmp_path):
-    """Claude Code stops the server with signals. Its session log must get the
-    `closed` trailer, or a fold never archives it."""
+def test_a_stopped_server_leaves_a_whole_session_log(tmp_path):
+    """Claude Code stops the server with signals. The session log it leaves
+    replays whole."""
     cd = tmp_path / ".codoc"
     ws = Workspace(cd); seed(ws); ws.close()
     before = set(L.list_sessions(cd))
@@ -39,12 +39,12 @@ server.main()
     p.send_signal(signal.SIGTERM)
     p.wait(timeout=10)
     [log] = set(L.list_sessions(cd)) - before
-    assert L.read_session(log).closed
+    assert L.read_session(log).valid and L.read_session(log).ops
 
 
-def test_a_signal_during_an_apply_closes_the_log_after_the_batch(tmp_path):
+def test_a_signal_during_an_apply_stops_the_server_after_the_batch(tmp_path):
     """FastMCP runs a tool in a worker thread, so the stop signal can arrive
-    while it applies. The log ends with the whole batch, then the trailer."""
+    while it applies. The log ends with the whole batch."""
     cd = tmp_path / ".codoc"
     ws = Workspace(cd); seed(ws); ws.close()
     before = set(L.list_sessions(cd))
@@ -54,8 +54,8 @@ from codoc.daemon import client
 from codoc.mcp import server
 from codoc.workspace import log as L
 append = L.SessionWriter.append
-def slow(self, op):
-    append(self, op)
+def slow(self, op, sub=None):
+    append(self, op, sub)
     print("mid", flush=True)
     time.sleep(0.3)
 L.SessionWriter.append = slow
@@ -72,8 +72,6 @@ server.main()
     p.send_signal(signal.SIGTERM)
     p.wait(timeout=20)
     [log] = set(L.list_sessions(cd)) - before
-    lines = [json.loads(x) for x in Path(log).read_text().splitlines()]
-    assert lines[-1] == {"closed": 1} and lines.count({"closed": 1}) == 1
     # The same write with no signal: the whole batch.
     ref = tmp_path / "ref" / ".codoc"
     ws = Workspace(ref); seed(ws); ws.close()
@@ -118,4 +116,4 @@ def test_sigint_then_sigterm_stop_the_real_server_once(tmp_path):
     err = errf.read_text()
     assert p.returncode in (0, -signal.SIGINT, -signal.SIGTERM) and "Fatal Python error" not in err, err
     [log] = set(L.list_sessions(cd)) - before
-    assert Path(log).read_text().splitlines().count(json.dumps({"closed": 1})) == 1
+    assert L.read_session(log).valid

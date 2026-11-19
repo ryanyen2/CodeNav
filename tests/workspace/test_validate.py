@@ -8,9 +8,10 @@ import json
 from codoc.calculus import ops as K
 from codoc.workspace import Roles, Workspace
 from codoc.workspace import log as L
-from codoc.workspace.log import Submission
+from codoc.workspace import inbox as I
+from codoc.workspace.inbox import Submission
 from codoc.workspace.snapshot import write_snapshot
-from codoc.workspace.validate import Finding, refused_verdicts, validate_logs
+from codoc.workspace.validate import Finding, refused_ops, validate_logs
 from tests.helpers import H, seed, write_roles
 
 
@@ -60,7 +61,7 @@ def test_a_git_person_outside_the_table_writes_the_trunk_and_a_hub_sign_in_does_
     ws.close()
     roles = Roles.load(cd)
     assert validate_logs(L.list_sessions(cd), roles=roles) == []
-    assert refused_verdicts(Workspace(cd, readonly=True).store, roles) == {}
+    assert refused_ops(Workspace(cd, readonly=True).store, roles) == {}
     _forge(L.list_sessions(cd)[0], hub.id)
     found = validate_logs(L.list_sessions(cd), roles=roles)
     assert len(found) == 1 and "refuses it" in found[0].reason, found
@@ -211,7 +212,7 @@ def test_rebuild_counts_what_the_table_would_refuse_today(tmp_path):
     ws.close()
     write_roles(cd, {"human:gh:alice": "suggest"})
     ws2 = Workspace(cd, readonly=True)
-    assert refused_verdicts(ws2.store, Roles.load(cd)) == {"human:gh:alice": 1}
+    assert refused_ops(ws2.store, Roles.load(cd)) == {"human:gh:alice": 1}
 
 
 def test_rebuild_does_not_count_a_machines_honest_withdrawal(tmp_path):
@@ -227,7 +228,7 @@ def test_rebuild_does_not_count_a_machines_honest_withdrawal(tmp_path):
     withdrawn = [o for o in ws.store.ops if o.kind == K.PLAN_REJECT]
     assert [(o.actor, o.conflict) for o in withdrawn] == [("agent:x", None)]
     ws.close()
-    assert refused_verdicts(Workspace(cd, readonly=True).store, Roles.load(cd)) == {}
+    assert refused_ops(Workspace(cd, readonly=True).store, Roles.load(cd)) == {}
 
 
 def test_a_finding_reads_as_a_place_and_a_reason():
@@ -244,10 +245,10 @@ def test_the_door_accepts_a_contributors_own_words_delete_and_their_own_comment(
     ws = Workspace(cd)
     seed(ws)
     r = list(ws.store.blocks["p1"].text().live_refs())
-    L.submit(cd, "hub-alice", [Submission(cid="i1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+    I.submit(cd, "hub-alice", [Submission(cid="i1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
                                           payload={"after": list(r[-1]), "text": " More."}, batch="b1")])
     ins = [o for o in ws.drain_inbox() if o.kind == K.TEXT_INSERT][0]
-    L.submit(cd, "hub-alice", [
+    I.submit(cd, "hub-alice", [
         Submission(cid="d1", kind=K.TEXT_DELETE, target={"bid": "p1", "path": "text"},
                    payload={"segments": [[ins.id, 0, 6]]}, batch="b2"),
         Submission(cid="c1", kind=K.BLOCK_ADD, target={"bid": "cx"},
@@ -290,7 +291,7 @@ def test_a_session_file_read_against_the_merge_base_with_a_torn_tail_cut_is_not_
     session.write_text(session.read_text().rsplit("\n", 1)[0] + "\n")     # what Daemon.__init__ does
     git("commit", "-qam", "cut")
     git("checkout", "-q", "main")
-    session.write_text(session.read_text() + '\n{"closed": 1}\n')
+    session.write_text(session.read_text() + '\n{"later": 1}\n')               # main appends after the tear
     git("commit", "-qam", "main grows")
     git("checkout", "-q", "pr")
     assert base_records(tmp_path, "main", [session], L.list_sessions(cd))[1] == []

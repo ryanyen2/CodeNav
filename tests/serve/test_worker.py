@@ -51,9 +51,9 @@ def test_realize_one_opens_a_pr_on_a_branch_and_refuses_out_of_scope(tmp_path):
     pr = [a for a, _ in calls if a[0] == "gh"][0]
     assert pr[:6] == ["gh", "pr", "create", "--base", "main", "--head"] and pr[6] == "codoc/realize-s-9"
     calls.clear()
-    bad = realize_one(req, "/tmp/wt", run=run, agent=lambda d, w, scope=None: ["c.py", ".github/workflows/ci.yml"])
+    bad = realize_one(req, "/tmp/wt", run=run, agent=lambda d, w, scope=None: ["c.py", ".github/workflows/ci.yml"], base="main")
     assert not bad.ok and bad.out_of_scope == [".github/workflows/ci.yml"] and not any(a[0] == "gh" for a, _ in calls)
-    none = realize_one(req, "/tmp/wt", run=run, agent=lambda d, w, scope=None: [])
+    none = realize_one(req, "/tmp/wt", run=run, agent=lambda d, w, scope=None: [], base="main")
     assert not none.ok and none.reason == "no changes produced"
 
 
@@ -63,9 +63,9 @@ def test_process_ready_records_each_handoff_once(tmp_path):
     seen = []
     run = lambda argv, cwd=None: 0
     agent = lambda d, w, scope=None: seen.append(d["id"]) or ["c.py"]
-    assert process_ready(str(tmp_path), str(cd), run=run, agent=agent, printer=lambda *_: None) == [ho.id]
+    assert process_ready(str(tmp_path), str(cd), base="main", run=run, agent=agent, printer=lambda *_: None) == [ho.id]
     assert read_ledger(cd) == {ho.id: branch_name(ho.id)}
-    assert process_ready(str(tmp_path), str(cd), run=run, agent=agent, printer=lambda *_: None) == []
+    assert process_ready(str(tmp_path), str(cd), base="main", run=run, agent=agent, printer=lambda *_: None) == []
     assert seen == [ho.id]
 
 
@@ -118,7 +118,7 @@ def test_a_branch_the_agent_already_built_is_published_not_rebuilt(tmp_path):
         return 0
 
     runs: list[str] = []
-    process_ready(str(tmp_path), str(cd), run=run, agent=lambda d, w, scope=None: runs.append(d["id"]) or ["c.py"],
+    process_ready(str(tmp_path), str(cd), base="main", run=run, agent=lambda d, w, scope=None: runs.append(d["id"]) or ["c.py"],
                   printer=lambda *_: None, retry=[])
     assert runs == [], f"the agent ran again for work already committed: {runs}"
     names = [" ".join(c[:3]) for c in calls]
@@ -137,7 +137,7 @@ def test_a_merged_hub_pull_request_settles_its_handoff(tmp_path, monkeypatch):
     from pathlib import Path
     from codoc.daemon.daemon import Daemon
     from codoc.index.changes import ChangeSet, ChunkRef
-    from codoc.loops.realize import queued
+    from codoc.calculus.derive import queued
     for k, v in {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t",
                  "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t",
                  "GIT_COMMITTER_EMAIL": "t@example.com"}.items():
@@ -151,7 +151,7 @@ def test_a_merged_hub_pull_request_settles_its_handoff(tmp_path, monkeypatch):
     (root / "c.py").write_text("def send(): ...\n")
     git("add", "c.py")
     git("commit", "-qm", "init")
-    d = Daemon(root, changeset=lambda *a: ChangeSet(modified=[ChunkRef("c.py", "c.py::send", "f2", "t1")]),
+    d = Daemon(root, changeset=lambda *a: ChangeSet(modified=[ChunkRef("c.py::send", "f2", "t1")]),
                propose=lambda *a, **k: [], printer=lambda *_: None)
     seed_loop(d.ws)
     ho = handoff(d.ws, "h1", actor="human:local")
@@ -165,7 +165,7 @@ def test_a_merged_hub_pull_request_settles_its_handoff(tmp_path, monkeypatch):
         Path(worktree, "c.py").write_text("def send(): retry()\n")
         return ["c.py"]
     [req] = pending(d.codoc_dir, d.ws.store, {})
-    assert realize_one(req, str(tmp_path / "wt"), run=run, agent=agent, root=str(root)).ok
+    assert realize_one(req, str(tmp_path / "wt"), run=run, agent=agent, base="main", root=str(root)).ok
     git("merge", "-q", "--ff-only", branch_name(ho.id))          # the pull request merges and is pulled
     d.process_batch([str(root / "c.py")])
     st = d.ws.store
@@ -222,7 +222,7 @@ def test_a_sandbox_that_could_not_run_is_not_a_refusal(tmp_path):
     ws.close()
     out = []
     retry = []
-    process_ready(str(tmp_path), str(cd), run=lambda a, cwd=None: 0, agent=lambda *a, **k: None,
+    process_ready(str(tmp_path), str(cd), base="main", run=lambda a, cwd=None: 0, agent=lambda *a, **k: None,
                   printer=out.append, retry=retry)
     assert ho.id not in read_ledger(cd), read_ledger(cd)
     assert retry == [ho.id] and any("will retry" in line for line in out), out
@@ -235,14 +235,14 @@ def test_the_worker_comes_back_to_an_unanswered_request_before_the_tree_moves(tm
     from codoc.serve import worker as W
     passes = []
 
-    def fake(root, cd, *, base="main", printer=print, retry=None, **kw):
+    def fake(root, cd, *, base, printer=print, retry=None, **kw):
         passes.append(1)
         if retry is not None and len(passes) < 3:
             retry.append("s:9")            # still unanswered
         return []
     monkeypatch.setattr(W, "_published_head", lambda cd: 7)
     monkeypatch.setattr(W, "process_ready", fake)
-    w = W.Worker(str(tmp_path), str(tmp_path / ".codoc"), interval=0.01, printer=lambda *_: None).start()
+    w = W.Worker(str(tmp_path), str(tmp_path / ".codoc"), base="main", interval=0.01, printer=lambda *_: None).start()
     time.sleep(0.2)
     w.stop()
     assert len(passes) == 3, f"{len(passes)} pass(es): the retry stopped early or never stopped"

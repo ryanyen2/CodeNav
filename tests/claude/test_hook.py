@@ -12,10 +12,10 @@ from codoc.claude import hook
 from codoc.daemon import client
 from codoc.daemon.epoch import read_activity, write_activity
 from codoc.daemon.publish import publish
-from codoc.loops.realize import queued
+from codoc.calculus.derive import queued
 from codoc.mcp import tools
 from codoc.workspace import Workspace
-from codoc.workspace import log as L
+from codoc.workspace import inbox as I
 from codoc.workspace.layout import REALIZE
 from tests.helpers import H, handoff, seed
 
@@ -38,18 +38,18 @@ def _setup(tmp_path, cited: list[str], *, open_: bool = True):
 
 def test_a_turn_that_reported_one_of_two_items_is_asked_once_about_the_other(tmp_path, capsys):
     cd = _setup(tmp_path, ["s:1"])
-    hook.handle_turn_stop({"session_id": "a"}, cd)
+    hook.handle_stop({"session_id": "a"}, cd)
     out = json.loads(capsys.readouterr().out)
     assert out["decision"] == "block" and "d:s:2" in out["reason"] and "d:s:1" not in out["reason"]
     assert read_activity(cd)["epoch"]["open"]                     # the turn goes on
-    hook.handle_turn_stop({"session_id": "a", "stop_hook_active": True}, cd)
+    hook.handle_stop({"session_id": "a", "stop_hook_active": True}, cd)
     assert capsys.readouterr().out == "" and not read_activity(cd)["epoch"]["open"]
 
 
 def test_a_turn_that_never_touched_the_queue_or_reported_all_of_it_just_ends(tmp_path, capsys):
     for cited in ([], ["s:1", "s:2"]):
         cd = _setup(tmp_path / str(len(cited)), cited)
-        hook.handle_turn_stop({"session_id": "a"}, cd)
+        hook.handle_stop({"session_id": "a"}, cd)
         assert capsys.readouterr().out == "" and not read_activity(cd)["epoch"]["open"]
 
 
@@ -58,11 +58,11 @@ def test_a_citation_from_an_earlier_turn_does_not_ask_about_this_one(tmp_path, c
     activity.json until the next turn opens. A turn that touched nothing in
     the queue just ends."""
     cd = _setup(tmp_path, ["s:1"], open_=False)
-    L.submit(cd, "agent-claude-code", [L.Submission(cid="c1", kind="bind.attach", target={}, payload={},
+    I.submit(cd, "agent-claude-code", [I.Submission(cid="c1", kind="bind.attach", target={}, payload={},
                                                     caused_by="s:1")])
     hook.handle_user_prompt({"session_id": "a"}, cd)
     capsys.readouterr()
-    hook.handle_turn_stop({"session_id": "a"}, cd)
+    hook.handle_stop({"session_id": "a"}, cd)
     assert capsys.readouterr().out == "" and not read_activity(cd)["epoch"]["open"]
 
 
@@ -91,7 +91,7 @@ def test_a_turn_with_no_daemon_settles_what_it_cited_when_it_ends(tmp_path, monk
         client.release(cd)
     assert r["ok"] and queued(Workspace(cd, readonly=True).store) == ["h1"]      # held while the epoch is open
     capsys.readouterr()
-    hook.handle_turn_stop({"session_id": "s"}, str(cd))
+    hook.handle_stop({"session_id": "s"}, str(cd))
     assert capsys.readouterr().out == ""                                          # it cited the one queued item
     assert queued(Workspace(cd, readonly=True).store) == []
     hook.handle_user_prompt({"session_id": "s"}, str(cd))

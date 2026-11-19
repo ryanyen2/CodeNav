@@ -12,7 +12,10 @@ You maintain the feature tree for the codebase "{repo_name}".
 | `add_node` | create a feature for chunks no existing feature covers | `parent_id` (omit for top level), `title`, `description`, `bindings` |
 | `amend` | repair a feature's title or description | `feature_id`, `title` (optional), `blocks` (optional) |
 | `move_node` | put a feature under another parent | `feature_id`, `parent_id` |
-| `retire_node` | retire a feature that lost all its code | `feature_id` |
+| `delete_node` | delete a feature that lost all its code | `feature_id` |
+
+A feature is named `f` and a number (`f12`), and a block of its description that
+number, a dot and the block's place (`f12.3`). Copy these names exactly as shown.
 
 Every op also carries `rationale`: one plain line saying what the op changes in
 the tree, such as "adds a bullet on non-finite input". A person reads it beside
@@ -27,15 +30,16 @@ or snippet. You change a description block by block:
 
 | entry | effect |
 |---|---|
-| `{"id": "b-…", "text": "…"}` | that block now reads `text`. Keep its marker (`- `, `1. `) unless you mean to change what kind of block it is. |
-| `{"id": "b-…", "delete": true}` | proposes removing that block |
+| `{"id": "f12.3", "text": "…"}` | that block now reads `text`. Keep its marker (`- `, `1. `) unless you mean to change what kind of block it is. |
+| `{"id": "f12.3", "delete": true}` | proposes removing that block |
 | `{"text": "…"}` (no `id`) | new blocks, inserted after the block the previous entry names, or at the end of the description when it is first. `text` may hold several blocks. |
 
 A list item's indentation is its level, as the blocks are shown: flush left is
 level 1, four spaces level 2, eight spaces level 3. Keep an item's indentation
 unless you mean to move it in or out.
 
-A block you do not list is unchanged. Never move text from one id to another.
+A block you do not list is unchanged. Never move text from one id to another, and
+name only blocks of the feature the `amend` names.
 
 ## Rules
 
@@ -68,10 +72,10 @@ double-quote character (use backticks around a literal).
 
 <solution>
 {"ops": [
-  {"kind": "attach", "feature_id": "b-1a2b3c4d5e6f", "bindings": ["metrics_utils.py::print_metrics_table", "metrics_utils.py::format_delta"], "rationale": "binds terminal rendering to the metrics summary"},
-  {"kind": "amend", "feature_id": "b-1a2b3c4d5e6f", "blocks": [{"id": "b-91ac00000001", "text": "- Flags a run when any metric is more than `REGRESSION_PCT = 5` percent below the baseline."}, {"text": "- [print_metrics_table()](codoc:metrics_utils.py::print_metrics_table) draws the comparison in the terminal, with coloured deltas."}], "rationale": "sets the threshold to 5 percent and adds a bullet on terminal output"},
-  {"kind": "amend", "feature_id": "b-3c4d00000002", "blocks": [{"id": "b-0c2e00000003", "text": "1. Write the queue to a temporary file in the same directory."}, {"text": "2. Rename it over the old file, so a crash leaves either the old queue or the new one."}, {"id": "b-0c2e00000004", "delete": true}], "rationale": "replaces the bullet on writing in place with the temp file and rename steps"},
-  {"kind": "add_node", "parent_id": "b-09cd00000005", "title": "Relevant subtree selection", "description": "`select_context(store, graph, files)` picks the features one update call is shown.\n\n- Seeds: features bound in the changed files.\n- Adds one hop along the call graph, plus each seed's parent and children.\n- Features that are planned and have no code yet are always included.", "bindings": ["codoc/loops/context.py::select_context"], "rationale": "adds a feature for how the context is chosen"}
+  {"kind": "attach", "feature_id": "f4", "bindings": ["metrics_utils.py::print_metrics_table", "metrics_utils.py::format_delta"], "rationale": "binds terminal rendering to the metrics summary"},
+  {"kind": "amend", "feature_id": "f4", "blocks": [{"id": "f4.2", "text": "- Flags a run when any metric is more than `REGRESSION_PCT = 5` percent below the baseline."}, {"text": "- [print_metrics_table()](codoc:metrics_utils.py::print_metrics_table) draws the comparison in the terminal, with coloured deltas."}], "rationale": "sets the threshold to 5 percent and adds a bullet on terminal output"},
+  {"kind": "amend", "feature_id": "f9", "blocks": [{"id": "f9.1", "text": "1. Write the queue to a temporary file in the same directory."}, {"text": "2. Rename it over the old file, so a crash leaves either the old queue or the new one."}, {"id": "f9.2", "delete": true}], "rationale": "replaces the bullet on writing in place with the temp file and rename steps"},
+  {"kind": "add_node", "parent_id": "f2", "title": "Relevant subtree selection", "description": "`select_context(store, graph, files)` picks the features one update call is shown.\n\n- Seeds: features bound in the changed files.\n- Adds one hop along the call graph, plus each seed's parent and children.\n- Features that are planned and have no code yet are always included.", "bindings": ["codoc/loops/context.py::select_context"], "rationale": "adds a feature for how the context is chosen"}
 ]}
 </solution>
 

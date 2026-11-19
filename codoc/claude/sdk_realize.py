@@ -1,31 +1,30 @@
 """Run the realize queue through the Claude Agent SDK.
 
-``claude_agent_sdk.query("/codoc:sync")`` streams every agent message back, so
+``claude_agent_sdk.query("/codoc:realize")`` streams every agent message back, so
 codoc reacts to each action as it happens:
 
 * **terminal**: one compact line per action (edit / read / reflect / fetch /
   run), so the person can see what the agent is doing without reading the
   diff. Plain text, dim ANSI only on a tty.
-* **activity.json**: every file touch is recorded through the same code path
-  the interactive hooks use (``hook._handle_tool``).
-* **status.json**: the pass holds the realizing lease and renews it from its
-  own tool activity.
+* **activity.json**: every file touch reopens the agent epoch and records the
+  file, as the interactive pre-tool hook does (``daemon.epoch``).
+* **status.json**: the pass renews the realizing lease from its own tool
+  activity. ``autorealize.start_realize`` takes the lease and starts this
+  module as ``python -m codoc.claude.sdk_realize <root> [<permission mode>]``,
+  for ``codoc realize`` and for the daemon.
 
-Runnable as ``python -m codoc.claude.sdk_realize <root>`` so the daemon can
-track it as a child process, and called in the foreground by ``codoc realize``.
 The SDK import is guarded: :func:`sdk_available` gates engine selection, and
 everything event-side is duck-typed, so tests need no SDK installed.
 """
 from __future__ import annotations
 
-import os
 import sys
 import time
-import uuid
 from pathlib import Path
 from typing import Any, Callable
 
-from codoc.daemon.publish import REALIZE_OWNER_ENV, renew_realizing, write_realizing
+from codoc.daemon.epoch import reopen_epoch, repo_relative, touch_epoch
+from codoc.daemon.publish import renew_realizing
 from codoc.workspace.layout import CODOC_DIR, REALIZE
 
 Printer = Callable[[str], None]
@@ -34,8 +33,6 @@ _WRITE_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
 _READ_TOOLS = frozenset({"Read"})
 # Tools that are pure orchestration noise in a compact readout.
 _QUIET_TOOLS = frozenset({"TodoWrite", "Task", "Glob", "Grep", "AskUserQuestion"})
-
-_DETAIL = "implementing (sdk): codoc realize"
 
 # How often tool activity renews the realizing lease. Well under the lease
 # itself, so one long directive never lets it lapse mid-pass, and coarse enough
@@ -81,9 +78,7 @@ class RealizeMonitor:
     # -- helpers ---------------------------------------------------------
 
     def _rel(self, path: str) -> str | None:
-        from codoc.claude.hook import _rel
-
-        return _rel(path, self.root_dir)
+        return repo_relative(path, self.codoc_dir)
 
     def _line(self, glyph: str, verb: str, detail: str, *, quiet: bool = False) -> None:
         text = f"  {glyph} {verb:<8}{detail}"
@@ -102,16 +97,12 @@ class RealizeMonitor:
         except Exception:  # noqa: BLE001 (the heartbeat is advisory, never break realize)
             pass
 
-    def _record_touch(self, name: str, tool_input: dict) -> None:
-        """Record the touch as the interactive PreToolUse hook would. Idempotent
-        with the in-session hook."""
-        from codoc.claude.hook import _handle_tool
-
+    def _record_touch(self, rel: str) -> None:
+        """Record the touch as the interactive pre-tool hook does: a streamed
+        tool-use block arrives when the tool is requested, before it writes."""
         try:
-            # phase="pre": a streamed tool_use block arrives when the tool is
-            # REQUESTED, matching the interactive PreToolUse hook semantics.
-            _handle_tool({"tool_name": name, "tool_input": tool_input},
-                         self.codoc_dir, phase="pre")
+            reopen_epoch(self.codoc_dir, None)
+            touch_epoch(self.codoc_dir, rel)
         except Exception:  # noqa: BLE001 (signals never break the run)
             pass
 
@@ -130,7 +121,7 @@ class RealizeMonitor:
             rel = self._rel(path)
             if rel is None:
                 return
-            self._record_touch(name, {**tool_input, "file_path": path})
+            self._record_touch(rel)
             if name in _WRITE_TOOLS:
                 self.writes.add(rel)
                 self._line("●", "edit", rel)
@@ -197,36 +188,19 @@ async def _run(root_dir: str, codoc_dir: str, *, permission_mode: str,
         cwd=root_dir,
         permission_mode=permission_mode,
         # Load the codoc MCP server (registered at local scope for this path),
-        # the hooks in .claude/settings.local.json and the /codoc:sync command.
+        # the hooks in .claude/settings.local.json and the /codoc:realize command.
         # The SDK loads no filesystem settings unless asked.
         setting_sources=["user", "project", "local"],
     )
 
     monitor = RealizeMonitor(root_dir, codoc_dir, printer=printer)
-    # Name this pass, in status.json and in the environment the agent inherits.
-    # Without the token that agent reads the lease written here, concludes
-    # another pass owns the queue, and stands down. A pass the daemon started
-    # arrives already named.
-    inherited = os.environ.get(REALIZE_OWNER_ENV)
-    owner = inherited or uuid.uuid4().hex
-    os.environ[REALIZE_OWNER_ENV] = owner
+    printer("codoc realize · /codoc:realize · claude-agent-sdk")
     try:
-        write_realizing(codoc_dir, detail=_DETAIL, owner=owner)
-    except Exception:  # noqa: BLE001 (status is advisory)
-        pass
-
-    printer("codoc realize · /codoc:sync · claude-agent-sdk")
-    try:
-        await consume_stream(monitor, query(prompt="/codoc:sync", options=options))
+        await consume_stream(monitor, query(prompt="/codoc:realize", options=options))
     except Exception:  # noqa: BLE001
-        # A SYNCHRONOUS raise from query() (invalid options, auth failure) lands
+        # A synchronous raise from query() (invalid options, auth failure) lands
         # here; mark failed, never propagate.
         monitor.errored = True
-    finally:
-        # The token names a pass that has ended. Left set, it would exempt a
-        # later realize in this same process from a lease it does not own.
-        if inherited is None:
-            os.environ.pop(REALIZE_OWNER_ENV, None)
     printer(monitor.summary())
     return 1 if monitor.errored else 0
 
@@ -252,9 +226,9 @@ def run_sdk_realize(root_dir: str, codoc_dir: str | None = None, *,
 
 
 def main(argv: list[str] | None = None) -> int:
+    """``python -m codoc.claude.sdk_realize [<root> [<permission mode>]]``."""
     args = list(sys.argv[1:] if argv is None else argv)
-    root = args[0] if args else "."
-    return run_sdk_realize(root)
+    return run_sdk_realize(args[0] if args else ".", permission_mode=args[1] if len(args) > 1 else "acceptEdits")
 
 
 if __name__ == "__main__":

@@ -20,8 +20,8 @@ Run **codoc: Set up codoc** (the status bar item, the walkthrough, or the comman
 palette). It needs a trusted workspace, because it installs and runs code.
 
 1. Installs `uv`, then the codoc Python core into its own environment.
-2. Picks the model provider: your Claude Code login when there is one, otherwise
-   it asks for an API key and writes it to the repo's `.env`.
+2. Asks for the model provider: your Claude Code login, or an OpenAI or Anthropic
+   API key, which it writes to the repo's `.env` after adding `.env` to `.gitignore`.
 3. Runs `codoc init`: indexes the code, writes the first tree, and installs the
    Claude Code hooks, `/codoc:*` commands and MCP server into the repo.
 4. Starts the daemon and stops it when the window closes.
@@ -34,7 +34,7 @@ yours.
 | colour | means |
 |---|---|
 | blue | words you wrote that the code has not caught up with (pulsing until handed off) |
-| gray | an open proposal from an agent, the loop or a contributor; struck gray is a proposed deletion |
+| gray | an open plan from an agent, the loop or a contributor; struck gray is a proposed deletion |
 | green, red | what the code added or removed under the description since you last looked |
 
 A marker beside each heading gives the feature's phase: edited, realizing,
@@ -65,11 +65,11 @@ that page.
 | control | does |
 |---|---|
 | ⌘S, Hand off | sends your edited features to the coding agent's queue (`.codoc/realize.md`) |
-| Build now, **codoc: Implement queued changes now** | runs `codoc realize` in a terminal |
-| Accept all, Reject all | answers the open proposals; accepting a coding agent's proposal also queues it |
+| Build now, **codoc: Build now** | runs `codoc realize` in a terminal |
+| Accept all, Reject all | answers the open plans; accepting a plan a coding agent proposed also queues it |
 | a comment on selected words | a request about those words; Build it on the card hands it off |
 
-In Claude Code, `/codoc:sync` builds the queue and `/codoc:plan <task>` proposes a
+In Claude Code, `/codoc:realize` builds the queue and `/codoc:plan <task>` proposes a
 change as tree edits before any code is written.
 
 ## Commands
@@ -79,10 +79,9 @@ change as tree edits before any code is written.
 | codoc: Set up codoc | the setup above |
 | codoc: Open | opens the tree |
 | codoc: Start the daemon | starts `codoc watch` for this repo |
-| codoc: Sync | one daemon pass: apply pending edits, reflect changed code |
-| codoc: Implement queued changes now | `codoc realize` in a terminal |
+| codoc: Build now | `codoc realize` in a terminal |
 | codoc: Find in Tree, Replace in Tree | ⌘F, ⌘⌥F in the tree |
-| codoc: Share … | serve the tree to other people from this machine ([docs/serve-deployment.md](../docs/serve-deployment.md)) |
+| codoc: Start the hub, Start the hub over a tunnel | serve the tree to other people from this machine ([docs/serve-deployment.md](../docs/serve-deployment.md)) |
 
 Setting: `codoc.serverPath`, a `codoc` executable to use instead of the one setup
 installs (for working on the Python side).

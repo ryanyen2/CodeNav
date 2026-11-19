@@ -17,8 +17,8 @@ from codoc.serve.auth import (
 )
 from codoc.serve.push import Feed
 from codoc.workspace import Workspace
-from codoc.workspace import log as L
-from codoc.workspace.log import Submission
+from codoc.workspace import inbox, log as L
+from codoc.workspace.inbox import Submission
 from tests.helpers import seed_loop
 
 
@@ -64,11 +64,14 @@ def test_local_hub_treats_its_viewer_as_the_owner_and_routes_submissions(tmp_pat
     r = c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "submit", "subs": [
         {"cid": "c1", "kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": "START", "text": "Hi "}, "batch": "b1"}]})
     assert r.json() == {"ok": True, "submitted": 1}
-    lines = L.read_inbox(cd, "cli")      # the local hub's viewer is the person at the machine
+    lines = inbox.read_inbox(cd, "cli")      # the local hub's viewer is the person at the machine
     assert len(lines) == 1 and lines[0].sub.cid == "c1" and lines[0].sub.kind == K.TEXT_INSERT
     assert c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "set-language", "tag": "ja"}).json() == {"ok": True}
     assert json.loads((cd / "config.json").read_text())["doc_language"] == "ja"
-    assert c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "realize"}).status_code == 202
+    for kind, says in (("realize", "no terminal"), ("open-cite", "code opens in the editor")):
+        r = c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": kind})
+        assert r.status_code == 202 and says in r.json()["error"], (kind, r.json())
+    assert c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "sync"}).status_code == 400
     h = c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "history"}).json()
     assert h["kind"] == "history" and h["history"]["head"] == len(L.read_session(L.list_sessions(cd)[0]).ops)
 
@@ -95,13 +98,13 @@ def test_auth_gate_records_roles_and_a_suggester_cannot_set_the_language(tmp_pat
     assert c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "set-language", "tag": "ja"}).status_code == 403
     r = c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "submit", "subs": [
         {"cid": "s1", "kind": K.PLAN_OPEN, "target": {"pid": "p-1"}, "payload": {"kind": "edit"}}]})
-    assert r.json()["ok"] and L.read_inbox(cd, client_name("alice"))[0].sub.kind == K.PLAN_OPEN
+    assert r.json()["ok"] and inbox.read_inbox(cd, client_name("alice"))[0].sub.kind == K.PLAN_OPEN
     # A maintainer signing in later gets the maintainer role beside alice's.
     s = auth.store.create("bob", role_for_permission("admin"))
     from codoc.serve.auth import record_role
     record_role(cd, "bob", s.role)
     assert read_roles(cd) == {"human:gh:alice": SUGGEST, "human:gh:bob": MAINTAINER}
-    assert L.actor_for(client_name("local")) == "human:gh:local" != "human:local"
+    assert inbox.actor_for(client_name("local")) == "human:gh:local" != "human:local"
 
 
 def test_feed_sends_a_snapshot_then_only_changes_and_this_viewers_acks(tmp_path):
@@ -110,9 +113,10 @@ def test_feed_sends_a_snapshot_then_only_changes_and_this_viewers_acks(tmp_path)
     first = feed.pending()
     assert [m["kind"] for m in first] == ["projection", "status"]
     assert first[1]["status"]["doc_language"] == "en" and first[1]["status"]["actor"] == "human:local"
+    assert first[1]["status"]["terminal"] is False         # the page offers no Build now on the hub
     assert feed.pending() == []
-    L.ack(cd, "cli", "c1", None, error="unknown_anchor")
-    L.ack(cd, "hub-other", "c9", None)
+    inbox.ack(cd, "cli", "c1", None, error="unknown_anchor")
+    inbox.ack(cd, "hub-other", "c9", None)
     got = feed.pending()
     assert got == [{"kind": "acks", "acks": [{"cid": "c1", "op": "", "conflict": "unknown_anchor"}]}]
     (cd / "config.json").write_text(json.dumps({"doc_language": "ja"}))
@@ -127,11 +131,11 @@ def test_a_viewer_keeps_receiving_acks_after_the_daemon_trims_the_ack_file(tmp_p
     the start, so acks keep arriving and held blocks are released."""
     cd = workspace(tmp_path)
     for i in range(2100):
-        L.ack(cd, "hub-alice", f"c{i}", None)
+        inbox.ack(cd, "hub-alice", f"c{i}", None)
     feed = Feed(cd, "hub-alice")
     feed.pending()
-    L.rotate_acks(cd, keep=2000)                        # the daemon restarted
-    L.ack(cd, "hub-alice", "fresh", None)
+    inbox.rotate_acks(cd, keep=2000)                        # the daemon restarted
+    inbox.ack(cd, "hub-alice", "fresh", None)
     got = [a["cid"] for m in feed.pending() if m["kind"] == "acks" for a in m["acks"]]
     assert "fresh" in got, got
 
@@ -146,7 +150,7 @@ def test_the_feed_sends_acks_before_the_projection_that_followed_them(tmp_path):
     feed.pending()
     ws = Workspace(cd)
     t = ws.store.blocks["p1"].text()
-    L.submit(cd, "ide", [Submission(cid="k1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+    inbox.submit(cd, "ide", [Submission(cid="k1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
                                     payload={"after": list(t.last_live_ref()), "text": " More."}, batch="b1")])
     ws.drain_inbox()
     publish(cd, ws.store, root_dir=str(tmp_path))
@@ -168,25 +172,25 @@ def test_a_contributor_and_the_person_edit_one_checkout_at_once(tmp_path):
     ws = Workspace(cd)
     seed_loop(ws)
     t = ws.store.blocks["p1"].text()
-    L.submit(cd, "ide", [Submission(cid="i1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+    inbox.submit(cd, "ide", [Submission(cid="i1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
                                     payload={"after": list(t.last_live_ref()), "text": " Mine."}, batch="b-ide")])
     pid = "p-alice"
-    L.submit(cd, client_name("alice"), [
+    inbox.submit(cd, client_name("alice"), [
         Submission(cid="a1", kind=K.PLAN_OPEN, target={"pid": pid}, payload={"kind": "edit", "target": "p1"}, batch=pid),
         Submission(cid="a2", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
                    payload={"after": list(t.ref_at(7)), "text": "twice not "}, plan=pid, batch=pid),
         Submission(cid="a3", kind=K.PLAN_ACCEPT, target={"pid": pid}, payload={}, batch=pid)])
     ops = ws.drain_inbox()
     assert [(o.actor, o.kind, o.conflict) for o in ops] == [
+        ("human:local", K.TEXT_INSERT, None),                 # appended first, applied first
         ("human:gh:alice", K.PLAN_OPEN, None), ("human:gh:alice", K.TEXT_INSERT, None),
-        ("human:gh:alice", K.PLAN_ACCEPT, "authority"),       # a suggester may not decide
-        ("human:local", K.TEXT_INSERT, None)]
+        ("human:gh:alice", K.PLAN_ACCEPT, "authority")]       # a suggester may not decide
     assert markdown(ws.store.blocks["p1"].text(), "rejected", ws.store) == "Retries once before giving up. Mine."
     assert [(c.stage, c.text) for c in plan_claims(ws.store, "h1")] == [("open", "twice not ")]
     assert phase(ws.store, "h1") == "edited"                   # the person's unsent words win the badge
-    acks = [json.loads(l) for l in (L.inbox_dir(cd) / f"{client_name('alice')}.ack.jsonl").read_text().splitlines()]
+    acks = [json.loads(l) for l in (inbox.inbox_dir(cd) / f"{client_name('alice')}.ack.jsonl").read_text().splitlines()]
     assert [a["conflict"] for a in acks] == [None, None, "authority"]
-    L.submit(cd, client_name("bob"), [Submission(cid="b1", kind=K.PLAN_ACCEPT, target={"pid": pid}, payload={}, batch="b-bob")])
+    inbox.submit(cd, client_name("bob"), [Submission(cid="b1", kind=K.PLAN_ACCEPT, target={"pid": pid}, payload={}, batch="b-bob")])
     ws.drain_inbox()
     assert ws.store.plans[pid].status == "accepted"
     assert ("human:gh:alice", "twice not ") in [(s.actor, s.chars) for s in ws.store.blocks["p1"].text().segs if s.live]
@@ -239,8 +243,8 @@ def test_set_language_takes_a_tag_and_not_a_string(tmp_path):
     c = TestClient(build_app(str(cd)))
     bad = c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "set-language", "tag": "x" * 5000})
     assert bad.status_code == 400 and "config.json" not in [p.name for p in cd.iterdir()]
-    assert c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "set-language", "tag": "zh-Hans"}).json() == {"ok": True}
-    assert json.loads((cd / "config.json").read_text())["doc_language"] == "zh-Hans"
+    assert c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "set-language", "tag": "zh"}).json() == {"ok": True}
+    assert json.loads((cd / "config.json").read_text())["doc_language"] == "zh-Hans"     # as `codoc lang zh` writes it
 
 
 
@@ -267,7 +271,7 @@ def test_a_contributor_cannot_resolve_or_rewrite_somebody_elses_comment_thread(t
         {"kind": K.TEXT_INSERT, "target": {"bid": "c1", "path": "body"}, "payload": {"after": "START", "text": "make it retry twice"}},
     ], actor="human:gh:bob")
     body = ws.store.blocks["c1"].content["body"]
-    L.submit(cd, client_name("alice"), [
+    inbox.submit(cd, client_name("alice"), [
         Submission(cid="r1", kind=K.BLOCK_SET, target={"bid": "c1", "path": "status"}, payload={"value": "resolved"}, batch="b"),
         Submission(cid="r2", kind=K.TEXT_DELETE, target={"bid": "c1", "path": "body"},
                    payload={"from": list(body.ref_at(0)), "to": list(body.last_live_ref())}, batch="b"),
@@ -275,7 +279,7 @@ def test_a_contributor_cannot_resolve_or_rewrite_somebody_elses_comment_thread(t
     assert [o.conflict for o in ws.drain_inbox()] == ["authority", "authority"]
     assert ws.store.blocks["c1"].content.get("status") == "open"
     # …while a reply of their own, and closing a thread they started, both stand.
-    L.submit(cd, client_name("alice"), [
+    inbox.submit(cd, client_name("alice"), [
         Submission(cid="r3", kind=K.BLOCK_ADD, target={"bid": "c2"},
                    payload={"kind": "comment", "after": "c1", "content": {"thread": "c1", "anchor": "p1",
                                                                           "anchor_text": "Retries", "scope": "code", "status": "open"}}, batch="b2"),
@@ -300,7 +304,7 @@ def test_a_revoked_collaborator_recorded_as_none_is_not_a_suggester(tmp_path):
     (cd / "config.json").write_text(json.dumps({"roles": {"human:gh:eve": "none"}}))
     ws = Workspace(cd)
     seed_loop(ws)
-    L.submit(cd, client_name("eve"), [
+    inbox.submit(cd, client_name("eve"), [
         Submission(cid="e1", kind=K.PLAN_OPEN, target={"pid": "pl-eve"},
                    payload={"kind": "edit", "target": "p1", "note": "hi"}, batch="pl-eve"),
         Submission(cid="e2", kind=K.BLOCK_ADD, target={"bid": "ce"},

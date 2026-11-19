@@ -5,6 +5,6 @@
                 inbox, or as the applier when no daemon owns the checkout.
 - ``publish``:  the derived files an applier writes after a turn, and the
                 realizing lease in ``status.json``.
-- ``epoch``:    ``activity.json``: the agent session the daemon stands down for.
+- ``epoch``:    ``activity.json``: the agent session the daemon defers reflecting for.
 - ``pidfile``:  whether a daemon owns the checkout.
 """

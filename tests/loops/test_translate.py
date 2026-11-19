@@ -16,7 +16,7 @@ def test_translate_ingests_per_block_and_plans_human_prose(tmp_path):
               propose_the_brief=lambda *a, **k: {}, concurrency=1)
     client = next(h.id for h in ws.store.headings() if title(ws.store, h.id) == "HTTP client")
     # The person rewrites one paragraph, so that block is human-written.
-    body = ws.store.feature_body(client)
+    body = ws.store.body(client)
     p2 = body[2]
     t = p2.text()
     ws.submit([{"kind": "text.delete", "target": {"bid": p2.id, "path": "text"}, "payload": {"from": list(t.ref_at(0)), "to": list(t.ref_at(6))}},

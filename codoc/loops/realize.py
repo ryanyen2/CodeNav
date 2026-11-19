@@ -1,23 +1,19 @@
-"""Document → code: hand-offs, the realize queue, and the realization watermark.
+"""Document → code: the realize queue and the realization watermark.
 
-A person's edits are already ops on the trunk; nothing here infers them.
+A person's edits are already ops on the trunk, and their hand-off
+(``feature.handoff``) is written by the surface they used: the editor,
+``codoc handoff``, an accept. Nothing here infers either.
 
-- ``handoff``: record ``feature.handoff`` for a feature, with the frontier it
-  drains, the commit the work starts from, the person's own words, and
-  whether a deletion may remove code. This is the one gesture that turns
-  documentation into a request (I7).
-- ``queued``: which features have handed-off work not yet realized, including
-  deleted headings whose removal is still pending (phantoms).
 - ``directive``: the realize prompt item for one feature.
 - ``write_queue``: render every queued directive into ``realize.md``, the
   prompt the realizing session or ``codoc realize`` reads. Regenerable; the
   log is the truth.
 - ``settle``: record ``feature.realized`` for each queued feature once a
-  binding op on any feature citing its latest hand-off in ``caused_by`` has landed, from
-  any writer (under a plan, once accepted), and for each phantom whose code a citing reflect pass saw go. Every
-  applier runs it after applying (the daemon, a daemonless writer), never the
-  agent; the owner may also write it by hand (``codoc done``) for a request
-  whose implementation moved no bound symbol.
+  binding op on any feature citing its latest hand-off in ``caused_by`` has
+  landed, from any writer (under a plan, once accepted), and for each phantom
+  whose code a citing reflect pass saw go. Every applier runs it after
+  applying (the daemon, a daemonless writer), never the agent. ``codoc done``
+  writes it by hand for a request whose implementation moved no bound symbol.
 """
 from __future__ import annotations
 
@@ -26,37 +22,25 @@ from pathlib import Path
 from codoc import kinds as registry
 from codoc.calculus import ops as K
 from codoc.calculus.derive import (
-    answered, description, ink, kind_words, live_spans, prose_blocks, removed_blocks, text_string, title,
-    verdict_ops,
+    description, ink, kind_words, live_spans, prose_blocks, queued, realized_content, removals, title,
 )
 from codoc.calculus.doc import BUILTIN
-from codoc.calculus.ids import OpId, is_human
-from codoc.calculus.ops import Op, covered, in_frontier
+from codoc.calculus.ids import LOOP, is_human
+from codoc.calculus.ops import Op, in_frontier
 from codoc.calculus.store import Store, Watermarks, file_of
-from codoc.calculus.text import BOLD, LINK, Text
+from codoc.calculus.text import BOLD, LINK
 from codoc.llm.prompt import format_prompt, load_prompt
 from codoc.workspace import Workspace
 from codoc.workspace.layout import REALIZE, atomic_write
-
-
-def queued(store: Store) -> list[str]:
-    """Features whose hand-off frontier is not covered by their realized
-    frontier, in document order; dead headings with a pending removal come
-    last. A watermark fact: a feature being edited or built right now is
-    still queued (the agent is reading its directive)."""
-    pending = {fid for fid, w in store.watermarks_by_fid.items() if w.handoff and not covered(w.handoff, w.realized)}
-    out = [h.id for h in store.headings() if h.id in pending]
-    out.extend(fid for fid in pending if fid in store.blocks and not store.blocks[fid].live)
-    return out
 
 
 def render_queue(store: Store, root_dir: str = ".", doc_language=None) -> str:
     items = []
     for fid in queued(store):
         w = store.watermarks(fid)
-        did = w.handoffs[-1] if w.handoffs else ""
+        latest_handoff = w.handoffs[-1] if w.handoffs else ""
         body = directive(store, fid)
-        items.append(body.replace("### ", f"### ⟨d:{did}⟩ ", 1) if did else body)
+        items.append(body.replace("### ", f"### ⟨d:{latest_handoff}⟩ ", 1) if latest_handoff else body)
     if not items:
         return ""
     template = load_prompt("realize", doc_language=doc_language)
@@ -90,15 +74,17 @@ def settle(ws: Workspace, res=None, *, sha: str = "") -> list[Op]:
         w = store.watermarks_by_fid[fid]
         if not w.handoffs:
             continue
-        did = w.handoffs[-1]
-        cites = [o for o in store.ops[store.position.get(did, 0):]
-                 if o.caused_by == did and o.kind.startswith("bind.") and o.conflict is None and _taken(store, o)]
-        if not cites and not (res and res.caused.get(fid) == did and _phantom_done(store, fid, did, res.removed)):
+        latest_handoff = w.handoffs[-1]
+        cites = [o for o in store.ops[store.position.get(latest_handoff, 0):]
+                 if o.caused_by == latest_handoff and o.kind.startswith("bind.") and o.conflict is None
+                 and _taken(store, o)]
+        if not cites and not (res and res.caused.get(fid) == latest_handoff
+                              and _phantom_done(store, fid, latest_handoff, res.removed)):
             continue
         out.extend(ws.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": fid},
                                "payload": {"covers": dict(w.handoff), "sha": sha,
                                            "files": sorted({file_of(o.payload["symbol"]) for o in cites})}}],
-                             actor="loop", caused_by=did))
+                             actor=LOOP, caused_by=latest_handoff))
     return out
 
 
@@ -113,7 +99,7 @@ def _taken(store: Store, o: Op) -> bool:
     return verdict is not None and o.id in (verdict.payload.get("accepted") or [])
 
 
-def _phantom_done(store: Store, fid: str, did: str, removed: set[str]) -> bool:
+def _phantom_done(store: Store, fid: str, latest_handoff: str, removed: set[str]) -> bool:
     """A deleted feature settles on its code going away, never on a binding op:
     the delete already detached its bindings, so no ``bind.*`` op can
     cite the hand-off and the phantom would queue forever. What it owned is
@@ -121,7 +107,7 @@ def _phantom_done(store: Store, fid: str, did: str, removed: set[str]) -> bool:
     code to go has nothing to build, so the pass that ran under the epoch
     settles it."""
     b = store.blocks.get(fid)
-    ho = store.by_id.get(did)
+    ho = store.by_id.get(latest_handoff)
     if b is None or b.live or ho is None:
         return False
     if not ho.payload.get("delete_code"):
@@ -153,7 +139,7 @@ def directive(store: Store, fid: str) -> str:
         lines.append(f"### {title(store, fid, 'rejected')} ⟨{fid}⟩")
         lines.append("")
         lines.append(description(store, fid, "rejected") or "(no description)")
-    changes = _human_changes(store, fid, w)
+    changes = _human_changes(store, fid)
     if changes:
         lines.append("")
         lines.append("Changed since the last realization:")
@@ -187,7 +173,7 @@ def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[
     reads: list[str] = []
     asks: list[str] = []
     ctx: object | None = None
-    for b in store.feature_body(fid):
+    for b in store.body(fid):
         kind = registry.get(b.kind)
         if kind is None:
             if b.kind not in BUILTIN and b.layout.flow and (said := kind_words(b, store)):
@@ -198,14 +184,7 @@ def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[
             reads.append(said)
         if kind.lower is None:
             continue
-        old = {k: (text_string(b.kind, k, _at_realized(store, v, w.realized), "rejected", store)
-                   if isinstance(v, Text) and k in b.layout.text else v)
-               for k, v in b.content.items()}
-        for o in reversed(store.ops_on([b.id])):
-            if o.conflict or o.kind != K.BLOCK_SET or in_frontier(o.id, w.realized):
-                continue
-            prev = o.payload.get("prev")
-            old.pop(o.target["path"], None) if prev is None else old.update({o.target["path"]: prev})
+        old = realized_content(store, b, w.realized)
         if ctx is None:
             ctx = registry.LowerContext(fid, [x for x in store.bindings.values() if x.feature == fid])
         if ask := kind.lower(old, new, ctx):
@@ -213,69 +192,19 @@ def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[
     return reads, asks
 
 
-def _at_realized(store: Store, text: Text, realized: dict) -> Text:
-    """The field without what the AUTHOR changed since the last realization:
-    their characters are not there yet and their kills have not happened. By
-    identity, no diff. Only the author's, because `lower` speaks for them. A
-    diagram the loop lifted from the code is already in the code, and telling
-    the agent "the author drew that edge" about it contradicts the `consult`
-    line beside it."""
-    t = text.clone()
-    t.segs = [s for s in t.segs if in_frontier(s.op, realized) or not _authored(store, s.op)]
-    for s in t.segs:
-        if s.dead and not in_frontier(s.dead, realized) and _authored(store, s.dead):
-            s.dead = None
-    t.marks = [m for m in t.marks if t.holds(m.start) and t.holds(m.end)]
-    return t
-
-
-def _authored(store: Store, op_id: OpId) -> bool:
-    """Whether a reader would call this the author's word: a person wrote it,
-    or a person ACCEPTED a plan that asks for code (``plan.build``, the rule
-    ``derive.accept_handoffs`` uses). Accepting an agent's proposal is how an
-    author adopts its words as a request, so an accepted edge reaches the
-    directive the same way a typed one does. An accepted reflect plan
-    describes code that is already there and asks for nothing."""
-    o = store.by_id.get(op_id)
-    if o is None:
-        return False
-    if is_human(o.actor):
-        return True
-    plan = store.plans.get(o.plan) if o.plan else None
-    return plan is not None and plan.status == "accepted" and plan.build
-
-
-def _human_changes(store: Store, fid: str, w: Watermarks) -> list[str]:
-    """What the person did that the code has not answered, as the directive
-    says it. Read from the TEXT, never from the ops: a segment carries who
-    minted it and now who killed it, so a fold that takes the ops away leaves
-    the request intact. That matters because the hand-off that renders it is
-    usually given after the fold, and nothing at fold time could know. What a
-    verdict removed answered a plan and asks nothing of the code, unless it
-    accepted a person's plan or one that asks for code (``derive.answered``)."""
-    out = []
-    verdicts = verdict_ops(store)
-    for c in ink(store, fid):
-        if c.stage == "sent":
-            out.append(f"added: \"{c.text}\"")
-    for b in prose_blocks(store, fid):
-        for f in b.layout.text:
-            for s in b.text(f).segs:
-                if s.dead and is_human(s.dead_actor) and not answered(verdicts, s, build=True) \
-                        and not in_frontier(s.dead, w.realized) and in_frontier(s.dead, w.handoff):
-                    out.append(f"removed: \"{s.chars}\"")
-    for b in removed_blocks(store, fid):
-        if in_frontier(b.dead, w.handoff) and not in_frontier(b.dead, w.realized):
-            words = " ".join(b.text(f).live_text() for f in b.layout.text).strip()
-            out.append(f"removed: \"{words}\"")
-    return out
+def _human_changes(store: Store, fid: str) -> list[str]:
+    """What the person handed off that the code has not answered: their sent
+    ink, then their sent removals (``derive.removals``). Read from the text,
+    so a fold that takes the ops away leaves the request intact."""
+    return [f"added: \"{c.text}\"" for c in ink(store, fid) if c.stage == "sent"] \
+        + [f"removed: \"{c.text}\"" for c in removals(store, fid) if c.stage == "sent"]
 
 
 def _focus(store: Store, fid: str, w: Watermarks) -> list[str]:
     """The words a person bolded and has not had realized: the directive's
     ``Focus:`` lines.
 
-    A mark carries its own actor and placing op, so this reads the MARKS, not
+    A mark carries its own actor and placing op, so this reads the marks, not
     the ops that placed them: a mark since turned off is not here to
     find, and a fold that takes the ops away leaves the focus intact."""
     out: list[str] = []
@@ -291,7 +220,7 @@ def _focus(store: Store, fid: str, w: Watermarks) -> list[str]:
 
 def _all_links(store: Store, fid: str) -> list[tuple[str, str]]:
     out = []
-    for b in store.feature_body(fid):
+    for b in store.body(fid):
         for f in b.layout.text:
             t = b.text(f)
             lt = t.live_text()

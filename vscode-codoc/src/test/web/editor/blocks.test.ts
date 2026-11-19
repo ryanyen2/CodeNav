@@ -116,7 +116,7 @@ describe('list gestures', () => {
     });
 });
 
-describe('Tab on a heading and a paragraph', () => {
+describe('Tab', () => {
     it('moves a heading in place with everything under it, one level deeper or shallower', () => {
         const m = mount([block('a', 'heading', 'A'), block('p', 'paragraph', 'x'), block('b', 'heading', 'B'),
                          block('c', 'heading', 'C', 2), block('q', 'paragraph', 'y')]);
@@ -139,6 +139,28 @@ describe('Tab on a heading and a paragraph', () => {
         select(m.view, posIn(m.view, 'p', 1));
         expect(key(m.view, 'Tab', 9)).toBe(true);
         expect(sent(m)).toEqual([]);
+    });
+
+    it('in a code block indents the caret\'s line by four spaces when no line is indented', () => {
+        const m = mount([block('h', 'heading', 'T'), block('c', 'code', 'def f():\nreturn 1', 0, 1, { lang: 'py' })]);
+        select(m.view, posIn(m.view, 'c', 9));                        // the start of "return 1"
+        key(m.view, 'Tab', 9);
+        expect(texts(m.view.state.doc)[1]).toBe('def f():\n    return 1');
+        const nl = m.shadows.get('c')!.refs[8];
+        expect(sent(m)).toEqual([{ kind: 'text.insert', target: { bid: 'c', path: 'source' }, payload: { after: nl, text: '    ' } }]);
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it('in a code block indents each selected line by the block\'s unit, and Shift-Tab takes one unit back', () => {
+        const m = mount([block('h', 'heading', 'T'), block('c', 'code', 'if a:\n  b()\nc()', 0, 1, { lang: 'py' })]);
+        select(m.view, posIn(m.view, 'c', 7), posIn(m.view, 'c', 13));   // from inside "  b()" to the end of "c()"
+        key(m.view, 'Tab', 9);
+        expect(texts(m.view.state.doc)[1]).toBe('if a:\n    b()\n  c()');
+        key(m.view, 'Tab', 9, { shiftKey: true });
+        key(m.view, 'Tab', 9, { shiftKey: true });
+        expect(texts(m.view.state.doc)[1]).toBe('if a:\nb()\nc()');
+        expect(sent(m).map(o => o.kind)).toEqual(['text.insert', 'text.insert', 'text.delete', 'text.delete', 'text.delete']);
+        expect(shadowFaults(m)).toEqual([]);
     });
 });
 
@@ -179,11 +201,10 @@ describe('Backspace at the start of a heading', () => {
         ['owns code', [block('f', 'heading', 'F'), block('p', 'paragraph', 'x')],
          { bindings: { by_feature: { f: ['a.py::f'] } } }],
         ['has a child heading', [block('f', 'heading', 'Theme'), block('c', 'heading', 'Child', 2)], {}],
-        // Edited ranks above queued, so the phase alone would let this one go mid-build.
-        ['is edited and queued', [block('f', 'heading', 'New'), block('p', 'paragraph', 'x')],
-         { phases: { f: 'edited' }, watermarks: { f: { handoff: { s: 5 }, realized: { s: 4 } } } }],
-        ['is named by an open plan', [block('f', 'heading', 'New'), block('p', 'paragraph', 'x')],
-         { plans: [{ id: 'p-1', actor: 'agent:x', kind: 'edit', target: 'p', note: '', status: 'open', handoff: ['f'] }] }],
+        // Edited ranks above queued and proposed, so the phase alone would let this one go
+        // mid-build or with a plan waiting.
+        ['is edited with work in flight', [block('f', 'heading', 'New'), block('p', 'paragraph', 'x')],
+         { phases: { f: 'edited' }, in_flight: ['f'] }],
         ['is proposed', [block('f', 'heading', 'New'), block('p', 'paragraph', 'x')], { phases: { f: 'proposed' } }],
         ['is drifted', [block('f', 'heading', 'Old'), block('p', 'paragraph', 'x')], { phases: { f: 'drifted' } }],
     ];
@@ -539,6 +560,23 @@ describe('an IME composition', () => {
         m.view.dom.dispatchEvent(new window.CompositionEvent('compositionend', { bubbles: true, data: '你' }));
         const ref = m.shadows.get('p')!.refs[1];
         expect(sent(m)).toEqual([{ kind: 'text.insert', target: { bid: 'p', path: 'text' }, payload: { after: ref, text: '你' } }]);
+        expect(shadowFaults(m)).toEqual([]);
+    });
+
+    it('after Mod-B sends the bold the page shows, as typed text does', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', 'ab')]);
+        const at = posIn(m.view, 'p', 2);
+        select(m.view, at);
+        key(m.view, 'b', 66, ctrl);
+        m.view.dom.dispatchEvent(new window.CompositionEvent('compositionstart', { bubbles: true }));
+        m.view.dispatch(m.view.state.tr.insertText('n', at, at));
+        m.view.dispatch(m.view.state.tr.insertText('你', at, at + 1));
+        m.view.dom.dispatchEvent(new window.CompositionEvent('compositionend', { bubbles: true, data: '你' }));
+        expect(m.view.state.doc.nodeAt(at)!.marks.map(x => x.type.name)).toEqual(['bold']);
+        const ops = sent(m);
+        const cid = m.submitted[0].cid;
+        expect(ops.map(o => o.kind)).toEqual(['text.insert', 'text.mark']);
+        expect(ops[1].payload).toEqual({ kind: 'bold', attrs: {}, start: ['$cid', cid, 0], end: ['$cid', cid, 0], on: true });
         expect(shadowFaults(m)).toEqual([]);
     });
 

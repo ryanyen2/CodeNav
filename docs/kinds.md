@@ -6,33 +6,35 @@ calculus knows the heading and prose kinds and the `source` field of the source 
 Every source and plugin kind is also a declaration in `codoc/kinds/`. The kinds and their
 fields are listed in [model.md](model.md#block-kinds).
 
-A plugin block's layout (its Text fields, `in_flow`, `exported`) is data recorded on the
-block by its `block.add`; its codecs are code. A clone that lacks the declaration still
-edits, exports and shows the block the same way, from the layout. Only `lift`, `lower`,
-`consult` and the schema check need the declaration.
+A plugin block's layout (its Text fields, whether it is in the reading flow, whether the
+export writes it) is data recorded on the block by its `block.add`; its codecs are code.
+A clone that lacks the declaration still edits, exports and shows the block the same way,
+from the layout. Only `lift`, `lower`, `consult` and the schema check need the
+declaration.
 
 ## 1. A declaration
 
 ```python
 Kind(
     name: str,
-    text_fields: tuple[str, ...],      # attributed Text; everything else is JSON
-    in_flow: bool = True,              # False: hangs off words, not between them (comment)
+    layout: Layout,                    # calculus.doc.Layout(text, flow=True, export=True)
     schema: dict,                      # field -> {type, enum?, required?}
     lift:    (LiftContext) -> dict | None,             # code -> content
     lower:   (old, new, LowerContext) -> str | None,   # a change to the block -> a directive line
     consult: (content) -> str,         # what the realizing agent reads
-    exported: bool = True,             # False: left out of tree.codoc (comment)
 )
 ```
 
-- `register(kind)` adds it to the registry and gives the calculus its layout:
-  `Layout(text_fields, in_flow, exported)`. A writer building a `block.add`
-  (`ingest.block_bodies`) puts that layout on it, and the applier uses it for an add that
-  carries none. A prose kind cannot be registered. A source kind's layout is the
-  calculus's own and registering it does not change it.
+`layout.text` names the attributed Text fields; every other field is JSON. A comment has
+`flow=False` (it hangs off words, not between them) and `export=False` (`tree.codoc`
+leaves it out).
+
+- `register(kind)` adds it to the registry and gives the calculus its layout. A writer
+  building a `block.add` (`ingest.block_bodies`) puts that layout on it, and the applier
+  uses it for an add that carries none. A prose kind cannot be registered. A source
+  kind's layout is the calculus's own and registering it does not change it.
 - A block keeps the layout it was added with. A new version of a kind cannot give
-  existing blocks a new Text field; a field it adds is a JSON field. `text_fields` may
+  existing blocks a new Text field; a field it adds is a JSON field. `layout.text` may
   name fields existing blocks lack, and a write to one is then a `block.set`.
 - No field may be named `$layout`: the `codoc:` fence carries the layout under that key.
 - `schema` types are `string`, `number`, `boolean`, `object`, `array`. `Kind.validate`
@@ -100,9 +102,11 @@ For each block of the feature's body (`loops/realize.py`, `_kind_lines`):
 
 - An in-flow block adds its `consult` line.
 - A block whose kind has a `lower` adds what `lower` makes of `(old, new)`. `old` is the
-  content as the last realization read it: Text fields without the characters a person
-  minted or killed since `realized` (an accepted plan's words count as the person's), and
-  JSON fields rolled back through the `block.set` records outside `realized`.
+  content as its author last had it realized (`derive.realized_content`): Text fields
+  without the characters the author minted or killed since `realized`, and JSON fields as
+  they were before the author's first `block.set` since (`Block.prior`). The author's
+  changes are a person's own and those of a plan they adopted (`Plan.adopted`); what the
+  loop lifted from the code is already in the code.
 - A comment is out of the flow, so it speaks only through `lower`. Its `lower` does not
   compare `old` and `new`: an open thread is in every directive of its feature until it is
   resolved.

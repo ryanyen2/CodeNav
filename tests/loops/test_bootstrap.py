@@ -2,7 +2,8 @@
 from codoc.calculus.derive import description, title
 from codoc.calculus.doc import fold_tree
 from codoc.index.graph import Graph
-from codoc.loops.bootstrap import _ensure_file_coverage, bootstrap
+from codoc.index.lang import get_adapter
+from codoc.loops.bootstrap import _ensure_file_coverage, _project_prose, bootstrap
 from codoc.workspace import Workspace
 from tests.helpers import ROWS, fake_file, fake_org, row
 
@@ -65,13 +66,58 @@ def test_the_top_level_follows_the_order_of_the_reply(tmp_path):
 
 
 def test_a_theme_titled_like_a_feature_is_dropped_with_its_moves(tmp_path):
+    """Titles compare as ``norm_key`` does: an IME's full-width letters and a
+    doubled space are the same title."""
     ws = Workspace(tmp_path / ".codoc")
 
     def org(features, edges, **kw):
         client = next(f["id"] for f in features if f["title"] == "HTTP client")
-        return [{"id": "t1", "kind": "add_node", "title": "http client", "description": "Same name."},
+        return [{"id": "t1", "kind": "add_node", "title": "ＨＴＴＰ  client", "description": "Same name."},
                 {"kind": "move_node", "feature_id": client, "parent_id": "t1"}]
 
     bootstrap(ws, ROWS, Graph(), propose_file=fake_file, propose_org=org,
               propose_the_brief=lambda *a, **k: {}, concurrency=1)
     assert [title(ws.store, r.id) for r in fold_tree(ws.store.headings())] == ["HTTP client", "Store"]
+
+
+def test_a_files_opening_ends_at_its_first_definition_in_any_language(tmp_path):
+    src = "// Retries with backoff.\nimport { x } from './x';\n\nexport function send() {}\n"
+    (tmp_path / "net.ts").write_text(src)
+    _, headers = _project_prose(str(tmp_path), get_adapter("typescript").extract_chunks("net.ts", src))
+    assert headers == [{"file": "net.ts", "opening": "// Retries with backoff.\nimport { x } from './x';"}]
+
+
+def test_the_organizing_call_names_features_by_alias_and_an_unplaced_one_is_reported(tmp_path):
+    ws = Workspace(tmp_path / ".codoc")
+    seen: list[str] = []
+
+    def org(features, edges, **kw):
+        seen.extend(f["id"] for f in features)
+        client = next(f["id"] for f in features if f["title"] == "HTTP client")
+        return [{"id": "t1", "kind": "add_node", "title": "Networking", "description": "On the wire."},
+                {"kind": "move_node", "feature_id": client, "parent_id": "t1"},
+                {"kind": "move_node", "feature_id": "f99"}]          # a name the list does not hold
+
+    res = bootstrap(ws, ROWS, Graph(), propose_file=fake_file, propose_org=org,
+                    propose_the_brief=lambda *a, **k: {}, concurrency=1)
+    assert all(i.startswith("f") and i[1:].isdigit() for i in seen)
+    assert res.unplaced == ["Store"] and ("move_node", "unknown feature 'f99'") in res.refused
+
+
+def test_a_chunk_a_parent_and_its_child_both_bind_goes_to_the_child():
+    f = "eval.py"
+    rows = [row(f, f"{f}::run"), row(f, f"{f}::score")]
+    ops = [{"id": "n1", "kind": "add_node", "title": "Running", "bindings": [f"{f}::run", f"{f}::score"]},
+           {"id": "n2", "kind": "add_node", "parent_id": "n1", "title": "Scoring", "bindings": [f"{f}::score"]},
+           {"id": "n3", "kind": "add_node", "parent_id": "n1", "title": "Ranking", "bindings": [f"{f}::run"]},
+           {"id": "n4", "kind": "add_node", "parent_id": "n2", "title": "Elsewhere", "bindings": ["other.py::x"]}]
+    out = _ensure_file_coverage(ops, rows, f)
+    assert [(o["title"], o["bindings"]) for o in out] == [
+        ("Running", []), ("Scoring", [f"{f}::score"]), ("Ranking", [f"{f}::run"])]
+
+
+def test_the_readme_is_found_in_any_case_and_leaves_room_for_the_package_metadata(tmp_path):
+    (tmp_path / "readme.md").write_text("# ky\n" + "x" * 20_000)
+    (tmp_path / "package.json").write_text('{"name": "ky"}')
+    readme, _ = _project_prose(str(tmp_path), [])
+    assert "--- readme.md ---" in readme and '{"name": "ky"}' in readme

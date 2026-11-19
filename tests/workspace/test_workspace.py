@@ -4,10 +4,12 @@ import random
 import shutil
 from pathlib import Path
 
+import pytest
+
 from codoc.calculus import ops as K
 from codoc.calculus.derive import phase
 from codoc.calculus.doc import PARAGRAPH
-from codoc.calculus.export import export_markdown
+from codoc.calculus.derive import export_markdown
 from codoc.calculus.ids import START
 from codoc.calculus.text import BOLD, LINK, SUGGEST_DEL
 from codoc.daemon.daemon import Daemon
@@ -15,8 +17,9 @@ from codoc.index.changes import ChangeSet
 from codoc.loops.realize import directive
 from codoc.workspace import Workspace
 from codoc.workspace import log as L
+from codoc.workspace import inbox as I
 from codoc.workspace.clock import Clock, fmt
-from codoc.workspace.log import Submission
+from codoc.workspace.inbox import Submission
 from tests.helpers import H, T, refs, seed, seed_loop, write_roles, ws_paragraph
 
 
@@ -60,7 +63,7 @@ def test_tampered_log_is_skipped_whole_and_reported(tmp_path):
 def test_inbox_drain_is_idempotent_and_stamps_actor(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
     seed(ws, bind=False)
-    L.submit(tmp_path / ".codoc", "ide", [
+    I.submit(tmp_path / ".codoc", "ide", [
         Submission(cid="c1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
                    payload={"after": list(ws.store.blocks["p1"].text().last_live_ref()), "text": " More."}),
     ])
@@ -68,11 +71,11 @@ def test_inbox_drain_is_idempotent_and_stamps_actor(tmp_path):
     assert len(done) == 1 and done[0].actor == "human:local" and done[0].conflict is None
     assert ws.store.blocks["p1"].text().live_text() == "Retries once. More."
     # Resubmitting the same client id applies nothing.
-    L.submit(tmp_path / ".codoc", "ide", [Submission(cid="c1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+    I.submit(tmp_path / ".codoc", "ide", [Submission(cid="c1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
                                                        payload={"after": START, "text": "X"})])
     assert ws.drain_inbox({"ide": "human:local"}) == []
     # An unknown client is ignored.
-    L.submit(tmp_path / ".codoc", "stranger", [Submission(cid="z", kind=K.BLOCK_DELETE, target={"bid": "h1"}, payload={})])
+    I.submit(tmp_path / ".codoc", "stranger", [Submission(cid="z", kind=K.BLOCK_DELETE, target={"bid": "h1"}, payload={})])
     assert ws.drain_inbox({"ide": "human:local"}) == []
     assert ws.store.blocks["h1"].live
     ws.close()
@@ -84,7 +87,7 @@ def test_a_new_session_reads_the_inbox_where_the_last_one_stopped(tmp_path):
     cd = tmp_path / ".codoc"
     ws = Workspace(cd)
     seed(ws, bind=False)
-    L.submit(cd, "ide", [Submission(cid="c1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+    I.submit(cd, "ide", [Submission(cid="c1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
                                     payload={"after": list(ws.store.blocks["p1"].text().last_live_ref()), "text": " More."})])
     assert len(ws.drain_inbox({"ide": "human:local"})) == 1
     ws.close()
@@ -93,7 +96,7 @@ def test_a_new_session_reads_the_inbox_where_the_last_one_stopped(tmp_path):
     ws2 = Workspace(cd)
     assert ws2.drain_inbox({"ide": "human:local"}) == []
     assert ws2.store.blocks["p1"].text().live_text() == "Retries once. More."
-    L.submit(cd, "ide", [Submission(cid="c2", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+    I.submit(cd, "ide", [Submission(cid="c2", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
                                     payload={"after": "START", "text": "New. "})])
     assert len(ws2.drain_inbox({"ide": "human:local"})) == 1
     assert ws2.store.blocks["p1"].text().live_text() == "New. Retries once. More."
@@ -171,7 +174,7 @@ def test_provisional_anchors_chain_a_typing_batch(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
     seed(ws, bind=False)
     last = list(ws.store.blocks["p1"].text().last_live_ref())
-    L.submit(tmp_path / ".codoc", "ide", [
+    I.submit(tmp_path / ".codoc", "ide", [
         Submission(cid="t1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"}, payload={"after": last, "text": " ab"}),
         Submission(cid="t2", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"}, payload={"after": ["$cid", "t1", 2], "text": "c"}),
         Submission(cid="t3", kind=K.TEXT_DELETE, target={"bid": "p1", "path": "text"}, payload={"from": ["$cid", "t1", 1], "to": ["$cid", "t2", 0]}),
@@ -259,7 +262,7 @@ def test_workspace_rebuild_equals_live_store_through_verdicts_and_undo(tmp_path)
 def test_torn_and_malformed_inbox_lines(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
     ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "p1"}, "payload": {"kind": PARAGRAPH, "after": START}}], actor="human:local")
-    d = L.inbox_dir(tmp_path / ".codoc")
+    d = I.inbox_dir(tmp_path / ".codoc")
     d.mkdir(parents=True, exist_ok=True)
     line = json.dumps(Submission(cid="c1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"}, payload={"after": START, "text": "X"}).__dict__)
     (d / "ide.jsonl").write_text(line[:20])
@@ -305,18 +308,18 @@ def test_deleting_a_bound_heading_detaches_and_undo_reattaches(tmp_path):
 def test_a_malformed_ingest_submission_is_acked_and_the_next_line_applies(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
     ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "p1"}, "payload": {"kind": PARAGRAPH, "after": START}}], actor="human:local")
-    L.submit(tmp_path / ".codoc", "ide", [
+    I.submit(tmp_path / ".codoc", "ide", [
         Submission(cid="c1", kind="ingest", target={}, payload={"base_text": "", "new_md": "x"}),
         Submission(cid="c2", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"}, payload={"after": START, "text": "ok"})])
     ws.drain_inbox()
     assert T(ws.store, "p1") == "ok"
-    acks = [json.loads(l) for l in (L.inbox_dir(tmp_path / ".codoc") / "ide.ack.jsonl").read_text().splitlines()]
+    acks = [json.loads(l) for l in (I.inbox_dir(tmp_path / ".codoc") / "ide.ack.jsonl").read_text().splitlines()]
     assert acks[0]["cid"] == "c1" and acks[0]["conflict"].startswith("ingest target.bid")
     ws.close()
     ws2 = Workspace(tmp_path / ".codoc")
     assert ws2.drain_inbox() == []
     # A provisional anchor from a previous drain still resolves.
-    L.submit(tmp_path / ".codoc", "ide", [Submission(cid="c3", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"}, payload={"after": ["$cid", "c2", 1], "text": "!"})])
+    I.submit(tmp_path / ".codoc", "ide", [Submission(cid="c3", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"}, payload={"after": ["$cid", "c2", 1], "text": "!"})])
     got = ws2.drain_inbox()
     assert got[0].conflict is None and T(ws2.store, "p1") == "ok!"
 
@@ -353,7 +356,7 @@ def test_an_undo_that_kills_nothing_is_indexed_the_same_after_rebuild(tmp_path):
 def test_a_clients_own_scalar_index_survives_normalisation(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
     ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "p1"}, "payload": {"kind": PARAGRAPH, "after": START}}], actor="human:local")
-    L.submit(tmp_path / ".codoc", "ide", [
+    I.submit(tmp_path / ".codoc", "ide", [
         Submission(cid="c1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"}, payload={"after": START, "text": "é"}),
         Submission(cid="c2", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"}, payload={"after": ["$cid", "c1", 1], "text": "x"})])
     ops = ws.drain_inbox()
@@ -365,7 +368,7 @@ def test_a_handoff_covers_what_arrived_with_it(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
     seed_loop(ws)
     last = ws.store.blocks["p1"].text().last_live_ref()
-    L.submit(tmp_path / ".codoc", "ide", [
+    I.submit(tmp_path / ".codoc", "ide", [
         Submission(cid="c1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
                    payload={"after": list(last), "text": " Twice."}, batch="t1"),
         Submission(cid="c2", kind=K.FEATURE_HANDOFF, target={"fid": "h1"}, payload={"asked": "twice"}, batch="t2")])
@@ -430,11 +433,11 @@ def test_an_amend_ack_reports_a_refused_rewrite_even_when_another_landed(tmp_pat
     ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
                 "payload": {"after": list(ws.store.blocks["p1"].text().ref_at(5)), "text": " X"}}],
               actor="agent:claude-code", plan=pid)
-    L.submit(cd, "agent-claude-code", [Submission(cid="a1", kind="amend", target={"fid": "h1"}, payload={
+    I.submit(cd, "agent-claude-code", [Submission(cid="a1", kind="amend", target={"fid": "h1"}, payload={
         "fid": "h1", "rewrites": [{"bid": "p1", "new_md": "Retries twice."},
                                   {"bid": "p2", "new_md": "Logs each retry once.", "base_text": "Logs each retry."}]})])
     ws.drain_inbox()
-    ack = json.loads((L.inbox_dir(cd) / "agent-claude-code.ack.jsonl").read_text().splitlines()[-1])
+    ack = json.loads((I.inbox_dir(cd) / "agent-claude-code.ack.jsonl").read_text().splitlines()[-1])
     assert ack["status"] == "trunk" and ack["conflict"] == "p1: open_plan", ack
     ws.close()
 
@@ -446,7 +449,7 @@ def test_a_suggesters_strike_covers_what_it_names_not_the_chars_it_lists(tmp_pat
     ws = Workspace(cd); seed(ws)
     r = refs(ws, "p1")
     every = ",".join(f"{op}:{k}" for op, k in r)
-    L.submit(cd, "hub-mallory", [Submission(cid="s1", kind=K.TEXT_MARK, target={"bid": "p1", "path": "text"}, payload={
+    I.submit(cd, "hub-mallory", [Submission(cid="s1", kind=K.TEXT_MARK, target={"bid": "p1", "path": "text"}, payload={
         "kind": SUGGEST_DEL, "attrs": {"chars": every}, "start": list(r[-1]), "end": list(r[-1]), "on": True})])
     pid = ws.drain_inbox()[-1].plan
     assert ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor=H)[0].conflict is None
@@ -462,7 +465,7 @@ def test_a_mark_naming_an_op_that_placed_no_mark_is_the_senders(tmp_path):
     ws = Workspace(cd); seed(ws)
     r = refs(ws, "p1")
     owners = ws.store.by_id[r[0][0]]
-    L.submit(cd, "agent-claude-code", [Submission(cid="m1", kind=K.TEXT_MARK, target={"bid": "p1", "path": "text"}, payload={
+    I.submit(cd, "agent-claude-code", [Submission(cid="m1", kind=K.TEXT_MARK, target={"bid": "p1", "path": "text"}, payload={
         "kind": BOLD, "start": list(r[0]), "end": list(r[6]), "on": True,
         "actor": H, "op": owners.id, "at": owners.at})])
     ws.drain_inbox()
@@ -486,13 +489,13 @@ def test_undoing_the_removal_of_a_widened_mark_gives_it_back_to_its_placer(tmp_p
     removal = ws.submit([bold(False, 11)], actor=H)[0]
     assert not ws.store.blocks["p1"].text().marks
     undo = removal.inverse[0]
-    ws.apply_submissions("ide", H, [Submission(cid="u1", kind=undo["kind"], target=undo["target"],
-                                               payload=undo["payload"])])
+    ws.apply_submissions([("ide", H, Submission(cid="u1", kind=undo["kind"], target=undo["target"],
+                                               payload=undo["payload"]))])
     assert [(m.kind, m.actor) for m in ws.store.blocks["p1"].text().marks] == [(BOLD, "loop")]
     # The loop removes it; the same undo sent again is the person's bold, not the loop's.
     ws.submit([bold(False, 11)], actor="loop")
-    ws.apply_submissions("ide", H, [Submission(cid="u2", kind=undo["kind"], target=undo["target"],
-                                               payload=undo["payload"])])
+    ws.apply_submissions([("ide", H, Submission(cid="u2", kind=undo["kind"], target=undo["target"],
+                                               payload=undo["payload"]))])
     assert [(m.kind, m.actor) for m in ws.store.blocks["p1"].text().marks] == [(BOLD, H)]
     ws.close()
 
@@ -503,20 +506,20 @@ def test_a_proposal_is_decided_whole_by_the_applier(tmp_path):
     ws = Workspace(tmp_path / ".codoc"); seed(ws)
 
     def propose(pid: str, text: str):
-        return ws.apply_submissions("agent-claude-code", "agent:claude-code", [Submission(
+        return ws.apply_submissions([("agent-claude-code", "agent:claude-code", Submission(
             cid=pid, kind="propose", target={"pid": pid}, payload={
                 "kind": "edit", "target": "h1", "note": "", "build": True,
-                "rewrites": [{"bid": "p1", "new_md": text}]})])[0]
+                "rewrites": [{"bid": "p1", "new_md": text}]}))])[0]
 
     same = propose("p-same", T(ws.store, "p1"))
     assert same.status == "unchanged" and "p-same" not in ws.store.open_plans
     changed = propose("p-new", "Retries twice.")
     assert changed.status == "plan:p-new" and ws.store.open_plans["p-new"].ops
     # A malformed part fails before anything lands, so no half-written plan stays.
-    bad = ws.apply_submissions("agent-claude-code", "agent:claude-code", [Submission(
+    bad = ws.apply_submissions([("agent-claude-code", "agent:claude-code", Submission(
         cid="p-bad", kind="propose", target={"pid": "p-bad"}, payload={
             "kind": "edit", "target": "h1", "note": "", "rewrites": [], "strikes": ["nope"],
-            "bodies": [{"kind": K.BLOCK_ADD, "target": {"bid": "nb"}, "payload": {"kind": "paragraph", "after": "p1"}}]})])[0]
+            "bodies": [{"kind": K.BLOCK_ADD, "target": {"bid": "nb"}, "payload": {"kind": "paragraph", "after": "p1"}}]}))])[0]
     assert bad.conflict and "p-bad" not in ws.store.plans and "nb" not in ws.store.blocks
     ws.close()
 
@@ -539,8 +542,8 @@ def test_an_old_undo_after_a_verdict_removed_the_mark_is_the_senders_bold(tmp_pa
     undo = removal.inverse[0]
 
     def send_undo(cid: str) -> None:
-        ws.apply_submissions("ide", H, [Submission(cid=cid, kind=undo["kind"], target=undo["target"],
-                                                   payload=undo["payload"])])
+        ws.apply_submissions([("ide", H, Submission(cid=cid, kind=undo["kind"], target=undo["target"],
+                                                   payload=undo["payload"]))])
 
     send_undo("u1")
     pid = ws.open_plan(actor="agent:claude-code", kind="edit", target="h1")
@@ -558,10 +561,10 @@ def test_only_a_coding_agents_plan_asks_for_a_build(tmp_path):
     write_roles(cd, {"human:gh:bob": "suggest"})
     ws = Workspace(cd)
     opened = {"kind": "edit", "target": "h1", "build": True}
-    ws.apply_submissions("hub-bob", "human:gh:bob", [Submission(cid="b", kind=K.PLAN_OPEN, target={"pid": "pb"},
-                                                                payload=dict(opened))])
-    ws.apply_submissions("agent-claude-code", "agent:claude-code", [Submission(cid="a", kind=K.PLAN_OPEN, target={"pid": "pa"},
-                                                                 payload=dict(opened))])
+    ws.apply_submissions([("hub-bob", "human:gh:bob", Submission(cid="b", kind=K.PLAN_OPEN, target={"pid": "pb"},
+                                                                payload=dict(opened)))])
+    ws.apply_submissions([("agent-claude-code", "agent:claude-code", Submission(cid="a", kind=K.PLAN_OPEN, target={"pid": "pa"},
+                                                                 payload=dict(opened)))])
     assert not ws.store.plans["pb"].build and ws.store.plans["pa"].build
     ws.close()
 
@@ -579,3 +582,56 @@ def test_a_machine_ingest_on_the_trunk_never_deletes_an_open_plans_words(tmp_pat
     assert res.refused == "open_plan" and ops == []
     assert T(ws.store, "p1") == "Retries once with backoff before giving up."
     ws.close()
+
+
+def test_a_submission_logged_before_its_ack_is_acked_from_the_log_and_not_applied_again(tmp_path, monkeypatch):
+    """The applier stops (SIGTERM from a closing window, or SIGKILL) after it
+    logged a submission's op and before it wrote the ack or the offset. The
+    next applier reads the line again, finds the submission named in the log,
+    acks it from there and does not type the words twice."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed_loop(ws)
+    I.submit(cd, "ide", [Submission(cid="k1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                                    payload={"after": list(ws.store.blocks["p1"].text().last_live_ref()),
+                                             "text": " Typed."})])
+
+    def stop(*_a, **_k):
+        raise SystemExit(0)
+    monkeypatch.setattr(I, "ack", stop)
+    with pytest.raises(SystemExit):
+        ws.drain_inbox(identity={"ide": H})
+    monkeypatch.undo()
+    typed = ws.store.ops[-1].id
+
+    again = Workspace(cd)
+    again.drain_inbox(identity={"ide": H})
+    assert T(again.store, "p1") == "Retries once before giving up. Typed."
+    acks = [json.loads(line) for line in (I.inbox_dir(cd) / "ide.ack.jsonl").read_text().splitlines()]
+    assert acks == [{"cid": "k1", "op": typed, "conflict": None}]
+    again.close()
+
+
+def test_the_drain_applies_submissions_in_the_order_they_were_appended(tmp_path):
+    """The person replaces "once." with "twice."; a moment later the agent's
+    amend rewords the same sentence. The person's edit goes first, whatever
+    the inbox names, so the machine gate sees a feature with unsent edits and
+    the agent's words do not land on top of the person's."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed(ws)
+    t = ws.store.blocks["p1"].text()
+    once = t.ref_at(8)
+    I.submit(cd, "ide", [
+        Submission(cid="i1", kind=K.TEXT_DELETE, target={"bid": "p1", "path": "text"},
+                   payload={"segments": [[once[0], once[1], 5]]}, batch="b1"),
+        Submission(cid="i2", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                   payload={"after": list(t.ref_at(7)), "text": "twice."}, batch="b1")])
+    I.submit(cd, "agent-claude-code", [Submission(
+        cid="a1", kind="amend", target={"fid": "h1"},
+        payload={"rewrites": [{"bid": "p1", "path": "text", "new_md": "Retries once on timeout.",
+                               "base_text": "Retries once."}]})])
+    ws.drain_inbox(identity={"ide": H, "agent-claude-code": "agent:claude-code"})
+    assert T(ws.store, "p1") == "Retries twice."
+    ws.close()
+

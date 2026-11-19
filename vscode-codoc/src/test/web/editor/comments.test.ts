@@ -4,7 +4,7 @@ import type { ProjectedBlock, Projection, TextField } from '../../../web/calc/pr
 import { anchorsOf, newThreadOps, resolveOps, threadsOf } from '../../../web/editor/comments';
 
 const body = (text: string, actor: string): TextField =>
-    ({ text, spans: [], suggest_del: [], runs: [{ start: 0, end: text.length, actor, at: '1', plan: null, op: 'x:1', k0: 0 }] });
+    ({ text, spans: [], runs: [{ start: 0, end: text.length, actor, at: '1', plan: null, op: 'x:1', k0: 0 }] });
 
 const comment = (id: string, anchor: string, anchorText: string, text: string, actor = 'human:a'): ProjectedBlock =>
     ({ id, kind: 'comment', level: 0, rank: id, head: 1,
@@ -30,7 +30,7 @@ describe('threads', () => {
         // p2 was merged into p1. The commented words and their mark are in p1
         // now, and the thread still names p2.
         const p1: ProjectedBlock = { id: 'p1', kind: 'paragraph', level: 0, rank: 'a', head: 2, fields: { text: {
-            text: 'firstsecond', suggest_del: [], runs: [], spans: [{ kind: 'comment', attrs: { block: 'c1' }, start: 5, end: 11 }] } } };
+            text: 'firstsecond', runs: [], spans: [{ kind: 'comment', attrs: { block: 'c1' }, start: 5, end: 11 }] } } };
         const p = proj([p1, comment('c1', 'p2', 'second', 'Why?')]);
         expect(anchorsOf(p).get('c1')).toBe('p1');
         expect(threadsOf(p)[0].anchor).toBe('p1');

@@ -2,73 +2,20 @@
 
 from __future__ import annotations
 
-import ctypes
-import pathlib
-import warnings
-
 import tree_sitter as ts
 
-from codoc.index.lang.base import Chunk, SymbolRef
+from codoc.index.lang.base import Chunk, SymbolRef, parser
 
 LANGUAGE_NAME = "typescript"
-
-# ---------------------------------------------------------------------------
-# Internal helpers: load the language once at import time.
-# Same ctypes shim as python.py; see that module for the rationale.
-# ---------------------------------------------------------------------------
-
-def _load_language(name: str) -> ts.Language:
-    import tree_sitter_languages as _tsl_pkg  # noqa: PLC0415
-
-    langs_so = pathlib.Path(_tsl_pkg.__file__).parent / "languages.so"
-    lib = ctypes.cdll.LoadLibrary(str(langs_so))
-    fn = getattr(lib, f"tree_sitter_{name}")
-    fn.restype = ctypes.c_void_p
-    ptr = fn()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        return ts.Language(ptr)
-
-
-_TS_LANG: ts.Language | None = None
-_TS_PARSER: ts.Parser | None = None
-
-
-def _get_lang() -> ts.Language:
-    global _TS_LANG
-    if _TS_LANG is None:
-        _TS_LANG = _load_language("typescript")
-    return _TS_LANG
-
-
-def _get_parser() -> ts.Parser:
-    global _TS_PARSER
-    if _TS_PARSER is None:
-        _TS_PARSER = ts.Parser(_get_lang())
-    return _TS_PARSER
-
 
 # ---------------------------------------------------------------------------
 # Extraction helpers
 # ---------------------------------------------------------------------------
 
-# Node types that define named entities at any scope.
-_DEFINITION_KINDS = frozenset({
-    "function_declaration",
-    "class_declaration",
-    "interface_declaration",
-    "type_alias_declaration",
-    "method_definition",
-    "export_statement",         # may wrap any of the above
-    "lexical_declaration",      # const/let arrow functions at module level
-    "variable_declaration",     # var arrow functions at module level
-})
-
-
 def _node_identifier(node: ts.Node) -> str | None:
-    """Return the primary name identifier of a named declaration node."""
+    """The name of a declaration node; a ``#private`` member's name keeps its ``#``."""
     for child in node.children:
-        if child.type in {"identifier", "type_identifier", "property_identifier"}:
+        if child.type in {"identifier", "type_identifier", "property_identifier", "private_property_identifier"}:
             return child.text.decode("utf-8", errors="replace")
     return None
 
@@ -135,7 +82,7 @@ def _extract_chunks_recursive(
             raw = source_bytes[module_start:module_end].decode("utf-8", errors="replace")
             chunks.append(
                 Chunk(
-                    symbol_path=f"{file}::__module__",
+                    symbol=f"{file}::__module__",
                     file=file,
                     start_byte=module_start,
                     end_byte=module_end,
@@ -162,11 +109,11 @@ def _extract_chunks_recursive(
             if name is None:
                 continue
             qualified = f"{prefix}.{name}" if prefix else name
-            sym_path = f"{file}::{qualified}"
+            symbol = f"{file}::{qualified}"
             raw = source_bytes[child.start_byte:child.end_byte].decode("utf-8", errors="replace")
             chunks.append(
                 Chunk(
-                    symbol_path=sym_path,
+                    symbol=symbol,
                     file=file,
                     start_byte=child.start_byte,
                     end_byte=child.end_byte,
@@ -192,13 +139,13 @@ def _extract_chunks_recursive(
                         found_arrow = True
                         flush_module_chunk()
                         qualified = f"{prefix}.{name}" if prefix else name
-                        sym_path = f"{file}::{qualified}"
+                        symbol = f"{file}::{qualified}"
                         raw = source_bytes[child.start_byte:child.end_byte].decode(
                             "utf-8", errors="replace"
                         )
                         chunks.append(
                             Chunk(
-                                symbol_path=sym_path,
+                                symbol=symbol,
                                 file=file,
                                 start_byte=child.start_byte,
                                 end_byte=child.end_byte,
@@ -217,13 +164,13 @@ def _extract_chunks_recursive(
                 if named:
                     flush_module_chunk()
                     qualified = f"{prefix}.{named}" if prefix else named
-                    sym_path = f"{file}::{qualified}"
+                    symbol = f"{file}::{qualified}"
                     raw = source_bytes[child.start_byte:child.end_byte].decode(
                         "utf-8", errors="replace"
                     )
                     chunks.append(
                         Chunk(
-                            symbol_path=sym_path,
+                            symbol=symbol,
                             file=file,
                             start_byte=child.start_byte,
                             end_byte=child.end_byte,
@@ -241,11 +188,11 @@ def _extract_chunks_recursive(
             if name is None:
                 continue
             qualified = f"{prefix}.{name}" if prefix else name
-            sym_path = f"{file}::{qualified}"
+            symbol = f"{file}::{qualified}"
             raw = source_bytes[child.start_byte:child.end_byte].decode("utf-8", errors="replace")
             chunks.append(
                 Chunk(
-                    symbol_path=sym_path,
+                    symbol=symbol,
                     file=file,
                     start_byte=child.start_byte,
                     end_byte=child.end_byte,
@@ -278,15 +225,15 @@ class TypeScriptAdapter:
         _extract_chunks_recursive(tree.root_node, source_bytes, file, "", chunks)
 
         # Merge multiple __module__ chunks.
-        module_chunks = [c for c in chunks if c.symbol_path.endswith("::__module__")]
-        other_chunks = [c for c in chunks if not c.symbol_path.endswith("::__module__")]
+        module_chunks = [c for c in chunks if c.symbol.endswith("::__module__")]
+        other_chunks = [c for c in chunks if not c.symbol.endswith("::__module__")]
         if module_chunks:
             merged_start = min(c.start_byte for c in module_chunks)
             merged_end = max(c.end_byte for c in module_chunks)
             merged_source = source_bytes[merged_start:merged_end].decode("utf-8", errors="replace")
             other_chunks.append(
                 Chunk(
-                    symbol_path=f"{file}::__module__",
+                    symbol=f"{file}::__module__",
                     file=file,
                     start_byte=merged_start,
                     end_byte=merged_end,
@@ -298,80 +245,6 @@ class TypeScriptAdapter:
     @property
     def comment_node_kinds(self) -> set[str]:  # type: ignore[override]
         return {"comment", "multiline_comment"}
-
-    def resolve_symbol_path(self, source: str, symbol_path: str) -> tuple[int, int] | None:
-        if "::" in symbol_path:
-            qualified = symbol_path.split("::", 1)[1]
-        else:
-            qualified = symbol_path
-
-        parts = qualified.split(".")
-        tree = self.parse(source)
-
-        def search(node: ts.Node, remaining: list[str]) -> tuple[int, int] | None:
-            if not remaining:
-                return None
-            target = remaining[0]
-            rest = remaining[1:]
-
-            for child in node.children:
-                inner = _unwrap_export(child)
-                inner_type = inner.type
-
-                if inner_type in {
-                    "function_declaration",
-                    "class_declaration",
-                    "interface_declaration",
-                    "type_alias_declaration",
-                }:
-                    name = _node_identifier(inner)
-                    if name == target:
-                        if not rest:
-                            return (child.start_byte, child.end_byte)
-                        if inner_type == "class_declaration":
-                            body = next(
-                                (c for c in inner.children if c.type == "class_body"), None
-                            )
-                            if body is not None:
-                                result = search(body, rest)
-                                if result is not None:
-                                    return result
-
-                elif inner_type in {"lexical_declaration", "variable_declaration"}:
-                    for decl in inner.children:
-                        if decl.type == "variable_declarator":
-                            is_arrow, name = _is_arrow_function_declarator(decl)
-                            if is_arrow and name == target and not rest:
-                                return (child.start_byte, child.end_byte)
-
-                elif inner_type == "method_definition":
-                    name = _node_identifier(inner)
-                    if name == target and not rest:
-                        return (child.start_byte, child.end_byte)
-
-            return None
-
-        return search(tree.root_node, parts)
-
-    def run_ts_query(
-        self, source: str, query_str: str,
-        scope: tuple[int, int] | None = None,
-    ) -> list[tuple[int, int]]:
-        tree = self.parse(source)
-        lang = _get_lang()
-        query = ts.Query(lang, query_str)
-        cursor = ts.QueryCursor(query)
-        if scope is not None:
-            cursor.set_byte_range(scope[0], scope[1])
-        matches = cursor.matches(tree.root_node)
-        results: list[tuple[int, int]] = []
-        for _idx, cap_dict in matches:
-            for nodes in cap_dict.values():
-                if nodes:
-                    n = nodes[0]
-                    results.append((n.start_byte, n.end_byte))
-                break
-        return results
 
     def references_in_chunk(self, chunk_source: str, file: str) -> list[SymbolRef]:
         tree = self.parse(chunk_source)
@@ -522,26 +395,4 @@ class TypeScriptAdapter:
         return refs
 
     def parse(self, source: str):
-        return _get_parser().parse(source.encode("utf-8"))
-
-    def token_stream(self, source: str, exclude_comment_nodes: bool = True) -> list[str]:
-        source_bytes = source.encode("utf-8")
-        tree = self.parse(source)
-        comment_kinds = self.comment_node_kinds if exclude_comment_nodes else set()
-        tokens: list[str] = []
-
-        def walk(node: ts.Node) -> None:
-            if node.type in comment_kinds:
-                return
-            if node.child_count == 0:
-                text = source_bytes[node.start_byte:node.end_byte].decode(
-                    "utf-8", errors="replace"
-                ).strip()
-                if text:
-                    tokens.append(text)
-                return
-            for child in node.children:
-                walk(child)
-
-        walk(tree.root_node)
-        return tokens
+        return parser("typescript").parse(source.encode("utf-8"))

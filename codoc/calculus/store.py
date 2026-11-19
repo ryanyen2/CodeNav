@@ -31,8 +31,8 @@ from dataclasses import dataclass, field
 from codoc.calculus import ops as K
 from codoc.calculus import rank as R
 from codoc.calculus.doc import HEADING, Block
-from codoc.calculus.ids import CharRef, OpId
-from codoc.calculus.ops import Op, frontier_union
+from codoc.calculus.ids import CharRef, OpId, is_human
+from codoc.calculus.ops import Op, covered, frontier_union
 from codoc.calculus.text import AnchorError, Mark, Text
 
 
@@ -71,15 +71,27 @@ class Plan:
     # before the code is written). Kept here, not read from the opening op,
     # so a fold that archives that op changes nothing.
     build: bool = False
-    # Who answered. Without it a fold re-emits the verdict as the importer and
-    # the tree forgets who decided. The log says who only until it is archived,
-    # and a fold archives it. WHEN is not kept: every op a fold
-    # emits carries the fold's clock, so a stored `decided_at` would be the one
-    # timestamp that looked authentic and was not.
+    # The actor of the current verdict. A fold archives the verdict op, so
+    # without this it would re-emit the verdict as the importer.
     decided_by: str = ""
     # The op of the current verdict, the one a reopen may undo. A fold keeps it
     # as it keeps who decided, so a reopen asks the same question either side.
     verdict: OpId = ""
+
+    @property
+    def asks_for_code(self) -> bool:
+        """Accepting it hands its features off: it was opened with ``build``.
+        A delete plan never does; removing code is its own decision
+        (``codoc handoff --delete-code``)."""
+        return self.build and self.kind != "delete"
+
+    @property
+    def adopted(self) -> bool:
+        """Accepted, so what it proposed is now a request of the person who
+        accepted it: it is a person's plan, or it asks for code. Accepting any
+        other plan (the loop's, a translator's, an agent's reflect of code
+        already written) takes words that describe what is already there."""
+        return self.status == "accepted" and (is_human(self.actor) or self.asks_for_code)
 
     def to_json(self) -> dict:
         return {"id": self.id, "actor": self.actor, "kind": self.kind, "target": self.target,
@@ -92,13 +104,18 @@ class Watermarks:
     handoff: dict = field(default_factory=dict)     # Frontier
     realized: dict = field(default_factory=dict)    # Frontier
     handoffs: list[OpId] = field(default_factory=list)   # hand-off op ids, oldest first
-    # When the code under this feature last MOVED (a `bind.refresh` or a
+    # When the code under this feature last moved (a `bind.refresh` or a
     # `bind.detach`), and when a realization last settled it. Drift is
     # "the code moved and nobody has looked at the prose since": these two
     # clocks and the ones on the segments and marks make it a comparison of
     # state, so a snapshot can fold the ops away.
     code_at: str = ""
     realized_at: str = ""
+
+    @property
+    def queued(self) -> bool:
+        """Handed off and not yet realized (docs/model.md, Watermarks)."""
+        return bool(self.handoff) and not covered(self.handoff, self.realized)
 
 
 Policy = Callable[["Store", Op], str | None]   # (store, op) → denial reason, or None
@@ -134,7 +151,7 @@ class Store:
         self.structural_head: int = 0
         self.plans_head: int = 0
         self.policy: Policy | None = policy
-        # Features that have ever had code bound to them. A feature that HAD code
+        # Features that have ever had code bound to them. A feature that had code
         # and has none now is proposed for deletion; after a fold there is no
         # `bind.attach` op left to read, so it is state and not history.
         self.bound_once: set[str] = set()
@@ -224,37 +241,32 @@ class Store:
         b = self.blocks[bid]
         return bisect.bisect_left(self.order, (b.rank, bid))
 
-    def dominated_ids(self, bid: str) -> list[str]:
-        """The live blocks ``bid`` dominates: itself, then for a heading every
-        live block until the next live heading at the same or a shallower
-        level. O(range plus interleaved dead blocks)."""
-        b = self.blocks[bid]
-        out = [bid]
-        if b.kind != HEADING:
-            return out
-        for j in range(self._index_of(bid) + 1, len(self.order)):
-            n = self.blocks[self.order[j][1]]
-            if not n.live:
-                continue
-            if n.kind == HEADING and n.level <= b.level:
-                break
-            out.append(n.id)
-        return out
+    def range(self, bid: str) -> list[Block]:
+        """``range(h)`` (docs/model.md, Features): a live heading and every
+        following live block up to the next live heading at its level or
+        shallower. What ``block.move`` moves. Any other block, and a dead
+        heading, is its own range. O(range plus interleaved dead blocks)."""
+        return self._following(bid, lambda n, h: n.kind == HEADING and n.level <= h.level)
 
-    def body_ids(self, bid: str) -> list[str]:
-        """A heading's own body: itself and the following live non-heading
-        blocks. A paragraph's body is itself."""
+    def body(self, bid: str) -> list[Block]:
+        """``body(h)``: a live heading and the following live non-heading
+        blocks, up to the next live heading of any level. What a feature says,
+        and what ``block.delete`` kills with its heading. Any other block, and a
+        dead heading, is its own body."""
+        return self._following(bid, lambda n, h: n.kind == HEADING)
+
+    def _following(self, bid: str, stop) -> list[Block]:
         b = self.blocks[bid]
-        out = [bid]
-        if b.kind != HEADING:
+        out = [b]
+        if b.kind != HEADING or not b.live:
             return out
         for j in range(self._index_of(bid) + 1, len(self.order)):
             n = self.blocks[self.order[j][1]]
             if not n.live:
                 continue
-            if n.kind == HEADING:
+            if stop(n, b):
                 break
-            out.append(n.id)
+            out.append(n)
         return out
 
     def removed_body(self, fid: str) -> list[Block]:
@@ -277,14 +289,6 @@ class Store:
             self.blocks[i].kill(op, actor, at, features[i])
             if features[i]:
                 self.removed.setdefault(features[i], set()).add(i)
-
-    def feature_range(self, fid: str) -> list[Block]:
-        h = self.blocks[fid]
-        return [self.blocks[i] for i in self.dominated_ids(fid)] if h.live else [h]
-
-    def feature_body(self, fid: str) -> list[Block]:
-        h = self.blocks[fid]
-        return [self.blocks[i] for i in self.body_ids(fid)] if h.live else [h]
 
     def feature_of(self, bid: str) -> str | None:
         """The live heading dominating ``bid`` (itself for a heading): the
@@ -315,6 +319,66 @@ class Store:
         prev = next((self.order[j][1] for j in range(i - 1, -1, -1) if flows(j)), None)
         nxt = next((self.order[j][1] for j in range(i + 1, len(self.order)) if flows(j)), None)
         return prev, nxt
+
+    # ── bindings ───────────────────────────────────────────────────────────
+    def unbind(self, fid: str) -> list[dict]:
+        """Drop ``fid``'s bindings and return them, each with ``fid``, as
+        ``reattach`` reads them."""
+        mine = [{"fid": fid, **b.to_json()} for b in self.bindings.values() if b.feature == fid]
+        for e in mine:
+            del self.bindings[e["symbol"]]
+        return mine
+
+    def reattach(self, entries: list[dict]) -> set[str]:
+        """Re-attach what a delete or a kind change took off, unless the symbol
+        has an owner now (their attach stands) or the block is no longer a
+        heading. Returns the features that got a binding back."""
+        got: set[str] = set()
+        for e in entries:
+            key = e["symbol"]
+            owner = self.blocks.get(e["fid"])
+            if owner is None or owner.kind != HEADING:
+                continue
+            if key not in self.bindings:
+                self.bindings[key] = Binding(e["fid"], key, e.get("fingerprint", ""), e.get("types_hash", ""))
+                got.add(e["fid"])
+            owner.detached = [d for d in owner.detached if d["symbol"] != key or d.get("set")]
+        return got
+
+    def detach_dead(self, fids: list[str]) -> list[dict]:
+        """A dead heading owns no code: drop its bindings and keep them on the
+        block (the deleted heading's settle and the undo read them there, so a
+        fold may take the op away). Returns them. What a kind change recorded
+        there (``set``) stays."""
+        out = []
+        for fid in fids:
+            mine = self.unbind(fid)
+            if mine:
+                b = self.blocks[fid]
+                b.detached = [*mine, *(e for e in b.detached if e.get("set"))]
+            out.extend(mine)
+        return out
+
+    def refeature(self, b: Block, prev_kind: str, entries: list[dict]) -> tuple[list[dict], list[dict]]:
+        """The one rule for a kind change, by ``block.set`` or a verdict's
+        ``set`` step. A heading made another kind leaves as a delete does: its
+        bindings come off, for the record to keep. A live block made a heading
+        takes back ``entries``, what the record of the change it undoes kept:
+        only this block's, each whose symbol nobody owns now, plan or not. A
+        dead block made a heading (a reopen) owns no code, so it keeps them, as
+        a delete keeps what it detached, and its restore re-attaches them.
+        Returns ``(detached, attached)``."""
+        if prev_kind == HEADING and b.kind != HEADING:
+            return self.unbind(b.id), []
+        if b.kind == HEADING and prev_kind != HEADING:
+            back = [e for e in entries or [] if e.get("fid") == b.id and e["symbol"] not in self.bindings]
+            if b.live:
+                self.reattach(back)
+            else:
+                kept = {e["symbol"] for e in b.detached if not e.get("set")}
+                b.detached = [*b.detached, *(e for e in back if e["symbol"] not in kept)]
+            return [], back
+        return [], []
 
     # ── characters and marks ───────────────────────────────────────────────
     def index_text(self, bid: str, path: str, text: Text) -> None:
@@ -412,16 +476,6 @@ class Store:
         return [self.ops[i] for i in sorted(seen)]
 
     # ── equality for tests and snapshots ───────────────────────────────────
-    def to_json(self) -> dict:
-        return {
-            "blocks": [b.to_json() for b in self.all_blocks()],
-            "bindings": [b.to_json() for b in self.bindings.values()],
-            "plans": [p.to_json() for p in self.plans.values()],
-            "watermarks": {fid: {"handoff": w.handoff, "realized": w.realized, "handoffs": w.handoffs}
-                           for fid, w in self.watermarks_by_fid.items()},
-            "frontier": dict(self.frontier),
-        }
-
     def state_fingerprint(self) -> dict:
         """The observable state: blocks with text and marks (marks in sequence
         order, so two logs applied in different orders compare equal), bindings,

@@ -2,7 +2,8 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ProjectedBlock, Projection, TextField } from '../../../web/calc/projection';
-import { block, ids, key, mount, para, posIn, proj, select, shadowFaults, texts, typeText } from './harness';
+import { deleteFeature } from '../../../web/editor/commands';
+import { block, ids, key, mount, para, perform, posIn, proj, select, shadowFaults, texts, typeText } from './harness';
 
 describe('a projection that predates a gesture', () => {
     it('does not bring back a paragraph that was merged away', () => {
@@ -27,7 +28,7 @@ describe('a projection that predates a gesture', () => {
 
     it('does not bring back a deleted feature', () => {
         const m = mount([block('h1', 'heading', 'A'), block('p1', 'paragraph', 'a'), block('h2', 'heading', 'B'), block('p2', 'paragraph', 'b')]);
-        m.handle.deleteFeature('h2');
+        perform(m, (s, env) => deleteFeature(s, env, 'h2'));
         expect(ids(m.view.state.doc)).toEqual(['heading:h1', 'paragraph:p1']);
         m.handle.adopt(m.proj);
         expect(ids(m.view.state.doc)).toEqual(['heading:h1', 'paragraph:p1']);
@@ -75,7 +76,7 @@ describe('a projection skipped for a block with an op in flight', () => {
         const cid = m.submitted[0].cid;
         const mine = (m.proj.blocks[1].fields.text as TextField).runs[0];
         const p1: ProjectedBlock = { id: 'p1', kind: 'paragraph', level: 0, rank: 'p1', head: 9,
-            fields: { text: { text, spans: [], suggest_del: [], runs: runs ?? [
+            fields: { text: { text, spans: [], runs: runs ?? [
                 { op: 'bob:1', k0: 0, start: 0, end: 1, actor: 'human:gh:bob', at: '2', plan: null },
                 { op: mine.op, k0: 0, start: 1, end: 4, actor: 'human:a', at: '1', plan: null },
                 { op: 'h:5', k0: 0, start: 4, end: 5, actor: 'human:local', at: '3', plan: null }] } } };
@@ -103,7 +104,9 @@ describe('a projection skipped for a block with an op in flight', () => {
 
     it("shows an agent's plan that arrived in the paragraph the person was typing in", () => {
         const { m, cid, p1 } = twoActors(
-            { plans: [{ id: 'pl1', actor: 'agent:x', kind: 'edit', target: 'p1', note: '', status: 'open' }] },
+            { plans: [{ id: 'pl1', actor: 'agent:x', kind: 'edit', target: 'p1', note: '', status: 'open' }],
+              claims: { h: [{ bid: 'p1', path: 'text', start: 4, end: 9, channel: 'plan', stage: 'open', actor: 'agent:x',
+                              text: ' more', plan: 'pl1' }] } },
             'onex more',
             [{ op: 's:p10', k0: 0, start: 0, end: 3, actor: 'human:a', at: '1', plan: null },
              { op: 'h:5', k0: 0, start: 3, end: 4, actor: 'human:local', at: '3', plan: null },
@@ -111,7 +114,7 @@ describe('a projection skipped for a block with an op in flight', () => {
         m.handle.adopt(p1);
         m.handle.ack([{ cid, op: 'h:5', conflict: null }]);
         expect(texts(m.view.state.doc)[1]).toBe('onex more');
-        expect(m.view.dom.querySelectorAll('[data-plan]').length).toBe(1);
+        expect(m.view.dom.querySelectorAll('.codoc-plan-open').length).toBe(1);
     });
 
     it("shows a contributor's own Backspace as the plan's strike-through, not as an absence", () => {
@@ -123,13 +126,14 @@ describe('a projection skipped for a block with an op in flight', () => {
         const cid = m.submitted[0].cid;
         // The daemon turned the contributor's delete into their plan's
         // suggested deletion, published, then acked.
-        const p1: ProjectedBlock = { ...m.proj.blocks[1], head: 9,
-            fields: { text: { ...(m.proj.blocks[1].fields.text as TextField), suggest_del: [{ plan: 'pl1', start: 4, end: 7 }] } } };
+        const p1: ProjectedBlock = { ...m.proj.blocks[1], head: 9 };
         m.handle.adopt(proj([block('h', 'heading', 'T'), p1],
-            { frontier: { h: 6 }, plans: [{ id: 'pl1', actor: 'human:gh:alice', kind: 'edit', target: 'p1', note: '', status: 'open' }] }));
+            { frontier: { h: 6 }, plans: [{ id: 'pl1', actor: 'human:gh:alice', kind: 'edit', target: 'p1', note: '', status: 'open' }],
+              claims: { h: [{ bid: 'p1', path: 'text', start: 4, end: 7, channel: 'plan', stage: 'removed',
+                              actor: 'human:gh:alice', text: 'two', plan: 'pl1' }] } }));
         m.handle.ack([{ cid, op: 'h:6', conflict: null }]);
         expect(texts(m.view.state.doc)[1]).toBe('one two');
-        expect(m.view.dom.querySelectorAll('[data-suggest-del]').length).toBe(1);
+        expect(m.view.dom.querySelectorAll('.codoc-plan-cut').length).toBe(1);
     });
 });
 
@@ -209,6 +213,17 @@ describe('a projection that changed only words', () => {
                                             ['one two', { op: run.op, actor: run.actor }]])], { head: 20 }));
         expect(texts(m.view.state.doc)[1]).toBe('Xone two');
         expect(m.view.state.selection.from).toBe(posIn(m.view, 'p1', 8));   // still after "two"
+    });
+
+    it('keeps a selection, so typing still replaces it', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p1', 'paragraph', 'Retries once.'), block('p2', 'paragraph', 'Other.')]);
+        const from = posIn(m.view, 'p1', 8), to = posIn(m.view, 'p1', 12);   // "once"
+        select(m.view, from, to);
+        m.handle.adopt(proj([block('h', 'heading', 'T'), m.proj.blocks[1], block('p2', 'paragraph', 'Other, by the agent.', 1, 7)]));
+        expect(texts(m.view.state.doc)[2]).toBe('Other, by the agent.');
+        expect([m.view.state.selection.from, m.view.state.selection.to]).toEqual([from, to]);
+        typeText(m.view, 'twice');
+        expect(texts(m.view.state.doc)[1]).toBe('Retries twice.');
     });
 
     it('rebuilds the document when a block arrived, left or moved', () => {

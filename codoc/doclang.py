@@ -1,24 +1,21 @@
-"""Doc language: the natural language codoc authors its prose in.
+"""The tree's authoring language: language profiles, and text helpers that work in any script.
 
-Not ``codoc/index/lang``, which is the *programming* languages of the code
-under analysis. This module is the *authoring* language of the tree: what
-titles, descriptions and directives are written in. The two are independent; a
-Python repo can have a Mandarin tree.
-
-The doc language is a property of the workspace, kept in the tracked
-``.codoc/config.json`` (``doc_language``) so that every contributor's daemon
-writes the same language. ``CODOC_DOC_LANGUAGE`` overrides it for one process.
-
-Two halves:
+Not ``codoc/index/lang``, which holds the programming languages of the code.
+This module is about the language titles, descriptions and directives are
+written in. The two are independent: a Python repository can have a Mandarin
+tree.
 
 **Profiles** (:class:`DocLanguage`, :func:`resolve`,
-:func:`workspace_doc_language`, :func:`prompt_directive`): how to ask a model
-to write a language. Configuration-driven.
+:func:`workspace_doc_language`, :func:`prompt_directive`): which language the
+workspace writes in, and how a prompt asks a model to write it. The setting is
+``doc_language`` in the tracked ``.codoc/config.json``, so every contributor's
+daemon writes the same language; ``CODOC_DOC_LANGUAGE`` overrides it for one
+process.
 
 **Script helpers** (:func:`norm_key`, :func:`char_budget`,
-:func:`detect_prose_language`): these read nothing but the text in front of
-them. A tree can hold English and Chinese nodes side by side, so one per-repo
-setting would be the wrong answer for some of them.
+:func:`detect_prose_language`): these read only the text they are given. A
+tree can hold English and Chinese nodes side by side, so one per-repository
+setting would be wrong for some of them.
 """
 from __future__ import annotations
 
@@ -89,7 +86,7 @@ def norm_key(text: str | None) -> str:
     fold for non-English text (German ``ß``, Greek final sigma) and identical to
     ``lower`` for ASCII.
 
-    Simplified vs Traditional Han is deliberately NOT folded: 简体/繁體 are a
+    Simplified and Traditional Han are not folded: 简体/繁體 are a
     localization choice, not a spelling variant, and a repo that authors in one
     never sees the other. Folding them would need a conversion table and would
     merge two legitimately distinct trees in a repo that hosts both.
@@ -103,16 +100,16 @@ def norm_key(text: str | None) -> str:
 # ---------------------------------------------------------------------------
 
 def char_budget(base_chars: int, text: str) -> int:
-    """A character cap written for Latin prose, rescaled for ``text``'s script.
+    """A character count written for Latin prose, rescaled for ``text``'s script.
 
     Prompt budgets are capped in characters but paid for in tokens, and the two
     diverge by roughly the same factor as word length: 400 characters of English
     is ~100 tokens, 400 characters of Chinese is several times that. Scaling the
-    cap down keeps the *information* budget, and the bill, roughly constant
-    instead of multiplying prompt size on a CJK repo.
+    cap down keeps the information, and the bill, roughly constant. A minimum
+    scales the same way: two English words are 12 characters, two Chinese
+    words 4.
     """
-    ratio = chars_per_word(text) / SPACED.chars_per_word
-    return max(40, round(base_chars * ratio))
+    return round(base_chars * chars_per_word(text) / SPACED.chars_per_word)
 
 
 # ---------------------------------------------------------------------------
@@ -228,10 +225,9 @@ ENV_VAR = "CODOC_DOC_LANGUAGE"
 def _generic(code: str) -> DocLanguage:
     """A usable profile for any tag without a bespoke one.
 
-    Unknown tags resolve rather than raise, because refusing an unlisted language
-    would make "supports other languages" false in practice: a model writes
-    perfectly good Norwegian from the tag alone, and there is nothing codoc needs
-    to know about Norwegian that the generic spaced-script rules don't cover.
+    Unknown tags resolve rather than raise: a model writes Norwegian well from
+    the tag alone, and there is nothing codoc needs to know about Norwegian that
+    the generic spaced-script rules don't cover.
     """
     key = code.strip().casefold()
     name = _GENERIC_NAMES.get(key) or _GENERIC_NAMES.get(key.split("-")[0]) or code
@@ -297,13 +293,13 @@ def workspace_doc_language(codoc_dir: str | Path | None) -> DocLanguage:
 # ---------------------------------------------------------------------------
 # Per-node language: observed, never imposed
 # ---------------------------------------------------------------------------
-# The workspace setting says what language codoc AUTHORS in. It does not say what
-# language the tree IS in, because an author is allowed to be inconsistent on
-# purpose: describing intent in Chinese while a revision they typed themselves is
+# The workspace setting says what language codoc writes new prose in. It does not
+# say what language the tree is in, because an author is allowed to be
+# inconsistent on purpose: describing intent in Chinese while a revision they typed themselves is
 # in English, and reaching for the English term whenever that is the word people
 # actually use. Both are ordinary technical writing, not drift to be corrected.
 #
-# So the setting governs prose codoc *originates* (a new node, a fresh
+# So the setting governs prose codoc originates (a new node, a fresh
 # description), and everything that touches prose already on the page follows the
 # page. That is why this is detection rather than a stored per-feature column: a
 # column records what the language was when someone last set it, goes stale the
@@ -313,14 +309,14 @@ def workspace_doc_language(codoc_dir: str | Path | None) -> DocLanguage:
 # Spans that stay in the code's language no matter what the prose is: inline code,
 # markdown link labels + targets, and bare `codoc:` refs. Stripped before judging
 # what language a description is in, because a well-cited Chinese description carries two
-# long identifiers against a dozen Han characters, so measuring the raw string
-# would call the correct answer wrong.
+# long identifiers against a dozen Han characters, and the raw string would
+# measure as English.
 _CODEISH = re.compile(r"`[^`]*`|\[[^\]]*\]\([^)]*\)|\bcodoc:[^\s)]+|https?://\S+")
 
 #: Share of a script's letters needed to call prose "in" that script.
 SCRIPT_FLOOR = 0.30
 
-#: The floor for a script that is not spaced, far lower on purpose. Borrowing runs
+#: The floor for a script that is not spaced, much lower. Borrowing runs
 #: one way: Chinese technical prose is full of English terms, while English
 #: technical prose almost never reaches for 使用 or 。. And the two sides are not
 #: measured on the same scale: a Han content word is one or two
@@ -364,8 +360,8 @@ def prose_script(text: str) -> ScriptClass | None:
     return _BY_NAME[name] if frac >= SCRIPT_FLOOR else None
 
 
-# Kana and Hangul are DECISIVE where Han is not: Han is shared by Chinese and
-# Japanese, but only Japanese uses kana and only Korean uses Hangul. So a script
+# Kana and Hangul name a language where Han does not: Han is shared by Chinese
+# and Japanese, but only Japanese uses kana and only Korean uses Hangul. So a script
 # class of LOGOGRAPHIC cannot name a language on its own, while these two can.
 _KANA = ((0x3040, 0x30FF), (0x31F0, 0x31FF))
 
@@ -429,7 +425,7 @@ def detect_prose_language(text: str, default: DocLanguage) -> DocLanguage:
 def prompt_directive(lang: DocLanguage, *, for_code_agent: bool = False) -> str:
     """The block that tells a model which language to author in.
 
-    Empty for English by design (see :attr:`DocLanguage.is_default`).
+    Empty for English (see :attr:`DocLanguage.is_default`).
 
     The identifier rule matters most. A model asked to write Chinese
     documentation will translate ``parse_tree`` to ``解析树`` inside a

@@ -4,7 +4,7 @@ nothing here writes.
 Every user-facing question is one of these: what does a feature say, who wrote
 which word, what is the person's unsent ink, what did the loop change under
 them, which plans are open here, where is the feature in its lifecycle, what
-happened to it over time.
+happened to it over time, what the document exports as.
 """
 from __future__ import annotations
 
@@ -16,20 +16,15 @@ from codoc.calculus.doc import (
     HEADING, LAYOUT_KEY, PROSE, SOURCE, Block, TreeNode, fold_tree, is_source_field, layout_entry,
     registered_layouts,
 )
-from codoc.calculus.ids import OpId, is_human
+from codoc.calculus.ids import LOOP, OpId, is_human
 from codoc.calculus.inline_md import Span, render
-from codoc.calculus.ops import Op, covered, in_frontier
+from codoc.calculus.ops import Op, in_frontier
 from codoc.calculus.store import Store
-from codoc.calculus.text import CITE, PROPOSALS, SUGGEST_DEL, SUGGEST_MARK, Mark, Text, struck_chars
+from codoc.calculus.text import CITE, PROPOSALS, SUGGEST_DEL, SUGGEST_MARK, Mark, Seg, Text, struck_chars
 
-LOOP = "loop"
 # A feature with pending intent: the document wins over a machine's repair,
 # whatever its size (docs/concurrency.md, The machine gate).
 HELD = ("edited", "queued", "planned")
-# The fraction of a block a machine may delete on the trunk before the repair
-# becomes a proposal instead; a person's prose is held tighter.
-GATE_MACHINE = 0.5
-GATE_HUMAN = 0.15
 
 
 # ── text views ───────────────────────────────────────────────────────────────
@@ -138,7 +133,7 @@ def description(store: Store, fid: str, mode: str = "live") -> str:
     """The feature's own body as Markdown: its paragraphs, list items, tables,
     diagrams and code, up to its first child heading. Other kinds (an image, a
     reference, a comment) are not part of what the feature says."""
-    specs = [s for b in store.feature_body(fid)[1:]
+    specs = [s for b in store.body(fid)[1:]
              if b.kind in PROSE or b.kind in SOURCE
              if (s := block_spec(store, b, mode)) is not None]
     return block_md.render(specs).rstrip("\n")
@@ -205,17 +200,14 @@ def block_written_by(store: Store, bid: str) -> str:
 @dataclass
 class Claim:
     bid: str
-    path: str
-    start: int
+    path: str           # "" for a whole block
+    start: int          # live offsets, half-open; a removal is zero-width at its place
     end: int
     channel: str        # human | plan | code
-    stage: str          # unsent | sent | open | added | removed | marked | unmarked
+    stage: str          # human: unsent | sent; plan: open | removed | marked | unmarked; code: added | removed
     actor: str
     text: str = ""
-
-
-def _body_ids(store: Store, fid: str) -> set[str]:
-    return {b.id for b in store.feature_body(fid)}
+    plan: str = ""      # the plan, on the plan channel
 
 
 def prose_blocks(store: Store, fid: str) -> list[Block]:
@@ -223,7 +215,7 @@ def prose_blocks(store: Store, fid: str) -> list[Block]:
     rather than standing among them, so writing one is not editing the prose:
     it must not ink the feature, turn it `edited`, or offer a hand-off of a
     note."""
-    return [b for b in store.feature_body(fid) if b.layout.flow]
+    return [b for b in store.body(fid) if b.layout.flow]
 
 
 def ink(store: Store, fid: str) -> list[Claim]:
@@ -293,9 +285,11 @@ def plan_claims(store: Store, fid: str) -> list[Claim]:
             lt = t.live_text()
             for r in attribution(t):
                 if r.plan in store.open_plans:
-                    out.append(Claim(b.id, f, r.start, r.end, "plan", "open", r.actor, lt[r.start:r.end]))
-            for sp in _suggest_spans(t, store):
-                out.append(Claim(b.id, f, sp.start, sp.end, "plan", "removed", store.plans[sp.attrs["plan"]].actor, lt[sp.start:sp.end]))
+                    out.append(Claim(b.id, f, r.start, r.end, "plan", "open", r.actor, lt[r.start:r.end], r.plan))
+            for sp in _suggest_spans(t, store.open_plans):
+                pid = sp.attrs["plan"]
+                out.append(Claim(b.id, f, sp.start, sp.end, "plan", "removed", store.plans[pid].actor,
+                                 lt[sp.start:sp.end], pid))
     return out + mark_claims(store, fid)
 
 
@@ -316,82 +310,103 @@ def mark_claims(store: Store, fid: str) -> list[Claim]:
                 if span:
                     out.append(Claim(b.id, f, span[0], span[1], "plan",
                                      "marked" if m.attrs.get("on") else "unmarked", plan.actor,
-                                     f"{m.attrs.get('mark', '')}:{lt[span[0]:span[1]]}"))
+                                     f"{m.attrs.get('mark', '')}:{lt[span[0]:span[1]]}", plan.id))
     return out
 
 
-def _suggest_spans(t: Text, store: Store) -> list[Span]:
-    return [sp for sp in live_spans(t, frozenset({SUGGEST_DEL}))
-            if sp.attrs.get("plan") in store.open_plans]
+def _suggest_spans(t: Text, plans) -> list[Span]:
+    """The characters each ``suggest_del`` of a plan in ``plans`` lists that
+    are still live here, as offset spans: what accepting it kills. A word typed
+    inside the struck range since is not among them."""
+    offsets = t.live_offsets()
+    out: list[Span] = []
+    for m in t.proposals(kind=SUGGEST_DEL):
+        pid = m.attrs.get("plan")
+        if pid not in plans:
+            continue
+        runs: list[list[int]] = []
+        for i in sorted(offsets[(o, k)] for o, k, _ in struck_chars(m) if (o, k) in offsets):
+            if runs and runs[-1][1] == i:
+                runs[-1][1] = i + 1
+            else:
+                runs.append([i, i + 1])
+        out.extend(Span(SUGGEST_DEL, {"plan": pid}, a, b) for a, b in runs)
+    return out
 
 
 def open_plans_on(store: Store, fid: str) -> list[str]:
-    """The open plans this feature is waiting on: one targeting a block of
-    its body, or one whose ops landed in it.
-
-    Over `store.open_plans`, not every plan the tree ever had: a decided plan
-    is answered, and walking all of them per feature would make `phases()`
-    cost O(features × plans)."""
-    ids = _body_ids(store, fid)
-    out = {pid for pid, p in store.open_plans.items() if p.target in ids}
-    out.update(o.plan for o in store.ops_on(ids)
-               if o.plan and not o.conflict and o.plan in store.open_plans)
+    """The plans offered for a verdict (``offered_plans``) that this feature
+    is waiting on: one targeting a block of its body, or one whose ops landed
+    in it. A plan whose target is dead stays open but cannot be decided, so it
+    does not make the feature ``proposed``."""
+    offered = {p.id for p in offered_plans(store)}
+    if not offered:
+        return []
+    ids = {b.id for b in store.body(fid)}
+    out = {pid for pid in offered if store.plans[pid].target in ids}
+    out.update(o.plan for o in store.ops_on(ids) if o.plan in offered and not o.conflict)
     return sorted(out)
-
-
-def _op(store: Store, op_id: OpId) -> Op | None:
-    return store.by_id.get(op_id)
 
 
 # ── phase ────────────────────────────────────────────────────────────────────
 
-# Doc-wins order: a person's unsent edit shows even while an agent holds the
-# realizing lease, which is what lets them keep typing during a build.
-PHASES = ("edited", "realizing", "queued", "planned", "proposed", "drifted", "synced")
-
-
 def editors(store: Store, fid: str) -> list[str]:
     """Who has edited this feature since its last hand-off: the actors of its
-    unsent ink and of the words and blocks they removed that no hand-off has
-    carried. A feature with any is `edited`, and the editor's ⌘S hands off
-    only the ones that name the viewer.
+    unsent ink and unsent removals. A feature with any is `edited`, and the
+    editor's ⌘S hands off only the ones that name the viewer."""
+    return sorted({c.actor for c in ink(store, fid) + removals(store, fid) if c.stage == "unsent"})
 
-    A removal is not part of `ink`, which the editor draws as what the person
-    wrote and not what they removed. It is pending intent all the same
-    (emptying a title by deleting characters flags the feature, and the
-    directive carries it as a `removed:` line); otherwise the person would be
-    told there is nothing to hand off while there is. A removal a verdict made
-    is nobody's edit unless it accepted a person's plan (``answered``); then
-    its editor is the one who accepted, who killed the characters."""
+
+def removals(store: Store, fid: str) -> list[Claim]:
+    """What a person removed from this feature that no realization has
+    settled: each run of characters they killed, zero-width at the live offset
+    where it was, then each whole block of the description they deleted
+    (``removed_blocks``, path ""). ``unsent`` outside the hand-off frontier,
+    ``sent`` inside.
+
+    A removal is pending intent as much as a typed word (emptying a title
+    makes the feature `edited`, and the directive carries it as a `removed:`
+    line), but it is not ink, which the editor draws as what the person wrote.
+    A removal a verdict made counts only when the verdict adopted its plan
+    (``Plan.adopted``) and the words were not the plan's own; it is then the
+    removal of the person who accepted."""
     w = store.watermarks(fid)
-    out = {c.actor for c in ink(store, fid) if c.stage == "unsent"}
-    kills = [sg for b in prose_blocks(store, fid) for f in b.layout.text
-             for sg in b.text(f).segs if sg.dead and is_human(sg.dead_actor)
-             and not in_frontier(sg.dead, w.handoff) and not in_frontier(sg.dead, w.realized)]
-    if kills:
-        verdicts = verdict_ops(store)
-        out.update(sg.dead_actor for sg in kills if not answered(verdicts, sg))
-    out.update(b.dead_actor for b in removed_blocks(store, fid)
-               if not in_frontier(b.dead, w.handoff) and not in_frontier(b.dead, w.realized))
-    return sorted(out)
+    verdicts: dict | None = None
+
+    def stage(op_id: str) -> str:
+        return "" if in_frontier(op_id, w.realized) else "sent" if in_frontier(op_id, w.handoff) else "unsent"
+
+    out: list[Claim] = []
+    for b in prose_blocks(store, fid):
+        for f in b.layout.text:
+            i = 0
+            for sg in b.text(f).segs:
+                if sg.live:
+                    i += len(sg.chars)
+                elif is_human(sg.dead_actor) and (st := stage(sg.dead)):
+                    verdicts = verdicts if verdicts is not None else _verdict_ops(store)
+                    if not _answered(verdicts, sg):
+                        out.append(Claim(b.id, f, i, i, "human", st, sg.dead_actor, sg.chars))
+    for b in removed_blocks(store, fid):
+        if st := stage(b.dead):
+            words = " ".join(b.text(f).live_text() for f in b.layout.text).strip()
+            out.append(Claim(b.id, "", 0, 0, "human", st, b.dead_actor, words))
+    return out
 
 
-def verdict_ops(store: Store) -> dict:
+def _verdict_ops(store: Store) -> dict:
     """The ops that decided a plan, each to its plan. Read from the plans,
     which a fold keeps, so a character a verdict killed is known as one after
     the fold too."""
     return {p.verdict: p for p in store.plans.values() if p.verdict}
 
 
-def answered(verdicts: dict, sg, *, build: bool = False) -> bool:
-    """Whether a removed segment answered a plan and asks nothing: a verdict
-    killed it, and that verdict did not accept a person's plan (a person who
-    accepts a suggester's strike adopts it as their own request) nor, with
-    ``build``, a plan that asks for code. A plan's own words that its verdict
-    took back were never the document's."""
+def _answered(verdicts: dict, sg: Seg) -> bool:
+    """Whether a verdict killed this dead segment without making the removal
+    anyone's request: its plan was not adopted, or the words were the plan's
+    own, taken back."""
     p = verdicts.get(sg.dead)
-    return p is not None and (p.status != "accepted" or sg.plan == p.id
-                              or not (is_human(p.actor) or build and p.build))
+    return p is not None and (sg.plan == p.id or not p.adopted)
 
 
 def removed_blocks(store: Store, fid: str) -> list[Block]:
@@ -412,13 +427,11 @@ def phase(store: Store, fid: str, realizing: set[str] = frozenset()) -> str:
     """The single lifecycle state of a feature. Doc wins: a person's pending
     intent outranks anything the code side has to say. ``realizing`` is the
     one ephemeral input (a lease outside the store)."""
-    w = store.watermarks(fid)
     if editors(store, fid):
         return "edited"
     if fid in realizing:
         return "realizing"
-    queued = bool(w.handoff) and not covered(w.handoff, w.realized)
-    if queued:
+    if store.watermarks(fid).queued:
         return "queued" if any(b.feature == fid for b in store.bindings.values()) else "planned"
     if open_plans_on(store, fid):
         return "proposed"
@@ -427,8 +440,29 @@ def phase(store: Store, fid: str, realizing: set[str] = frozenset()) -> str:
     return "synced"
 
 
+def queued(store: Store) -> list[str]:
+    """Features with a hand-off not yet realized, in document order, then the
+    dead headings whose removal is still waiting. A watermark fact: a feature
+    being edited or built right now is still queued."""
+    pending = {fid for fid, w in store.watermarks_by_fid.items() if w.queued}
+    out = [h.id for h in store.headings() if h.id in pending]
+    out.extend(sorted(fid for fid in pending if fid in store.blocks and not store.blocks[fid].live))
+    return out
+
+
+def in_flight(store: Store) -> list[str]:
+    """Features with work under way whatever their phase shows: queued, or
+    one a plan offered for a verdict is about (``plan_features``). ``phase``
+    shows `edited` over both, and the editor still keeps such a heading a
+    heading."""
+    out = set(queued(store))
+    for p in offered_plans(store):
+        out.update(plan_features(store, p))
+    return sorted(out)
+
+
 def reads_its_ops(store: Store, fid: str) -> bool:
-    """Whether a view still reads this feature's OPS and not only its state,
+    """Whether a view still reads this feature's ops and not only its state,
     which is what a snapshot may not fold away.
 
     One does: an open plan's verdict undoes the plan's own ops by identity, so
@@ -436,18 +470,19 @@ def reads_its_ops(store: Store, fid: str) -> bool:
 
     Everything else reads state. A segment carries its minter's actor and clock
     and its killer's; a mark carries its actor, its placing op and its clock; a
-    watermark carries when the code last moved and when a realization last
-    settled; a dead heading carries what it owned. So the directive's
-    `removed:` and `Focus:`, `ground`'s reds and greens, drift, and a deleted
-    heading's settle read the document, and a hand-off given after a fold
-    still finds what it needs.
+    block carries who added it and the values the author's unrealized sets
+    replaced; a watermark carries when the code last moved and when a
+    realization last settled; a dead heading carries what it owned. So the
+    directive's `removed:`, `Focus:` and kind lines, `ground`'s reds and
+    greens, drift, a comment's owner and a deleted heading's settle read the
+    document, and a hand-off given after a fold still finds what it needs.
     """
     b = store.blocks.get(fid)
     return b is not None and b.live and bool(open_plans_on(store, fid))
 
 
 def touched_at(store: Store, fid: str, *, human_only: bool = False) -> str:
-    """The clock of the newest thing anyone did to this feature's PROSE: a
+    """The clock of the newest thing anyone did to this feature's prose: a
     character written or removed, a mark placed. Read from the text, because
     that is where a segment's and a mark's clocks live; ``human_only`` asks the
     same question about the person alone, which is what ``ground`` measures
@@ -480,14 +515,54 @@ def _drifted(store: Store, fid: str) -> bool:
     return w.code_at > max(w.realized_at, touched_at(store, fid))
 
 
+# ── as last realized ─────────────────────────────────────────────────────────
+
+def realized_content(store: Store, b: Block, realized: dict) -> dict:
+    """``b``'s content as its author last had it realized, as a kind's codec
+    reads content (``kinds.plain``): each Text field without what the author
+    wrote or removed since ``realized``, by identity, in the ``rejected`` mode;
+    each other field as it was before the author's first set since
+    (``Block.prior``). Only the author's, because ``lower`` speaks for them: a
+    diagram the loop lifted from the code is already in the code."""
+    out = {k: text_string(b.kind, k, _at_realized(store, v, realized), "rejected", store)
+           if k in b.layout.text and isinstance(v, Text) else v for k, v in b.content.items()}
+    for k, sets in b.prior.items():
+        first = next((e for e in sets if not in_frontier(e[0], realized)
+                      and (not e[2] or (p := store.plans.get(e[2])) is not None and p.adopted)), None)
+        if first is None:
+            continue
+        if first[1] is None:
+            out.pop(k, None)
+        else:
+            out[k] = first[1]
+    return out
+
+
+def _at_realized(store: Store, text: Text, realized: dict) -> Text:
+    t = text.clone()
+    t.segs = [s for s in t.segs if in_frontier(s.op, realized) or not _authored(store, s)]
+    verdicts = _verdict_ops(store)
+    for s in t.segs:
+        if s.dead and not in_frontier(s.dead, realized) and is_human(s.dead_actor) and not _answered(verdicts, s):
+            s.dead = None
+    t.marks = [m for m in t.marks if t.holds(m.start) and t.holds(m.end)]
+    return t
+
+
+def _authored(store: Store, sg: Seg) -> bool:
+    """Whether these characters are the author's words: a person minted them,
+    or a plan the author adopted did (``Plan.adopted``)."""
+    p = store.plans.get(sg.plan) if sg.plan else None
+    return is_human(sg.actor) or p is not None and p.adopted
+
+
 # ── history ──────────────────────────────────────────────────────────────────
 
 def history(store: Store, fid: str) -> list[Op]:
-    """Every op recorded against the heading or a block it currently
-    dominates, oldest first, conflicted ones included (their ``conflict`` says
-    why they did nothing). Ops on blocks it dominated at the time but does not
-    dominate now are omitted."""
-    return store.ops_on(_body_ids(store, fid))
+    """Every op recorded against a block of the feature's body, oldest first,
+    conflicted ones included (their ``conflict`` says why they did nothing).
+    Ops on blocks that were in its body then and are not now are omitted."""
+    return store.ops_on([b.id for b in store.body(fid)])
 
 
 def dead_cites(store: Store) -> list[tuple[str, Mark]]:
@@ -504,14 +579,13 @@ def dead_cites(store: Store) -> list[tuple[str, Mark]]:
 
 def block_entry(store: Store, b: Block) -> dict:
     """One block as the editor reads it. Pure, and a function of the block's
-    own state plus which plans are open, so a caller may memoize it on
-    ``(block_head[b.id], plans_head)`` (docs/model.md, Cache keys).
+    own state, so a caller may memoize it on ``block_head[b.id]``
+    (docs/model.md, Cache keys).
 
     The spans are the document's own marks, and nothing else: a plan never
     changes them, so a proposal to unbold a word leaves the word bold, the way
-    a proposal to delete words leaves them struck rather than gone. What the
-    plan proposes is drawn over them from ``mark_claims``, and the words it
-    inserted are in ``runs``, as before."""
+    a proposal to delete words leaves them struck rather than gone. What a
+    plan proposes is in the feature's claims (``plan_claims``)."""
     entry = {"id": b.id, "kind": b.kind, "level": b.level, "rank": b.rank, "head": store.block_head.get(b.id, 0),
              "fields": {}, **layout_entry(b.kind, b.layout)}     # an editor without the kind can still draw it
     for f in b.layout.text:
@@ -520,7 +594,6 @@ def block_entry(store: Store, b: Block) -> dict:
             "text": t.live_text(),
             "runs": [r.__dict__ for r in attribution(t, merge=False)],
             "spans": [{"kind": s.kind, "attrs": s.attrs, "start": s.start, "end": s.end} for s in live_spans(t)],
-            "suggest_del": [{"plan": s.attrs["plan"], "start": s.start, "end": s.end} for s in _suggest_spans(t, store)],
         }
     for k, v in b.content.items():
         if k not in b.layout.text:
@@ -529,34 +602,31 @@ def block_entry(store: Store, b: Block) -> dict:
 
 
 def feature_claims(store: Store, fid: str) -> list[dict]:
-    """The claims the editor cannot read off a block's runs and `suggest_del`:
-    the code channel (``ground``) and an open plan's mark toggles. It draws ink
-    and a plan's words and cuts from the block entries."""
-    return [c.__dict__ for c in ground(store, fid) + mark_claims(store, fid)]
+    """Everything the editor draws on a feature's prose: the person's ink, the
+    open plans' words, cuts and mark toggles, and the code's ground."""
+    return [c.__dict__ for c in ink(store, fid) + plan_claims(store, fid) + ground(store, fid)]
 
 
 def projection(store: Store, realizing: set[str] = frozenset(), phases: dict[str, str] | None = None,
                entry=block_entry, claims=feature_claims) -> dict:
     """What an editor needs: every live block with its text, runs and spans,
-    each feature's phase, who edited each `edited` one (``editors``), bindings
-    and claims. ``phases``, ``entry`` and
-    ``claims`` may be passed in by a caller that already computed or memoized
-    them."""
+    each feature's phase and claims, who edited each `edited` one
+    (``editors``), the plans offered for a verdict, the features with work in
+    flight, and bindings. ``phases``, ``entry`` and ``claims`` may be passed in
+    by a caller that already computed or memoized them."""
     blocks = []
     phases = dict(phases) if phases is not None else {}
     for b in store.ordered():
         if b.kind == HEADING and b.id not in phases:
             phases[b.id] = phase(store, b.id, realizing)
         blocks.append(entry(store, b))
-    watermarks = {fid: {"handoff": w.handoff, "realized": w.realized}
-                  for fid, w in store.watermarks_by_fid.items() if (w.handoff or w.realized) and fid in phases}
     by_feature: dict[str, list[str]] = {}
     for bd in store.bindings.values():
         by_feature.setdefault(bd.feature, []).append(bd.symbol)
     return {"store": store.id, "head": store.pos, "frontier": dict(store.frontier), "blocks": blocks,
             "phases": phases, "editors": {fid: editors(store, fid) for fid, p in phases.items() if p == "edited"},
-            "plans": [{**p.to_json(), "handoff": accept_handoffs(store, p)} for p in open_plans(store)],
-            "watermarks": watermarks, "bindings": {"by_feature": by_feature},
+            "plans": [{**p.to_json(), "hands_off": accept_handoffs(store, p)} for p in offered_plans(store)],
+            "in_flight": in_flight(store), "bindings": {"by_feature": by_feature},
             "claims": {fid: c for fid in phases if (c := claims(store, fid))},
             # The layouts this checkout's plugin kinds give a new block, so a
             # paste of a fence without `$layout` splits its fields the same way.
@@ -576,22 +646,32 @@ def plan_features(store: Store, plan) -> list[str]:
 
 
 def accept_handoffs(store: Store, plan) -> list[str]:
-    """The features that accepting ``plan`` hands off, in the same batch.
-
-    A plan opened with ``build`` asks for code: ``codoc_propose`` opens one
-    before the code is written, so accepting it queues the work. Any other
-    plan (the loop's, a translator's, a suggester's, or an agent's
-    ``codoc_reflect`` of code it already wrote) is about words, and accepting
-    it takes the words only. A delete plan never hands off: removing code is
-    its own decision (`codoc handoff --delete-code`)."""
-    if plan.kind == "delete" or not plan.build:
-        return []
-    return plan_features(store, plan)
+    """The features that accepting ``plan`` hands off, in the same batch: a
+    plan that asks for code (``Plan.asks_for_code``) queues the work. Any other
+    plan is about words, and accepting it takes the words only."""
+    return plan_features(store, plan) if plan.asks_for_code else []
 
 
-def open_plans(store: Store) -> list:
+def offered_plans(store: Store) -> list:
     """Plans still awaiting a verdict whose target (when they have one) is
     live: a proposal on a heading the person deleted is not decidable from
     any surface, so it is not offered."""
     return [p for p in store.open_plans.values()
             if p.target is None or (p.target in store.blocks and store.blocks[p.target].live)]
+
+
+# ── export ───────────────────────────────────────────────────────────────────
+
+def export_spec(store: Store, b: Block) -> BlockSpec | None:
+    """One block of ``tree.codoc``: ``block_spec`` in the ``rejected`` mode, so
+    an open plan's words are left out and a block holding nothing else is left
+    out whole. A function of the block and of which plans are open, so a
+    caller may memoize it on ``(block_head[b.id], plans_head)``."""
+    return block_spec(store, b, "rejected")
+
+
+def export_markdown(store: Store, spec=export_spec) -> str:
+    """``tree.codoc``: every live block's ``export_spec``, headings with their
+    ids. The file is one-way: nothing reads it back into a store, and its
+    first line (``block_md.GENERATED``) says a hand edit is overwritten."""
+    return block_md.render([s for b in store.ordered() if (s := spec(store, b)) is not None], ids=True, generated=True)

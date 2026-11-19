@@ -181,9 +181,6 @@ class Text:
     def live_len(self) -> int:
         return sum(len(s.chars) for s in self.segs if s.live)
 
-    def is_empty(self) -> bool:
-        return self.live_len() == 0
-
     def locate(self, ref: CharRef) -> Pos:
         """Position of a character, live or dead. Raises ``AnchorError``."""
         op, k = ref
@@ -370,7 +367,7 @@ class Text:
         self._coalesce()
         return killed
 
-    def ops_between_refs(self, start: CharRef, end: CharRef) -> list[CharRef]:
+    def live_chars_between(self, start: CharRef, end: CharRef) -> list[CharRef]:
         """Every live character from ``start`` to ``end`` inclusive, by
         identity: what ``delete`` would kill, named rather than killed."""
         si, so = self.locate(start)
@@ -409,15 +406,6 @@ class Text:
                 hit.append(((s.op, min(lo for lo, _ in ov)), (s.op, max(hi for _, hi in ov))))
         return (hit[0][0], hit[-1][1]) if hit else None
 
-    def ops_between(self, start: CharRef, end: CharRef) -> set[OpId]:
-        """The ops that minted the live characters from ``start`` to ``end``
-        inclusive: what ``delete`` would kill, without killing it."""
-        si, so = self.locate(start)
-        ei, eo = self.locate(end)
-        if (ei, eo) < (si, so):
-            raise AnchorError(("range", start, end))
-        return {s.op for s in self.segs[si:ei + 1] if s.live}
-
     def kill(self, segments: list[Segment], *, by: OpId, by_actor: str = "", by_at: str = "") -> list[Segment]:
         """Kill exactly the named characters that are live here; nothing that
         sits between them. Returns what it actually killed."""
@@ -446,7 +434,8 @@ class Text:
         return revived
 
     def kill_op(self, op: OpId, *, by: OpId, by_actor: str = "", by_at: str = "") -> list[Segment]:
-        """Kill every live character ``op`` minted here (a rejected plan insert)."""
+        """Kill every live character ``op`` minted here: the timeline taking an
+        insert back."""
         segs = [(s.op, s.k0, len(s.chars)) for s in self.segs if s.op == op and s.live]
         return self.kill(segs, by=by, by_actor=by_actor, by_at=by_at) if segs else []
 

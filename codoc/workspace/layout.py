@@ -1,8 +1,8 @@
 """The ``.codoc/`` directory: what its files are called, and the file primitives
 every writer of them shares.
 
-Names are relative to the ``.codoc`` directory. ``config.json``, ``tree.codoc``
-and ``log/`` are tracked in git; everything else is derived or a local channel
+Names are relative to the ``.codoc`` directory. ``config.json``, ``log/`` and
+``media/`` are tracked in git; everything else is derived or a local channel
 and can be deleted.
 
 Primitives: ``atomic_write`` (tmp file, then rename), ``read_json`` (a missing
@@ -27,10 +27,10 @@ CODOC_DIR = ".codoc"
 
 # Tracked.
 CONFIG = "config.json"            # workspace settings: doc_language, roles
-EXPORT = "tree.codoc"             # the Markdown export
 LOG_DIR = "log"                   # session logs: the truth
 ARCHIVE_DIR = "archive"           # under log/: sessions a snapshot folded
 SNAPSHOT_PREFIX = "snapshot-"
+MEDIA_DIR = "media"               # files that image and pdf blocks reference
 
 # Channels into the applier.
 INBOX_DIR = "inbox"               # <client>.jsonl submissions and <client>.ack.jsonl answers
@@ -38,6 +38,7 @@ OFFSETS = "offsets.json"          # under inbox/: how far each client's file has
 ACTIVITY = "activity.json"        # the agent epoch and what the session touched
 
 # Derived files the applier publishes.
+EXPORT = "tree.codoc"             # the Markdown export
 PROJECTION = "projection.json"    # what the editor and the hub render
 HISTORY = "history.json"          # the timeline window
 STATUS = "status.json"            # workspace state and the realizing lease
@@ -45,10 +46,7 @@ REALIZE = "realize.md"            # the queued directives, as the realizing agen
 GRAPH_CACHE = "cache/graph.json"  # the code graph
 
 # Other local state.
-ASK = "ask.json"                  # the /codoc:ask walkthrough overlay
-TRANSLATE = "translate.json"      # progress of a running `codoc translate`
 HUB_PRS = "cache/hub-prs.json"    # hand-off → pull-request branch, kept by the hub
-MEDIA_DIR = "media"               # files that image and pdf blocks reference
 PIDFILE = "watch.pid"             # the daemon's pid
 APPLIER_LOCK = "applier.lock"     # held for one apply-and-publish turn
 SERVE_LOCK = "serve.lock"         # the hub that owns this checkout

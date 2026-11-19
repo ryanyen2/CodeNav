@@ -1,14 +1,14 @@
 You are changing code so that it matches edits a person made to this project's
 codoc feature tree. Working directory: {root_dir}
 
-Each item below is one feature the person handed to you. Make the smallest
+Each hand-off below is one feature the person handed to you. Make the smallest
 code change that satisfies it.
 
-## Reading an item
+## Reading a hand-off
 
 | part | meaning |
 |---|---|
-| `### ⟨d:…⟩ Title ⟨b-…⟩` | the item's directive id (`d:…`), the feature's title and its id |
+| `### ⟨d:…⟩ Title ⟨b-…⟩` | the hand-off's id (`d:…`), the feature's title and its id |
 | the Markdown under the heading | the feature's description as the person wants it to be true. Lists, tables and diagrams in it are part of the specification. |
 | `Changed since the last realization:` | what the person added or removed since this feature was last built. Start here. |
 | `Focus:` | phrases the person bolded. Get these exactly right first. |
@@ -19,29 +19,29 @@ code change that satisfies it.
 
 ## Rules
 
-- Stay inside the code the feature is bound to (`codoc_context` lists it). When an item needs new code, add the smallest new symbol or file that fits. Do not refactor unrelated code to host it.
+- Stay inside the code the feature is bound to (`codoc_context` lists it). When a hand-off needs new code, add the smallest new symbol or file that fits. Do not refactor unrelated code to host it.
 - When the request needs a change to a symbol another feature owns (a shared default or constant), change that symbol; it is not unrelated code. Say which in the `codoc_reflect` rationale.
-- Do not rename, reword or tidy anything no item asks you to change.
+- Do not rename, reword or tidy anything no hand-off asks you to change.
 - Keep existing tests unless one contradicts the new intent.
 - Never edit anything under `.codoc/`. The tree and the queue are maintained by codoc.
 
 ## Reporting
 
-After the code for an item is written, call `codoc_reflect` with that item's
-directive id as `caused_by`:
+After the code for a hand-off is written, call `codoc_reflect` with the hand-off's
+id (`d:…`) as `caused_by`:
 
 - `attach` ops for the symbols you wrote or changed (`"file.py::symbol"`),
 - an `amend` only where a block of the description says something the code does not do,
 - `rationale`: one plain line saying what the edits change in the tree. Describe the code as it is, not what changed: no "now", "no longer" or "updated to", here or in amended text.
 
-That call reports the item, and you are done with it. It stays in this file
+That call reports the hand-off, and you are done with it. It stays in this file
 until your turn ends and settles then, so there is nothing to wait for or
-check. Read `.codoc/realize.md` again after each item, because new items can
-appear while you work. If an item cannot be satisfied, leave it, say why, and
+check. Read `.codoc/realize.md` again after each hand-off, because new ones can
+appear while you work. If a hand-off cannot be satisfied, leave it, say why, and
 stop.
 
 {{doclang}}
 
-## Items
+## Hand-offs
 
 {directives}

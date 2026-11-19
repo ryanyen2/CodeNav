@@ -50,11 +50,11 @@ Code extension ([docs/editor.md](docs/editor.md)).
 |---|---|---|
 | `log/<session>.jsonl` | tracked | The op log, one file per session. The truth. |
 | `log/snapshot-<hlc>.jsonl`, `log/archive/` | tracked | A folded prefix of the log; the files it folded. |
-| `tree.codoc` | tracked | The Markdown export. Derived; never read back. |
-| `config.json` | tracked | `doc_language`, `roles`. |
+| `tree.codoc` | ignored | The Markdown export. Derived; never read back. Ignored because the daemon rewrites it on every edit, which would block a pull, a checkout or a `stash pop`. |
+| `config.json` | tracked | `doc_language`, `roles`, `index_exclude`. |
 | `inbox/<client>.jsonl`, `inbox/<client>.ack.jsonl`, `inbox/offsets.json` | ignored | Submissions, acks, drain offsets. |
 | `projection.json`, `history.json`, `status.json`, `realize.md` | ignored | Derived. |
-| `activity.json`, `ask.json`, `watch.pid`, `applier.lock`, `serve.lock` | ignored | Local state. |
+| `activity.json`, `watch.pid`, `applier.lock`, `serve.lock` | ignored | Local state. |
 | `cache/`, `cocoindex.db`, `lancedb/` | ignored | The code graph and the chunk index. |
 | `media/` | tracked | Files that image, screenshot and pdf blocks reference. |
 

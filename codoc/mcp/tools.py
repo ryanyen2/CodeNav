@@ -14,8 +14,8 @@ written and the error names it.
 |---|---|---|
 | ``reflect`` | ``attach``, ``detach`` on an existing feature | on the trunk |
 | ``reflect`` | ``amend`` | ``Workspace.amend``: all of it on the trunk when it only rewords and passes the machine gate, else one plan |
-| ``reflect`` | ``add_node``, ``move_node``, ``retire_node`` | as ``propose`` writes them, but accepting them builds nothing |
-| ``propose`` | all | one plan for everything but removals; each ``retire_node`` is its own delete plan |
+| ``reflect`` | ``add_node``, ``move_node``, ``delete_node`` | as ``propose`` writes them, but accepting them builds nothing |
+| ``propose`` | all | one plan for everything but deletions; each ``delete_node`` is its own delete plan |
 
 A ``propose`` plan is opened with ``build: true``: it comes before the code,
 so accepting it (in the editor or with ``codoc accept``) also hands off the
@@ -27,16 +27,15 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from codoc.calculus import ops as K
 from codoc.calculus.derive import (
-    attribution, dead_cites, description, history as feature_history, open_plans, phase, title,
+    description, offered_plans, phase, title,
 )
 from codoc.calculus.doc import HEADING, fold_tree
 from codoc.calculus.ids import new_plan_id
 from codoc.daemon import client
+from codoc.daemon.client import doc_language_block
 from codoc.daemon.epoch import note_cited, read_activity
-from codoc.daemon.publish import read_status as published_status
-from codoc.daemon.publish import REALIZE_OWNER_ENV, realizing_is_fresh, write_realizing
+from codoc.daemon.publish import REALIZE_OWNER_ENV, write_realizing
 from codoc.doclang import detect_prose_language, workspace_doc_language
 from codoc.index.graph import Graph
 from codoc.llm.prompt import titles_outline
@@ -44,9 +43,7 @@ from codoc.loops.context import description_blocks, feature_context, select_cont
 from codoc.calculus.block_md import BlockSpec
 from codoc.calculus.ingest import block_bodies, concat_bodies
 from codoc.loops.edits import PLAN_KIND, Change, Compiler, delete_open
-from codoc.loops.realize import queued
-from codoc.mcp.walkthrough import AskStep, build_walkthrough, clear_walkthrough, read_walkthrough, write_walkthrough
-from codoc.workspace import log as L
+from codoc.workspace.inbox import AGENT_CLIENT
 from codoc.workspace.layout import GRAPH_CACHE
 
 
@@ -55,7 +52,7 @@ def agent_client() -> str:
     applier stamps ``agent:<CODOC_AGENT>``. The one place the agent's name is
     read: set CODOC_AGENT in the MCP server's environment (cursor, codex, ...)."""
     name = f"agent-{os.environ.get('CODOC_AGENT') or 'claude-code'}"
-    if not L.AGENT_CLIENT.fullmatch(name):
+    if not AGENT_CLIENT.fullmatch(name):
         raise ValueError(f"CODOC_AGENT must be lowercase letters, digits, '-' or '_': {name[6:]!r}")
     return name
 
@@ -67,15 +64,6 @@ def _err(msg: str) -> dict:
 def _open(codoc_dir: str):
     ws = client.read(codoc_dir)
     return ws, Graph.load(Path(codoc_dir) / GRAPH_CACHE)
-
-
-def doc_language_block(codoc_dir: str) -> dict:
-    lang = workspace_doc_language(codoc_dir)
-    block = {"code": lang.code, "name": lang.name}
-    if not lang.is_default:
-        block["instruction"] = (f"This tree is authored in {lang.name}. Write every title, paragraph and note in "
-                                f"{lang.name}; never translate identifiers, paths or codoc: targets.")
-    return block
 
 
 def _lang(text: str, default) -> dict:
@@ -143,11 +131,11 @@ def read_tree(codoc_dir: str, *, root_id: str | None = None, depth: int = 0, inc
     if root_id:
         roots = [_find(roots, root_id)]
     walk(roots, 1, None)
-    # `open_plans`, not every open plan: one whose target block is gone cannot
+    # `offered_plans`, not every open plan: one whose target block is gone cannot
     # be answered from any surface, so offering it asks for a verdict nobody
     # can give. It comes back when the block does.
     plans = [{"plan_id": p.id, "kind": p.kind, "target": p.target, "actor": p.actor, "note": p.note}
-             for p in open_plans(store)]
+             for p in offered_plans(store)]
     return {"ok": True, "features": out, "plans": plans, "doc_language": doc_language_block(codoc_dir)}
 
 
@@ -159,61 +147,6 @@ def _find(nodes, fid):
         if hit is not None:
             return hit
     return None
-
-
-def read_status(codoc_dir: str) -> dict:
-    """``queued_list`` is what is left to build; ``reported_list`` is what this
-    turn's calls cited (``epoch.note_cited``), which settles when the turn
-    ends. State ``reported`` says every queued item is reported."""
-    ws, _ = _open(codoc_dir)
-    store = ws.store
-    heads = store.headings()
-    phases = {h.id: phase(store, h.id) for h in heads}
-    cited = set(read_activity(codoc_dir).get("cited") or [])
-    items: dict[bool, list] = {False: [], True: []}
-    for f in queued(store):
-        did = (store.watermarks(f).handoffs or [""])[-1]
-        items[did in cited].append({"feature_id": f, "title": title(store, f, "rejected"), "directive": f"d:{did}"})
-    todo, reported = items[False], items[True]
-    state = published_status(codoc_dir).get("state", "synced")
-    if state == "realizing" and not realizing_is_fresh(codoc_dir):
-        # The lease lapsed, or it is the lease of the pass this agent belongs to:
-        # either way no other pass is working the queue.
-        state = "queued" if todo or reported else "synced"
-    if state == "queued" and not todo:
-        state = "reported"
-    dead = [{"block": bid, "symbol": m.attrs.get("symbol")} for bid, m in dead_cites(store)]
-    edited = [f for f, p in phases.items() if p == "edited"]
-    return {"ok": True, "state": state, "features": len(heads), "queued": len(todo), "queued_list": todo[:20],
-            "reported": len(reported), "reported_list": reported[:20],
-            "edited": len(edited), "edited_list": [{"feature_id": f, "title": title(store, f)} for f in edited[:20]],
-            "proposals": len(open_plans(store)),
-            "dead_cites": len(dead), "dead_cite_list": dead[:20],
-            "doc_language": doc_language_block(codoc_dir)}
-
-
-def read_history(codoc_dir: str, feature_id: str, limit: int = 20) -> dict:
-    ws, _ = _open(codoc_dir)
-    store = ws.store
-    if feature_id not in store.blocks:
-        return _err(f"no feature {feature_id!r}")
-    ops = feature_history(store, feature_id)[-limit:]
-    entries = []
-    for o in ops:
-        e = {"op": o.id, "at": o.at, "actor": o.actor, "kind": o.kind, "batch": o.batch}
-        if o.caused_by:
-            e["caused_by"] = o.caused_by
-        if o.plan:
-            e["plan"] = o.plan
-        if o.kind == K.TEXT_INSERT:
-            e["text"] = o.payload.get("text")
-        if o.kind == K.TEXT_DELETE:
-            e["removed_segments"] = o.payload.get("segments")
-        entries.append(e)
-    blame = {(b.id if f == "text" else f"{b.id}.{f}"):
-             [{"actor": r.actor, "start": r.start, "end": r.end} for r in attribution(b.text(f))]
-             for b in store.feature_body(feature_id) for f in b.layout.text}
-    return {"ok": True, "feature_id": feature_id, "title": title(store, feature_id), "ops": entries, "attribution": blame}
 
 
 # ── writes ───────────────────────────────────────────────────────────────────
@@ -295,24 +228,24 @@ def propose(codoc_dir: str, *, ops: list[dict], note: str = "", caused_by: str |
 
 def _write_plans(codoc_dir: str, store, changes: list[Change], *, note: str, caused_by: str | None,
                  root_dir: str | None, build: bool) -> dict:
-    """Each removal as its own delete plan (accepting one deletes that
+    """Each deletion as its own delete plan (accepting one deletes that
     feature), everything else as one plan. A feature already proposed for
     deletion, by an open plan or earlier in this call, is not proposed again.
-    ``build`` says accepting the plan asks for the code: true for a proposal
+    ``build`` says accepting the plan asks for the code: true for a plan
     made before the code, false for a reflection of code already written.
     Returns every plan written, and why each part that was not written was
     refused; an error only when no plan was written."""
-    removals: dict[str, Change] = {}
+    deletions: dict[str, Change] = {}
     for c in changes:
-        if c.kind == "retire_node" and c.target not in removals and not delete_open(store, c.target):
-            removals[c.target] = c
-    rest = [c for c in changes if c.kind != "retire_node"]
-    groups = ([(rest, note, build)] if rest else []) + [([c], c.note or note, False) for c in removals.values()]
+        if c.kind == "delete_node" and c.target not in deletions and not delete_open(store, c.target):
+            deletions[c.target] = c
+    rest = [c for c in changes if c.kind != "delete_node"]
+    groups = ([(rest, note, build)] if rest else []) + [([c], c.note or note, False) for c in deletions.values()]
     results = [_write_plan(codoc_dir, store, group, note=n, caused_by=caused_by, root_dir=root_dir, build=b)
                for group, n, b in groups]
     written = [r for r in results if r.get("ok")]
     if not written:
-        return results[0] if results else _err("every feature named is already proposed for removal")
+        return results[0] if results else _err("every feature named is already proposed for deletion")
     out = {"ok": True, "plan_id": written[0]["plan_id"], "plan_ids": [r["plan_id"] for r in written],
            "ops": sum(r["ops"] for r in written), "note": written[0]["note"]}
     refused = [x for r in written for x in r.get("refused", [])] + [r["error"] for r in results if not r.get("ok")]
@@ -327,7 +260,7 @@ def _write_plan(codoc_dir: str, store, changes: list[Change], *, note: str, caus
     the applier opens it, writes the bodies, rewrites and strikes under it, and
     takes it back when nothing landed (``Workspace.propose``)."""
     kinds = {PLAN_KIND.get(c.kind, "edit") for c in changes}
-    kind = kinds.pop() if len(kinds) == 1 else "edit"      # a delete plan holds exactly one removal
+    kind = kinds.pop() if len(kinds) == 1 else "edit"      # a delete plan holds exactly one deletion
     target = changes[0].target if len(changes) == 1 and kind != "add" else None
     pid, bodies = new_plan_id(), []
     for c in changes:
@@ -376,7 +309,7 @@ def write_block(codoc_dir: str, *, content: dict, bid: str | None = None, kind: 
             return _err(f"unknown feature_id {feature_id!r}")
         if err := k.validate(content):
             return _err(err)
-        bodies, (bid,) = block_bodies([BlockSpec(kind, content=content)], after=store.feature_body(feature_id)[-1].id)
+        bodies, (bid,) = block_bodies([BlockSpec(kind, content=content)], after=store.body(feature_id)[-1].id)
         added = client.write(codoc_dir, client=agent_client(), bodies=bodies, plan=plan, caused_by=caused_by, root_dir=root_dir)
         refused = [a["conflict"] for a in added if a.get("conflict")]
         if refused:
@@ -401,65 +334,11 @@ def write_block(codoc_dir: str, *, content: dict, bid: str | None = None, kind: 
 
 
 def realize_progress(codoc_dir: str, *, done: int, total: int, current: str = "") -> dict:
-    """Renew the realizing lease so the editor shows 'implementing n of m'.
+    """Renew the realizing lease so the editor shows 'building n of m'.
     The lease is this server's own (the realize pass's that started the agent,
     else this process's), so this agent's status does not read it as another
-    pass. Returns the items this turn has reported."""
+    pass. Returns the hand-offs this turn has reported."""
     shown = min(done + 1, total)
     write_realizing(codoc_dir, pending=max(0, total - done), owner=os.environ.setdefault(REALIZE_OWNER_ENV, f"mcp-{os.getpid()}"),
-                    detail=f"implementing {shown} of {total}" + (f": {current}" if current else ""))
+                    detail=f"building {shown} of {total}" + (f": {current}" if current else ""))
     return {"ok": True, "reported": [f"d:{d}" for d in read_activity(codoc_dir).get("cited") or []]}
-
-
-# ── walkthrough ──────────────────────────────────────────────────────────────
-
-def walkthrough(codoc_dir: str, *, question: str, answer: str = "", steps: list[dict] | None = None) -> dict:
-    rows = list(steps or [])
-    if not rows:
-        return _err("pass steps=[{feature_id, note, quote?, group?, file?, symbol?, line?}, ...]")
-    ws, _ = _open(codoc_dir)
-    store = ws.store
-    heads = {h.id: h for h in store.headings()}
-    by_title = {title(store, h).strip().lower(): h for h in heads}
-    built, dropped, unresolved, seen = [], [], [], set()
-    for row in rows:
-        if not isinstance(row, dict):
-            dropped.append({"step": str(row), "why": "not an object"})
-            continue
-        fid = str(row.get("feature_id") or "").strip()
-        h = heads.get(fid) or by_title.get(fid.lower())
-        if h is None:
-            dropped.append({"feature_id": fid, "why": "no such live feature"})
-            continue
-        if h.id in seen:
-            dropped.append({"feature_id": h.id, "why": "already a stop on this path"})
-            continue
-        seen.add(h.id)
-        quote = str(row.get("quote") or "").strip()
-        if quote:
-            prose = " ".join((title(store, h.id) + " " + description(store, h.id)).split())
-            if " ".join(quote.split()) not in prose:
-                unresolved.append({"feature_id": h.id, "quote": quote})
-                quote = ""
-        line = row.get("line")
-        built.append(AskStep(feature_id=h.id, note=str(row.get("note") or ""), quote=quote, group=str(row.get("group") or ""),
-                             file=str(row.get("file") or ""), symbol=str(row.get("symbol") or ""),
-                             line=int(line) if isinstance(line, (int, float)) else None))
-    if not built:
-        return _err("no step named a live feature. Read the tree first and pass real ids")
-    walk = build_walkthrough(question, answer, built)
-    write_walkthrough(codoc_dir, walk)
-    out: dict = {"ok": True, "id": walk.id, "steps": len(walk.steps), "labels": [s.label for s in walk.steps]}
-    if dropped:
-        out["dropped"] = dropped
-    if unresolved:
-        out["unresolved_quotes"] = unresolved
-    return out
-
-
-def clear_walkthrough_tool(codoc_dir: str) -> dict:
-    return {"ok": True, "cleared": clear_walkthrough(codoc_dir)}
-
-
-def read_walkthrough_tool(codoc_dir: str) -> dict:
-    return {"ok": True, "walkthrough": read_walkthrough(codoc_dir)}

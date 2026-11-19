@@ -2,14 +2,14 @@
 
 Routes: ``/healthz``; ``/auth/login`` → GitHub → ``/auth/callback``;
 ``/api/whoami``; ``/api/events`` (SSE: projection, status, this viewer's acks);
-``/api/message`` (POST, the webview's ``WebviewToHost`` messages: ``submit``
+``/api/message`` (POST, the page's ``PageToHost`` messages: ``submit``
 appends to ``inbox/hub-<login>.jsonl``; ``set-language`` writes ``config.json``
-for maintainers; the terminal-bound ones are refused with a reason);
+for maintainers; ``realize`` and ``open-cite`` are refused with a reason);
 ``/api/media/<name>``; the SPA shell and its assets.
 
 With an ``AuthContext`` every ``/api`` route needs a session whose role is not
 ``none``. Without one the hub is for localhost and its single viewer is the
-owner, writing to ``cli`` as the local person (``log.local_actor``).
+owner, writing to ``cli`` as the local person (``inbox.local_actor``).
 """
 from __future__ import annotations
 
@@ -21,16 +21,21 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.staticfiles import StaticFiles
 
 from codoc.serve.auth import COOKIE_NAME, MAINTAINER, NONE, AuthContext, Session, authorize, record_role
-from codoc.workspace import log as L
-from codoc.workspace.log import Submission
+from codoc.workspace import inbox
+from codoc.workspace.inbox import Submission
 
 STATE_COOKIE = "codoc_oauth_state"
 MAX_SUBS = 200                     # one settle is a few ops; the rate limit counts requests
 LOCAL = Session("local", "local", MAINTAINER, 0.0)
+# The page's messages only the VS Code host can carry out, and why.
+REFUSED = {
+    "realize": "the hub has no terminal; the pull-request worker or the maintainer builds hand-offs",
+    "open-cite": "code opens in the editor, not on the hub",
+}
 
 
 def client_name(login: str) -> str:
-    """The inbox file for a GitHub login; the daemon stamps ``log.hub_actor``."""
+    """The inbox file for a GitHub login; the daemon stamps ``inbox.hub_actor``."""
     safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in login)[:64] or "anon"
     return f"hub-{safe}"
 
@@ -169,7 +174,7 @@ def build_app(codoc_dir: str, *, static_dir: str | None = None, auth: AuthContex
 
 
 def handle_message(cd: Path, s: Session, m: dict) -> JSONResponse:
-    """One ``WebviewToHost`` message from this viewer."""
+    """One ``PageToHost`` message from this viewer (``vscode-codoc/src/wire.ts``)."""
     kind = m.get("kind") if isinstance(m, dict) else None
     if kind == "ready":
         return JSONResponse({"ok": True})
@@ -181,11 +186,11 @@ def handle_message(cd: Path, s: Session, m: dict) -> JSONResponse:
         if not isinstance(subs, list) or not all(isinstance(x, dict) for x in subs):
             return JSONResponse({"error": "subs must be a list of submissions"}, status_code=400)
         if len(subs) > MAX_SUBS:
-            # The rate limit counts REQUESTS, so one POST is one request however
+            # The rate limit counts requests, so one POST is one request however
             # much it carries. A settle is a few ops; anything of this size is
             # not a person typing.
             return JSONResponse({"error": f"at most {MAX_SUBS} submissions per message"}, status_code=413)
-        L.submit(cd, inbox_of(s), [Submission(
+        inbox.submit(cd, inbox_of(s), [Submission(
             cid=str(x.get("cid") or ""), kind=str(x.get("kind") or ""), target=dict(x.get("target") or {}),
             payload=dict(x.get("payload") or {}), batch=str(x.get("batch") or ""), plan=x.get("plan") or None,
             caused_by=x.get("caused_by") or None) for x in subs])
@@ -194,16 +199,15 @@ def handle_message(cd: Path, s: Session, m: dict) -> JSONResponse:
         if s.role != MAINTAINER:
             return JSONResponse({"error": "only a maintainer changes the tree's language"}, status_code=403)
         tag = str(m.get("tag") or "").strip()
-        from codoc.doclang import is_language_tag
+        from codoc.doclang import is_language_tag, resolve
         from codoc.workspace.config import write_config
         if not is_language_tag(tag):
             return JSONResponse({"error": "a BCP 47 language tag is required"}, status_code=400)
-        # Atomically, like every other writer of the tracked config: the daemon
-        # reads it on each inbox pass, and a torn read would drop every role.
-        write_config(cd, doc_language=tag)
+        # The same normalized tag `codoc lang` writes.
+        write_config(cd, doc_language=resolve(tag).code)
         return JSONResponse({"ok": True})
-    if kind in ("realize", "sync", "open-cite", "open-file", "find"):
-        return JSONResponse({"ok": False, "error": "the hub has no terminal; a maintainer's daemon builds hand-offs"}, status_code=202)
+    if kind in REFUSED:
+        return JSONResponse({"ok": False, "error": REFUSED[kind]}, status_code=202)
     return JSONResponse({"error": f"unknown message kind {kind!r}"}, status_code=400)
 
 

@@ -12,20 +12,20 @@ LANCE_TABLE_NAME = "code_chunks"
 
 @dataclass
 class CodeChunk:
-    """One indexed AST chunk plus its identity signals.
+    """One indexed AST chunk plus its identity hashes.
 
-    ``id`` is derived from ``(file, symbol_path)`` via ``generate_id`` so the
-    primary key is stable across runs as long as the chunk's location is
-    stable. A moved chunk is delete+insert here; the reflect pass recognises
-    the move from ``tokens_hash`` / ``types_hash``.
+    ``id`` is ``generate_id(symbol)``, so the primary key is stable across runs
+    while the chunk keeps its name. A moved chunk is a delete and an insert
+    here; the reflect pass recognises the move from ``fingerprint`` and
+    ``types_hash``.
     """
 
     id: int
     file: str
-    symbol_path: str
+    symbol: str
     language: str
     source: str
-    tokens_hash: str
+    fingerprint: str
     types_hash: str
     start_byte: int
     end_byte: int

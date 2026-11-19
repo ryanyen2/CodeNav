@@ -7,7 +7,7 @@ from codoc.calculus.apply import apply
 from codoc.calculus.block_md import BlockSpec
 from codoc.calculus.derive import block_entry, block_spec, markdown
 from codoc.calculus.doc import BUILTIN, BULLET, CODE_BLOCK, HEADING, NUMBERED, PARAGRAPH, TABLE, Layout
-from codoc.calculus.export import export_markdown
+from codoc.calculus.derive import export_markdown
 from codoc.calculus.ids import START
 from codoc.calculus.ingest import block_bodies, resolve_pending_refs
 from codoc.calculus.ops import Op

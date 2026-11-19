@@ -1,8 +1,9 @@
 """``.codoc/config.json``: the workspace settings every clone must agree on.
 
 Tracked in git, unlike the rest of ``.codoc/``. It holds ``doc_language`` (the
-language the tree is authored in, see ``codoc.doclang``) and ``roles`` (actor →
-role, see ``codoc.workspace.roles``).
+language the tree is authored in, see ``codoc.doclang``), ``roles`` (actor →
+role, see ``codoc.workspace.roles``) and ``index_exclude`` (files the index
+skips, read by ``codoc.index.app``).
 """
 from __future__ import annotations
 

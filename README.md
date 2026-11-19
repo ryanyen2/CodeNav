@@ -7,7 +7,7 @@ code that cite the code inline; the document is where you read what a codebase
 does, say what it should do, and review what an agent did to it.
 
 Every word in the document records who wrote it, so the editor can show your
-unsent edits in blue, an agent's proposal in gray, and what the code changed
+unsent edits in blue, an agent's plan in gray, and what the code changed
 underneath in green and red, without diffing prose to guess.
 
 ## How it works
@@ -18,8 +18,8 @@ underneath in green and red, without diffing prose to guess.
   words; anything larger, or anything on a feature you are editing, becomes a
   **plan** you accept or reject.
 - **Document → code.** You edit the document like a document. When you hand a
-  feature off (⌘S), your edits become a directive in `.codoc/realize.md`; a
-  Claude Code session (`/codoc:sync`) or `codoc realize` implements it, and the
+  feature off (⌘S), your edits become a hand-off in `.codoc/realize.md`; a
+  Claude Code session (`/codoc:realize`) or `codoc realize` builds it, and the
   daemon marks the request realized when the session closes and the bound code
   moved.
 - **The agent in the loop.** Claude Code hooks tell the daemon when a session
@@ -34,6 +34,8 @@ and the ops, `docs/concurrency.md` who may write and how logs merge.
 
 ## Requirements
 
+- **macOS or Linux.** The applier's file locks use `fcntl`, which Windows does
+  not have.
 - The **codoc VS Code extension** (it provisions everything else).
 - **Claude Code**, for the interactive workflow and, by default, as the engine
   for codoc's own model calls (no separate key). An OpenAI or Anthropic key is
@@ -75,7 +77,7 @@ codoc sync                            # one pass without the daemon
 codoc handoff <feature> --asked "…"   # the CLI's ⌘S
 codoc accept | reject <plan>          # verdicts
 codoc done <feature>                  # mark a request realized when the build moved no bound symbol
-codoc realize                         # implement the queue now, in the foreground
+codoc realize                         # build the queue now, in the foreground
 codoc history <feature>               # ops and per-word attribution
 codoc lang [tag] | codoc translate    # the authoring language; convert an existing tree
 codoc rebuild | codoc snapshot        # replay the logs; fold them
@@ -115,9 +117,9 @@ agent as the author of its words; rejecting it removes exactly what it added.
 |---|---|---|
 | `log/<session>.jsonl` | the truth: one append-only file per session | tracked |
 | `log/snapshot-*.jsonl`, `log/archive/` | a folded prefix of the log, and the files it folded | tracked |
-| `tree.codoc` | the Markdown export (`## Title {#b-id}`), for review and for people without codoc; derived, regenerated on every publish | tracked |
+| `tree.codoc` | the Markdown export (`## Title {#b-id}`), for review and for people without codoc; derived, regenerated on every publish | ignored |
 | `config.json` | the authoring language and the roles table | tracked |
-| `projection.json`, `history.json`, `status.json`, `realize.md`, `activity.json`, `ask.json` | derived and local state | ignored |
+| `projection.json`, `history.json`, `status.json`, `realize.md`, `activity.json` | derived and local state | ignored |
 | `inbox/` | client submissions and the daemon's acks | ignored |
 | `cache/`, `lancedb/`, `cocoindex.db` | the code index and graph | ignored |
 

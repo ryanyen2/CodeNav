@@ -20,7 +20,7 @@ export interface WindowEntry {
     kind: string;
     batch: string;
     /** Where this batch began, so a batch that reaches back past the window is
-     *  recognisable however its ops interleave with another actors'. */
+     *  recognisable however its ops interleave with another actor's. */
     batch_first?: number;
     plan: string | null;
     caused_by: string | null;

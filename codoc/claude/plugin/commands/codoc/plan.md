@@ -33,5 +33,5 @@ One call: `codoc_propose(ops=[…], note="<what the plan changes, in one plain l
 Say: "Accept the plan in the codoc tree to approve it, or reject it to discard.
 Accepting hands the work to me." Then end your turn.
 
-When the person accepts, the feature is queued. `/codoc:sync` builds it; cite
-the item's `d:…` id as `caused_by` when you reflect.
+When the person accepts, the feature is queued as a hand-off. `/codoc:realize`
+builds it; cite the hand-off's `d:…` id as `caused_by` when you reflect.

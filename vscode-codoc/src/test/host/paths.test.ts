@@ -2,39 +2,29 @@ import { describe, it, expect } from 'vitest';
 import * as path from 'node:path';
 import {
     CODOC_PYTHON_VERSION,
-    executablePaths, findBundledWheel, shouldReresolve, uvInstalledPath,
+    codocPath, findBundledWheel, shouldReresolve, uvInstalledPath,
     uvInstallerCommand, uvPythonInstallArgs, uvToolDirBinArgs, uvToolInstallArgs,
     uvVersionArgs,
 } from '../../host/setup/paths';
 
-describe('executablePaths', () => {
-    it('joins bare codoc / codoc-mcp under binDir on darwin (no extension)', () => {
+describe('codocPath', () => {
+    it('joins a bare codoc under binDir on darwin and linux', () => {
         const binDir = '/Users/me/.local/share/uv/tools/bin';
-        const execs = executablePaths(binDir, 'darwin');
-        expect(execs.codoc).toBe(path.join(binDir, 'codoc'));
-        expect(execs.codocMcp).toBe(path.join(binDir, 'codoc-mcp'));
-    });
-
-    it('joins bare names on linux too', () => {
-        const execs = executablePaths('/home/me/.local/bin', 'linux');
-        expect(execs.codoc).toBe(path.join('/home/me/.local/bin', 'codoc'));
-        expect(execs.codocMcp).toBe(path.join('/home/me/.local/bin', 'codoc-mcp'));
+        expect(codocPath(binDir, 'darwin')).toBe(path.join(binDir, 'codoc'));
+        expect(codocPath('/home/me/.local/bin', 'linux')).toBe(path.join('/home/me/.local/bin', 'codoc'));
     });
 
     it('appends .exe on win32', () => {
         const binDir = 'C:\\Users\\me\\AppData\\Roaming\\uv\\tools\\bin';
-        const execs = executablePaths(binDir, 'win32');
-        expect(execs.codoc).toBe(path.join(binDir, 'codoc.exe'));
-        expect(execs.codocMcp).toBe(path.join(binDir, 'codoc-mcp.exe'));
+        expect(codocPath(binDir, 'win32')).toBe(path.join(binDir, 'codoc.exe'));
     });
 
     it('trims surrounding whitespace/newlines from the uv stdout', () => {
-        const execs = executablePaths('  /opt/bin\n', 'darwin');
-        expect(execs.codoc).toBe(path.join('/opt/bin', 'codoc'));
+        expect(codocPath('  /opt/bin\n', 'darwin')).toBe(path.join('/opt/bin', 'codoc'));
     });
 
     it('throws on empty bin dir', () => {
-        expect(() => executablePaths('   ', 'darwin')).toThrow(/empty path/);
+        expect(() => codocPath('   ', 'darwin')).toThrow(/empty path/);
     });
 });
 

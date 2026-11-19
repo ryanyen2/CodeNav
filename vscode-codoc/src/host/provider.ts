@@ -5,8 +5,9 @@
  * `status.json` to the page when they change, appends the page's submissions
  * to `.codoc/inbox/ide.jsonl`, tails `.codoc/inbox/ide.ack.jsonl` and posts
  * the daemon's acks back, answers a `history` request with `history.json`,
- * writes the tree's language to `config.json`, and opens the code a citation
- * names. It holds no document model and compares nothing.
+ * sets the tree's language with `codoc lang`, runs `codoc realize` in a
+ * terminal, and opens the code a citation names. It holds no document model
+ * and compares nothing.
  *
  * The custom editor is registered for `.codoc/tree.codoc`, the daemon's
  * Markdown export. That file is only the handle VS Code opens; the page is
@@ -19,6 +20,7 @@ import * as vscode from 'vscode';
 import type { HostToPage, PageToHost } from '../wire';
 import type { Ack, Projection, Submission } from '../web/calc/projection';
 import type { HistoryWindow } from '../web/calc/window';
+import { symbolOffset } from './symbol';
 
 /** This client's name in the daemon's inbox: `inbox/ide.jsonl`, `inbox/ide.ack.jsonl`. */
 const CLIENT = 'ide';
@@ -27,8 +29,11 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
     static readonly viewType = 'codoc.tree-editor';
     private static panels = new Map<string, vscode.WebviewPanel>();
 
-    /** `realize` runs `codoc realize` in the given repository, where the person can watch it. */
-    constructor(private readonly context: vscode.ExtensionContext, private readonly realize: (root: string) => void) {}
+    /** `realize` runs `codoc realize` in the given repository, in a terminal where the person can
+     *  watch it; `setLanguage` runs `codoc lang <tag>` there to completion. */
+    constructor(private readonly context: vscode.ExtensionContext,
+                private readonly realize: (root: string) => void,
+                private readonly setLanguage: (root: string, tag: string) => Promise<void>) {}
 
     static find(replace = false): void {
         for (const p of CodocEditorProvider.panels.values()) void p.webview.postMessage({ kind: 'find', replace } satisfies HostToPage);
@@ -50,7 +55,8 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
             const st = await readJson<Record<string, unknown>>(path.join(codocDir, 'status.json'));
             const cfg = await readJson<{ doc_language?: string }>(path.join(codocDir, 'config.json'));
             // `status.json` carries `actor`: the person the daemon stamps on the `ide` inbox.
-            if (st) post({ kind: 'status', status: { ...st, doc_language: cfg?.doc_language ?? 'en' } });
+            // `terminal`: this host can run `codoc realize` where the person sees it.
+            if (st) post({ kind: 'status', status: { ...st, doc_language: cfg?.doc_language ?? 'en', terminal: true } });
         };
 
         // Acks: tail the ack file from its current end.
@@ -96,18 +102,12 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
                     if (history) post({ kind: 'history', history });
                     return;
                 }
-                case 'set-language': {
-                    if (!msg.tag) return;
-                    const p = path.join(codocDir, 'config.json');
-                    const cfg = (await readJson<Record<string, unknown>>(p)) ?? {};
-                    // Atomically: this file is tracked, the daemon reads it on
-                    // every inbox pass, and a torn read drops every role in it.
-                    const tmp = `${p}.tmp`;
-                    await fsp.writeFile(tmp, JSON.stringify({ ...cfg, doc_language: msg.tag }, null, 2) + '\n', 'utf8');
-                    await fsp.rename(tmp, p);
-                    await postStatus();
+                case 'set-language':
+                    // The CLI checks and normalizes the tag, as the hub does; the
+                    // config.json watcher posts the new status.
+                    if (msg.tag) await this.setLanguage(root, msg.tag)
+                        .catch(err => post({ kind: 'notice', text: `The language was not set: ${(err as Error).message}` }));
                     return;
-                }
                 case 'realize':
                     this.realize(root);
                     return;
@@ -168,26 +168,22 @@ async function readFrom(p: string, offset: number): Promise<{ lines: string[]; e
 async function appendSubmissions(codocDir: string, subs: Submission[]): Promise<void> {
     const dir = path.join(codocDir, 'inbox');
     await fsp.mkdir(dir, { recursive: true });
-    const body = subs.map(s => JSON.stringify({ cid: s.cid, kind: s.kind, target: s.target, payload: s.payload, batch: s.batch, plan: s.plan ?? null })).join('\n') + '\n';
+    // `at` orders this line among every client's (docs/concurrency.md, A submission's path).
+    const at = Date.now();
+    const body = subs.map(s => JSON.stringify({ cid: s.cid, kind: s.kind, target: s.target, payload: s.payload, batch: s.batch, plan: s.plan ?? null, at })).join('\n') + '\n';
     await fsp.appendFile(path.join(dir, `${CLIENT}.jsonl`), body, 'utf8');
 }
 
-/** Open the file `symbol` (`file::symbol_path`) names and put the caret on it:
- *  its definition when a Python or JavaScript keyword introduces it, otherwise
- *  its first occurrence. A symbol with no `::` names a whole file. */
+/** Open the file `symbol` (`file::symbol_path`) names and put the caret on the
+ *  symbol (`symbolOffset`). A symbol with no `::` names a whole file. */
 async function openSymbol(root: string, symbol: string): Promise<void> {
     const at = symbol.indexOf('::');
     const uri = vscode.Uri.file(path.join(root, at < 0 ? symbol : symbol.slice(0, at)));
     const doc = await vscode.workspace.openTextDocument(uri);
     const editor = await vscode.window.showTextDocument(doc, { preview: true });
-    const leaf = at < 0 ? '' : symbol.slice(at + 2).split('.').pop();
-    if (!leaf) return;
-    const text = doc.getText();
-    const name = leaf.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const m = new RegExp(`\\b(def|class|function|const|let|var|async function)\\s+${name}\\b`).exec(text)
-        ?? new RegExp(`\\b${name}\\b`).exec(text);
-    if (!m) return;
-    const pos = doc.positionAt(m.index);
+    const offset = symbolOffset(doc.getText(), symbol);
+    if (offset < 0) return;
+    const pos = doc.positionAt(offset);
     editor.selection = new vscode.Selection(pos, pos);
     editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
 }

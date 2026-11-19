@@ -29,10 +29,10 @@ def load_prompt(name: str, *, doc_language: DocLanguage | None = None,
 
     ``{{doclang}}`` expands to the authoring-language directive for
     ``doc_language`` (empty for English, so an English repo's prompt text is
-    unchanged). It is expanded HERE, at load time, for the same reason includes
-    are: expansion must happen before :func:`split_prompt`, so the directive
-    lands inside the cached prefix and cannot be displaced by a marker-shaped
-    value substituted later. Omitting the argument yields English.
+    unchanged). It is expanded at load time, as includes are, so that it
+    happens before :func:`split_prompt`: the directive lands inside the cached
+    prefix, and a marker-shaped value substituted later cannot displace it.
+    Omitting the argument yields English.
     """
     prompts_dir = Path(__file__).parent.parent / "prompts"
     text = (prompts_dir / f"{name}.txt").read_text(encoding="utf-8")
@@ -69,18 +69,18 @@ def expand_doclang(text: str, doc_language: DocLanguage | None, *,
 
 
 def split_prompt(template: str) -> tuple[list[str], str]:
-    """Split a TEMPLATE on ``CACHE_BREAK`` markers.
+    """Split a template on ``CACHE_BREAK`` markers.
 
     Returns ``(prefix_parts, volatile_tail)``: everything before the last
     marker is the stable prefix (one part per marker-delimited segment,
     most-stable-first, in the template author's order), the remainder is the
     per-call tail. A template without markers is all tail (no caching).
 
-    MUST be called on the raw template, BEFORE ``format_prompt`` substitutes
-    values: substituted content is repo-derived (chunk source, descriptions),
-    and a literal marker inside it (codoc's own source contains one) would
-    move the split point and promote untrusted text into the system-prompt
-    prefix. Splitting first makes marker-shaped *values* inert.
+    Call it on the raw template, before ``format_prompt`` substitutes values.
+    Substituted content comes from the repository (chunk source,
+    descriptions), and a literal marker inside it (codoc's own source holds
+    one) would move the split point and put untrusted text in the
+    system-prompt prefix. Splitting first leaves a marker in a value inert.
     """
     if CACHE_BREAK not in template:
         return [], template
@@ -100,11 +100,11 @@ def titles_outline(all_titles: list[dict]) -> str:
     lines: list[str] = []
 
     def _line(t: dict, depth: int) -> str:
-        # The planned marker is the outline's one annotation: an accepted plan
-        # placeholder is invisible to file-seeded context (it has no bindings),
-        # so this line is the only place a reader (the tree-update LLM or an
-        # agent reading codoc_context) learns the node exists and is waiting
-        # for exactly this code rather than needing a fresh node.
+        # The planned marker is the outline's one annotation. A node an
+        # accepted plan added has no bindings, so context seeded from files
+        # never shows it; this line is where a reader (the tree-update pass, an
+        # agent reading codoc_context) learns the node exists and waits for
+        # code, so it does not add a second one.
         mark = "  (planned: attach its code, do not add a second node)" if t.get("planned") else ""
         return f"{'  ' * depth}- [{t.get('id')}] {t.get('title', '')}{mark}"
 
@@ -119,11 +119,11 @@ def titles_outline(all_titles: list[dict]) -> str:
 
     emitted: set[str] = set()
     _emit(None, 0, emitted)
-    # EVERY title must appear: this list is the LLM's duplicate-avoidance
-    # context. Nodes the root walk can't reach (orphaned parent links, cycle
-    # members, and their descendants) are appended flat; omitting them invites
-    # the model to mint duplicates of exactly the features that are already in
-    # a broken state.
+    # Every title appears, since this list is what keeps the model from adding
+    # a duplicate. Nodes the walk from the roots cannot reach (an orphaned
+    # parent link, a cycle and what hangs off it) are appended flat; leaving
+    # them out would invite duplicates of the features already in a broken
+    # state.
     for t in all_titles:
         if str(t.get("id")) not in emitted:
             lines.append(_line(t, 0))
@@ -152,9 +152,8 @@ def repair_json(text: str) -> str:
     character is one that can legally follow a string (``,:}]`` or the end).
     Anything else is a quote the model meant literally, so escape it.
 
-    This is a rescue path, not a licence to emit sloppy JSON: the prompts still
-    ask for clean output. But without it one malformed sample costs a whole
-    call, and a description is exactly the field most likely to carry a
+    The prompts still ask for clean JSON. Without this, one malformed sample
+    costs a whole call, and a description is the field most likely to hold a
     quotation.
     """
     out: list[str] = []
@@ -206,8 +205,7 @@ def _concatenated(raw: str) -> dict | list | None:
     Reading only the first value would be worse than the error, because the rest
     of the file's features would vanish with nothing said. So every value is
     decoded and combined: lists concatenate, objects merge with their list-valued
-    keys concatenated. Trailing prose after the last value is dropped, which is
-    the one case where taking what parsed is plainly right.
+    keys concatenated. Prose after the last value is dropped.
     """
     decoder = json.JSONDecoder()
     values: list[dict | list] = []
@@ -220,7 +218,7 @@ def _concatenated(raw: str) -> dict | list | None:
         try:
             value, i = decoder.raw_decode(raw, i)
         except json.JSONDecodeError:
-            # Something here is not a complete JSON value. If it OPENS like one
+            # Something here is not a complete JSON value. If it opens like one
             # it is a broken one (truncated, or with a stray quote in it), and
             # the repair pass is likelier to recover it than dropping it is. If
             # it does not, it is the model talking after its answer, and keeping
@@ -304,9 +302,9 @@ def parse_solution(response: str) -> dict | list:
 
 
 # In-process response memo (bounded LRU). The loops re-derive their state per
-# pass, so a pass that failed AFTER its LLM call re-issues a byte-identical
-# prompt, which would be billed again in full. Keyed on provider, model,
-# temperature and the whole prompt; only responses that PARSED are cached, so a
+# pass, so a pass that failed after its LLM call sends a byte-identical prompt
+# again, which would be billed again in full. Keyed on provider, model,
+# temperature and the whole prompt; only a response that parsed is kept, so a
 # malformed sample is retried fresh. Process-local: the daemon is long-lived,
 # and a CLI one-shot misses.
 _MEMO_MAX = 32

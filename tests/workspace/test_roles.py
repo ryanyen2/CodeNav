@@ -8,6 +8,7 @@ from codoc.calculus.store import Store
 from codoc.calculus.text import SUGGEST_DEL
 from codoc.workspace import Roles, Workspace
 from codoc.workspace import log as L
+from codoc.workspace import inbox as I
 from tests.helpers import H, T, ins, refs, seed, seed_loop, sub, write_roles
 
 
@@ -43,8 +44,8 @@ def test_roles_table_over_every_kind():
 
     for kind in K.KINDS:
         assert allowed("human:local", kind) and allowed("human:m", kind)
-        assert allowed("agent:a", kind) == (kind not in K.VERDICTS)
-        assert allowed("loop", kind) == (kind not in K.VERDICTS or kind == K.FEATURE_REALIZED)
+        assert allowed("agent:a", kind) == (kind not in K.OWNER_ONLY)
+        assert allowed("loop", kind) == (kind not in K.OWNER_ONLY or kind == K.FEATURE_REALIZED)
         assert allowed("human:gh:s", kind) == (kind == K.PLAN_OPEN)
         assert allowed("human:gh:s", kind, "p-mine")            # the policy allows; apply's not_plannable decides the rest
         assert not allowed("human:gh:s", kind, "p-theirs") or kind == K.PLAN_OPEN
@@ -76,9 +77,9 @@ def test_the_local_person_is_their_git_email_and_human_local_without_one(tmp_pat
     for repo in (named, bare):
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
     subprocess.run(["git", "-C", str(named), "config", "user.email", "ada@example.com"], check=True)
-    assert L.actor_for("ide", named / ".codoc") == L.actor_for("cli", named / ".codoc") == "human:ada@example.com"
-    assert L.actor_for("ide", bare / ".codoc") == "human:local"
-    assert L.actor_for("ide", tmp_path / "no-repo" / ".codoc") == "human:local"
+    assert I.actor_for("ide", named / ".codoc") == I.actor_for("cli", named / ".codoc") == "human:ada@example.com"
+    assert I.actor_for("ide", bare / ".codoc") == "human:local"
+    assert I.actor_for("ide", tmp_path / "no-repo" / ".codoc") == "human:local"
     # The status the editor reads says who the page's person is.
     assert write_status(named / ".codoc", Store())["actor"] == "human:ada@example.com"
     # Every git person is an owner, since they can push; a hub sign-in is a suggester; the table wins.
@@ -156,7 +157,7 @@ def test_a_suggesters_backspace_becomes_a_suggest_del_under_their_plan(tmp_path)
     cd = tmp_path / ".codoc"
     ws = Workspace(cd); seed(ws)
     r = refs(ws, "p1")
-    L.submit(cd, "hub-alice", [sub("d1", K.TEXT_DELETE, {"bid": "p1", "path": "text"}, {"from": list(r[0]), "to": list(r[6])})])
+    I.submit(cd, "hub-alice", [sub("d1", K.TEXT_DELETE, {"bid": "p1", "path": "text"}, {"from": list(r[0]), "to": list(r[6])})])
     ops = ws.drain_inbox()
     assert [o.conflict for o in ops if o.kind != K.PLAN_OPEN] == [None], [(o.kind, o.conflict) for o in ops]
     assert T(ws.store, "p1") == "Retries once."                       # proposed, not destroyed
@@ -173,7 +174,7 @@ def test_a_suggesters_segments_delete_strikes_only_the_characters_it_names(tmp_p
     ws = Workspace(cd); seed(ws)                          # "Retries once."
     r = refs(ws, "p1")
     seen = r[0][0]
-    L.submit(cd, "hub-alice", [sub("d1", K.TEXT_DELETE, {"bid": "p1", "path": "text"},
+    I.submit(cd, "hub-alice", [sub("d1", K.TEXT_DELETE, {"bid": "p1", "path": "text"},
                                     {"segments": [[seen, r[0][1], 8]]})])           # "Retries "
     ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
                 "payload": {"after": list(r[3]), "text": "ALWAYS"}}], actor=H)     # inside the range, unseen by alice
@@ -192,17 +193,17 @@ def test_a_contributor_backspacing_over_their_own_proposal_removes_it(tmp_path):
     cd = tmp_path / ".codoc"
     ws = Workspace(cd); seed(ws)
     r = refs(ws, "p1")
-    L.submit(cd, "hub-alice", [sub("i1", K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": list(r[-1]), "text": " More."})])
+    I.submit(cd, "hub-alice", [sub("i1", K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": list(r[-1]), "text": " More."})])
     ins = [o for o in ws.drain_inbox() if o.kind == K.TEXT_INSERT][0]
     assert ins.conflict is None and ins.plan and T(ws.store, "p1") == "Retries once. More."
-    L.submit(cd, "hub-alice", [sub("d1", K.TEXT_DELETE, {"bid": "p1", "path": "text"},
+    I.submit(cd, "hub-alice", [sub("d1", K.TEXT_DELETE, {"bid": "p1", "path": "text"},
                                     {"from": [ins.id, 0], "to": [ins.id, 5]}, batch="b2")])
     ops = ws.drain_inbox()
     assert all(o.conflict is None for o in ops), [(o.kind, o.conflict) for o in ops]
     assert T(ws.store, "p1") == "Retries once."
     assert not [m for m in ws.store.blocks["p1"].text().marks if m.kind == SUGGEST_DEL]
     # …but a range that also covers a word of the trunk's is still a proposal.
-    L.submit(cd, "hub-alice", [sub("d2", K.TEXT_DELETE, {"bid": "p1", "path": "text"},
+    I.submit(cd, "hub-alice", [sub("d2", K.TEXT_DELETE, {"bid": "p1", "path": "text"},
                                     {"from": list(r[0]), "to": list(r[6])}, batch="b3")])
     ws.drain_inbox()
     assert T(ws.store, "p1") == "Retries once."
@@ -222,24 +223,24 @@ def test_a_contributor_cannot_revive_words_the_maintainer_deleted(tmp_path):
     cd = tmp_path / ".codoc"
     ws = Workspace(cd); seed(ws)
     r = refs(ws, "p1")
-    L.submit(cd, "hub-alice", [sub("i1", K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": list(r[-1]), "text": " More."})])
+    I.submit(cd, "hub-alice", [sub("i1", K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": list(r[-1]), "text": " More."})])
     ins = [o for o in ws.drain_inbox() if o.kind == K.TEXT_INSERT][0]
     gone = ws.submit([{"kind": K.TEXT_DELETE, "target": {"bid": "p1", "path": "text"},
                        "payload": {"from": [ins.id, 0], "to": [ins.id, 5]}}], actor=H)[0]
     assert T(ws.store, "p1") == "Retries once."
-    L.submit(cd, "hub-alice", [sub("u1", K.TEXT_RESTORE, {"bid": "p1", "path": "text"},
+    I.submit(cd, "hub-alice", [sub("u1", K.TEXT_RESTORE, {"bid": "p1", "path": "text"},
                                     {"segments": [[ins.id, 0, 6]], "by": gone.id}, batch="b2")])
     assert [o.conflict for o in ws.drain_inbox()] == ["not_this_plans_delete"]
     assert T(ws.store, "p1") == "Retries once."
     # …while undoing a delete of THEIR own stands, which is what it has to keep.
-    L.submit(cd, "hub-alice", [sub("i2", K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": list(r[-1]), "text": " Twice."}, batch="b3")])
+    I.submit(cd, "hub-alice", [sub("i2", K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": list(r[-1]), "text": " Twice."}, batch="b3")])
     second = [o for o in ws.drain_inbox() if o.kind == K.TEXT_INSERT][0]
-    L.submit(cd, "hub-alice", [sub("d2", K.TEXT_DELETE, {"bid": "p1", "path": "text"},
+    I.submit(cd, "hub-alice", [sub("d2", K.TEXT_DELETE, {"bid": "p1", "path": "text"},
                                     {"from": [second.id, 0], "to": [second.id, 6]}, batch="b4")])
     theirs = [o for o in ws.drain_inbox() if o.kind == K.TEXT_DELETE][0]
     assert theirs.conflict is None and T(ws.store, "p1") == "Retries once."
     undo = theirs.inverse[0]                            # exactly what the editor's undo sends
-    L.submit(cd, "hub-alice", [sub("u2", undo["kind"], undo["target"], undo["payload"], batch="b5")])
+    I.submit(cd, "hub-alice", [sub("u2", undo["kind"], undo["target"], undo["payload"], batch="b5")])
     assert [o.conflict for o in ws.drain_inbox()] == [None]
     assert T(ws.store, "p1") == "Retries once. Twice."
     ws.close()
@@ -250,13 +251,13 @@ def test_a_suggesters_no_op_ingest_leaves_no_empty_open_plan(tmp_path):
     will land under it, and withdraws it when nothing did."""
     cd = tmp_path / ".codoc"
     ws = Workspace(cd); seed(ws)
-    L.submit(cd, "hub-alice", [sub("i1", "ingest", {"bid": "p1", "path": "text"},
+    I.submit(cd, "hub-alice", [sub("i1", "ingest", {"bid": "p1", "path": "text"},
                                     {"base_text": "Retries once.", "new_md": "Retries once."})])
     ws.drain_inbox()
     empty = [p for p in ws.store.plans.values() if p.status == "open" and not p.ops]
     assert not empty, [(p.id, p.actor, p.ops) for p in empty]
     # and a batch whose only op conflicts (unknown anchor)
-    L.submit(cd, "hub-alice", [sub("x1", K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": ["s-nope:1", 0], "text": "x"}, batch="b2")])
+    I.submit(cd, "hub-alice", [sub("x1", K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": ["s-nope:1", 0], "text": "x"}, batch="b2")])
     ws.drain_inbox()
     empty = [p for p in ws.store.plans.values() if p.status == "open" and not p.ops]
     assert not empty, [(p.id, p.actor, p.ops) for p in empty]
@@ -275,7 +276,7 @@ def test_a_contributor_typing_over_several_settles_leaves_one_proposal(tmp_path)
     seed(ws)
     for i, word in enumerate(["One ", "two ", "three "]):
         last = ws.store.blocks["p1"].text().last_live_ref()
-        L.submit(cd, "hub-alice", [sub(f"c{i}", K.TEXT_INSERT, {"bid": "p1", "path": "text"},
+        I.submit(cd, "hub-alice", [sub(f"c{i}", K.TEXT_INSERT, {"bid": "p1", "path": "text"},
                                         {"after": list(last), "text": word}, batch=f"t{i}")])
         assert all(o.conflict is None for o in ws.drain_inbox() if o.kind != K.PLAN_OPEN)
     open_plans = [p for p in ws.store.plans.values() if p.status == "open"]
@@ -293,15 +294,15 @@ def test_a_contributor_cannot_revive_words_they_withdrew_once_the_plan_is_decide
         cd = tmp_path / verdict / ".codoc"
         ws = Workspace(cd); seed(ws)
         r = refs(ws, "p1")
-        L.submit(cd, "hub-alice", [sub("i1", K.TEXT_INSERT, {"bid": "p1", "path": "text"},
+        I.submit(cd, "hub-alice", [sub("i1", K.TEXT_INSERT, {"bid": "p1", "path": "text"},
                                         {"after": list(r[-1]), "text": " More."})])
         ins = [o for o in ws.drain_inbox() if o.kind == K.TEXT_INSERT][0]
-        L.submit(cd, "hub-alice", [sub("d1", K.TEXT_DELETE, {"bid": "p1", "path": "text"},
+        I.submit(cd, "hub-alice", [sub("d1", K.TEXT_DELETE, {"bid": "p1", "path": "text"},
                                         {"segments": [[ins.id, 0, 6]]}, batch="b2")])
         gone = [o for o in ws.drain_inbox() if o.kind == K.TEXT_DELETE][0]
         assert gone.conflict is None and gone.plan == ins.plan   # their own words, in their own plan
         ws.submit([{"kind": verdict, "target": {"pid": ins.plan}, "payload": {}}], actor=H)
-        L.submit(cd, "hub-alice", [sub("u1", K.TEXT_RESTORE, {"bid": "p1", "path": "text"},
+        I.submit(cd, "hub-alice", [sub("u1", K.TEXT_RESTORE, {"bid": "p1", "path": "text"},
                                         {"segments": [[ins.id, 0, 6]], "by": gone.id}, batch="b3")])
         after = ws.drain_inbox()
         assert all(o.conflict for o in after), [(o.kind, o.conflict) for o in after]
@@ -319,7 +320,7 @@ def test_a_contributors_typo_corrected_within_one_flush_is_not_struck_as_a_propo
     cd = tmp_path / ".codoc"
     ws = Workspace(cd); seed(ws)
     r = refs(ws, "p1")
-    L.submit(cd, "hub-alice", [
+    I.submit(cd, "hub-alice", [
         sub("c1", K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": list(r[-1]), "text": " Moer"}),
         sub("c2", K.TEXT_DELETE, {"bid": "p1", "path": "text"},
              {"from": ["$cid", "c1", 0], "to": ["$cid", "c1", 4]}),
@@ -340,7 +341,7 @@ def test_a_client_cannot_send_fields_only_a_snapshot_writes(tmp_path):
     owner = next(o for o in ws.store.ops if o.kind == K.TEXT_INSERT and o.target["bid"] == "p1")
     forged = {"segs": [{"op": owner.id, "k0": 100, "chars": "Also drops the table.", "actor": H,
                         "at": "00000000000000000001-00000000000000000000-x"}], "marks": []}
-    L.submit(cd, "hub-mallory", [
+    I.submit(cd, "hub-mallory", [
         sub("c1", K.PLAN_OPEN, {"pid": "p-forged000001"}, {"kind": "edit", "target": "p1", "ops": [owner.id]}),
         sub("c2", K.BLOCK_ADD, {"bid": "b-forged000002"},
             {"kind": PARAGRAPH, "after": "p1", "texts": {"text": forged}}),

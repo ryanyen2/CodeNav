@@ -7,7 +7,7 @@ A tree edit is what a model pass or a coding agent says about the tree, as JSON:
     add_node     {id?, parent_id?, title, description, bindings?}
     amend        {feature_id, title?, blocks: [{id, text} | {id, delete: true} | {text}]}
     move_node    {feature_id, parent_id?}
-    retire_node  {feature_id}
+    delete_node  {feature_id}
 
 - ``bindings`` is a list of symbols, each ``file::symbol_path``.
 - ``description`` and each ``text`` are Markdown (``calculus.block_md``).
@@ -32,9 +32,9 @@ from codoc.calculus.ids import START
 from codoc.calculus.ingest import block_bodies, concat_bodies
 from codoc.calculus.store import Store
 
-KINDS = ("attach", "detach", "add_node", "amend", "move_node", "retire_node")
+KINDS = ("attach", "detach", "add_node", "amend", "move_node", "delete_node")
 # The plan an edit opens when it lands as a proposal; any other edit is an `edit` plan.
-PLAN_KIND = {"add_node": "add", "move_node": "move", "retire_node": "delete"}
+PLAN_KIND = {"add_node": "add", "move_node": "move", "delete_node": "delete"}
 
 
 def delete_open(store: Store, fid: str) -> bool:
@@ -206,17 +206,18 @@ class Compiler:
         change = Change("amend", fid)
         if (raw.get("title") or "").strip():
             change.rewrites.append(Rewrite(fid, "text", one_line(raw["title"])))
-        body = {b.id: b for b in self.store.feature_body(fid)[1:] if b.kind in PROSE or b.kind in SOURCE}
+        body = {b.id: b for b in self.store.body(fid)[1:] if b.kind in PROSE or b.kind in SOURCE}
         # A new block follows the block the entry before it names; with none
         # named it goes at the end of the feature's own body.
-        last = self.store.feature_body(fid)[-1].id
+        last = self.store.body(fid)[-1].id
         for entry in raw.get("blocks") or []:
             bid, text = entry.get("id"), entry.get("text") or ""
             specs = block_md.parse(text, headings=False, absolute=True)
             if bid is not None:
                 block = body.get(bid)
                 if block is None:
-                    continue            # not a block of this feature's description
+                    change.refused = f"{bid}: not a block of this feature's description"
+                    return change
                 if entry.get("delete") or not specs:
                     change.strikes.append(bid)
                     change.structural = True
@@ -240,16 +241,16 @@ class Compiler:
         if fid is None or fid not in self.store.blocks:
             return Change("move_node", refused=f"unknown feature {raw['feature_id']!r}")
         parent = self._feature(raw.get("parent_id"))
-        if parent in self.store.dominated_ids(fid):
+        if parent in {b.id for b in self.store.range(fid)}:
             return Change("move_node", fid, refused="a feature cannot move under itself")
         return Change("move_node", fid, structural=True, bodies=[
             {"kind": K.BLOCK_MOVE, "target": {"bid": fid}, "payload": {"under": parent or START}}])
 
-    def _retire_node(self, raw: dict) -> Change:
+    def _delete_node(self, raw: dict) -> Change:
         fid = self._feature(raw["feature_id"])
         if fid is None or fid not in self.store.blocks:
-            return Change("retire_node", refused=f"unknown feature {raw['feature_id']!r}")
-        return Change("retire_node", fid, strikes=[b.id for b in self.store.feature_body(fid)], structural=True)
+            return Change("delete_node", refused=f"unknown feature {raw['feature_id']!r}")
+        return Change("delete_node", fid, strikes=[b.id for b in self.store.body(fid)], structural=True)
 
     # ── helpers ────────────────────────────────────────────────────────────
     def _feature(self, ref: str | None) -> str | None:

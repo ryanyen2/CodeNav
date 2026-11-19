@@ -1,7 +1,7 @@
 """One tree-sitter walk over a chunk that yields its two identity hashes.
 
 ``walk`` returns a ``WalkResult`` with:
-  tokens_hash:    SHA-256 of the whitespace-normalized token stream, comments
+  fingerprint:    SHA-256 of the whitespace-normalized token stream, comments
                   stripped: the chunk's content, wherever it sits.
   types_hash:     SHA-256 of the node-type sequence: the chunk's shape, whatever
                   its identifiers are called.
@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class WalkResult:
-    tokens_hash: str   # hex SHA-256
+    fingerprint: str   # hex SHA-256
     types_hash: str    # hex SHA-256
 
 
@@ -49,11 +49,10 @@ def walk(source: str, adapter=None) -> WalkResult:
         tokens = source.split()
         types = []
 
-    token_str = " ".join(tokens)
-    tokens_hash = hashlib.sha256(token_str.encode()).hexdigest()
-    types_str = " ".join(types)
-    types_hash = hashlib.sha256(types_str.encode()).hexdigest()
-    return WalkResult(tokens_hash=tokens_hash, types_hash=types_hash)
+    return WalkResult(
+        fingerprint=hashlib.sha256(" ".join(tokens).encode()).hexdigest(),
+        types_hash=hashlib.sha256(" ".join(types).encode()).hexdigest(),
+    )
 
 
 def _walk_tree(

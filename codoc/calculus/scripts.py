@@ -14,7 +14,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class ScriptClass:
     name: str
-    # Mean characters per word, INCLUDING the separator for spaced scripts. This
+    # Mean characters per word, including the separator for spaced scripts. This
     # is the number that ports a character budget across scripts.
     chars_per_word: float
 

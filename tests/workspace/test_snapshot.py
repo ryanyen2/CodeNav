@@ -2,7 +2,7 @@
 stays in the log."""
 from codoc.calculus import ops as K
 from codoc.calculus.apply import apply, replay_recorded
-from codoc.calculus.derive import accept_handoffs, phase
+from codoc.calculus.derive import accept_handoffs, phase, queued
 from codoc.calculus.doc import HEADING, PARAGRAPH
 from codoc.calculus.ids import START
 from codoc.calculus.ops import Op
@@ -229,11 +229,11 @@ def test_a_phantom_with_delete_code_can_still_settle_after_a_fold(tmp_path):
     ws.close()
     fold(cd)
     ws = Workspace(cd)
-    assert R.queued(ws.store) == ["h1"]
-    cs = ChangeSet(removed=[ChunkRef("c.py", "c.py::send", "f1", "t1")])
+    assert queued(ws.store) == ["h1"]
+    cs = ChangeSet(removed=[ChunkRef("c.py::send", "f1", "t1")])
     res = reflect(ws, cs, Graph(), propose=lambda *a, **k: [], under_epoch=True)
     R.settle(ws, res, sha="abc")
-    assert R.queued(ws.store) == [], "the phantom's code went and it is still queued"
+    assert queued(ws.store) == [], "the phantom's code went and it is still queued"
     ws.close()
 
 
@@ -513,7 +513,7 @@ def test_snapshot_folds_and_rebuilds_identically(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
     bootstrap(ws, ROWS, Graph(), propose_file=fake_file, propose_org=fake_org, propose_the_brief=lambda *a, **k: {}, concurrency=1)
     fid = ws.store.headings()[0].id
-    body = ws.store.feature_body(fid)[-1]
+    body = ws.store.body(fid)[-1]
     t = body.text()
     ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": body.id, "path": "text"},
                 "payload": {"after": list(t.last_live_ref()), "text": " Mine."}}], actor="human:local")

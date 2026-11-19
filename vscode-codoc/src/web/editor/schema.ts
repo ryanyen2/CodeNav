@@ -3,7 +3,7 @@
  *
  *   doc    := (heading | paragraph | bullet | numbered | source | kindBlock)+
  *   inline := text
- *   marks  := bold | code | link{href} | cite{symbol} | comment{block} | suggest_del{plan} | plan{pid}
+ *   marks  := bold | code | link{href} | cite{symbol} | comment{block}
  *
  * The nodes follow the store's block kinds (docs/model.md, "Block kinds").
  * A heading, a paragraph and a list item hold one line of inline text; a line
@@ -19,9 +19,9 @@
  * drawn as decorations.
  *
  * A person sets `bold`, `code`, `link` and `cite`, and the recorder sends
- * them. The projection sets `plan`, `suggest_del` and `comment`; the recorder
- * never sends those. Every mark but `bold` is non-inclusive, so typing at its
- * end is outside it, as the store has it.
+ * them. The projection sets `comment`; the recorder never sends it. Every
+ * mark but `bold` is non-inclusive, so typing at its end is outside it, as
+ * the store has it.
  *
  * Any other kind (an image, a url, a kind a newer codoc made) is a
  * `kindBlock`: an atom drawn as a card (card.ts) from the fields the
@@ -34,9 +34,7 @@ import Text from '@tiptap/extension-text';
 import type { Node as PMNode } from '@tiptap/pm/model';
 
 import { fenceOf } from '../calc/markdown';
-import type { Layout } from '../calc/projection';
-
-export const MAX_LEVEL = 6;
+import { MAX_LEVEL, type Layout } from '../calc/projection';
 
 export const clampLevel = (level: number): number => Math.min(MAX_LEVEL, Math.max(1, Math.round(level) || 1));
 
@@ -227,27 +225,7 @@ const Comment = Mark.create({
     renderHTML({ HTMLAttributes }) { return ['span', mergeAttributes(HTMLAttributes, { 'data-comment': '', class: 'codoc-comment' }), 0]; },
 });
 
-const SuggestDel = Mark.create({
-    name: 'suggest_del',
-    inclusive: false,
-    addAttributes() {
-        return { plan: { default: '' } };
-    },
-    parseHTML() { return [{ tag: 'span[data-suggest-del]' }]; },
-    renderHTML({ HTMLAttributes }) { return ['span', mergeAttributes(HTMLAttributes, { 'data-suggest-del': '', class: 'codoc-plan-cut' }), 0]; },
-});
-
-const Plan = Mark.create({
-    name: 'plan',
-    inclusive: false,
-    addAttributes() {
-        return { pid: { default: '' } };
-    },
-    parseHTML() { return [{ tag: 'span[data-plan]' }]; },
-    renderHTML({ HTMLAttributes }) { return ['span', mergeAttributes(HTMLAttributes, { 'data-plan': '', class: 'codoc-plan' }), 0]; },
-});
-
 export function codocSchema() {
     return getSchema([Document, Text, Heading, Paragraph, listItem('bullet', false), listItem('numbered', true), Source, KindBlock,
-                      Bold, Code, Link, Cite, Comment, SuggestDel, Plan]);
+                      Bold, Code, Link, Cite, Comment]);
 }

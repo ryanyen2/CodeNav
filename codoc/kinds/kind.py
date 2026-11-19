@@ -1,7 +1,8 @@
 """``Kind``: the declaration of a source or plugin block kind, and the registry.
 
-A kind declares which content fields are attributed ``Text``, a schema for the
-rest, and up to three codecs:
+A kind declares the layout a new block gets (which content fields are
+attributed ``Text``, whether it sits in the reading flow, whether the export
+writes it), a schema for the other fields, and up to three codecs:
 
     lift(ctx)              code → content; read-only on code; idempotent; run by the loop
     lower(old, new, ctx)   content → a directive line, or None; run when a hand-off renders
@@ -39,20 +40,18 @@ class LowerContext:
 @dataclass(frozen=True)
 class Kind:
     name: str
-    text_fields: tuple[str, ...] = ()
-    in_flow: bool = True                              # a comment hangs off words, it does not sit between them
+    layout: Layout = Layout()
     schema: dict = field(default_factory=dict)        # field → {"type": "string"|"number"|"boolean"|"object"|"array", "enum"?: [...], "required"?: bool}
     lift: Callable[[LiftContext], dict | None] | None = None
     lower: Callable[[dict, dict, LowerContext], str | None] | None = None
     consult: Callable[[dict], str] = lambda c: ""
-    exported: bool = True
 
     def validate(self, content: dict, *, partial: bool = False) -> str | None:
         """Why ``content`` does not fit the schema, or None. Text fields are
         strings (Markdown) on the way in; unknown fields are refused; a
         ``partial`` write (fields not named are left alone) skips ``required``."""
         for k, v in content.items():
-            if k in self.text_fields:
+            if k in self.layout.text:
                 if not isinstance(v, str):
                     return f"{k} must be a string"
                 continue
@@ -79,7 +78,7 @@ def register(kind: Kind) -> Kind:
     if is_one_line(kind.name):
         raise ValueError(f"{kind.name} is a prose kind of the calculus")
     _REGISTRY[kind.name] = kind
-    register_kind(kind.name, Layout(kind.text_fields, kind.in_flow, kind.exported))
+    register_kind(kind.name, kind.layout)
     return kind
 
 

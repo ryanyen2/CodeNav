@@ -18,6 +18,7 @@ import re
 import time
 from pathlib import Path
 
+from codoc.calculus.doc import Layout
 from codoc.kinds.kind import Kind, LiftContext, LowerContext, register
 from codoc.workspace.layout import CODOC_DIR, MEDIA_DIR
 
@@ -27,9 +28,9 @@ RETRY_COOLDOWN_S = 300
 # ── table, code: authored source. Both are part of the feature's description,
 #    so the agent reads them there and neither needs a `consult`.
 
-TABLE = Kind(name="table", text_fields=("source",))
+TABLE = Kind(name="table", layout=Layout(("source",)))
 
-CODE = Kind(name="code", text_fields=("source",), schema={"lang": {"type": "string"}})
+CODE = Kind(name="code", layout=Layout(("source",)), schema={"lang": {"type": "string"}})
 
 # ── diagram: mermaid. Authored by default. `derived` marks a flowchart of the
 #    feature's bound code: the loop redraws it, and an edit to it is a dependency request.
@@ -101,7 +102,7 @@ def diagram_lower(old: dict, new: dict, ctx: LowerContext) -> str | None:
 
 
 DIAGRAM = Kind(
-    name="diagram", text_fields=("source",), schema={"derived": {"type": "boolean"}},
+    name="diagram", layout=Layout(("source",)), schema={"derived": {"type": "boolean"}},
     lift=diagram_lift, lower=diagram_lower,
 )
 
@@ -148,7 +149,7 @@ def url_consult(c: dict) -> str:
 
 
 URL = Kind(
-    name="url", text_fields=("caption",),
+    name="url", layout=Layout(("caption",)),
     schema={"url": {"type": "string", "required": True}, "status": {"type": "string"}, "fetched": {"type": "string"},
             "title": {"type": "string"}, "excerpt": {"type": "string"}, "attempted_at": {"type": "number"}},
     lift=url_lift, consult=url_consult,
@@ -188,7 +189,7 @@ def pdf_lift(ctx: LiftContext) -> dict | None:
 
 
 PDF = Kind(
-    name="pdf", text_fields=("caption",),
+    name="pdf", layout=Layout(("caption",)),
     schema={"ref": {"type": "string", "required": True}, "status": {"type": "string"}, "extracted": {"type": "string"},
             "pages": {"type": "number"}, "excerpt": {"type": "string"}, "attempted_at": {"type": "number"}},
     lift=pdf_lift,
@@ -199,13 +200,13 @@ PDF = Kind(
 # ── image / screenshot: pixels the agent is told about ──────────────────────
 
 IMAGE = Kind(
-    name="image", text_fields=("alt", "caption"),
+    name="image", layout=Layout(("alt", "caption")),
     schema={"asset": {"type": "string", "required": True}, "source": {"type": "string", "enum": ["screenshot", "upload", "agent"]}},
     consult=lambda c: f"Image {c.get('alt') or ''}. " + (f"Caption: {c['caption']}. " if c.get("caption") else "") + f"File: {c.get('asset', '')}",
 )
 
 SCREENSHOT = Kind(
-    name="screenshot", text_fields=("caption",),
+    name="screenshot", layout=Layout(("caption",)),
     schema={"asset": {"type": "string", "required": True}},
     consult=lambda c: f"Consult this screenshot of the problem before implementing: {c.get('asset', '')}"
     + (f" ({c['caption']})" if c.get("caption") else ""),
@@ -229,13 +230,12 @@ def comment_lower(old: dict, new: dict, ctx: LowerContext) -> str | None:
 
 
 COMMENT = Kind(
-    name="comment", text_fields=("body",),
+    name="comment", layout=Layout(("body",), flow=False, export=False),   # hangs off words, not between them
     schema={"thread": {"type": "string", "required": True}, "anchor": {"type": "string", "required": True},
             "anchor_text": {"type": "string"}, "scope": {"type": "string", "enum": ["code", "both"]},
             "status": {"type": "string", "enum": ["open", "resolved"]}},
     lower=comment_lower,
     consult=lambda c: f"Comment on \"{c.get('anchor_text', '')}\": {c.get('body', '')}",
-    exported=False, in_flow=False,
 )
 
 ALL = (TABLE, CODE, DIAGRAM, URL, PDF, IMAGE, SCREENSHOT, COMMENT)

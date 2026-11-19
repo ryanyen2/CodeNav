@@ -8,8 +8,7 @@ function field(text: string, runs: [string, number, number][]): TextField {
         text,
         runs: runs.map(([op, start, end]) => ({ op, k0: 0, start, end, actor: 'human:a', at: '1', plan: null })),
         spans: [],
-        suggest_del: [],
-    };
+            };
 }
 
 describe('Shadow', () => {

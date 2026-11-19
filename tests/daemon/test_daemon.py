@@ -13,7 +13,8 @@ from codoc.daemon.epoch import read_activity, write_activity
 from codoc.index.changes import ChangeSet, ChunkRef
 from codoc.workspace import Workspace
 from codoc.workspace import log as L
-from codoc.workspace.log import Submission
+from codoc.workspace import inbox as I
+from codoc.workspace.inbox import Submission
 from tests.helpers import handoff, seed_loop, T
 
 
@@ -32,7 +33,7 @@ def make(tmp_path, changesets: list):
 
 
 def test_code_change_reflects_and_publishes(tmp_path):
-    d, calls = make(tmp_path, [ChangeSet(modified=[ChunkRef("c.py", "c.py::send", "f2", "t1")])])
+    d, calls = make(tmp_path, [ChangeSet(modified=[ChunkRef("c.py::send", "f2", "t1")])])
     (d.root / "c.py").write_text("def send(): ...")
     note = d.process_batch([str(d.root / "c.py")])
     assert "reflect" in note and calls == [{"c.py"}]
@@ -45,12 +46,12 @@ def test_code_change_reflects_and_publishes(tmp_path):
 
 
 def test_open_epoch_holds_code_until_it_closes(tmp_path):
-    d, calls = make(tmp_path, [ChangeSet(modified=[ChunkRef("c.py", "c.py::send", "f3", "t1")])])
+    d, calls = make(tmp_path, [ChangeSet(modified=[ChunkRef("c.py::send", "f3", "t1")])])
     act = d.codoc_dir / "activity.json"
     write_activity(d.codoc_dir, {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": ["c.py"]})
     assert "opened" in d.process_batch([str(act)])
     (d.root / "c.py").write_text("x")
-    assert "holding" in d.process_batch([str(d.root / "c.py")]) and calls == []
+    assert "deferring" in d.process_batch([str(d.root / "c.py")]) and calls == []
     data = read_activity(d.codoc_dir)
     data["epoch"]["open"] = False
     write_activity(d.codoc_dir, data)
@@ -58,15 +59,52 @@ def test_open_epoch_holds_code_until_it_closes(tmp_path):
     assert "closed" in note and "reflect" in note and calls == [{"c.py"}]
 
 
+def test_a_daemon_started_during_an_agent_turn_reflects_the_turn_when_it_closes(tmp_path):
+    """The window reloads (the extension stops its daemon and starts a new
+    one) while a coding agent is mid-turn. The new daemon reads the open epoch
+    at its first batch, so the stop hook's close runs the pass over every file
+    the turn touched, and the hand-off it built settles."""
+    from codoc.calculus.derive import queued
+    d, calls = make(tmp_path, [])
+    handoff(d.ws, "h1", actor="human:local")
+    write_activity(d.codoc_dir, {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": ["c.py"]})
+    d.process_batch([str(d.codoc_dir / "activity.json")])
+    d.ws.close()
+
+    again = Daemon(d.root, changeset=lambda _r, _c, files: calls.append(set(files)) or ChangeSet(
+        modified=[ChunkRef("c.py::send", "f9", "t1")]), propose=lambda *a, **k: [], printer=lambda *_: None)
+    again.start()
+    assert "opened" in again.process_batch([])
+    data = read_activity(again.codoc_dir)
+    data["epoch"]["open"] = False
+    write_activity(again.codoc_dir, data)
+    assert "closed" in again.process_batch([str(again.codoc_dir / "activity.json")])
+    assert calls == [{"c.py"}] and queued(again.ws.store) == []
+
+
+def test_the_daemons_passes_write_in_the_workspace_language(tmp_path):
+    """The reflect pass and the realize queue are written in the language
+    `config.json` names, not in English."""
+    from codoc.workspace.config import write_config
+    asked: list = []
+    d, _ = make(tmp_path, [ChangeSet(added=[ChunkRef("c.py::retry", "f2", "t2", "def retry(): ...")])])
+    d._propose = lambda *a, **k: asked.append(k["doc_language"].code) or []
+    write_config(d.codoc_dir, doc_language="ja")
+    handoff(d.ws, "h1", actor="human:local")
+    (d.root / "c.py").write_text("def retry(): ...")
+    d.process_batch([str(d.root / "c.py")])
+    assert asked == ["ja"] and "Japanese" in (d.codoc_dir / "realize.md").read_text()
+
+
 def test_inbox_ops_are_drained_and_acked(tmp_path):
     d, _ = make(tmp_path, [])
     t = d.ws.store.blocks["p1"].text()
-    L.submit(d.codoc_dir, "ide", [Submission(cid="a1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+    I.submit(d.codoc_dir, "ide", [Submission(cid="a1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
                                              payload={"after": list(t.last_live_ref()), "text": " Typed."})])
-    note = d.process_batch([str(L.inbox_dir(d.codoc_dir) / "ide.jsonl")])
+    note = d.process_batch([str(I.inbox_dir(d.codoc_dir) / "ide.jsonl")])
     assert "1 client op" in note
     assert d.ws.store.blocks["p1"].text().live_text().endswith(" Typed.")
-    assert (L.inbox_dir(d.codoc_dir) / "ide.ack.jsonl").exists()
+    assert (I.inbox_dir(d.codoc_dir) / "ide.ack.jsonl").exists()
     status = json.loads((d.codoc_dir / "status.json").read_text())
     assert status["state"] == "edited"
 
@@ -76,7 +114,7 @@ def test_a_batch_with_no_paths_drains_what_queued_while_no_daemon_ran(tmp_path):
     appended while nothing was watching has no file event to announce it."""
     d, _ = make(tmp_path, [])
     t = d.ws.store.blocks["p1"].text()
-    L.submit(d.codoc_dir, "ide", [Submission(cid="q1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+    I.submit(d.codoc_dir, "ide", [Submission(cid="q1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
                                              payload={"after": list(t.last_live_ref()), "text": " Queued."})])
     assert "1 client op" in d.process_batch([])
     assert d.ws.store.blocks["p1"].text().live_text().endswith(" Queued.")
@@ -103,7 +141,7 @@ def test_a_daemonless_writer_starts_a_new_session_when_head_moves(tmp_path, monk
     from codoc.workspace import Workspace
 
     head = {"sha": "a" * 40}
-    monkeypatch.setattr(client, "head_sha", lambda _root: head["sha"])
+    monkeypatch.setattr(client, "head", lambda _root: (head["sha"], "main"))
     cd = tmp_path / ".codoc"
     ws = Workspace(cd); seed_loop(ws); ws.close()
 
@@ -203,7 +241,8 @@ def test_derive_builds_the_projection_the_publisher_writes(tmp_path):
     assert published == json.loads(json.dumps(projection(ws.store)))
     assert published["bindings"] == {"by_feature": {"h1": ["c.py::send"]}}
     assert [(c["channel"], c["stage"], c["text"]) for c in published["claims"]["h1"]] == [
-        ("code", "added", " Loop."), ("plan", "marked", "bold:Retries")]
+        ("human", "unsent", " Typed."), ("plan", "open", " Maybe."), ("plan", "marked", "bold:Retries"),
+        ("code", "added", " Loop.")]
 
 
 def test_the_daemon_wakes_for_the_files_the_index_reads(tmp_path):
@@ -211,7 +250,7 @@ def test_the_daemon_wakes_for_the_files_the_index_reads(tmp_path):
     outside the index's excludes."""
     d, _ = make(tmp_path, [])
     rel = ["a.mts", "src/b.py", "dist/c.ts", "d.go", "e.js", "node_modules/f/g.ts", "h.d.ts", ".venv/i.py"]
-    assert d.classify([str(d.root / p) for p in rel]) == ({"a.mts", "src/b.py"}, False)
+    assert {d.code_path(str(d.root / p)) for p in rel} - {None} == {"a.mts", "src/b.py"}
 
 
 def test_projection_carries_the_realizing_lease_and_publish_skips_unchanged(tmp_path):
@@ -232,6 +271,24 @@ def test_projection_carries_the_realizing_lease_and_publish_skips_unchanged(tmp_
     assert d.process_batch([]) == "no-op" and (d.codoc_dir / "projection.json").stat().st_mtime_ns == stamp
 
 
+def test_every_publish_reads_the_lease_and_none_renews_it(tmp_path):
+    """A one-shot publish (the CLI, a daemonless writer) shows a feature another
+    pass is building as `realizing`, as the daemon's does, and leaves the
+    lease's file alone, so a pass that died lets it lapse."""
+    from codoc.daemon.publish import publish
+    ws = Workspace(tmp_path / ".codoc")
+    seed_loop(ws)
+    handoff(ws, "h1", actor="human:local")
+    publish(ws.codoc_dir, ws.store, root_dir=str(tmp_path))
+    status = ws.codoc_dir / "status.json"
+    status.write_text(json.dumps({"state": "realizing", "version": 2}))
+    stamp = status.stat().st_mtime_ns
+    publish(ws.codoc_dir, ws.store, root_dir=str(tmp_path))
+    assert json.loads((ws.codoc_dir / "projection.json").read_text())["phases"] == {"h1": "realizing"}
+    assert status.stat().st_mtime_ns == stamp
+    ws.close()
+
+
 def test_head_change_rebuilds_from_the_logs_on_disk(tmp_path):
     root = tmp_path / "repo"
     (root / ".codoc").mkdir(parents=True)
@@ -243,9 +300,9 @@ def test_head_change_rebuilds_from_the_logs_on_disk(tmp_path):
     t = other.store.blocks["p1"].text()
     other.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": list(t.last_live_ref()), "text": " From a peer."}}], actor="human:local")
     other.close()
-    d.state.head = "moved"
+    d.ws.head = ("moved", "main")
     note = d.process_batch([])
-    assert "rotated" in note and T(d.ws.store, "p1").endswith(" From a peer.")
+    assert "rebuilt" in note and T(d.ws.store, "p1").endswith(" From a peer.")
 
 
 LANDS = {
@@ -271,7 +328,7 @@ def test_a_handoff_trailer_counts_on_the_branch_its_base_trailer_names(tmp_path,
     rebase, a checkout)."""
     import subprocess
     from codoc.index.git import BASE_TRAILER, HANDOFF_TRAILER
-    from codoc.loops.realize import queued
+    from codoc.calculus.derive import queued
     for k, v in {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t",
                  "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t",
                  "GIT_COMMITTER_EMAIL": "t@example.com"}.items():
@@ -287,7 +344,7 @@ def test_a_handoff_trailer_counts_on_the_branch_its_base_trailer_names(tmp_path,
     git("add", "-A")
     git("commit", "-qm", "init")
     fps = (f"f{i}" for i in range(2, 20))
-    d = Daemon(root, changeset=lambda *a: ChangeSet(modified=[ChunkRef("c.py", "c.py::send", next(fps), "t1")]),
+    d = Daemon(root, changeset=lambda *a: ChangeSet(modified=[ChunkRef("c.py::send", next(fps), "t1")]),
                propose=lambda *a, **k: [], printer=lambda *_: None)
     seed_loop(d.ws)
     ho = handoff(d.ws, "h1", actor="human:local")
@@ -309,10 +366,10 @@ def test_an_inbox_file_no_actor_owns_is_named_once(tmp_path):
     d, _ = make(tmp_path, [])
     said: list[str] = []
     d.say = said.append
-    L.submit(d.codoc_dir, "mcp", [Submission(cid="m1", kind=K.BIND_ATTACH, target={"fid": "h1"},
+    I.submit(d.codoc_dir, "mcp", [Submission(cid="m1", kind=K.BIND_ATTACH, target={"fid": "h1"},
                                              payload={"symbol": "c.py::a"})])
     for _ in range(2):
-        assert "client op" not in d.process_batch([str(L.inbox_dir(d.codoc_dir) / "mcp.jsonl")])
+        assert "client op" not in d.process_batch([str(I.inbox_dir(d.codoc_dir) / "mcp.jsonl")])
     assert len(said) == 1 and "inbox/mcp.jsonl" in said[0] and "MCP server" in said[0]
 
 
@@ -348,7 +405,7 @@ def test_rebuild_with_equal_pos_publishes_fresh_files(tmp_path):
     d.ws.close()
     shutil.rmtree(d.codoc_dir / "log")
     shutil.copytree(other / "log", d.codoc_dir / "log")
-    d.state.head = "other-branch"
+    d.ws.head = ("other", "other-branch")
     d.process_batch([])
     assert T(d.ws.store, "p1") == "Listens forever." and "Listens forever." in (d.codoc_dir / "tree.codoc").read_text()
 
@@ -358,13 +415,13 @@ def test_an_agents_citing_binding_op_settles_its_handoff_with_no_epoch(tmp_path)
     so no agent epoch ever closes. The binding op their `codoc_reflect` lands
     with the hand-off as `caused_by` is the evidence, and the daemon settles on
     it after the drain."""
-    from codoc.loops.realize import queued
+    from codoc.calculus.derive import queued
     d, calls = make(tmp_path, [])
     ho = handoff(d.ws, "h1", actor="human:local")
-    L.submit(d.codoc_dir, "agent-cursor", [Submission(
+    I.submit(d.codoc_dir, "agent-cursor", [Submission(
         cid="c1", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload={"symbol": "c.py::retry"},
         caused_by=ho.id)])
-    d.process_batch([str(L.inbox_dir(d.codoc_dir) / "agent-cursor.jsonl")])
+    d.process_batch([str(I.inbox_dir(d.codoc_dir) / "agent-cursor.jsonl")])
     st = d.ws.store
     assert queued(st) == [] and calls == [] and not d.state.epoch_open
     attach = next(o for o in st.ops if o.kind == K.BIND_ATTACH and o.caused_by == ho.id)
@@ -376,15 +433,15 @@ def test_an_agents_citing_binding_op_settles_its_handoff_with_no_epoch(tmp_path)
 def test_binding_ops_that_do_not_cite_the_latest_handoff_settle_nothing(tmp_path):
     """Only an op's recorded `caused_by` decides: an attach that cites nothing,
     or cites a hand-off the person has since superseded, is not evidence."""
-    from codoc.loops.realize import queued
+    from codoc.calculus.derive import queued
     d, _ = make(tmp_path, [])
     old = handoff(d.ws, "h1", actor="human:local")
     handoff(d.ws, "h1", actor="human:local", asked="and log each retry")
-    L.submit(d.codoc_dir, "agent-cursor", [
+    I.submit(d.codoc_dir, "agent-cursor", [
         Submission(cid="c1", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload={"symbol": "c.py::a"}),
         Submission(cid="c2", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload={"symbol": "c.py::b"},
                    caused_by=old.id)])
-    assert "2 client op" in d.process_batch([str(L.inbox_dir(d.codoc_dir) / "agent-cursor.jsonl")])
+    assert "2 client op" in d.process_batch([str(I.inbox_dir(d.codoc_dir) / "agent-cursor.jsonl")])
     assert queued(d.ws.store) == ["h1"]
     assert not [o for o in d.ws.store.ops if o.kind == K.FEATURE_REALIZED]
 
@@ -392,16 +449,16 @@ def test_binding_ops_that_do_not_cite_the_latest_handoff_settle_nothing(tmp_path
 def test_a_citing_attach_settles_nothing_while_an_agent_epoch_is_open_and_settles_at_its_close(tmp_path):
     """An open epoch is a build in progress: the hand-off stays queued, so the
     agent's later amends still land as plans. The close runs the same scan."""
-    from codoc.loops.realize import queued
+    from codoc.calculus.derive import queued
     d, _ = make(tmp_path, [])
     ho = handoff(d.ws, "h1", actor="human:local")
     act = d.codoc_dir / "activity.json"
     write_activity(d.codoc_dir, {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": []})
     assert "opened" in d.process_batch([str(act)])
-    L.submit(d.codoc_dir, "agent-claude-code", [Submission(
+    I.submit(d.codoc_dir, "agent-claude-code", [Submission(
         cid="c1", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload={"symbol": "c.py::retry"},
         caused_by=ho.id)])
-    d.process_batch([str(L.inbox_dir(d.codoc_dir) / "agent-claude-code.jsonl")])
+    d.process_batch([str(I.inbox_dir(d.codoc_dir) / "agent-claude-code.jsonl")])
     assert queued(d.ws.store) == ["h1"]
     data = read_activity(d.codoc_dir)
     data["epoch"]["open"] = False
@@ -417,10 +474,10 @@ def test_a_batch_does_not_wake_the_daemon_for_what_it_wrote(tmp_path):
     drain with nothing new rewrites nothing."""
     from codoc.daemon.daemon import _filter
     d, _ = make(tmp_path, [])
-    inbox = L.inbox_dir(d.codoc_dir)
+    inbox = I.inbox_dir(d.codoc_dir)
     keep = _filter(d.codoc_dir, d.code_path)
     t = d.ws.store.blocks["p1"].text()
-    L.submit(d.codoc_dir, "ide", [Submission(cid="w1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+    I.submit(d.codoc_dir, "ide", [Submission(cid="w1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
                                              payload={"after": list(t.last_live_ref()), "text": " Typed."})])
     assert keep(None, str(inbox / "ide.jsonl"))
 

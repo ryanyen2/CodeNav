@@ -62,9 +62,9 @@ def test_one_machine_clause_does_not_loosen_the_gate_on_a_persons_paragraph(tmp_
 def test_one_pass_proposes_a_feature_for_deletion_once(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
     seed_loop(ws)
-    cs = ChangeSet(removed=[chunk("c.py", "c.py::send", "f1", "t1")], added=[chunk("d.py", "d.py::x", "fx", "tx")])
+    cs = ChangeSet(removed=[chunk("c.py::send", "f1", "t1")], added=[chunk("d.py::x", "fx", "tx")])
     model = lambda changes, subtree, titles, **k: [
-        {"kind": "retire_node", "feature_id": "h1", "rationale": "send was removed"},
+        {"kind": "delete_node", "feature_id": "h1", "rationale": "send was removed"},
         {"kind": "add_node", "title": "Thing x", "description": "Does x.", "bindings": ["d.py::x"]}]
     reflect(ws, cs, Graph(), propose=model)
     deletes = [p for p in ws.store.plans.values() if p.status == "open" and p.kind == "delete"]
@@ -116,7 +116,7 @@ def test_propose_makes_each_removal_its_own_delete_plan(tmp_path):
     seed(ws)
     ws.close()
     try:
-        out = tools.propose(str(cd), ops=[{"kind": "retire_node", "feature_id": "h1"},
+        out = tools.propose(str(cd), ops=[{"kind": "delete_node", "feature_id": "h1"},
                                           {"kind": "add_node", "title": "Replacement", "description": "Does it."}],
                             root_dir=str(tmp_path))
         assert out["ok"] and len(out["plan_ids"]) == 2

@@ -26,7 +26,7 @@ from codoc.calculus.text import BOLD
 from codoc.index.changes import ChunkRef
 from codoc.index.reader import ChunkRow
 from codoc.workspace import Workspace
-from codoc.workspace import log as L
+from codoc.workspace import inbox as I
 from codoc.workspace.snapshot import write_snapshot
 
 H = "human:local"
@@ -240,18 +240,18 @@ def fold(cd) -> None:
     ws.close()
 
 
-def sub(cid, kind, target, payload, batch="b1", **kw) -> L.Submission:
-    return L.Submission(cid=cid, kind=kind, target=target, payload=payload, batch=batch, **kw)
+def sub(cid, kind, target, payload, batch="b1", **kw) -> I.Submission:
+    return I.Submission(cid=cid, kind=kind, target=target, payload=payload, batch=batch, **kw)
 
 
 # ── the index and the LLM ───────────────────────────────────────────────────
 
-def chunk(file, sym, fp="", th="", src=""):
-    return ChunkRef(file=file, symbol_path=sym, fingerprint=fp, types_hash=th, source=src)
+def chunk(sym, fp="", th="", src=""):
+    return ChunkRef(sym, fp, th, src)
 
 
 def row(file, sym, src="def f(): ...", th="t"):
-    return ChunkRow(id=0, file=file, symbol_path=sym, language="python", source=src, tokens_hash=f"h-{sym}",
+    return ChunkRow(id=0, file=file, symbol=sym, language="python", source=src, fingerprint=f"h-{sym}",
                     types_hash=th, start_byte=0, end_byte=1)
 
 

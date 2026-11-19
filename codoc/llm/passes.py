@@ -19,7 +19,9 @@ Bootstrap (``loops/bootstrap.py``):
   under a few theme parents (``add_node`` themes, ``move_node`` of features).
 
 A new node carries a temporary id in its ``id`` field; a child or a moved
-feature names it as ``parent_id``, and the caller maps those to real ids.
+feature names it as ``parent_id``, and the caller maps those to real ids. The
+organizing call also names existing features by alias (``f3``), which the
+caller maps back the same way.
 
 Reflect (``loops/reflect.py``):
 
@@ -114,6 +116,12 @@ def format_brief(brief: dict | None) -> str:
     def sentence(s) -> str:
         return str(s).strip().rstrip(".") + "."
 
+    # The cost of a choice and the failure of an order follow as plain clauses,
+    # not as labels: a file pass copies a label into a description with the fact.
+    def clause(s) -> str:
+        s = sentence(s)
+        return s[:1].lower() + s[1:] if s[1:2].islower() else s
+
     choices = []
     for d in brief.get("decisions") or []:
         if d.get("choice"):
@@ -121,7 +129,7 @@ def format_brief(brief: dict | None) -> str:
             if d.get("because"):
                 line = f"- {sentence(d['choice'])[:-1]}, because {sentence(d['because'])}"
             if d.get("gave_up"):
-                line += f" Gives up: {sentence(d['gave_up'])}"
+                line += f" In exchange, {clause(d['gave_up'])}"
             choices.append(line)
     if choices:
         out.append("Choices where another was possible:\n" + "\n".join(choices))
@@ -130,7 +138,7 @@ def format_brief(brief: dict | None) -> str:
         if o.get("before"):
             line = f"- {sentence(str(o['before']) + ' runs before ' + str(o.get('then', '')))}"
             if o.get("otherwise"):
-                line += f" Otherwise: {sentence(o['otherwise'])}"
+                line += f" If not, {clause(o['otherwise'])}"
             order.append(line)
     if order:
         out.append("Order that matters:\n" + "\n".join(order))

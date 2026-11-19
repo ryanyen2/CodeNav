@@ -1,6 +1,10 @@
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { providerEnvVars, upsertEnvLines } from '../../host/setup/env-file';
+import { ignoreEnvFile, providerEnvVars, upsertEnvLines } from '../../host/setup/env-file';
 
 describe('upsertEnvLines', () => {
     it('adds a key to an empty file', () => {
@@ -52,14 +56,39 @@ describe('providerEnvVars', () => {
         expect(providerEnvVars('anthropic', ' sk-ant-x ')).toEqual({ CODOC_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'sk-ant-x' });
     });
 
-    it('a model adds CODOC_MODEL', () => {
-        expect(providerEnvVars('claude', undefined, 'sonnet')).toEqual({ CODOC_PROVIDER: 'claude', CODOC_MODEL: 'sonnet' });
-        expect(providerEnvVars('openai', 'sk-x', 'gpt-5.4-mini')).toEqual({ CODOC_PROVIDER: 'openai', OPENAI_API_KEY: 'sk-x', CODOC_MODEL: 'gpt-5.4-mini' });
-    });
-
     it('refuses a key provider without a key', () => {
         expect(() => providerEnvVars('openai')).toThrow(/requires an API key/);
         expect(() => providerEnvVars('openai', '   ')).toThrow(/requires an API key/);
         expect(() => providerEnvVars('anthropic')).toThrow(/requires an API key/);
+    });
+});
+
+describe('ignoreEnvFile', () => {
+    // No global excludes file: a developer's own ignore of `.env` would hide the write.
+    const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+    const repo = () => {
+        const dir = mkdtempSync(join(tmpdir(), 'codoc-env-'));
+        spawnSync('git', ['init', '-q', dir], { env });
+        return dir;
+    };
+
+    it('adds .env to .gitignore once, keeping what is there', () => {
+        const dir = repo();
+        writeFileSync(join(dir, '.gitignore'), 'node_modules');
+        const saved = { ...process.env };
+        Object.assign(process.env, env);
+        try {
+            ignoreEnvFile(dir);
+            ignoreEnvFile(dir);
+        } finally {
+            process.env = saved;
+        }
+        expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe('node_modules\n.env\n');
+    });
+
+    it('writes nothing outside a git repository', () => {
+        const dir = mkdtempSync(join(tmpdir(), 'codoc-env-'));
+        ignoreEnvFile(dir);
+        expect(existsSync(join(dir, '.gitignore'))).toBe(false);
     });
 });

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import type { Submission } from '../../../web/calc/projection';
+import type { Submission, TextField } from '../../../web/calc/projection';
 import type { HistoryWindow } from '../../../web/calc/window';
 import { block, proj } from './harness';
 
@@ -63,7 +63,7 @@ describe('the page', () => {
         const first = undoSubs();
         expect(first.map(s => s.batch)).toEqual(['u-b-verdict']);
         post({ kind: 'acks', acks: first.map(s => ({ cid: s.cid, op: null, conflict: 'verdict_folded' })) });
-        expect(statusLine()).toBe('Could not undo accepting the proposal: it is in a snapshot now.');
+        expect(statusLine()).toBe('Could not undo accepting the plan: it is in a snapshot now.');
         posted.length = 0;
         cmdZ();
         post({ kind: 'history', history: w });                          // the refused undo is not in the window
@@ -179,8 +179,8 @@ describe('the page', () => {
 
     it('accepting a plan hands off the features it names, in the same batch', () => {
         post({ kind: 'projection', proj: proj([block('h', 'heading', 'Title'), block('p', 'paragraph', 'one two')], { head: 30,
-            plans: [{ id: 'p-1', actor: 'agent:x', kind: 'edit', target: 'p', note: '', status: 'open', handoff: ['h'] },
-                    { id: 'p-2', actor: 'loop', kind: 'edit', target: 'p', note: '', status: 'open', handoff: [] }] }) });
+            plans: [{ id: 'p-1', actor: 'agent:x', kind: 'edit', target: 'p', note: '', status: 'open', hands_off: ['h'] },
+                    { id: 'p-2', actor: 'loop', kind: 'edit', target: 'p', note: '', status: 'open', hands_off: [] }] }) });
         posted.length = 0;
         const accept = Array.from(document.querySelectorAll('.codoc-btn')).find(b => b.textContent?.startsWith('Accept all')) as HTMLButtonElement;
         accept.click();
@@ -188,7 +188,7 @@ describe('the page', () => {
             .filter(s => s.kind === 'plan.accept' || s.kind === 'feature.handoff');
         expect(subs.map(s => [s.kind, s.target, s.payload])).toEqual([
             ['plan.accept', { pid: 'p-1' }, {}], ['plan.accept', { pid: 'p-2' }, {}],
-            ['feature.handoff', { fid: 'h' }, { asked: 'Build the plan p-1.' }]]);
+            ['feature.handoff', { fid: 'h' }, {}]]);
         expect(new Set(subs.map(s => s.batch)).size).toBe(1);
     });
 
@@ -208,11 +208,29 @@ describe('the page', () => {
         const dot = (fid: string) => document.querySelector(`.codoc-row[data-fid="${fid}"] .codoc-dot`) as HTMLElement;
         expect(dot('h').classList.contains('is-theirs')).toBe(false);
         expect(dot('g').classList.contains('is-theirs')).toBe(true);
-        expect(dot('g').title).toBe('edited by human:bob@x.org, not yet handed off; your ⌘S does not send it');
+        expect(dot('g').title).toBe('edited by human:bob@x.org, not yet handed off; your hand-off does not send it');
         expect(document.querySelector('.codoc-marker.is-theirs')?.getAttribute('aria-label')).toBe(dot('g').title);
         posted.length = 0;
         document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true }));
         const subs = posted.filter(m => m.kind === 'submit').flatMap(m => (m as { subs: Submission[] }).subs);
         expect(subs.filter(s => s.kind === 'feature.handoff').map(s => s.target)).toEqual([{ fid: 'h' }]);
+    });
+
+    it('on a host with no terminal offers no Build now, and Build it is a plain hand-off', () => {
+        post({ kind: 'status', status: { state: 'synced', actor: 'human:local', role: 'maintainer', terminal: false, doc_language: 'zh-Hans' } });
+        expect(document.documentElement.lang).toBe('zh-Hans');
+        const p = proj([block('h', 'heading', 'Title'), block('p', 'paragraph', 'one two'),
+            { id: 'c1', kind: 'comment', level: 0, rank: 'z', head: 1, fields: { thread: 'c1', anchor: 'p', anchor_text: 'one',
+              scope: 'code', status: 'open', body: { text: 'tighten this', spans: [],
+              runs: [{ op: 'o', k0: 0, start: 0, end: 12, actor: 'human:local', at: '1', plan: null }] } } }],
+            { head: 60, phases: { h: 'queued' } });
+        (p.blocks[1].fields.text as TextField).spans.push({ kind: 'comment', attrs: { block: 'c1' }, start: 0, end: 3 });
+        post({ kind: 'projection', proj: p });
+        expect(Array.from(document.querySelectorAll('.codoc-toolbar .codoc-btn')).map(b => b.textContent)).not.toContain('Build now');
+        posted.length = 0;
+        const build = Array.from(document.querySelectorAll('.codoc-card .codoc-btn')).find(b => b.textContent === 'Build it') as HTMLButtonElement;
+        build.click();
+        expect(posted.map(m => m.kind)).toEqual(['submit']);
+        expect((posted[0] as { subs: Submission[] }).subs.map(s => [s.kind, s.target, s.payload])).toEqual([['feature.handoff', { fid: 'h' }, {}]]);
     });
 });

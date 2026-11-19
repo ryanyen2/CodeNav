@@ -125,7 +125,7 @@ def record_role(codoc_dir: str | Path, login: str, role: str) -> None:
     """Remember a login's role where every clone reads it: the tracked
     ``config.json`` (``roles: {actor: role}``), so a rebuild on any
     machine applies that contributor's ops under the same authority. The actor
-    is ``log.hub_actor``, never a bare ``human:<login>``, so no GitHub login can
+    is ``inbox.hub_actor``, never a bare ``human:<login>``, so no GitHub login can
     name the maintainer's own identity.
 
     This adds the person to the role table, or changes their entry, and so
@@ -133,7 +133,7 @@ def record_role(codoc_dir: str | Path, login: str, role: str) -> None:
     finds a changed role, leave ``config.json`` modified for the maintainer to
     commit. It writes the ``roles`` key and nothing else."""
     from codoc.workspace.config import read_config, write_config
-    from codoc.workspace.log import hub_actor
+    from codoc.workspace.inbox import hub_actor
     roles = dict(read_config(codoc_dir).get("roles") or {})
     if roles.get(hub_actor(login)) == role:
         return                       # a tracked file: signing in is not a change

@@ -10,15 +10,14 @@ queued work) is left alone: the document wins.
 from __future__ import annotations
 
 from codoc.calculus.derive import HELD, phase
+from codoc.calculus.ids import LOOP
 from codoc.kinds import LiftContext, get, plain
 from codoc.kinds.write import write_block
 from codoc.workspace import Workspace
 
 
-
-def lift_pass(ws: Workspace, graph=None, codoc_dir: str | None = None, only: set[str] | None = None) -> int:
-    """Returns the number of blocks whose content changed. ``only`` limits the
-    pass to blocks whose feature is in the set."""
+def lift_pass(ws: Workspace, graph=None, codoc_dir: str | None = None) -> int:
+    """Returns the number of blocks whose content changed."""
     store = ws.store
     changed = 0
     for block in list(store.ordered()):
@@ -26,8 +25,6 @@ def lift_pass(ws: Workspace, graph=None, codoc_dir: str | None = None, only: set
         if kind is None or kind.lift is None:
             continue
         fid = store.feature_of(block.id)
-        if only is not None and fid not in only:
-            continue
         if fid and phase(store, fid) in HELD:
             continue
         bindings = [b for b in store.bindings.values() if b.feature == fid] if fid else []
@@ -38,7 +35,7 @@ def lift_pass(ws: Workspace, graph=None, codoc_dir: str | None = None, only: set
         delta = {k: v for k, v in new.items() if current.get(k) != v}
         if not delta:
             continue
-        w = write_block(ws, block.id, delta, actor="loop", derived=True)
+        w = write_block(ws, block.id, delta, actor=LOOP, derived=True)
         if w.ops:
             changed += 1
     return changed

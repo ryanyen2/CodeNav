@@ -111,7 +111,7 @@ def test_a_repair_never_rides_in_the_agents_open_proposal_to_delete(tmp_path):
     publish(cd, ws.store, root_dir=str(tmp_path))
     ws.close()
     try:
-        assert tools.propose(str(cd), ops=[{"kind": "retire_node", "feature_id": "h1"}], note="dead code",
+        assert tools.propose(str(cd), ops=[{"kind": "delete_node", "feature_id": "h1"}], note="dead code",
                              root_dir=str(tmp_path))["ok"]
         tools.reflect(str(cd), ops=[{"kind": "amend", "feature_id": "h1", "title": "Server client"}],
                       root_dir=str(tmp_path))
@@ -124,7 +124,7 @@ def test_a_repair_never_rides_in_the_agents_open_proposal_to_delete(tmp_path):
 
 
 def test_the_tools_do_not_offer_a_proposal_nobody_can_answer(tmp_path):
-    """A plan whose target block is dead is not offered (`derive.open_plans`),
+    """A plan whose target block is dead is not offered (`derive.offered_plans`),
     and `read_tree` and `read_status` count the plans the editor draws, so the
     agent never reads a proposal the person cannot answer."""
     cd = tmp_path / ".codoc"
@@ -136,21 +136,21 @@ def test_the_tools_do_not_offer_a_proposal_nobody_can_answer(tmp_path):
                 "payload": {"after": list(r[-1]), "text": " Proposed."}}], actor="agent:claude-code", plan=pid)
     publish(cd, ws.store, root_dir=str(tmp_path))
     ws.close()
-    assert tools.read_status(str(cd))["proposals"] == 1
+    assert client.queue_status(str(cd))["plans"] == 1
     assert [p["plan_id"] for p in tools.read_tree(str(cd))["plans"]] == [pid]
     client.release(cd)
     ws = Workspace(cd)
     d = ws.submit([{"kind": K.BLOCK_DELETE, "target": {"bid": "h1"}, "payload": {}}], actor=H)[0]
     publish(cd, ws.store, root_dir=str(tmp_path))
     ws.close()
-    assert tools.read_status(str(cd))["proposals"] == 0
+    assert client.queue_status(str(cd))["plans"] == 0
     assert tools.read_tree(str(cd))["plans"] == []
     client.release(cd)
     ws = Workspace(cd)                                   # …and it comes back with the block
     ws.submit([dict(b) for b in d.inverse], actor=H)
     publish(cd, ws.store, root_dir=str(tmp_path))
     ws.close()
-    assert tools.read_status(str(cd))["proposals"] == 1
+    assert client.queue_status(str(cd))["plans"] == 1
     client.release(cd)
 
 
@@ -207,7 +207,7 @@ def test_a_refused_part_does_not_hide_the_plans_that_were_written(tmp_path):
     try:
         reword = {"kind": "amend", "feature_id": "h1", "blocks": [{"id": "p1", "text": "Retries twice."}]}
         assert tools.propose(str(cd), ops=[reword], root_dir=str(tmp_path))["ok"]
-        got = tools.propose(str(cd), ops=[reword, {"kind": "retire_node", "feature_id": "h2"}], root_dir=str(tmp_path))
+        got = tools.propose(str(cd), ops=[reword, {"kind": "delete_node", "feature_id": "h2"}], root_dir=str(tmp_path))
         st = client.read(cd).store
         assert got["ok"] and [st.plans[p].kind for p in got["plan_ids"]] == ["delete"]
         assert any("open_plan" in r for r in got["refused"])
@@ -216,12 +216,12 @@ def test_a_refused_part_does_not_hide_the_plans_that_were_written(tmp_path):
 
 
 def test_a_feature_is_proposed_for_removal_once(tmp_path):
-    """Two `retire_node` of one feature in one call open one delete plan, and
+    """Two `delete_node` of one feature in one call open one delete plan, and
     a later call adds none while that plan is open."""
     cd, ws = workspace(tmp_path)
     ws.close()
     try:
-        retire = {"kind": "retire_node", "feature_id": "h1"}
+        retire = {"kind": "delete_node", "feature_id": "h1"}
         assert tools.propose(str(cd), ops=[retire, retire], root_dir=str(tmp_path))["ok"]
         assert not tools.propose(str(cd), ops=[retire], root_dir=str(tmp_path))["ok"]
         st = client.read(cd).store
@@ -235,7 +235,7 @@ def test_codoc_agent_names_the_actor_and_its_citing_attach_settles_the_handoff(t
     Claude Code hooks, so no agent epoch ever closes. Their attach that cites
     the hand-off is the evidence, and the applier settles on it, here with no
     daemon running."""
-    from codoc.loops.realize import queued
+    from codoc.calculus.derive import queued
     cd, ws = workspace(tmp_path)
     ho = handoff(ws, "h1", actor=H)
     ws.close()
@@ -255,7 +255,7 @@ def test_codoc_agent_names_the_actor_and_its_citing_attach_settles_the_handoff(t
 def test_the_queues_d_id_settles_the_handoff(tmp_path):
     """realize.md shows a hand-off as ⟨d:<op id>⟩ and the agent is told to pass
     that id as caused_by; it must cite the hand-off the same as the bare id."""
-    from codoc.loops.realize import queued
+    from codoc.calculus.derive import queued
     cd, ws = workspace(tmp_path)
     ho = handoff(ws, "h1", actor=H)
     ws.close()
@@ -303,16 +303,16 @@ def test_status_lists_an_item_reported_this_turn_as_settling_when_the_turn_ends(
     publish(cd, ws.store, root_dir=str(tmp_path))
     ws.close()
     write_activity(str(cd), {"epoch": {"id": "ep", "open": True}, "cited": []})
-    item = {"feature_id": "h1", "title": "Client", "directive": f"d:{ho.id}"}
+    item = {"feature_id": "h1", "title": "Client", "handoff": f"d:{ho.id}"}
     try:
         tools.realize_progress(str(cd), done=0, total=1, current="Client")
-        st = tools.read_status(str(cd))
+        st = client.queue_status(str(cd))
         assert (st["state"], st["queued_list"], st["reported_list"]) == ("queued", [item], [])
         assert tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::retry"]}],
-                             caused_by=item["directive"], root_dir=str(tmp_path))["ok"]
-        st = tools.read_status(str(cd))
+                             caused_by=item["handoff"], root_dir=str(tmp_path))["ok"]
+        st = client.queue_status(str(cd))
         assert (st["state"], st["queued"], st["reported_list"]) == ("reported", 0, [item])
-        assert tools.realize_progress(str(cd), done=1, total=1)["reported"] == [item["directive"]]
+        assert tools.realize_progress(str(cd), done=1, total=1)["reported"] == [item["handoff"]]
     finally:
         client.release(cd)
 
@@ -346,15 +346,15 @@ def test_context_for_a_feature_is_its_range_and_the_features_one_call_away(tmp_p
 
 
 def test_the_agent_is_claude_code_unless_codoc_agent_names_another(monkeypatch):
-    from codoc.workspace import log as L
+    from codoc.workspace.inbox import actor_for
     monkeypatch.delenv("CODOC_AGENT", raising=False)
-    assert L.actor_for(tools.agent_client()) == "agent:claude-code"
+    assert actor_for(tools.agent_client()) == "agent:claude-code"
     monkeypatch.setenv("CODOC_AGENT", "codex")
-    assert L.actor_for(tools.agent_client()) == "agent:codex"
+    assert actor_for(tools.agent_client()) == "agent:codex"
     # The name becomes an inbox file name and an actor id: anything else refuses to start.
     import pytest
     from codoc.mcp import server
     monkeypatch.setenv("CODOC_AGENT", "../Cursor")
     with pytest.raises(SystemExit, match="CODOC_AGENT"):
         server.main()
-    assert L.actor_for("agent-../Cursor") is None
+    assert actor_for("agent-../Cursor") is None

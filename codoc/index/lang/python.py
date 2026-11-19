@@ -2,54 +2,11 @@
 
 from __future__ import annotations
 
-import ctypes
-import pathlib
-import warnings
-
 import tree_sitter as ts
 
-from codoc.index.lang.base import Chunk, SymbolRef
+from codoc.index.lang.base import Chunk, SymbolRef, parser
 
 LANGUAGE_NAME = "python"
-
-# ---------------------------------------------------------------------------
-# Internal helpers: load the language once at import time.
-# tree_sitter_languages 1.10.2 ships precompiled grammars in languages.so but
-# was built against the old tree-sitter 0.20 API.  We load the shared library
-# directly with ctypes to get the raw TSLanguage pointer, then hand it to the
-# tree-sitter 0.25 Python binding, which accepts an integer pointer.
-# ---------------------------------------------------------------------------
-
-def _load_language(name: str) -> ts.Language:
-    import tree_sitter_languages as _tsl_pkg  # noqa: PLC0415
-
-    langs_so = pathlib.Path(_tsl_pkg.__file__).parent / "languages.so"
-    lib = ctypes.cdll.LoadLibrary(str(langs_so))
-    fn = getattr(lib, f"tree_sitter_{name}")
-    fn.restype = ctypes.c_void_p
-    ptr = fn()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        return ts.Language(ptr)
-
-
-_PY_LANG: ts.Language | None = None
-_PY_PARSER: ts.Parser | None = None
-
-
-def _get_lang() -> ts.Language:
-    global _PY_LANG
-    if _PY_LANG is None:
-        _PY_LANG = _load_language("python")
-    return _PY_LANG
-
-
-def _get_parser() -> ts.Parser:
-    global _PY_PARSER
-    if _PY_PARSER is None:
-        _PY_PARSER = ts.Parser(_get_lang())
-    return _PY_PARSER
-
 
 # ---------------------------------------------------------------------------
 # Extraction helpers
@@ -61,6 +18,14 @@ def _node_name(node: ts.Node) -> str | None:
         if child.type == "identifier":
             return child.text.decode("utf-8", errors="replace")
     return None
+
+
+def _is_overload(decorated: ts.Node) -> bool:
+    """An ``@overload`` stub: a signature for type checkers. The implementation
+    follows under the same name, and it is the chunk."""
+    return any(d.type == "decorator"
+               and d.text.decode("utf-8", errors="replace").lstrip("@").strip().rsplit(".", 1)[-1] == "overload"
+               for d in decorated.children)
 
 
 def _module_assignment_name(node: ts.Node) -> str | None:
@@ -96,8 +61,8 @@ def _extract_chunks_recursive(
     prefix  – dot-separated qualified name of the enclosing scope, e.g. "MyClass"
                or "" for module scope.
     Consecutive non-definition sibling nodes at module scope are collected into a
-    single __module__ chunk.  Inside a class body they are skipped (we only care
-    about methods / nested classes).
+    single __module__ chunk.  Inside a class body they are skipped: only methods and
+    nested classes are chunks there.
     """
     definition_kinds = {"function_definition", "class_definition", "decorated_definition"}
     is_module_scope = prefix == ""
@@ -111,7 +76,7 @@ def _extract_chunks_recursive(
             raw = source_bytes[module_start:module_end].decode("utf-8", errors="replace")
             chunks.append(
                 Chunk(
-                    symbol_path=f"{file}::__module__",
+                    symbol=f"{file}::__module__",
                     file=file,
                     start_byte=module_start,
                     end_byte=module_end,
@@ -142,7 +107,7 @@ def _extract_chunks_recursive(
                     (c for c in child.children if c.type in {"function_definition", "class_definition"}),
                     None,
                 )
-                if inner is None:
+                if inner is None or _is_overload(child):
                     continue
                 def_node = inner
             else:
@@ -153,12 +118,12 @@ def _extract_chunks_recursive(
                 continue
 
             qualified = f"{prefix}.{entity_name}" if prefix else entity_name
-            sym_path = f"{file}::{qualified}"
+            symbol = f"{file}::{qualified}"
 
             raw = source_bytes[child.start_byte:child.end_byte].decode("utf-8", errors="replace")
             chunks.append(
                 Chunk(
-                    symbol_path=sym_path,
+                    symbol=symbol,
                     file=file,
                     start_byte=child.start_byte,
                     end_byte=child.end_byte,
@@ -185,7 +150,7 @@ def _extract_chunks_recursive(
                     )
                     chunks.append(
                         Chunk(
-                            symbol_path=f"{file}::{assign_name}",
+                            symbol=f"{file}::{assign_name}",
                             file=file,
                             start_byte=child.start_byte,
                             end_byte=child.end_byte,
@@ -219,15 +184,15 @@ class PythonAdapter:
         chunks: list[Chunk] = []
         _extract_chunks_recursive(tree.root_node, source_bytes, file, "", chunks)
         # De-duplicate __module__ chunks (merge all into one).
-        module_chunks = [c for c in chunks if c.symbol_path.endswith("::__module__")]
-        other_chunks = [c for c in chunks if not c.symbol_path.endswith("::__module__")]
+        module_chunks = [c for c in chunks if c.symbol.endswith("::__module__")]
+        other_chunks = [c for c in chunks if not c.symbol.endswith("::__module__")]
         if module_chunks:
             merged_start = min(c.start_byte for c in module_chunks)
             merged_end = max(c.end_byte for c in module_chunks)
             merged_source = source_bytes[merged_start:merged_end].decode("utf-8", errors="replace")
             other_chunks.append(
                 Chunk(
-                    symbol_path=f"{file}::__module__",
+                    symbol=f"{file}::__module__",
                     file=file,
                     start_byte=merged_start,
                     end_byte=merged_end,
@@ -239,72 +204,6 @@ class PythonAdapter:
     @property
     def comment_node_kinds(self) -> set[str]:  # type: ignore[override]
         return {"comment"}
-
-    def resolve_symbol_path(self, source: str, symbol_path: str) -> tuple[int, int] | None:
-        """Resolve "file.py::ClassName.method" → (start_byte, end_byte)."""
-        if "::" in symbol_path:
-            qualified = symbol_path.split("::", 1)[1]
-        else:
-            qualified = symbol_path
-
-        parts = qualified.split(".")
-        tree = self.parse(source)
-
-        def search(node: ts.Node, remaining: list[str]) -> tuple[int, int] | None:
-            if not remaining:
-                return None
-            target = remaining[0]
-            rest = remaining[1:]
-
-            for child in node.children:
-                # decorated_definition wraps function/class
-                effective = child
-                if child.type == "decorated_definition":
-                    inner = next(
-                        (c for c in child.children if c.type in {"function_definition", "class_definition"}),
-                        None,
-                    )
-                    if inner is not None:
-                        effective = inner
-                    else:
-                        continue
-
-                if effective.type in {"function_definition", "class_definition"}:
-                    name_node = next((c for c in effective.children if c.type == "identifier"), None)
-                    if name_node and name_node.text.decode("utf-8", errors="replace") == target:
-                        if not rest:
-                            return (child.start_byte, child.end_byte)
-                        # Dig into the block
-                        body = next((c for c in effective.children if c.type == "block"), None)
-                        if body is not None:
-                            result = search(body, rest)
-                            if result is not None:
-                                return result
-
-            return None
-
-        return search(tree.root_node, parts)
-
-    def run_ts_query(
-        self, source: str, query_str: str,
-        scope: tuple[int, int] | None = None,
-    ) -> list[tuple[int, int]]:
-        tree = self.parse(source)
-        lang = _get_lang()
-        query = ts.Query(lang, query_str)
-        cursor = ts.QueryCursor(query)
-        if scope is not None:
-            cursor.set_byte_range(scope[0], scope[1])
-        matches = cursor.matches(tree.root_node)
-        results: list[tuple[int, int]] = []
-        for _idx, cap_dict in matches:
-            # Use the first capture group's first node.
-            for nodes in cap_dict.values():
-                if nodes:
-                    n = nodes[0]
-                    results.append((n.start_byte, n.end_byte))
-                break
-        return results
 
     def references_in_chunk(self, chunk_source: str, file: str) -> list[SymbolRef]:
         tree = self.parse(chunk_source)
@@ -431,26 +330,4 @@ class PythonAdapter:
         return refs
 
     def parse(self, source: str):
-        return _get_parser().parse(source.encode("utf-8"))
-
-    def token_stream(self, source: str, exclude_comment_nodes: bool = True) -> list[str]:
-        source_bytes = source.encode("utf-8")
-        tree = self.parse(source)
-        comment_kinds = self.comment_node_kinds if exclude_comment_nodes else set()
-        tokens: list[str] = []
-
-        def walk(node: ts.Node) -> None:
-            if node.type in comment_kinds:
-                return
-            if node.child_count == 0:
-                text = source_bytes[node.start_byte:node.end_byte].decode(
-                    "utf-8", errors="replace"
-                ).strip()
-                if text:
-                    tokens.append(text)
-                return
-            for child in node.children:
-                walk(child)
-
-        walk(tree.root_node)
-        return tokens
+        return parser("python").parse(source.encode("utf-8"))

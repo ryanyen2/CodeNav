@@ -33,11 +33,11 @@ def _root(cd: str) -> str:
 @mcp.tool
 def codoc_context(files: list[str] | None = None, feature_id: str | None = None, include_bindings: bool = True) -> dict:
     """The relevant slice of the feature tree for the code you are working on,
-    and the PREFERRED read before editing or proposing. `files` (repo-relative):
+    and the read to make before editing or proposing. `files` (repo-relative):
     the features bound to them expanded one hop along call/import edges.
     `feature_id`: that feature, the features under it, and the features owning
-    code it calls or that calls it. Each feature comes with its paragraphs BY BLOCK ID (an amend
-    names the paragraph it changes), plus a title outline and nearby graph edges."""
+    code it calls or that calls it. Each feature comes with its paragraphs by block id (an
+    amend names the paragraph it changes), plus a title outline and nearby graph edges."""
     cd, err = _need_dir()
     return err or tools.read_context(cd, files=files, feature_id=feature_id, include_bindings=include_bindings)
 
@@ -53,13 +53,14 @@ def codoc_tree(root_id: str | None = None, depth: int = 0, include_bindings: boo
 @mcp.tool
 def codoc_status() -> dict:
     """Where the tree and the code stand: `state` (synced | edited | queued |
-    realizing | reported | proposed), the queued items left to build
-    (`queued_list`, what /codoc:sync implements), the items this turn reported
-    with codoc_reflect (`reported_list`: they settle when your turn ends, so
-    there is nothing to wait for), features with unsent edits, open proposals,
-    and citations that do not resolve to code."""
+    realizing | reported | proposed), the hand-offs left to build
+    (`queued_list`, what /codoc:realize builds, each with its `handoff` id),
+    the hand-offs this turn reported with codoc_reflect (`reported_list`: they
+    settle when your turn ends, so there is nothing to wait for), features with
+    unsent edits, the number of open plans, and citations that do not resolve
+    to code."""
     cd, err = _need_dir()
-    return err or tools.read_status(cd)
+    return err or client.queue_status(cd)
 
 
 @mcp.tool
@@ -67,7 +68,7 @@ def codoc_history(feature_id: str, limit: int = 20) -> dict:
     """One feature's history: its ops newest-last (who, when, what) and the
     current attribution of every paragraph as runs (who wrote which words)."""
     cd, err = _need_dir()
-    return err or tools.read_history(cd, feature_id, limit)
+    return err or client.read_history(cd, feature_id, limit)
 
 
 @mcp.tool
@@ -79,12 +80,12 @@ def codoc_reflect(ops: list[dict], rationale: str = "", caused_by: str | None = 
     (a paragraph, a `- ` item, a `1. ` step, a table) and a block you do not list is
     unchanged (lands on the trunk when it only rewords a little and nobody has
     pending edits there, else as one plan); or `add_node` / `move_node` /
-    `retire_node` (always a plan; accepting it takes the words, since the code is
+    `delete_node` (always a plan; accepting it takes the words, since the code is
     already written). `rationale` is one plain line saying what the edits change
     in the document; it is the note on any plan they open. Describe the code as it
     is, not what changed: no "now", "no longer" or "updated to", in the rationale or
-    in amended text. Pass the directive id from realize.md as `caused_by`: that
-    reports the item, which settles when your turn ends."""
+    in amended text. Pass the hand-off's id from realize.md (`d:…`) as
+    `caused_by`: that reports the hand-off, which settles when your turn ends."""
     cd, err = _need_dir()
     return err or tools.reflect(cd, ops=ops, rationale=rationale, caused_by=caused_by, root_dir=_root(cd))
 
@@ -96,12 +97,12 @@ def codoc_propose(ops: list[dict], note: str = "", caused_by: str | None = None)
     (`description` is Markdown), `{"kind": "amend", "feature_id", "title"?, "blocks":
     [{"id", "text"} | {"id", "delete": true} | {"text"}]}` (a block you do not list is
     unchanged), `{"kind": "move_node", "feature_id", "parent_id"}`,
-    `{"kind": "retire_node", "feature_id"}`. `note` is one plain line saying what
+    `{"kind": "delete_node", "feature_id"}`. `note` is one plain line saying what
     the plan changes in the document, describing the code as it will be, not what
     changes: no "now", "no longer" or "updated to", in the note or in amended text.
-    Each removal is its own plan, and a
-    feature already proposed for removal is not proposed again. Accepting a plan
-    from here queues the work for you; accepting a removal does not delete code."""
+    Each deletion is its own plan, and a
+    feature already proposed for deletion is not proposed again. Accepting a plan
+    from here queues the work for you; accepting a deletion does not delete code."""
     cd, err = _need_dir()
     return err or tools.propose(cd, ops=ops, note=note, caused_by=caused_by, root_dir=_root(cd))
 
@@ -122,33 +123,10 @@ def codoc_write_block(content: dict, bid: str | None = None, kind: str | None = 
 @mcp.tool
 def codoc_realize_progress(done: int, total: int, current: str = "") -> dict:
     """Report progress through the realize queue so the editor shows
-    'implementing n of m' and knows the pass is alive. Returns the items this
+    'building n of m' and knows the pass is alive. Returns the hand-offs this
     turn reported (`reported`), which settle when your turn ends."""
     cd, err = _need_dir()
     return err or tools.realize_progress(cd, done=done, total=total, current=current)
-
-
-@mcp.tool
-def codoc_walkthrough(question: str, steps: list[dict], answer: str = "") -> dict:
-    """Answer a question by drawing a numbered reading path over features that
-    already exist. Steps: `{feature_id, note, quote?, group?, file?, symbol?, line?}`.
-    Writes nothing to the tree."""
-    cd, err = _need_dir()
-    return err or tools.walkthrough(cd, question=question, answer=answer, steps=steps)
-
-
-@mcp.tool
-def codoc_walkthrough_clear() -> dict:
-    """Dismiss the walkthrough on screen. Idempotent."""
-    cd, err = _need_dir()
-    return err or tools.clear_walkthrough_tool(cd)
-
-
-@mcp.tool
-def codoc_walkthrough_read() -> dict:
-    """The walkthrough currently on the reader's screen, or null."""
-    cd, err = _need_dir()
-    return err or tools.read_walkthrough_tool(cd)
 
 
 def main() -> None:
@@ -159,9 +137,9 @@ def main() -> None:
 
     # Claude Code stops a stdio server with SIGINT and then SIGTERM about 100 ms
     # later, before the event loop has unwound, and SIGTERM's default skips
-    # atexit. Close the session log first so it gets its `closed` trailer and
-    # a fold may archive it. A tool runs in a worker thread; `release` waits
-    # for the batch it is applying. The stop runs once, and `os._exit` skips
+    # atexit. A tool runs in a worker thread, and `release` waits for the
+    # batch it is applying, so the log never ends halfway through one. The
+    # stop runs once, and `os._exit` skips
     # interpreter shutdown, which aborts on stdin's buffer lock while FastMCP's
     # reader thread is blocked reading it.
     def stop(*_):

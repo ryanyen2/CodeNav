@@ -10,8 +10,9 @@
  *
  * When only words changed, the changed blocks are replaced in place. When a
  * block arrived, left or moved, the whole document is rebuilt in the
- * projection's order and the transaction is tagged `REPLACED`. Either way the
- * caret is put back after the character it sat after, found by identity.
+ * projection's order and the transaction is tagged `REPLACED`. Either way each
+ * end of the selection is put back after the character it sat after, found by
+ * identity.
  *
  * A block whose op the daemon refused is re-read once nothing of it is in
  * flight (`Outbox.reloadable`). A projection of a different `store` comes from
@@ -33,13 +34,15 @@ import type { Outbox } from './outbox';
 
 export type Adopt = (next: Projection) => void;
 
+type End = { bid: string; off: number; ref: CharRef | undefined };
+
 export function adopter(view: EditorView, shadows: Map<string, Shadow>, outbox: Outbox, paints: Paints, shown: Shown): Adopt {
     const schema = view.state.schema;
 
     /**
      * Mark the blocks whose paints this projection can have changed. A block's
      * paints come from its own projected fields and from its feature's phase,
-     * editors, claims and watermarks, so most projections touch few. A reorder touches
+     * editors and claims, so most projections touch few. A reorder touches
      * every block.
      *
      * The plans list is not compared. That rests on the applier touching every
@@ -52,28 +55,48 @@ export function adopter(view: EditorView, shadows: Map<string, Shadow>, outbox: 
             return;
         }
         const features = new Set<string>();
-        const pw = prev.watermarks ?? {}, nw = next.watermarks ?? {};
         for (const fid of new Set([...Object.keys(prev.phases), ...Object.keys(next.phases)])) {
             if (prev.phases[fid] !== next.phases[fid] || !sameJson(prev.editors?.[fid], next.editors?.[fid])) features.add(fid);
         }
         for (const fid of new Set([...Object.keys(prev.claims), ...Object.keys(next.claims)])) {
             if (!sameJson(prev.claims[fid], next.claims[fid])) features.add(fid);
         }
-        for (const fid of new Set([...Object.keys(pw), ...Object.keys(nw)])) {
-            if (!sameJson(pw[fid], nw[fid])) features.add(fid);
-        }
         for (const bid of changed) paints.mark(bid);
         if (features.size) for (const [bid, fid] of paints.featureOf) if (fid && features.has(fid)) paints.mark(bid);
     }
 
-    /** Put the caret back in the block it was in, after the character it sat after. */
-    function restoreCaret(tr: Transaction, bid: string | null, off: number, ref: CharRef | undefined): Transaction {
-        if (!bid) return tr;
-        const at = ref ? shadows.get(bid)?.indexOf(ref) ?? -1 : -1;
-        const want = at >= 0 ? at + 1 : off;
-        let pos = 0;
-        tr.doc.forEach((n, p) => { if (n.attrs.bid === bid) pos = p + 1 + unitOffset(n, want); });
-        return pos ? tr.setSelection(TextSelection.create(tr.doc, Math.min(pos, tr.doc.content.size))) : tr;
+    /** A selection end as identity: its block, its offset there, and the character before it. */
+    function endAt(pos: number): End | null {
+        const $p = view.state.doc.resolve(pos);
+        if ($p.depth < 1) return null;
+        const block = $p.node(1), bid = block.attrs.bid as string;
+        const off = scalarOffset(block, $p.parentOffset);
+        return { bid, off, ref: off > 0 ? shadows.get(bid)?.refs[off - 1] : undefined };
+    }
+
+    /** Where an end is in `doc`: after the same character, at the start when it
+     *  was at the start, or null. With `loose`, at its old offset when the
+     *  character is gone. */
+    function posOf(doc: PMNode, e: End | null, loose: boolean): number | null {
+        if (!e) return null;
+        let k = e.off;
+        if (k > 0) {
+            const i = e.ref ? shadows.get(e.bid)?.indexOf(e.ref) ?? -1 : -1;
+            if (i >= 0) k = i + 1;
+            else if (!loose) return null;
+        }
+        let pos: number | null = null;
+        doc.forEach((n, p) => { if (n.attrs.bid === e.bid) pos = Math.min(p + 1 + unitOffset(n, k), doc.content.size); });
+        return pos;
+    }
+
+    /** Put the selection back. A range comes back when both its ends still
+     *  exist; otherwise the caret goes where the head was. */
+    function restoreSelection(tr: Transaction, anchor: End | null, head: End | null): Transaction {
+        const a = posOf(tr.doc, anchor, false), h = posOf(tr.doc, head, false);
+        if (a !== null && h !== null) return tr.setSelection(TextSelection.create(tr.doc, a, h));
+        const at = posOf(tr.doc, head, true);
+        return at === null ? tr : tr.setSelection(TextSelection.create(tr.doc, at));
     }
 
     return function adopt(next) {
@@ -100,11 +123,7 @@ export function adopter(view: EditorView, shadows: Map<string, Shadow>, outbox: 
             view.dispatch(view.state.tr.setMeta(REPAINT, true));
             return;
         }
-        const $caret = view.state.doc.resolve(view.state.selection.from);
-        const caretBlock = $caret.depth >= 1 ? $caret.node(1) : null;
-        const caretBid = caretBlock ? caretBlock.attrs.bid as string : null;
-        const caretOff = caretBlock ? scalarOffset(caretBlock, $caret.parentOffset) : 0;
-        const caretRef = caretBid && caretOff > 0 ? shadows.get(caretBid)?.refs[caretOff - 1] : undefined;
+        const anchor = endAt(view.state.selection.anchor), head = endAt(view.state.selection.head);
         const changed = new Set<string>();
 
         // Only words changed: the structure is already right, so replace each
@@ -126,7 +145,7 @@ export function adopter(view: EditorView, shadows: Map<string, Shadow>, outbox: 
             }
             markPaints(prev, next, changed, rebuilt);
             tr = tr.setMeta(RECORDED, []).setMeta(REPAINT, true);
-            view.dispatch(restoreCaret(tr, caretBid, caretOff, caretRef));
+            view.dispatch(restoreSelection(tr, anchor, head));
             return;
         }
 
@@ -160,7 +179,7 @@ export function adopter(view: EditorView, shadows: Map<string, Shadow>, outbox: 
         const newDoc = schema.nodes.doc.create(null, order.map(id => nodeFor.get(id)!));
         const tr = view.state.tr.replaceWith(0, view.state.doc.content.size, newDoc.content)
             .setMeta(RECORDED, []).setMeta(REPLACED, true).setMeta(REPAINT, true);
-        view.dispatch(restoreCaret(tr, caretBid, caretOff, caretRef));
+        view.dispatch(restoreSelection(tr, anchor, head));
     };
 }
 

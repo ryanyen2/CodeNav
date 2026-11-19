@@ -13,7 +13,7 @@ Given a change set from the index, the pass:
    | edit | lands |
    |---|---|
    | ``attach`` | on the trunk (attribution, not intent); under the node's plan when the node is new in this answer |
-   | ``add_node``, ``move_node``, ``retire_node`` | as a plan |
+   | ``add_node``, ``move_node``, ``delete_node`` | as a plan |
    | ``amend`` | on the trunk when every part is a small rewording and the feature has nothing pending; otherwise as ONE plan for the whole amend, the loop's open plan on the feature when it has one |
 
 4. covers what the model left unplaced: a chunk lands with the feature that
@@ -29,7 +29,9 @@ back to the request. A pass triggered by a hand edit cites nothing, since
 nobody implemented anything.
 
 ``propose`` is injectable: a callable ``(changes, subtree, all_titles, **kw) →
-list[dict]`` of raw ops in the prompt's JSON shape. Tests inject a fake.
+list[dict]`` of raw ops in the prompt's JSON shape. Tests inject a fake. What it
+is shown names features and blocks by alias (``loops.context.aliases``); an op
+may name them by alias or by id.
 """
 from __future__ import annotations
 
@@ -37,14 +39,14 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from codoc.calculus import ops as K
-from codoc.calculus.derive import HELD, LOOP, open_plans_on, phase
-from codoc.calculus.ingest import Ingest
-from codoc.calculus.ops import Op, covered
+from codoc.calculus.derive import HELD, open_plans_on, phase
+from codoc.calculus.ids import LOOP
+from codoc.calculus.ingest import strike_bodies
+from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
 from codoc.index.changes import ChangeSet, ChunkRef
 from codoc.index.graph import Graph
-from codoc.loops.context import impacted_features, owner_of, select_context
-from codoc.calculus.ingest import strike_bodies
+from codoc.loops.context import aliases, impacted_features, owner_of, renamed, select_context
 from codoc.loops.edits import PLAN_KIND, Change, Compiler, delete_open, title_from_file
 from codoc.workspace import Workspace
 
@@ -57,7 +59,6 @@ class ReflectResult:
     plans: list[str] = field(default_factory=list)
     llm_calls: int = 0
     refused: list[tuple[str, str]] = field(default_factory=list)   # (bid or kind, reason)
-    impacted: list[str] = field(default_factory=list)
     caused: dict[str, str] = field(default_factory=dict)            # fid -> handoff op cited
     removed: set[str] = field(default_factory=set)                  # symbols removed from the code
     ops: list[Op] = field(default_factory=list)                     # everything this pass wrote
@@ -74,7 +75,7 @@ class ReflectResult:
 
 
 class _Pass:
-    """One reflect pass's writer: every submit and ingest lands in ``res.ops``."""
+    """One reflect pass's writer: every op it writes lands in ``res.ops``."""
 
     def __init__(self, ws: Workspace, res: ReflectResult, caused_by: dict[str, str]) -> None:
         self.ws, self.res, self._caused = ws, res, caused_by
@@ -92,11 +93,6 @@ class _Pass:
         self.res.ops.extend(ops)
         return ops
 
-    def commit(self, ing: Ingest, **kw) -> list[Op]:
-        ops = self.ws.commit_ingest(ing, actor=LOOP, **kw)
-        self.res.ops.extend(ops)
-        return ops
-
     def open_plan(self, **kw) -> str:
         pid = self.ws.open_plan(actor=LOOP, **kw)
         self.res.ops.append(self.store.by_id[self.store.plans[pid].opened_by])
@@ -105,27 +101,27 @@ class _Pass:
 
 
 def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: str = "codebase",
-            config=None, doc_language=None, allow_delete: bool = True, extra_changes: dict | None = None,
+            config=None, doc_language=None, allow_delete: bool = True,
             under_epoch: bool = False, landed: frozenset[str] = frozenset()) -> ReflectResult:
     store = ws.store
     res = ReflectResult()
     caused_by = {fid: did for fid, did in _causes(store).items() if under_epoch or did in landed}
     res.caused = dict(caused_by)
-    res.removed = {r.symbol_path for r in cs.removed}
+    res.removed = {r.symbol for r in cs.removed}
     p = _Pass(ws, res, caused_by)
 
     # 1. Deterministic binding maintenance.
     removed_owner: dict[str, str] = {}
     bodies: list[dict] = []
     for r in cs.removed:
-        b = store.bindings.get(r.symbol_path)
+        b = store.bindings.get(r.symbol)
         if b:
-            removed_owner[r.symbol_path] = b.feature
-            bodies.append(_bind(K.BIND_DETACH, b.feature, r.symbol_path, caused_by=p.cause(b.feature)))
+            removed_owner[r.symbol] = b.feature
+            bodies.append(_bind(K.BIND_DETACH, b.feature, r.symbol, caused_by=p.cause(b.feature)))
     for c in cs.modified:
-        b = store.bindings.get(c.symbol_path)
+        b = store.bindings.get(c.symbol)
         if b and (b.fingerprint != c.fingerprint or b.types_hash != c.types_hash):
-            bodies.append(_bind(K.BIND_REFRESH, b.feature, c.symbol_path, c.fingerprint, c.types_hash,
+            bodies.append(_bind(K.BIND_REFRESH, b.feature, c.symbol, c.fingerprint, c.types_hash,
                                 caused_by=p.cause(b.feature)))
     if bodies:
         for op in p.submit(bodies):
@@ -133,11 +129,11 @@ def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: s
                 res.auto[op.kind.split(".")[1]] += 1
     relocated: set[str] = set()
     reloc_bodies = []
-    for added, removed, _kind in _relocations(cs, removed_owner):
-        owner = removed_owner[removed.symbol_path]
-        reloc_bodies.append(_bind(K.BIND_ATTACH, owner, added.symbol_path, added.fingerprint,
+    for added, removed in _relocations(cs, removed_owner):
+        owner = removed_owner[removed.symbol]
+        reloc_bodies.append(_bind(K.BIND_ATTACH, owner, added.symbol, added.fingerprint,
                                   added.types_hash, caused_by=p.cause(owner)))
-        relocated.add(added.symbol_path)
+        relocated.add(added.symbol)
     if reloc_bodies:
         for op in p.submit(reloc_bodies):
             if op.conflict is None:
@@ -154,66 +150,64 @@ def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: s
                 _delete_plan(p, fid, note="lost all of its code")
 
     # 3. The LLM pass over what needs judgment.
-    added_unbound = [a for a in cs.added if a.symbol_path not in store.bindings and a.symbol_path not in relocated]
-    modified_bound = [(c, store.bindings[c.symbol_path].feature) for c in cs.modified
-                      if c.symbol_path in store.bindings]
+    added_unbound = [a for a in cs.added if a.symbol not in store.bindings and a.symbol not in relocated]
+    modified_bound = [(c, store.bindings[c.symbol].feature) for c in cs.modified if c.symbol in store.bindings]
     if not added_unbound and not modified_bound:
         return res
-    changed_symbols = {c.symbol_path for c in cs.added + cs.modified + cs.removed}
+    changed_symbols = {c.symbol for c in cs.added + cs.modified + cs.removed}
     subtree, all_titles, graph_ctx = select_context(store, graph, cs.touched_files(), changed_symbols, mode="loop")
     impacted = impacted_features(store, graph, changed_symbols)
-    res.impacted = sorted(impacted)
     changes: dict = {
         "added": [],
-        "modified": [{"file": c.file, "symbol_path": c.symbol_path, "current_feature_id": fid,
-                      "source": (c.source or "")[:600]} for c, fid in modified_bound],
-        "removed": [{"file": r.file, "symbol_path": r.symbol_path,
-                     "current_feature_id": removed_owner.get(r.symbol_path)} for r in cs.removed],
+        "modified": [{"symbol": c.symbol, "current_feature_id": fid, "source": (c.source or "")[:600]}
+                     for c, fid in modified_bound],
+        "removed": [{"symbol": r.symbol, "current_feature_id": removed_owner.get(r.symbol)} for r in cs.removed],
         "graph": graph_ctx,
     }
     if impacted:
         changes["impacted"] = [{"feature_id": f, "via": sorted(v)} for f, v in impacted.items()]
-    if extra_changes:
-        changes.update(extra_changes)
-    batches = _batches(added_unbound, MAX_ADDED_PER_CALL) or [[]]
-    titles = list(all_titles)
+    # The model sees short aliases, never block ids; its answer is mapped back
+    # before it is compiled, and an alias that names nothing stays as it is and
+    # is refused as an unknown feature or block.
+    names = aliases(store, subtree)
+    changes, subtree, titles = renamed(changes, names), renamed(subtree, names), renamed(all_titles, names)
     raw_ops: list[dict] = []
-    for batch in batches:
-        changes["added"] = [{"file": a.file, "symbol_path": a.symbol_path, "source": (a.source or "")[:600]}
-                            for a in batch]
+    for batch in _batches(added_unbound, MAX_ADDED_PER_CALL) or [[]]:
+        changes["added"] = [{"symbol": a.symbol, "source": (a.source or "")[:600]} for a in batch]
         fresh = propose(changes, subtree, titles, repo_name=repo_name, config=config, doc_language=doc_language)
         raw_ops.extend(fresh or [])
         titles = titles + [{"id": "(proposed this pass)", "title": o.get("title"), "parent_id": o.get("parent_id")}
                            for o in (fresh or []) if isinstance(o, dict) and o.get("kind") == "add_node" and o.get("title")]
         res.llm_calls += 1
+    raw_ops = renamed(raw_ops, {a: real for real, a in names.items()})
 
     # The model may bind only what this change set added or modified: those
     # chunks exist by construction, and untouched code is not its to reshuffle.
-    hashes = {c.symbol_path: (c.fingerprint, c.types_hash) for c in cs.added + cs.modified}
+    hashes = {c.symbol: (c.fingerprint, c.types_hash) for c in cs.added + cs.modified}
     compiler = Compiler(store, hashes=hashes, bindable=set(hashes))
-    covered: set[str] = set()
+    placed: set[str] = set()
     for raw in raw_ops:
         change = compiler.compile(raw)
         if change.refused:
             res.refused.append((change.kind, change.refused))
             continue
-        if change.kind == "retire_node" and not (allow_delete and phase(store, change.target) not in HELD):
+        if change.kind == "delete_node" and not (allow_delete and phase(store, change.target) not in HELD):
             continue
         if _land(p, change):
-            covered.update(change.bound)
+            placed.update(change.bound)
 
     # 4. Coverage net for what the model left unplaced.
     homeless: dict[str, list[str]] = {}
     for a in added_unbound:
-        if a.symbol_path in covered or a.symbol_path in store.bindings:
+        if a.symbol in placed or a.symbol in store.bindings:
             continue
-        home = graph.neighbor_feature(a.symbol_path, lambda s: owner_of(store, s))
+        home = graph.neighbor_feature(a.symbol, lambda s: owner_of(store, s))
         if home and store.blocks.get(home) and store.blocks[home].live:
-            p.submit([_bind(K.BIND_ATTACH, home, a.symbol_path, a.fingerprint, a.types_hash,
+            p.submit([_bind(K.BIND_ATTACH, home, a.symbol, a.fingerprint, a.types_hash,
                             caused_by=p.cause(home))])
             res.auto["net"] += 1
         else:
-            homeless.setdefault(a.file, []).append(a.symbol_path)
+            homeless.setdefault(a.file, []).append(a.symbol)
     for file, symbols in homeless.items():
         _land(p, compiler.compile({"kind": "add_node", "title": title_from_file(file), "bindings": symbols,
                                    "rationale": "no feature covered this file"}))
@@ -237,7 +231,7 @@ def _emptied(store: Store) -> list[str]:
     plan (of any verdict: a rejected one is an answer, not an invitation)."""
     bound = {b.feature for b in store.bindings.values()}
     proposed = {pl.target for pl in store.plans.values() if pl.kind == "delete"}
-    # A symbol an OPEN plan borrowed is not a symbol the feature lost: a plan's
+    # A symbol an open plan borrowed is not a symbol the feature lost: a plan's
     # `bind.attach` applies live and displaces the prior owner (I8), and
     # rejecting it gives the symbol back. Asking whether to delete the owner
     # before the person has answered the proposal that emptied it is asking
@@ -267,11 +261,13 @@ def _causes(store: Store) -> dict[str, str]:
     by a realization (whatever the person typed since; that ink is beyond the
     frontier and stays unsent)."""
     return {fid: w.handoffs[-1] for fid, w in store.watermarks_by_fid.items()
-            if w.handoffs and not covered(w.handoff, w.realized)}
+            if w.queued and w.handoffs}
 
 
-def _relocations(cs: ChangeSet, removed_owner: dict) -> list[tuple[ChunkRef, ChunkRef, str]]:
-    removed = [r for r in cs.removed if r.symbol_path in removed_owner]
+def _relocations(cs: ChangeSet, removed_owner: dict) -> list[tuple[ChunkRef, ChunkRef]]:
+    """``(added, removed)`` pairs that are one bound chunk relocated: the same
+    content moved, or a unique AST shape renamed."""
+    removed = [r for r in cs.removed if r.symbol in removed_owner]
     used: set[str] = set()
     out = []
     by_tok: dict[str, list[ChunkRef]] = {}
@@ -279,28 +275,28 @@ def _relocations(cs: ChangeSet, removed_owner: dict) -> list[tuple[ChunkRef, Chu
         by_tok.setdefault(r.fingerprint, []).append(r)
     matched: set[str] = set()
     for a in cs.added:
-        cands = [c for c in by_tok.get(a.fingerprint, []) if c.symbol_path not in used]
+        cands = [c for c in by_tok.get(a.fingerprint, []) if c.symbol not in used]
         if a.fingerprint and cands:
             c = cands[0]
-            used.add(c.symbol_path)
-            matched.add(a.symbol_path)
-            out.append((a, c, "move"))
+            used.add(c.symbol)
+            matched.add(a.symbol)
+            out.append((a, c))
     # rename: a unique AST shape among everything that left the index (bound
     # or not) matched with a unique shape among what arrived
     shapes_removed_all = Counter(r.types_hash for r in cs.removed if r.types_hash)
     by_shape_removed: dict[str, list[ChunkRef]] = {}
     for r in removed:
-        if r.symbol_path not in used and r.types_hash:
+        if r.symbol not in used and r.types_hash:
             by_shape_removed.setdefault(r.types_hash, []).append(r)
     by_shape_added: dict[str, list[ChunkRef]] = {}
     for a in cs.added:
-        if a.symbol_path not in matched and a.types_hash:
+        if a.symbol not in matched and a.types_hash:
             by_shape_added.setdefault(a.types_hash, []).append(a)
     for shape, adds in by_shape_added.items():
         rems = by_shape_removed.get(shape, [])
         if len(adds) == 1 and len(rems) == 1 and shapes_removed_all[shape] == 1:
-            out.append((adds[0], rems[0], "rename"))
-            used.add(rems[0].symbol_path)
+            out.append((adds[0], rems[0]))
+            used.add(rems[0].symbol)
     return out
 
 
@@ -347,7 +343,7 @@ def _land(p: _Pass, change: Change) -> bool:
         if done.plan and done.plan != own:
             p.res.plans.append(done.plan)
         return bool(done.ops)
-    if change.kind == "retire_node" and delete_open(p.store, fid):
+    if change.kind == "delete_node" and delete_open(p.store, fid):
         return False          # already proposed for deletion in this pass or an earlier one
     pid = p.open_plan(kind=PLAN_KIND[change.kind], target=fid, note=change.note)
     if change.kind == "add_node":
@@ -358,7 +354,7 @@ def _land(p: _Pass, change: Change) -> bool:
 
 def _delete_plan(p: _Pass, fid: str, note: str) -> str:
     pid = p.open_plan(kind="delete", target=fid, note=note)
-    bodies = strike_bodies(p.store, [b.id for b in p.store.feature_body(fid)], pid)
+    bodies = strike_bodies(p.store, [b.id for b in p.store.body(fid)], pid)
     if bodies:
         p.submit(bodies, plan=pid, batch=pid)
     return pid

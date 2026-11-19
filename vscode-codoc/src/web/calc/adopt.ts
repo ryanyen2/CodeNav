@@ -3,9 +3,7 @@
  *
  * `blockNode` builds one block's node from its projected Text field. For a
  * heading or a prose block that is the live text with the projection's spans
- * as marks, plan-tagged runs as `plan` marks and suggested deletions as
- * `suggest_del` marks; for a source block (table, diagram, code) it is the raw
- * `source`. Any other kind is a card (editor/card.ts) whose node carries the
+ * as marks; for a source block (table, diagram, code) it is the raw `source`. Any other kind is a card (editor/card.ts) whose node carries the
  * projected fields and its layout; the card keeps its own
  * shadows. `adoptionPlan` says which blocks to replace, insert, remove or
  * reorder given the document's current blocks and the set of held blocks
@@ -13,7 +11,7 @@
  */
 import type { Node as PMNode, Schema } from '@tiptap/pm/model';
 
-import { SOURCE, isBuiltin, layoutOf, refsOf, textField, type ProjectedBlock, type Projection, type TextField } from './projection';
+import { SOURCE, isBuiltin, layoutOf, refsOf, textField, type ProjectedBlock, type Projection, type Span } from './projection';
 import { Shadow } from './shadow';
 
 /** The blocks the document shows: everything in the reading flow. Comment
@@ -38,33 +36,22 @@ export function blockNode(schema: Schema, b: ProjectedBlock): { node: PMNode; sh
     const type = schema.nodes[b.kind];
     const attrs = b.kind === 'paragraph' ? { bid: b.id, head: b.head } : { bid: b.id, head: b.head, level: b.level || 1 };
     if (!f) return { node: type.create(attrs), shadow: null };
-    return { node: type.create(attrs, inlineFrom(schema, f)), shadow: Shadow.fromField(f.text, refsOf(f)) };
+    return { node: type.create(attrs, inlineNodes(schema, f.text, f.spans)), shadow: Shadow.fromField(f.text, refsOf(f)) };
 }
 
-/** Inline content for a field: text split at every mark boundary. */
-function inlineFrom(schema: Schema, f: TextField): PMNode[] {
-    const ranges: MarkRange[] = [];
-    for (const s of f.spans) ranges.push({ start: s.start, end: s.end, name: s.kind, attrs: s.attrs });
-    for (const s of f.suggest_del) ranges.push({ start: s.start, end: s.end, name: 'suggest_del', attrs: { plan: s.plan } });
-    for (const r of f.runs) if (r.plan) ranges.push({ start: r.start, end: r.end, name: 'plan', attrs: { pid: r.plan } });
-    return inlineNodes(schema, f.text, ranges);
-}
-
-export interface MarkRange { start: number; end: number; name: string; attrs: Record<string, string> }
-
-/** `text` as text nodes carrying the marks of `ranges` (scalar offsets, end
+/** `text` as text nodes carrying the marks of `spans` (scalar offsets, end
  *  exclusive). A mark the schema does not know is left out. */
-export function inlineNodes(schema: Schema, text: string, ranges: MarkRange[]): PMNode[] {
+export function inlineNodes(schema: Schema, text: string, spans: readonly Span[]): PMNode[] {
     const chars = Array.from(text);
     if (!chars.length) return [];
-    const known = ranges.filter(r => r.end > r.start && schema.marks[r.name]);
+    const known = spans.filter(r => r.end > r.start && schema.marks[r.kind]);
     const cuts = new Set<number>([0, chars.length]);
     for (const r of known) { cuts.add(Math.min(r.start, chars.length)); cuts.add(Math.min(r.end, chars.length)); }
     const points = Array.from(cuts).sort((a, b) => a - b);
     const out: PMNode[] = [];
     for (let i = 0; i + 1 < points.length; i++) {
         const [a, b] = [points[i], points[i + 1]];
-        const marks = known.filter(r => r.start <= a && r.end >= b).map(r => schema.marks[r.name].create(r.attrs));
+        const marks = known.filter(r => r.start <= a && r.end >= b).map(r => schema.marks[r.kind].create(r.attrs));
         out.push(schema.text(chars.slice(a, b).join(''), marks));
     }
     return out;

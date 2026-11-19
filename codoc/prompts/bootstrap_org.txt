@@ -42,7 +42,7 @@ modules it passes.
 ## Fields
 
 - A theme: `add_node` with a temporary id (`"id": "t1"`), a `title`, and a `description`. The description is one sentence that names, in backticks, the one or two symbols a caller enters through and what they return or change. Add a numbered list of stages only when a call path above visits its features in that order; a list of the child titles is not stages.
-- A move: `move_node` with the feature's real id (`b-…`) as `feature_id` and the theme's temporary id as `parent_id`.
+- A move: `move_node` with the feature's id from the list above (`f3`) as `feature_id` and the theme's temporary id as `parent_id`.
 - A feature that stays at the top level: `move_node` with no `parent_id`.
 
 ## Order
@@ -63,10 +63,10 @@ break is `\n`, and it contains no double-quote character.
 <solution>
 {"ops": [
   {"id": "t1", "kind": "add_node", "title": "Sending a request", "description": "Turns a call like `get(url)` into bytes on a connection and a response object back.\n\n1. The public functions open a session.\n2. The session prepares the request and applies cookies, auth and redirects.\n3. The adapter sends it over a pooled connection.", "bindings": []},
-  {"kind": "move_node", "feature_id": "b-1a2b3c4d5e6f", "parent_id": "t1", "rationale": "the public entry point"},
-  {"kind": "move_node", "feature_id": "b-5e6f7a8b9c0d", "parent_id": "t1", "rationale": "session handling, step 2"},
-  {"kind": "move_node", "feature_id": "b-7c8d9e0f1a2b", "rationale": "the exception classes stand alone, after the request path"},
-  {"kind": "move_node", "feature_id": "b-3a4b5c6d7e8f", "rationale": "package version constants go last"}
+  {"kind": "move_node", "feature_id": "f1", "parent_id": "t1", "rationale": "the public entry point"},
+  {"kind": "move_node", "feature_id": "f4", "parent_id": "t1", "rationale": "session handling, step 2"},
+  {"kind": "move_node", "feature_id": "f2", "rationale": "the exception classes stand alone, after the request path"},
+  {"kind": "move_node", "feature_id": "f7", "rationale": "package version constants go last"}
 ]}
 </solution>
 

@@ -3,8 +3,10 @@
 - ``layout``:     the names of the files in it, atomic write, tolerant read, flock.
 - ``config``:     the tracked ``config.json`` (doc language, roles).
 - ``clock``:      the hybrid logical clock every op is stamped with.
-- ``log``:        session log files (the truth), their validation, and the
-                  client inbox the applier drains.
+- ``log``:        session log files (the truth): reading, checking, replay order,
+                  the writer.
+- ``inbox``:      the client inbox the applier drains, its acks, and which
+                  actor each inbox file writes as.
 - ``snapshot``:   folding a settled prefix of the log into one snapshot file.
 - ``roles``:      who may write what.
 - ``workspace``:  ``Workspace``: open the directory, rebuild the store from its

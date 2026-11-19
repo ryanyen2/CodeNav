@@ -1,9 +1,10 @@
-"""The Consult-URL gate for a hub-triggered realize run.
+"""The Consult-URL gate for a realize run the hub starts.
 
 A feature description can carry external `[label](https://…)` links that the
-realizing agent WebFetches. On a remote-triggered run those links are attacker-
-authorable, so the fetch path is locked down: https only, the host must be in a
-default-EMPTY allowlist, and the resolved IP must be public: loopback,
+realizing agent fetches. On a run a remote contributor asked for, anyone with
+suggest access could have written those links, so a fetch is allowed only over
+https, to a host in an allowlist that is empty by default, at an address that
+resolves to public IPs: loopback,
 link-local/metadata (169.254/16), RFC1918, CGNAT, and reserved ranges are refused
 so a Consult link cannot reach the home LAN or a cloud metadata endpoint. DNS
 resolution is injected so the resolve-and-pin check is testable; the caller must
@@ -20,7 +21,7 @@ def consult_url_allowed(url: str, allowlist, *, resolve) -> tuple[bool, str]:
     """(allowed, reason) for fetching ``url``.
 
     ``allowlist`` is the set of permitted hostnames (empty → deny everything).
-    ``resolve(host) -> list[str]`` returns the host's IPs; ALL must be public."""
+    ``resolve(host) -> list[str]`` returns the host's IPs; every one must be public."""
     try:
         parsed = urlparse(url)
     except Exception:

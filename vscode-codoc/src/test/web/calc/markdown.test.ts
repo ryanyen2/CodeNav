@@ -7,13 +7,13 @@ import type { Span } from '../../../web/calc/projection';
 
 // Written by the Python codecs (codoc.calculus.block_md / inline_md); see the file's `_comment`.
 const cases = JSON.parse(fs.readFileSync(path.join(__dirname, '../../fixtures/markdown-cases.json'), 'utf8')) as {
-    blocks: Array<{ name: string; md: string; headings: boolean; expect: BlockSpec[] }>;
+    blocks: Array<{ name: string; md: string; headings: boolean; expect: BlockSpec[]; paste?: BlockSpec[] }>;
     inline: Array<{ name: string; md: string; text: string; spans: Span[] }>;
     render: Array<{ name: string; text: string; spans: Span[]; md: string }>;
 };
 
-describe('parseBlocks reads what block_md.parse reads', () => {
-    for (const c of cases.blocks) it(c.name, () => expect(parseBlocks(c.md, c.headings)).toEqual(c.expect));
+describe('parseBlocks reads what block_md.parse reads, keeping each line of prose', () => {
+    for (const c of cases.blocks) it(c.name, () => expect(parseBlocks(c.md)).toEqual(c.paste ?? c.expect));
 });
 
 describe('parseInline reads what inline_md.parse reads', () => {

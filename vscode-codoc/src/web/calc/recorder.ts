@@ -24,7 +24,7 @@
  * counts Unicode scalars. `scalarOffset` converts one way here, and
  * `unitOffset` in editor/decorations.ts converts back.
  */
-import type { Node as PMNode, Slice } from '@tiptap/pm/model';
+import type { Fragment, Node as PMNode, Slice } from '@tiptap/pm/model';
 import { AddMarkStep, RemoveMarkStep, ReplaceStep, type Step } from '@tiptap/pm/transform';
 
 import { kindOf, nfc, pathOf, scalars, type Anchor, type CharRef, type OpBody } from './projection';
@@ -37,8 +37,8 @@ export interface Recorded {
     unhandled: Step[];
 }
 
-/** The mark kinds a person sets and the recorder sends. The others (`plan`,
- *  `suggest_del`, `comment`) are drawn from the projection and never sent. */
+/** The mark kinds a person sets and the recorder sends. The other, `comment`,
+ *  comes from the projection and is never sent. */
 export const SENT_MARKS: ReadonlySet<string> = new Set(['bold', 'code', 'link', 'cite']);
 
 /** The op target for a block node: its id and its Text field. */
@@ -91,19 +91,7 @@ export class Recorder {
             out.ops.push({ kind: 'text.insert', target, payload: { after, text } });
             out.cids.push(cid);
             shadow.insert(fromOff, text, cid);
-            // Marks carried by the inserted text, as ranges over the minted chars.
-            let k = 0;
-            step.slice.content.forEach(child => {
-                const len = scalars(nfc(child.text ?? '')).length;
-                for (const m of child.marks) {
-                    if (!SENT_MARKS.has(m.type.name) || len === 0) continue;
-                    out.ops.push({ kind: 'text.mark', target, payload: {
-                        kind: m.type.name, attrs: markAttrs(m.type.name, m.attrs),
-                        start: ['$cid', cid, k] as CharRef, end: ['$cid', cid, k + len - 1] as CharRef, on: true,
-                    } });
-                }
-                k += len;
-            });
+            out.ops.push(...markOps(target, cid, step.slice.content));
         }
         return true;
     }
@@ -144,6 +132,25 @@ export function scalarOffset(block: PMNode, parentOffset: number): number {
     return out;
 }
 
+/** A `text.mark` for each sent mark on the text nodes of `content`, over the
+ *  characters the insert `cid` minted for them. */
+function markOps(target: { bid: string; path: string }, cid: string, content: Fragment): OpBody[] {
+    const out: OpBody[] = [];
+    let k = 0;
+    content.forEach(child => {
+        const len = scalars(nfc(child.text ?? '')).length;
+        for (const m of child.marks) {
+            if (!SENT_MARKS.has(m.type.name) || len === 0) continue;
+            out.push({ kind: 'text.mark', target, payload: {
+                kind: m.type.name, attrs: markAttrs(m.type.name, m.attrs),
+                start: ['$cid', cid, k] as CharRef, end: ['$cid', cid, k + len - 1] as CharRef, on: true,
+            } });
+        }
+        k += len;
+    });
+    return out;
+}
+
 /** The plain text of an inline slice, NFC as the applier records it. */
 function sliceText(slice: Slice): string {
     let s = '';
@@ -164,19 +171,30 @@ export function markAttrs(kind: string, attrs: Record<string, unknown>): Record<
 }
 
 /**
- * The fallback: a block whose text changed through a step the recorder could
- * not name. Compares the block's current scalars with its shadow as one
- * replaced span: the shortest common prefix and suffix survive, everything
- * between is deleted and re-inserted. The actor is the person either way;
- * only run boundaries can be coarser than recording.
+ * The fallback, and the record of an IME composition: a block whose text
+ * changed through steps the recorder did not read. Compares the block's current
+ * scalars with its shadow as one replaced span: the longest common prefix and
+ * suffix survive, everything between is deleted and re-inserted. The inserted
+ * characters keep the marks the page shows on them, as typed text does. The
+ * actor is the person either way; only run boundaries can be coarser than
+ * recording.
  */
 export function reconcile(block: PMNode, shadow: Shadow, nextCid: () => string): { ops: OpBody[]; cids: string[] } {
-    return reconcileText(targetOf(block), block.textContent, shadow, nextCid);
+    const target = targetOf(block);
+    const text = block.textContent;
+    const r = reconcileText(target, text, shadow, nextCid);
+    if (r.cids.length) {
+        const from = scalars(text).slice(0, r.at).join('').length;
+        const inserted = r.ops[r.ops.length - 1].payload.text as string;
+        r.ops.push(...markOps(target, r.cids[0], block.content.cut(from, from + inserted.length)));
+    }
+    return r;
 }
 
-/** The same comparison for a field's plain text, as a card's text area holds it. */
+/** The same comparison for a field's plain text, as a card's text area holds
+ *  it. `at` is the offset of the insert, when there is one. */
 export function reconcileText(target: { bid: string; path: string }, text: string, shadow: Shadow,
-                              nextCid: () => string): { ops: OpBody[]; cids: string[] } {
+                              nextCid: () => string): { ops: OpBody[]; cids: string[]; at: number } {
     const now = scalars(nfc(text));
     const was = shadow.chars;
     let p = 0;
@@ -194,5 +212,5 @@ export function reconcileText(target: { bid: string; path: string }, text: strin
         cids.push(cid);
         shadow.insert(p, inserted, cid);
     }
-    return { ops, cids };
+    return { ops, cids, at: p };
 }

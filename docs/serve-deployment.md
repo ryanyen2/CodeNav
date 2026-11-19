@@ -45,9 +45,9 @@ browser holds an opaque cookie, never a token. Writes are rate limited per
 login.
 
 The hub's own viewer on `localhost` writes as `human:local`, the same actor as
-the VS Code window on that machine — the person at the machine, in both places.
-One consequence is worth knowing: ⌘Z in that browser tab undoes the newest
-batch that person made anywhere, including one they made in the editor.
+the VS Code window on that machine: the person at the machine, in both places.
+⌘Z in a browser tab undoes only the batches that tab sent, as in the editor
+([editor.md](editor.md), section 4), never one the same person made in VS Code.
 
 ## What travels
 
@@ -83,10 +83,11 @@ the pull request's own branch settles nothing.
 pull request, and which were refused (an agent that wrote outside the scope,
 or produced nothing) so the same request is not tried again and again; a git
 or `gh` failure is not a refusal, and neither is a sandbox that could not run
-at all (the SDK missing, the hook unsupported) — both leave the request
+at all (the SDK missing, the hook unsupported): both leave the request
 unanswered, and the worker comes back to it on the next interval whether or not
-anybody has edited the tree since. `CODOC_SERVE_BASE` is the base
-branch (default `main`); `codoc serve --no-prs` (or `CODOC_SERVE_PR=0`) turns the
+anybody has edited the tree since. `CODOC_SERVE_BASE` is the branch the pull
+requests target; by default the branch origin's `HEAD` names, else the branch
+checked out, else `main`. `codoc serve --no-prs` (or `CODOC_SERVE_PR=0`) turns the
 worker off and leaves the queue for a person. The server prints one line at startup
 when the worker runs.
 
@@ -94,5 +95,10 @@ when the worker runs.
 
 `/` the editor · `/auth/login`, `/auth/callback`, `/api/logout` ·
 `/api/whoami` · `/api/events` (SSE: `projection`, `status`, this viewer's
-`acks`) · `/api/message` (POST with `x-codoc-csrf`: `submit`, `set-language`
-for maintainers) · `/api/media/<name>` · `/healthz`.
+`acks`) · `/api/message` (POST with `x-codoc-csrf`: `ready`, `history`, `submit`,
+and `set-language` for maintainers; `realize` and `open-cite` are refused with a
+reason, since the hub has no terminal and no code editor) · `/api/media/<name>` ·
+`/healthz`.
+
+The hub's `status` carries `terminal: false` and the VS Code host's `terminal: true`,
+so the page offers Build now only where `codoc realize` can run.

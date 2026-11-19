@@ -3,25 +3,24 @@
 
 Per debounced batch of filesystem events it does, in order:
 
-1. rotate the session log if ``HEAD`` moved (a commit, a checkout), noting
-   the hand-offs the commits it moved over name in a ``Codoc-Handoff``
-   trailer, each from a commit whose ``Codoc-Base`` names the branch ``HEAD``
-   is on;
+1. follow the logs on disk: when ``HEAD`` moved (its sha or its branch) or
+   git took the session file, rebuild and start a new session
+   (``Workspace.follow_head``), noting the hand-offs the commits ``HEAD``
+   moved over name in a ``Codoc-Handoff`` trailer, each from a commit whose
+   ``Codoc-Base`` names the branch ``HEAD`` is on;
 2. drain every client inbox into ops, warning once about an inbox file whose
    name maps to no actor;
-3. read the agent epoch (``activity.json``): while an interactive session is
-   open, code changes accumulate instead of triggering a reflect pass, since the
-   agent owns those files; when the epoch closes, one scoped reflect pass runs
-   over everything it touched and cites every queued hand-off. A hard-killed
-   session (no hook fired) is recovered after ``EPOCH_STALE_SECONDS`` of silence;
-4. otherwise, reflect the changed code files, citing the hand-offs of step 1;
-5. publish the derived files.
+3. read the agent epoch (``activity.json``): while a coding agent's session is
+   open, changed code files are deferred, since the agent is mid-edit; when it
+   closes, or after ``EPOCH_STALE_SECONDS`` of silence, they and every file
+   the session touched go to step 4, and that pass cites every queued hand-off;
+4. reflect the changed code files that are not deferred, citing the hand-offs
+   of step 1;
+5. settle the hand-offs applied binding ops now cite, unless an epoch is open
+   (``client.settle_if_idle``); a reflect pass settles too;
+6. publish the derived files.
 
-After a reflect pass and at the end of every batch, when no agent epoch is
-open, every queued hand-off that an applied binding op now cites is settled
-(``loops.realize.settle``), whoever wrote the op.
-
-``process_batch`` is pure enough to test with an injected reflect; ``run``
+``process_batch`` runs with an injected change set and model in tests; ``run``
 wires it to ``watchfiles``.
 """
 from __future__ import annotations
@@ -32,14 +31,16 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path, PurePosixPath
 
-from codoc.daemon.epoch import EPOCH_STALE_SECONDS, close_epoch, epoch_alive, epoch_touched_files, read_epoch
+from codoc.daemon.client import settle_if_idle
+from codoc.daemon.epoch import EPOCH_STALE_SECONDS, close_epoch, epoch_age, epoch_touched_files, read_epoch
 from codoc.daemon.pidfile import clear_pidfile, daemon_running, write_pidfile
-from codoc.daemon.publish import Publisher, realizing_is_fresh
-from codoc.index.git import handoffs_landed, head, head_sha
+from codoc.daemon.publish import Publisher
+from codoc.doclang import workspace_doc_language
+from codoc.index.git import handoffs_landed, head
 from codoc.index.graph import Graph
 from codoc.index.lang import detect_language
-from codoc.loops import realize as R
 from codoc.workspace import Roles, Workspace
+from codoc.workspace import inbox as I
 from codoc.workspace import log as L
 from codoc.workspace.layout import ACTIVITY, APPLIER_LOCK, CODOC_DIR, GRAPH_CACHE, atomic_write, locked
 
@@ -49,17 +50,16 @@ DEBOUNCE_MS = 600
 @dataclass
 class DaemonState:
     epoch_open: bool = False
-    epoch_id: str = ""
-    suppressed: set[str] = field(default_factory=set)
-    head: str = ""
+    deferred: set[str] = field(default_factory=set)   # code files changed while the epoch was open
 
 
 class Daemon:
-    def __init__(self, root_dir: str | Path, codoc_dir: str | Path | None = None, *, reflect=None,
+    def __init__(self, root_dir: str | Path, codoc_dir: str | Path | None = None, *,
                  changeset=None, propose=None, printer=print, after_batch=None) -> None:
         self.root = Path(root_dir)
         self.codoc_dir = Path(codoc_dir or self.root / CODOC_DIR)
         self.ws = Workspace(self.codoc_dir)
+        self.ws.head = head(self.root)
         # A torn last line (a crash mid-write) is cut so every later rebuild
         # agrees with this one; every other log problem is reported.
         for f in self.ws.torn:
@@ -68,30 +68,30 @@ class Daemon:
         for p in self.ws.problems:
             printer(f"▸ log problem: {p.path}:{p.line}: {p.reason}")
         self.graph = Graph.load(self.codoc_dir / GRAPH_CACHE)
-        self.state = DaemonState(head=head_sha(self.root))
+        self.state = DaemonState()
         self.say = printer
         self.after_batch = after_batch       # called with the daemon after every watched batch
-        self._reflect = reflect
         self._changeset = changeset
         self._propose = propose
         self._unknown: set[str] = set()
         self.publisher = Publisher(self.codoc_dir, str(self.root))
 
     def identity(self, client: str, codoc_dir: Path) -> str | None:
-        """The actor an inbox file writes as (``L.actor_for``). A file whose
-        name maps to no actor is never drained, so say so once."""
-        actor = L.actor_for(client, codoc_dir)
+        """The actor an inbox file writes as (``inbox.actor_for``). A file
+        whose name maps to no actor is never drained, so say so once."""
+        actor = I.actor_for(client, codoc_dir)
         if actor is None and client not in self._unknown:
             self._unknown.add(client)
-            self.say(f"▸ not draining {L.inbox_dir(codoc_dir) / client}.jsonl: no actor has that name. "
+            self.say(f"▸ not draining {I.inbox_dir(codoc_dir) / client}.jsonl: no actor has that name. "
                      "An older codoc MCP server wrote it; restart the agent so it runs the current one.")
         return actor
 
     # ── routing ────────────────────────────────────────────────────────────
     @cached_property
     def _source(self):
-        # ponytail: built on first use (importing the index takes seconds) and
-        # once, so a .gitignore edited while the daemon runs counts from its next start.
+        # Built on first use, since importing the index takes seconds. Limit:
+        # built once, so a .gitignore edited while the daemon runs counts from
+        # its next start.
         from codoc.index.app import source_matcher
         return source_matcher(self.root)
 
@@ -104,44 +104,27 @@ class Daemon:
             return None
         return rel if detect_language(rel) and self._source.is_file_included(PurePosixPath(rel)) else None
 
-    def classify(self, paths: list[str]) -> tuple[set[str], bool]:
-        """``(code_files, activity_touched)``. An inbox change needs no flag:
-        every batch drains the inboxes."""
-        code: set[str] = set()
-        activity = False
-        act = (self.codoc_dir / ACTIVITY).resolve()
-        for p in paths:
-            if Path(p).resolve() == act:
-                activity = True
-            elif (rel := self.code_path(p)) is not None:
-                code.add(rel)
-        return code, activity
-
     def process_batch(self, paths: list[str], *, now: float | None = None) -> str:
         now = now if now is not None else time.time()
-        code, activity = self.classify(paths)
+        code = {rel for p in paths if (rel := self.code_path(p)) is not None}
         notes: list[str] = []
-        rebuilt = False
-        # 1. HEAD moved → the set of logs on disk may have changed (a checkout,
-        # a pull): rebuild from them, then start a new session file.
+        # 1. The logs on disk.
+        was = self.ws.head
         sha, branch = head(self.root)
         landed: frozenset[str] = frozenset()
-        if sha != self.state.head:
+        rebuilt = self.ws.follow_head(sha, branch)
+        if rebuilt:
             # A trailer counts from the commits HEAD moved over when HEAD is on
             # the branch the commit's `Codoc-Base` names (a merge, a pull with or
             # without rebase, a checkout of the base). Checking out or pulling a
-            # hub pull request's own branch merges nothing.
-            # ponytail: the trailer is read when the batch that sees HEAD move
-            # reflects the merged files; a merge whose files were reflected in an
-            # earlier batch (a conflicted merge committed later) cites nothing,
-            # and `codoc done` settles it.
-            landed = handoffs_landed(self.root, self.state.head, sha, branch)
-            self.state.head = sha
-            self.ws.rebuild()
-            self.ws.rotate_session()
+            # hub pull request's own branch merges nothing. Limit: the trailer
+            # is read when the batch that sees HEAD move reflects the merged
+            # files; a merge whose files were reflected in an earlier batch (a
+            # conflicted merge committed later) cites nothing, and `codoc done`
+            # settles it.
+            landed = handoffs_landed(self.root, was[0], sha, branch) if was else frozenset()
             self.publisher.invalidate()      # a different set of logs is a different tree
-            rebuilt = True
-            notes.append("session rotated (HEAD moved)")
+            notes.append("rebuilt from the logs on disk")
         # 2. Client ops, under the roles the tracked config names right now
         # (the hub adds a login's role when they sign in). Every batch drains:
         # the drain reads each inbox from its saved offset, so this is cheap,
@@ -151,67 +134,49 @@ class Daemon:
         done = self.ws.drain_inbox(self.identity)
         if done:
             notes.append(f"{len(done)} client op(s)")
-        # 3. Epoch edges and stale recovery. The pass that runs because an agent
-        # session ended cites the queued hand-offs, as an agent's own
-        # `codoc_reflect` and a merged commit's trailer do.
+        # 3. The agent epoch, read every batch, so a daemon started during a
+        # turn defers that turn's files and reflects them when it closes. The
+        # pass that runs because a session ended cites the queued hand-offs, as
+        # an agent's own `codoc_reflect` and a merged commit's trailer do.
         under_epoch = False
-        if self.state.epoch_open and _stale(self.codoc_dir, now):
-            dead = self.state.epoch_id
-            files = self.state.suppressed | set(epoch_touched_files(self.codoc_dir))
-            self.state.epoch_open = False
-            self.state.suppressed = set()
-            if close_epoch(self.codoc_dir, dead, now=now, stale_after=EPOCH_STALE_SECONDS):
-                code |= files
-                under_epoch = True
-                notes.append("recovered a dead agent session")
-        if activity:
-            ep = read_epoch(self.codoc_dir)
-            if ep is not None:
-                if ep.get("open") and not self.state.epoch_open:
-                    self.state.epoch_open = True
-                    self.state.epoch_id = ep.get("id", "")
-                    self.state.suppressed = set()
-                    notes.append("agent session opened")
-                elif self.state.epoch_open and not ep.get("open") and ep.get("id") == self.state.epoch_id:
-                    self.state.epoch_open = False
-                    code |= self.state.suppressed | set(epoch_touched_files(self.codoc_dir))
-                    self.state.suppressed = set()
-                    under_epoch = True
-                    notes.append("agent session closed")
+        ep = read_epoch(self.codoc_dir) or {}
+        is_open = bool(ep.get("open"))
+        stale = is_open and epoch_age(self.codoc_dir, now) > EPOCH_STALE_SECONDS
+        if stale and close_epoch(self.codoc_dir, ep.get("id", ""), now=now, stale_after=EPOCH_STALE_SECONDS):
+            is_open = False                  # a session killed without its hooks
+        if is_open and not self.state.epoch_open:
+            self.state = DaemonState(epoch_open=True)
+            notes.append("agent session opened")
+        elif self.state.epoch_open and not is_open:
+            code |= self.state.deferred | set(epoch_touched_files(self.codoc_dir))
+            self.state = DaemonState()
+            under_epoch = True
+            notes.append("recovered a dead agent session" if stale else "agent session closed")
         # 4. Reflect.
         if code:
             if self.state.epoch_open:
-                self.state.suppressed |= code
-                notes.append(f"holding {len(code)} file(s) for the open session")
+                self.state.deferred |= code
+                notes.append(f"deferring {len(code)} file(s) for the open session")
             else:
                 notes.append(self.reflect(code, under_epoch=under_epoch, landed=landed))
-        self._settle(sha=sha, now=now)       # what the drain landed, and a session that just closed
-        # 5. Publish (the publisher skips the write when nothing moved).
-        realizing = set(R.queued(self.ws.store)) if realizing_is_fresh(self.codoc_dir, now) else set()
-        self.publisher.publish(self.ws.store, realizing=realizing, force=rebuilt)
+        # 5. Settle what the drain landed, and a session that just closed.
+        settle_if_idle(self.ws, sha=sha, now=now)
+        # 6. Publish (the publisher skips the write when nothing moved).
+        self.publisher.publish(self.ws.store, force=rebuilt)
         return "; ".join(notes) or "no-op"
 
     def reflect(self, files: set[str], *, under_epoch: bool = False, landed: frozenset[str] = frozenset()) -> str:
-        from codoc.loops.reflect import reflect as _reflect
-        cs = (self._changeset or _changeset)(str(self.root), str(self.codoc_dir), files)
+        from codoc.kinds.lift import lift_pass
+        from codoc.loops.reflect import reflect
+        cs = index_code(self.root, self.codoc_dir, self.graph, files, changeset=self._changeset)
         if cs is None:
             return "index unavailable"
-        self.graph.update(cs.rows, cs.touched_files())
-        atomic_write(self.codoc_dir / GRAPH_CACHE, self.graph.dumps())
-        res = (self._reflect or _reflect)(self.ws, cs, self.graph, propose=self._propose or _propose(),
-                                          under_epoch=under_epoch, landed=landed)
-        self._settle(res, sha=head_sha(self.root))
+        res = reflect(self.ws, cs, self.graph, propose=self._propose or _propose(),
+                      doc_language=workspace_doc_language(self.codoc_dir), under_epoch=under_epoch, landed=landed)
+        settle_if_idle(self.ws, res, sha=head(self.root)[0])
         # Kind blocks that derive from code (a diagram) follow the bindings.
-        from codoc.kinds.lift import lift_pass
         lifted = lift_pass(self.ws, self.graph, str(self.codoc_dir))
         return f"reflect: {res.summary()}" + (f" · {lifted} block(s) lifted" if lifted else "")
-
-    def _settle(self, res=None, *, sha: str, now: float | None = None) -> None:
-        """Settle the hand-offs binding ops now cite, unless an agent epoch is
-        open: its build is in progress, so the feature stays queued and the
-        agent's amends land as plans. The close runs the same scan."""
-        if not epoch_alive(self.codoc_dir, now=now):
-            R.settle(self.ws, res, sha=sha)
 
     # ── lifecycle ──────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -220,7 +185,7 @@ class Daemon:
         built and before the pidfile appeared wrote a log this store has not
         read; one that takes the lock after this sees the pidfile and submits
         to the inbox (``client.applying``)."""
-        # ponytail: the logs are replayed twice at start; build the store after
+        # Limit: the logs are replayed twice at start; build the store after
         # the pidfile if start-up time on a long log matters.
         write_pidfile(self.codoc_dir)
         with locked(self.codoc_dir / APPLIER_LOCK):
@@ -237,8 +202,8 @@ class Daemon:
         self.start()
         atexit.register(clear_pidfile, self.codoc_dir)
         atexit.register(self.ws.close)
-        # The hub stops its daemon with SIGTERM, whose default skips atexit:
-        # the session log would never get its `closed` trailer.
+        # The hub and the editor stop the daemon with SIGTERM, whose default
+        # skips atexit and would leave the pidfile behind.
         signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
         self.process_batch([])   # absorb anything that queued while we were down
         self.say(f"codoc watching {self.root} (session {self.ws.session})")
@@ -255,11 +220,24 @@ class Daemon:
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-def _stale(codoc_dir: Path, now: float) -> bool:
-    try:
-        return now - (codoc_dir / ACTIVITY).stat().st_mtime > EPOCH_STALE_SECONDS
-    except OSError:
-        return True
+def index_code(root: str | Path, codoc_dir: str | Path, graph: Graph, files: set[str] = frozenset(), *,
+               changeset=None):
+    """Bring the chunk index up to date, update the code graph from it, and
+    cache the graph where every reader loads it. ``files`` limits the
+    comparison to what a batch saw change, and the graph re-extracts only
+    their edges; with none, every file is compared and the graph is built
+    whole (``codoc init``, ``codoc sync``). ``changeset(root, codoc_dir,
+    files)`` stands in for the index in tests. Returns the change set, or None
+    when the index is unavailable."""
+    cs = (changeset or _changeset)(str(root), str(codoc_dir), set(files))
+    if cs is None:
+        return None
+    if files:
+        graph.update(cs.rows, cs.touched_files())
+    else:
+        graph.rebuild(cs.rows)
+    atomic_write(Path(codoc_dir) / GRAPH_CACHE, graph.dumps())
+    return cs
 
 
 def _changeset(root: str, codoc_dir: str, files: set[str]):
@@ -273,7 +251,7 @@ def _propose():
 
 
 def _filter(codoc_dir: Path, code_path):
-    inbox = L.inbox_dir(codoc_dir).resolve()
+    inbox = I.inbox_dir(codoc_dir).resolve()
     act = (codoc_dir / ACTIVITY).resolve()
 
     def keep(_change, path: str) -> bool:

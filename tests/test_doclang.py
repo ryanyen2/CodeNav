@@ -61,8 +61,10 @@ def test_char_budget_is_identity_for_latin_and_scales_for_cjk():
     assert dl.char_budget(400, "") == 400        # no letters ⇒ no rescale
 
 
-def test_char_budget_never_collapses_to_nothing():
-    assert dl.char_budget(10, "索引快照") >= 40
+def test_char_budget_scales_a_minimum_too():
+    """The commit-subject minimum is two words: 12 Latin characters, 4 Han."""
+    assert dl.char_budget(12, "fix bug") == 12
+    assert dl.char_budget(12, "修复缓存过期竞态") == 4
 
 
 # ── profiles ────────────────────────────────────────────────────────────────

@@ -5,11 +5,15 @@
  * runs as: the daemon, the hooks and the MCP server, most of which the
  * extension does not start. So the provider a person picks during setup is
  * written there rather than passed in an environment (setup/credentials.ts).
- * These two functions say which variables a provider needs and merge them into
- * existing `.env` text without disturbing anything else in it.
+ * These functions say which variables a provider needs, merge them into
+ * existing `.env` text without disturbing anything else in it, and keep the
+ * file out of git before a key goes into it.
  *
- * No `vscode` import and no file access, so vitest can load it.
+ * No `vscode` import, so vitest can load it.
  */
+import * as cp from 'node:child_process';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 /** The LLM provider codoc's own passes run on. */
 export type CodocProvider = 'claude' | 'openai' | 'anthropic';
@@ -47,11 +51,11 @@ export function upsertEnvLines(existingText: string, vars: Record<string, string
 }
 
 /**
- * The variables a provider needs: `CODOC_PROVIDER`, the API key for `openai`
- * and `anthropic` (required; `claude` reuses the Claude Code login and takes
- * none), and `CODOC_MODEL` when a model is given.
+ * The variables a provider needs: `CODOC_PROVIDER`, and the API key for
+ * `openai` and `anthropic` (required; `claude` reuses the Claude Code login and
+ * takes none).
  */
-export function providerEnvVars(provider: CodocProvider, key?: string, model?: string): Record<string, string> {
+export function providerEnvVars(provider: CodocProvider, key?: string): Record<string, string> {
     const vars: Record<string, string> = { CODOC_PROVIDER: provider };
     if (provider === 'openai' || provider === 'anthropic') {
         if (!key || key.trim().length === 0) {
@@ -59,8 +63,21 @@ export function providerEnvVars(provider: CodocProvider, key?: string, model?: s
         }
         vars[provider === 'openai' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY'] = key.trim();
     }
-    if (model && model.trim().length > 0) vars.CODOC_MODEL = model.trim();
     return vars;
+}
+
+/**
+ * Add `.env` to `<rootDir>/.gitignore` unless git already ignores it, so an
+ * API key written there is never committed. Outside a git repository, or
+ * without git, nothing is written. `check-ignore` exits 0 for an ignored path,
+ * 1 for one that is not, and 128 outside a repository.
+ */
+export function ignoreEnvFile(rootDir: string): void {
+    if (cp.spawnSync('git', ['-C', rootDir, 'check-ignore', '-q', '.env']).status !== 1) return;
+    const gitignore = path.join(rootDir, '.gitignore');
+    let text = '';
+    try { text = fs.readFileSync(gitignore, 'utf8'); } catch { /* no .gitignore yet */ }
+    fs.writeFileSync(gitignore, text + (text && !text.endsWith('\n') ? '\n' : '') + '.env\n', 'utf8');
 }
 
 /** A value as it is written after `KEY=`: bare when it is a plain token,

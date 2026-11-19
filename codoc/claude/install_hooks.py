@@ -25,12 +25,14 @@ The hook template says ``python``; installing replaces it with
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import subprocess
 import sys
 from pathlib import Path
 
 from codoc.claude.autorealize import find_claude
+from codoc.llm.prompt import load_prompt
 from codoc.workspace.layout import atomic_write
 
 # The module the installed hook commands run, and the path it had before; an
@@ -194,12 +196,14 @@ def install_hooks(root_dir: str, *, say=lambda _msg: None) -> list[str]:
     if tracked_kept != tracked_hooks:
         _save_or_remove(shared, tracked, "hooks", tracked_kept)
 
-    # 2. The skill.
+    # 2. The skill, with its `{{include:style}}` expanded as the prompts expand it.
     skill_src = _plugin_dir() / "skills" / "codoc-intent" / "SKILL.md"
     skill_dest = root / ".claude" / "skills" / "codoc-intent" / "SKILL.md"
     if skill_src.exists():
         skill_dest.parent.mkdir(parents=True, exist_ok=True)
-        skill_dest.write_text(skill_src.read_text(encoding="utf-8"), encoding="utf-8")
+        skill = re.sub(r"\{\{include:(\w+)\}\}", lambda m: load_prompt(m.group(1)).strip(),
+                       skill_src.read_text(encoding="utf-8"))
+        skill_dest.write_text(skill, encoding="utf-8")
 
     # 3. The commands, keeping subdirectories so `.claude/commands/codoc/plan.md`
     #    is the namespaced `/codoc:plan`.
@@ -213,7 +217,8 @@ def install_hooks(root_dir: str, *, say=lambda _msg: None) -> list[str]:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(cmd.read_text(encoding="utf-8"), encoding="utf-8")
             installed_cmds.append("/" + ":".join(list(rel.parts[:-1]) + [rel.stem]))
-        # Drop installed codoc commands that the plugin does not ship.
+        # Drop installed codoc commands that the plugin no longer ships, such
+        # as `sync.md`, which became `realize.md`.
         dest_ns = cmd_dest_dir / "codoc"
         if dest_ns.is_dir():
             shipped = {p.name for p in (cmd_src_dir / "codoc").glob("*.md")}

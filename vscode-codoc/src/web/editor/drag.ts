@@ -3,7 +3,7 @@
  *
  * A handle before every block; dropping it above or below another block moves
  * the dragged block, with everything it dominates, through `moveBlock`, which
- * is one recorded `block.move`. No positional bookkeeping survives the drop.
+ * is one recorded `block.move`.
  *
  * The handle is a CSS `::before` on the block, not a widget decoration. It
  * never depends on what a block says, and one widget per block would cost

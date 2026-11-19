@@ -14,7 +14,7 @@ from codoc.calculus.derive import (
 )
 from codoc.calculus.block_md import GENERATED
 from codoc.calculus.doc import HEADING, PARAGRAPH
-from codoc.calculus.export import export_markdown
+from codoc.calculus.derive import export_markdown
 from codoc.calculus.ids import START
 from codoc.calculus.inline_md import Span, render
 from codoc.calculus.ops import covered
@@ -193,7 +193,7 @@ def test_a_suggesters_strike_the_owner_accepted_is_the_owners_request(tmp_path):
     the one who accepted as its editor. Rejecting a person's plan takes back
     only its own words, which the document never held."""
     from codoc.calculus.derive import editors
-    from codoc.workspace import log as L
+    from codoc.workspace import inbox as I
     from tests.helpers import H, refs, sub, write_roles
     cd = tmp_path / ".codoc"
     ws = Workspace(cd); seed_loop(ws); ws.close()
@@ -202,7 +202,7 @@ def test_a_suggesters_strike_the_owner_accepted_is_the_owners_request(tmp_path):
     r = refs(ws, "p1")                                   # "Retries once before giving up."
 
     def bob(kind, payload):
-        L.submit(cd, "hub-bob", [sub(kind, kind, {"bid": "p1", "path": "text"}, payload)])
+        I.submit(cd, "hub-bob", [sub(kind, kind, {"bid": "p1", "path": "text"}, payload)])
         pid = ws.drain_inbox()[-1].plan
         assert ws.store.plans[pid].actor == "human:gh:bob"
         return pid
@@ -304,3 +304,36 @@ def test_verdicts_are_in_the_features_history(tmp_path):
     acc = ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor="human:local")[0]
     h = history(ws.store, "h1")
     assert bad.conflict == "authority" and bad in h and acc in h
+
+
+def test_a_fold_changes_neither_who_owns_a_comment_nor_what_lower_compares_against(tmp_path):
+    """Both are read from the blocks, not from the ops a snapshot archives: a
+    suggester still owns the comment they added (the fold's `block.add` is the
+    importer's), and a person's set since the last realization still shows its
+    old value."""
+    import codoc.kinds  # noqa: F401  (registers the comment and url layouts)
+    from codoc.calculus.derive import realized_content
+    from codoc.calculus.ops import Op
+    from tests.helpers import H, fold, kind_block, seed
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    alice = "human:gh:alice"
+    c = kind_block(ws, "comment", {"thread": "t1", "anchor": "p1", "anchor_text": "once", "body": "Twice?"},
+                   after="p1", actor=alice)
+    u = kind_block(ws, "url", {"url": "https://a.example"}, after="p1")
+    ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {}}], actor=H)
+    ws.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": "h1"}, "payload": {}}], actor="loop")
+    ws.submit([{"kind": K.BLOCK_SET, "target": {"bid": u, "path": "url"}, "payload": {"value": "https://b.example"}}],
+              actor=H)
+
+    def answers(store):
+        write = lambda actor: Op(id="x:1", at="", actor=actor, batch="", kind=K.TEXT_INSERT,
+                                 target={"bid": c, "path": "body"}, payload={"after": START, "text": "Or"})
+        old = realized_content(store, store.blocks[u], store.watermarks("h1").realized)
+        return ws.roles.policy(store, write(alice)), bool(ws.roles.policy(store, write("human:gh:bob"))), old["url"]
+
+    before = answers(ws.store)
+    assert before == (None, True, "https://a.example")
+    ws.close()
+    fold(cd)
+    assert answers(Workspace(cd, readonly=True).store) == before

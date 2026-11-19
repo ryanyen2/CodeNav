@@ -3,8 +3,8 @@
  *
  * Everything setup/provision.ts decides without running a process is here:
  * the `uv` argument vectors, the installer command per platform, where the
- * installer puts `uv`, where `uv` puts codoc's console scripts, which file in
- * `bundled/` is the wheel, and whether a cached path is still good.
+ * installer puts `uv`, where `uv` puts the `codoc` console script, which file
+ * in `bundled/` is the wheel, and whether a cached path is still good.
  *
  * No `vscode` import and no process spawning, so vitest can load it.
  */
@@ -12,14 +12,6 @@ import * as path from 'node:path';
 
 /** The Python version codoc's environment is pinned to. */
 export const CODOC_PYTHON_VERSION = '3.11';
-
-/** The paths of codoc's two console scripts. */
-export interface CodocExecutables {
-    /** The `codoc` CLI. */
-    readonly codoc: string;
-    /** The `codoc-mcp` server. */
-    readonly codocMcp: string;
-}
 
 /** A command to run. `shell` is true only for the uv installer, which is a pipeline. */
 export interface CommandSpec {
@@ -32,14 +24,13 @@ function exeSuffix(platform: NodeJS.Platform): string {
     return platform === 'win32' ? '.exe' : '';
 }
 
-/** The script paths inside the directory `uv tool dir --bin` printed. */
-export function executablePaths(binDir: string, platform: NodeJS.Platform): CodocExecutables {
+/** The `codoc` script inside the directory `uv tool dir --bin` printed. */
+export function codocPath(binDir: string, platform: NodeJS.Platform): string {
     const dir = binDir.trim();
     if (dir.length === 0) {
-        throw new Error('uv tool dir --bin returned an empty path, so the codoc executables cannot be found.');
+        throw new Error('uv tool dir --bin returned an empty path, so the codoc executable cannot be found.');
     }
-    const suffix = exeSuffix(platform);
-    return { codoc: path.join(dir, `codoc${suffix}`), codocMcp: path.join(dir, `codoc-mcp${suffix}`) };
+    return path.join(dir, `codoc${exeSuffix(platform)}`);
 }
 
 /** uv's standalone installer. Both forms are pipelines of constant strings, so

@@ -17,15 +17,14 @@ class FakeRow:
     """Minimal ChunkRow stand-in for graph tests (no LanceDB needed)."""
 
     file: str
-    symbol_path: str
+    symbol: str
     source: str = ""
     language: str = "python"
     id: int = 0
-    tokens_hash: str = "h"
+    fingerprint: str = "h"
     types_hash: str = "t"
     start_byte: int = 0
     end_byte: int = 0
-    embedding: object = None
 
 
 # ---------------------------------------------------------------------------
@@ -45,10 +44,8 @@ def test_build_indices_leaf_and_module():
         FakeRow("auth.py", "auth.py::MyClass.login", "def login(self): ..."),
         FakeRow("utils.py", "utils.py::helper", "def helper(): ..."),
     ]
-    by_symbol, by_leaf, ftm = _build_indices(rows)
+    by_leaf, ftm = _build_indices(rows)
 
-    assert "auth.py::MyClass" in by_symbol
-    assert "auth.py::MyClass.login" in by_symbol
     assert "MyClass" in by_leaf
     assert "login" in by_leaf
     assert "helper" in by_leaf
@@ -61,8 +58,8 @@ def test_resolve_same_file_preferred():
         FakeRow("a.py", "a.py::foo", "def foo(): ..."),
         FakeRow("b.py", "b.py::foo", "def foo(): ..."),
     ]
-    by_symbol, by_leaf, ftm = _build_indices(rows)
-    result = _resolve("foo", "a.py", by_symbol, by_leaf, ftm)
+    by_leaf, ftm = _build_indices(rows)
+    result = _resolve("foo", "a.py", by_leaf, ftm)
     assert result is not None and result.file == "a.py"
 
 
@@ -71,31 +68,31 @@ def test_resolve_module_prefix_match():
         FakeRow("requests/models.py", "requests/models.py::Response", "class Response: ..."),
         FakeRow("other.py", "other.py::Response", "class Response: ..."),
     ]
-    by_symbol, by_leaf, ftm = _build_indices(rows)
+    by_leaf, ftm = _build_indices(rows)
     # qualified_name "requests.models.Response" should resolve to requests/models.py
-    result = _resolve("requests.models.Response", "main.py", by_symbol, by_leaf, ftm)
+    result = _resolve("requests.models.Response", "main.py", by_leaf, ftm)
     assert result is not None and result.file == "requests/models.py"
 
 
 def test_resolve_strips_self_prefix():
     rows = [FakeRow("a.py", "a.py::send", "def send(): ...")]
-    by_symbol, by_leaf, ftm = _build_indices(rows)
-    result = _resolve("self.send", "a.py", by_symbol, by_leaf, ftm)
-    assert result is not None and result.symbol_path == "a.py::send"
+    by_leaf, ftm = _build_indices(rows)
+    result = _resolve("self.send", "a.py", by_leaf, ftm)
+    assert result is not None and result.symbol == "a.py::send"
 
 
 def test_resolve_external_returns_none():
     rows = [FakeRow("a.py", "a.py::foo", "def foo(): ...")]
-    by_symbol, by_leaf, ftm = _build_indices(rows)
-    result = _resolve("os.path.join", "a.py", by_symbol, by_leaf, ftm)
+    by_leaf, ftm = _build_indices(rows)
+    result = _resolve("os.path.join", "a.py", by_leaf, ftm)
     # "join" is not in any row
     assert result is None
 
 
 def test_resolve_rejects_short_leaf():
     rows = [FakeRow("a.py", "a.py::x", "x = 1")]
-    by_symbol, by_leaf, ftm = _build_indices(rows)
-    result = _resolve("x", "a.py", by_symbol, by_leaf, ftm)
+    by_leaf, ftm = _build_indices(rows)
+    result = _resolve("x", "a.py", by_leaf, ftm)
     assert result is None  # len("x") <= 1 → skip
 
 

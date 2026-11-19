@@ -11,7 +11,7 @@ function block(id: string, kind: 'heading' | 'paragraph', text: string, runs: Ar
     return {
         id, kind, level, rank: id, head,
         fields: { text: { text, runs: runs.map(([op, s, e, actor, plan]) => ({ op, k0: 0, start: s, end: e, actor: actor ?? 'human:a', at: '1', plan: plan ?? null })),
-                          spans, suggest_del: [] } },
+                          spans } },
     };
 }
 
@@ -20,16 +20,14 @@ function proj(blocks: ProjectedBlock[]): Projection {
 }
 
 describe('blockNode', () => {
-    it('turns spans, plan runs and suggested deletions into marks', () => {
+    it('turns spans into marks, and leaves plan runs to the paints', () => {
         const b = block('p', 'paragraph', 'keep this maybe', [['s:1', 0, 10], ['a:1', 10, 15, 'agent:x', 'pl']],
             [{ kind: 'bold', attrs: {}, start: 0, end: 4 }]);
-        (b.fields.text as { suggest_del: unknown[] }).suggest_del = [{ plan: 'pl', start: 5, end: 9 }];
         const { node, shadow } = blockNode(schema, b);
         const marksAt = (i: number) => node.resolve(i + 1).marks().map(m => m.type.name).sort();
         expect(node.textContent).toBe('keep this maybe');
         expect(marksAt(0)).toEqual(['bold']);
-        expect(marksAt(6)).toEqual(['suggest_del']);
-        expect(marksAt(12)).toEqual(['plan']);
+        expect(marksAt(12)).toEqual([]);
         expect(shadow!.ref(11)).toEqual(['a:1', 1]);
     });
 });

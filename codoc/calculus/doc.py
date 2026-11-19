@@ -1,6 +1,7 @@
 """Blocks and the heading fold.
 
-    Block := { id, kind, rank, ranked_by, level, content, layout, dead?, void? }
+    Block := { id, kind, rank, ranked_by, level, content, layout, added_by,
+               dead?, dead_actor?, dead_at?, dead_in?, detached?, prior?, void? }
 
 Kinds, by what their content is:
 
@@ -25,9 +26,10 @@ replaced whole by ``block.set``.
 ``level`` is the outline depth of a heading (1..6), the indent depth of a list
 item (1..6), and 0 for every other kind.
 
-A feature is a view: a live heading and every following live block until the
-next live heading at the same or a shallower level. Level gaps are tolerated
-(an H1 followed by an H3 is parent and child).
+A feature is a live heading. What it says is its body, the blocks after it up
+to the next live heading; what moves with it is its range, up to the next live
+heading at its level or shallower (``Store.body``, ``Store.range``). Level gaps
+are tolerated (an H1 followed by an H3 is parent and child).
 """
 from __future__ import annotations
 
@@ -130,6 +132,9 @@ class Block:
     rank: str
     level: int = 0
     content: dict = field(default_factory=dict)   # field -> Text | JSON
+    # The actor of the `block.add` or `block.split` that made it: a suggester
+    # may write into a comment they added and no other.
+    added_by: str = ""
     dead: OpId | None = None
     # A dead heading owns no code, so its bindings leave the store when it
     # dies. They are kept here as `[{fid, feature, symbol, fingerprint, types_hash}]`:
@@ -154,6 +159,11 @@ class Block:
     # Rejected plans' moves that could not be put back, each with the place it
     # found the block in: an undo that comes back to one goes on to that place.
     void: dict = field(default_factory=dict)      # move op -> [rank, level, ranked_by]
+    # Per JSON field, the author's `block.set`s that the feature's realization
+    # has not covered, oldest first, as [op, the value it replaced, plan]: what
+    # a kind's `lower` compares the block against (`derive.realized_content`).
+    # A person's untagged set has plan "".
+    prior: dict = field(default_factory=dict)     # field -> [[op, value, plan], ...]
 
     def __post_init__(self) -> None:
         self.layout = BUILTIN.get(self.kind) or self.layout
@@ -168,6 +178,16 @@ class Block:
     def revive(self) -> None:
         self.dead, self.dead_actor, self.dead_at, self.dead_in = None, "", "", ""
 
+    def unvoid(self, rank: str, level: int, ranked_by: str) -> tuple[str, int, str]:
+        """The place an undo of a move gives this block: past every rejected
+        plan's move it would bring back, to the place that move found the
+        block (``void``)."""
+        seen: set[str] = set()
+        while ranked_by in self.void and ranked_by not in seen:     # seen: a forged restore can make a cycle
+            seen.add(ranked_by)
+            rank, level, ranked_by = self.void[ranked_by]
+        return rank, level, ranked_by
+
     def text(self, path: str = "text") -> Text:
         t = self.content.get(path)
         if not isinstance(t, Text):
@@ -178,6 +198,10 @@ class Block:
         content = {k: (v.to_json() if isinstance(v, Text) else v) for k, v in self.content.items()}
         d = {"id": self.id, "kind": self.kind, "rank": self.rank, "ranked_by": self.ranked_by, "level": self.level,
              "content": content, **layout_entry(self.kind, self.layout)}
+        if self.added_by:
+            d["added_by"] = self.added_by
+        if self.prior:
+            d["prior"] = {k: [list(e) for e in v] for k, v in self.prior.items()}
         if self.void:
             d["void"] = {k: list(v) for k, v in self.void.items()}
         if self.dead:

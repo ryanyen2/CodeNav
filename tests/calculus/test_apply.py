@@ -21,8 +21,8 @@ def test_feature_view_and_tree_fold():
     heading(m, s, "h2", "Child", level=3, after="p1")   # level gap tolerated
     paragraph(m, s, "p2", "body two", after="h2")
     heading(m, s, "h3", "Second top", level=1, after="p2")
-    assert [b.id for b in s.feature_range("h1")] == ["h1", "p1", "h2", "p2"]
-    assert [b.id for b in s.feature_range("h2")] == ["h2", "p2"]
+    assert [b.id for b in s.range("h1")] == ["h1", "p1", "h2", "p2"]
+    assert [b.id for b in s.range("h2")] == ["h2", "p2"]
     assert s.feature_of("p2") == "h2" and s.feature_of("p1") == "h1"
     from codoc.calculus.doc import fold_tree
     roots = fold_tree(s.headings())

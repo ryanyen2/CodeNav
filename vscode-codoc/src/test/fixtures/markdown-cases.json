@@ -1,5 +1,5 @@
 {
- "_comment": "Generated from codoc.calculus.block_md.parse, inline_md.parse and inline_md.render. Offsets are Unicode scalars, end exclusive.",
+ "_comment": "Generated from codoc.calculus.block_md.parse, inline_md.parse and inline_md.render. Offsets are Unicode scalars, end exclusive. A case's `paste`, where present, is what the editor reads for a paste instead (calc/markdown.ts), written by hand: each line of prose a paragraph of its own, and a `# line` always a heading.",
  "blocks": [
   {
    "name": "headings and paragraphs",
@@ -41,6 +41,50 @@
      "content": {},
      "id": null
     }
+   ],
+   "paste": [
+    {
+     "kind": "heading",
+     "level": 1,
+     "text": "Client",
+     "content": {},
+     "id": "b-0123456789ab"
+    },
+    {
+     "kind": "paragraph",
+     "level": 0,
+     "text": "Retries once.",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "heading",
+     "level": 2,
+     "text": "Sub",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "paragraph",
+     "level": 0,
+     "text": "wrapped",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "paragraph",
+     "level": 0,
+     "text": "lines join",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "heading",
+     "level": 6,
+     "text": "Six",
+     "content": {},
+     "id": null
+    }
    ]
   },
   {
@@ -51,6 +95,22 @@
     {
      "kind": "paragraph",
      "level": 0,
+     "text": "Not a feature",
+     "content": {},
+     "id": null
+    },
+    {
+     "kind": "paragraph",
+     "level": 0,
+     "text": "body",
+     "content": {},
+     "id": null
+    }
+   ],
+   "paste": [
+    {
+     "kind": "heading",
+     "level": 1,
      "text": "Not a feature",
      "content": {},
      "id": null

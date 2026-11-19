@@ -21,14 +21,14 @@ import os
 from collections import Counter
 from dataclasses import dataclass, field
 
-from codoc.calculus.derive import LOOP, description, title
-from codoc.calculus.ids import new_batch_id
-from codoc.doclang import char_budget
+from codoc.calculus.derive import description, title
+from codoc.calculus.ids import LOOP, new_batch_id
+from codoc.doclang import char_budget, norm_key
 from codoc.index.flows import flow_lines
 from codoc.index.git import commit_rationales
 from codoc.index.graph import Graph
 from codoc.llm.passes import propose_brief, propose_file_features_raw, propose_organization_raw
-from codoc.loops.context import owner_of
+from codoc.loops.context import aliases, owner_of
 from codoc.loops.edits import Compiler, symbol, title_from_file
 from codoc.workspace import Workspace
 
@@ -37,6 +37,7 @@ CALLS_CAP = 6
 ORG_FEATURE_CAP = 400
 COUPLING_CAP = 40
 README_CAP = 12_000
+META_CAP = 4_000        # pyproject.toml, package.json
 HEADER_CAP = 1_200
 
 
@@ -47,10 +48,12 @@ class BootstrapResult:
     calls: int = 0
     skipped: list[str] = field(default_factory=list)
     refused: list[tuple[str, str]] = field(default_factory=list)   # (edit kind, why) an edit that did not land
+    unplaced: list[str] = field(default_factory=list)             # top-level features the organizing call did not place
 
     def summary(self) -> str:
         base = f"{self.chunks} chunks → {self.features} features ({self.calls} LLM calls)"
         base += f", {len(self.skipped)} file(s) skipped" if self.skipped else ""
+        base += f", {len(self.unplaced)} feature(s) left unorganized" if self.unplaced else ""
         return base + (f", {len(self.refused)} block(s) refused" if self.refused else "")
 
 
@@ -81,10 +84,10 @@ def bootstrap(ws: Workspace, rows: list, graph: Graph, *, repo_name: str = "code
         snapshot = list(titles)
         prepared = []
         for file in wave:
-            frows = sorted(by_file[file], key=lambda r: r.symbol_path)
-            chunks = [{"symbol_path": r.symbol_path, "source": (r.source or "")[:SOURCE_CAP]} for r in frows]
+            frows = sorted(by_file[file], key=lambda r: r.symbol)
+            chunks = [{"symbol": r.symbol, "source": (r.source or "")[:SOURCE_CAP]} for r in frows]
             edges = _file_edges(frows, graph)
-            why = commit_rationales(root_dir, [file], cap=char_budget) if root_dir else []
+            why = commit_rationales(root_dir, [file], rescale=char_budget) if root_dir else []
             prepared.append((file, frows, chunks, edges, why))
 
         def call(item):
@@ -121,13 +124,19 @@ def bootstrap(ws: Workspace, rows: list, graph: Graph, *, repo_name: str = "code
 
     top = [h for h in ws.store.headings() if h.level == 1]
     if organize and 1 < len(top) <= ORG_FEATURE_CAP:
-        feats = [{"id": h.id, "title": title(ws.store, h.id), "description": description(ws.store, h.id)} for h in top]
+        alias = aliases(ws.store)
+        feats = [{"id": alias[h.id], "title": title(ws.store, h.id), "description": description(ws.store, h.id)}
+                 for h in top]
         exported = {b.symbol for b in ws.store.bindings.values() if b.file.endswith("__init__.py")}
         try:
-            ops = propose_org(feats, _feature_coupling(ws.store, graph), repo_name=repo_name, config=config,
+            ops = propose_org(feats, _feature_coupling(ws.store, graph, alias), repo_name=repo_name, config=config,
                               brief=brief, flows=flow_lines(graph, exported), doc_language=doc_language)
             res.calls += 1
-            _land_org(ws, res, ops, batch)
+            placed = _land_org(ws, res, ops, batch, {a: fid for fid, a in alias.items()})
+            res.unplaced = [title(ws.store, h.id) for h in top if h.id not in placed]
+            if res.unplaced:
+                say(f"  ⚠ the organization pass placed no move for {len(res.unplaced)} feature(s), which stay "
+                    "above every theme: " + ", ".join(res.unplaced))
         except Exception as exc:  # noqa: BLE001 (a flat tree is still usable)
             say(f"  ⚠ organization pass failed ({exc}); the tree stays flat")
     elif organize and len(top) > ORG_FEATURE_CAP:
@@ -153,14 +162,15 @@ def _land(ws: Workspace, res: BootstrapResult, compiler: Compiler, raw: dict, ba
 
 def _land_file(ws: Workspace, res: BootstrapResult, ops: list[dict], frows: list, batch: str) -> list[str]:
     """One file's ``add_node`` edits. Returns the titles added."""
-    hashes = {r.symbol_path: (r.tokens_hash, r.types_hash) for r in frows}
+    hashes = {r.symbol: (r.fingerprint, r.types_hash) for r in frows}
     compiler = Compiler(ws.store, hashes=hashes, bindable=set(hashes))
     return [o["title"].strip() for o in ops
             if o.get("kind") == "add_node" and _land(ws, res, compiler, o, batch)]
 
 
-def _land_org(ws: Workspace, res: BootstrapResult, ops: list[dict], batch: str) -> None:
-    """The top level in the order the reply gives it.
+def _land_org(ws: Workspace, res: BootstrapResult, ops: list[dict], batch: str, ids: dict[str, str]) -> set[str]:
+    """The top level in the order the reply gives it. ``ids`` maps the aliases
+    the reply names features by to their ids. Returns the features it moved.
 
     - An ``add_node`` puts a theme at the end of the document.
     - A ``move_node`` puts a feature under its theme or, with no ``parent_id``,
@@ -169,26 +179,33 @@ def _land_org(ws: Workspace, res: BootstrapResult, ops: list[dict], batch: str) 
       rule 7), and the moves to it with it, so those features stay where they are.
     """
     compiler = Compiler(ws.store)
-    taken = {title(ws.store, h.id).strip().casefold() for h in ws.store.headings()}
+    placed: set[str] = set()
+
+    def move(o: dict) -> None:
+        if fid := _land(ws, res, compiler, {**o, "feature_id": ids.get(o.get("feature_id"), o.get("feature_id"))}, batch):
+            placed.add(fid)
+
+    taken = {norm_key(title(ws.store, h.id)) for h in ws.store.headings()}
     themes = {o.get("id") for o in ops if o.get("kind") == "add_node" and o.get("id")}
     added: set[str] = set()
     waiting: dict[str, list[dict]] = {}
     for o in ops:
         if o.get("kind") == "add_node":
-            if (o.get("title") or "").strip().casefold() in taken:
+            if norm_key(o.get("title")) in taken:
                 res.refused.append(("add_node", "a theme titled like a feature"))
                 continue
             # A theme sits at the top and owns no code.
             if _land(ws, res, compiler, {**o, "parent_id": None, "bindings": []}, batch) and o.get("id"):
                 added.add(o["id"])
-                for move in waiting.pop(o["id"], []):
-                    _land(ws, res, compiler, move, batch)
+                for m in waiting.pop(o["id"], []):
+                    move(m)
         elif o.get("kind") == "move_node":
             parent = o.get("parent_id")
             if parent in themes and parent not in added:
                 waiting.setdefault(parent, []).append(o)
                 continue
-            _land(ws, res, compiler, o, batch)
+            move(o)
+    return placed
 
 
 # ── context helpers ──────────────────────────────────────────────────────────
@@ -196,12 +213,12 @@ def _land_org(ws: Workspace, res: BootstrapResult, ops: list[dict], batch: str) 
 def _file_edges(frows: list, graph: Graph) -> list[dict]:
     out = []
     for r in frows:
-        outs, ins = graph.edges_out(r.symbol_path), graph.edges_in(r.symbol_path)
+        outs, ins = graph.edges_out(r.symbol), graph.edges_in(r.symbol)
         calls = [e["dst_symbol"] for e in outs if e["kind"] == "call" and e.get("dst_symbol")][:CALLS_CAP]
         called_by = [e["src_symbol"] for e in ins if e["kind"] == "call"][:CALLS_CAP]
         contained = next((e["dst_symbol"] for e in outs if e["kind"] == "contain"), None)
         if calls or called_by or contained:
-            entry = {"symbol": r.symbol_path}
+            entry = {"symbol": r.symbol}
             if calls:
                 entry["calls"] = calls
             if called_by:
@@ -215,23 +232,30 @@ def _file_edges(frows: list, graph: Graph) -> list[dict]:
 def _ensure_file_coverage(ops: list[dict], frows: list, file: str) -> list[dict]:
     """Every chunk of the file bound by exactly one node.
 
-    - A binding outside the file, or bound twice, is dropped.
+    - A binding outside the file is dropped. A chunk two nodes bind goes to
+      the deeper one, the more specific description of it.
     - What no node bound goes to the node with the most bindings, or to a new
       node named after the file.
-    - ``__module__`` goes to the first top-level node. A node left owning
-      nothing, with no children, is dropped: it described only imports
-      (``bootstrap_file.txt`` rule 3)."""
-    keys = {r.symbol_path for r in frows}
-    seen: set[str] = set()
-    for o in ops:
-        kept = []
+    - ``__module__`` goes to the first top-level node.
+    - A node left owning nothing, with no children, is dropped: it described
+      code another node holds, or only imports (``bootstrap_file.txt`` rule 3)."""
+    keys = {r.symbol for r in frows}
+    parent = {o.get("id"): o.get("parent_id") for o in ops if o.get("id")}
+
+    def depth(o: dict) -> int:
+        d, p = 0, o.get("parent_id")
+        while p in parent and d <= len(parent):
+            d, p = d + 1, parent[p]
+        return d
+
+    owner: dict[str, int] = {}
+    for o in sorted(ops, key=depth, reverse=True):     # stable: the reply's order breaks a tie
         for b in o.get("bindings") or []:
-            key = symbol(b)
-            if key in keys and key not in seen:
-                seen.add(key)
-                kept.append(key)
-        o["bindings"] = kept
-    uncovered = sorted(keys - seen)
+            if (key := symbol(b)) in keys:
+                owner.setdefault(key, id(o))
+    for o in ops:
+        o["bindings"] = [k for k in dict.fromkeys(symbol(b) for b in o.get("bindings") or []) if owner.get(k) == id(o)]
+    uncovered = sorted(keys - owner.keys())
     adds = [o for o in ops if o.get("kind") == "add_node" and (o.get("title") or "").strip()]
     if uncovered and not adds:
         return list(ops) + [{"kind": "add_node", "title": title_from_file(file), "description": "",
@@ -244,12 +268,15 @@ def _ensure_file_coverage(ops: list[dict], frows: list, file: str) -> list[dict]
         module = next(s for s in holder["bindings"] if s.endswith("::__module__"))
         holder["bindings"].remove(module)
         roots[0]["bindings"].append(module)
-        if not holder["bindings"] and holder.get("id") not in {o.get("parent_id") for o in ops} - {None}:
-            ops = [o for o in ops if o is not holder]
-    return ops
+    while True:
+        parents = {o.get("parent_id") for o in ops} - {None}
+        empty = {id(o) for o in ops if o.get("kind") == "add_node" and not o.get("bindings") and o.get("id") not in parents}
+        if not empty:
+            return ops
+        ops = [o for o in ops if id(o) not in empty]
 
 
-def _feature_coupling(store, graph: Graph) -> list[str]:
+def _feature_coupling(store, graph: Graph, alias: dict[str, str]) -> list[str]:
     pair: Counter = Counter()
     for e in graph.all_edges():
         if e["kind"] not in ("call", "import") or not e.get("dst_symbol"):
@@ -257,36 +284,42 @@ def _feature_coupling(store, graph: Graph) -> list[str]:
         a, b = owner_of(store, e["src_symbol"]), owner_of(store, e["dst_symbol"])
         if a and b and a != b:
             pair[(a, b)] += 1
-    return [f"{a} ({title(store, a)}) → {b} ({title(store, b)}): {n}" for (a, b), n in pair.most_common(COUPLING_CAP)]
+    return [f"{alias[a]} ({title(store, a)}) → {alias[b]} ({title(store, b)}): {n}"
+            for (a, b), n in pair.most_common(COUPLING_CAP)]
 
 
 def _project_prose(root_dir: str | None, rows: list) -> tuple[str, list[dict]]:
-    import re
+    """The README and package metadata, and each file's opening: what precedes
+    its first definition (the module docstring, leading comments, imports).
+    The index knows where each definition starts, in every language it parses."""
     readme = ""
-    if root_dir:
-        for name in ("README.md", "README.rst", "README.txt", "README", "pyproject.toml", "package.json"):
-            path = os.path.join(root_dir, name)
-            if os.path.isfile(path):
-                try:
-                    with open(path, encoding="utf-8", errors="replace") as fh:
-                        readme += f"\n\n--- {name} ---\n{fh.read()[:README_CAP]}"
-                except OSError:
-                    continue
-            if len(readme) > README_CAP:
-                break
-    headers: list[dict] = []
-    seen: set[str] = set()
-    for row in rows:
-        if row.file in seen or not root_dir:
+    try:
+        names = {n.casefold(): n for n in os.listdir(root_dir)} if root_dir else {}
+    except OSError:
+        names = {}
+    first_readme = next((names[n] for n in ("readme.md", "readme.rst", "readme.txt", "readme") if n in names), None)
+    for name, cap in ((first_readme, README_CAP), (names.get("pyproject.toml"), META_CAP),
+                      (names.get("package.json"), META_CAP)):
+        if name is None:
             continue
-        seen.add(row.file)
         try:
-            with open(os.path.join(root_dir, row.file), encoding="utf-8", errors="replace") as fh:
-                text = fh.read(HEADER_CAP * 3)
+            with open(os.path.join(root_dir, name), encoding="utf-8", errors="replace") as fh:
+                readme += f"\n\n--- {name} ---\n{fh.read(cap)}"
         except OSError:
             continue
-        cut = re.search(r"^(?:def |class |async def )", text, re.M)
-        opening = (text[: cut.start()] if cut else text).strip()[:HEADER_CAP]
+    first_def: dict[str, int] = {}
+    for r in rows:
+        if not r.symbol.endswith("::__module__"):
+            first_def[r.file] = min(r.start_byte, first_def.get(r.file, r.start_byte))
+    most = HEADER_CAP * 4          # bytes: a UTF-8 character is at most four
+    headers: list[dict] = []
+    for file in dict.fromkeys(r.file for r in rows) if root_dir else ():
+        try:
+            with open(os.path.join(root_dir, file), "rb") as fh:
+                head = fh.read(min(first_def.get(file, most), most))
+        except OSError:
+            continue
+        opening = head.decode("utf-8", errors="replace").strip()[:HEADER_CAP]
         if opening:
-            headers.append({"file": row.file, "opening": opening})
+            headers.append({"file": file, "opening": opening})
     return readme.strip(), headers

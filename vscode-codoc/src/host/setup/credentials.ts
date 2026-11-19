@@ -5,8 +5,9 @@
  * login and needs no key, an OpenAI API key, or an Anthropic API key.
  * Dismissing the picker selects Claude Code. The choice, and the key when
  * there is one, is written to the repository-root `.env`, which is where every
- * codoc process reads it from (setup/env-file.ts). The key is never passed on
- * a command line.
+ * codoc process reads it from (setup/env-file.ts). Before a key is written,
+ * `.env` is added to `.gitignore` unless git already ignores it. The key is
+ * never passed on a command line.
  */
 import * as vscode from 'vscode';
 import * as cp from 'node:child_process';
@@ -14,7 +15,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { output } from '../output';
-import { providerEnvVars, upsertEnvLines, type CodocProvider } from './env-file';
+import { ignoreEnvFile, providerEnvVars, upsertEnvLines, type CodocProvider } from './env-file';
 
 const CLAUDE_BILLING_CAVEAT =
     'codoc will reuse your Claude Code login (no separate API key). '
@@ -124,5 +125,6 @@ export async function bootstrapCredentials(rootDir: string): Promise<void> {
         output().appendLine(`codoc: no ${chosen} key given. codoc has no provider until one is added.`);
         return;
     }
+    ignoreEnvFile(rootDir);
     writeEnvVars(rootDir, providerEnvVars(chosen, key.trim()));
 }

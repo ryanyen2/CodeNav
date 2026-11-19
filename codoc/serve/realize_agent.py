@@ -1,25 +1,23 @@
 """The sandboxed agent that realizes a hand-off on the hub.
 
-``sandbox.py`` is the pure policy (allowed tools, scope, secret-read/edit denylist);
-``consult.py`` is the pure SSRF-hardened Consult-URL gate. This module is the live
-wiring that binds BOTH onto a Claude-Agent-SDK run so a remote-authored directive can
-only touch what it is allowed to:
+``sandbox.py`` is the policy (allowed tools, scope, the read and edit denylist);
+``consult.py`` is the gate on Consult URLs. This module applies both to a Claude
+Agent SDK run, so a hand-off written by a remote contributor can only touch what it
+is allowed to:
 
-  • tool use goes through ``realize_tool_policy``, installed as the SDK's
-    PreToolUse hook: ``sandbox.can_use_tool`` for
-    everything, plus a WebFetch branch that defers to ``consult_url_allowed`` (default
-    allowlist EMPTY → every WebFetch denied) so a Consult link cannot reach the LAN or a
-    cloud metadata endpoint;
-  • the agent runs with ``HUB_ALLOWED_TOOLS`` (Read/Edit/Write/Glob/Grep + a
-    consult-gated WebFetch; NO Bash) and its environment SCRUBBED of every GitHub
-    token, so it can never push or authenticate as the maintainer (the orchestrator in
-    ``worker.py`` holds the token and opens the PR);
-  • FAIL-SAFE: if the SDK cannot be loaded or the canUseTool hook cannot be installed,
-    the agent runs NOTHING and reports zero changes rather than falling back to an
-    unsandboxed run.
+- Every tool call goes through ``realize_tool_policy``, installed as the SDK's
+  PreToolUse hook: ``sandbox.can_use_tool`` for everything, and for WebFetch also
+  ``consult_url_allowed``, whose allowlist is empty by default, so a Consult link
+  cannot reach the local network or a cloud metadata endpoint.
+- The agent runs with ``HUB_ALLOWED_TOOLS`` (Read, Edit, Write, Glob, Grep and the
+  gated WebFetch; no Bash), and every GitHub token is removed from its environment,
+  so it cannot push or authenticate as the maintainer. The orchestrator in
+  ``worker.py`` holds the token and opens the pull request.
+- When the SDK cannot be loaded or the hook cannot be installed, the agent runs
+  nothing and reports no changes; it never falls back to an unsandboxed run.
 
-The tool policy and the git change-detection are pure (tested here); the SDK call is
-the thin live edge.
+The tool policy and the git change detection are pure functions; the SDK call is
+the only part that talks to the outside.
 """
 from __future__ import annotations
 
@@ -29,14 +27,12 @@ from typing import Callable
 from codoc.serve import sandbox
 from codoc.serve.consult import consult_url_allowed
 
-# The sandbox's minimal set PLUS a consult-gated WebFetch (sandbox.ALLOWED_TOOLS omits
-# WebFetch because it must go through the consult gate, wired below).
+# The sandbox's set and WebFetch, which sandbox.ALLOWED_TOOLS omits because it must
+# go through the consult gate, wired below.
 HUB_ALLOWED_TOOLS = (*sandbox.ALLOWED_TOOLS, "WebFetch")
-# Named so the model is never offered them. The PreToolUse hook refuses anything
-# outside HUB_ALLOWED_TOOLS anyway; this is the belt.
-# `Agent` is the subagent tool; `Task` was its name and is kept because an
-# older CLI on the maintainer's machine still offers it. The hook denies
-# whatever is not in `ALLOWED_TOOLS` in any case: this list is the belt.
+# Named so the model is never offered them; the PreToolUse hook refuses anything
+# outside HUB_ALLOWED_TOOLS in any case. `Agent` is the subagent tool, and `Task`
+# is the name an older `claude` CLI on the maintainer's machine gives it.
 DENIED_TOOLS = ("Bash", "BashOutput", "KillShell", "Agent", "Task", "NotebookEdit", "TodoWrite",
                 "WebSearch", "SlashCommand", "ExitPlanMode")
 
@@ -60,7 +56,7 @@ def realize_tool_policy(scope, *, consult_allowlist, resolve, root=None) -> Call
 
 def consult_allowlist_from_env(environ: dict | None = None) -> frozenset:
     """The Consult-URL host allowlist, comma-separated in ``CODOC_CONSULT_ALLOWLIST``,
-    default EMPTY (every WebFetch denied). A maintainer opts specific doc hosts in."""
+    empty by default, which denies every WebFetch. A maintainer lists the hosts to allow."""
     env = environ if environ is not None else os.environ
     raw = env.get("CODOC_CONSULT_ALLOWLIST", "")
     return frozenset(h.strip().lower() for h in raw.split(",") if h.strip())
@@ -93,8 +89,8 @@ def _default_run_capture(argv, cwd) -> str:
 
 
 def build_directive_prompt(directive: dict, scope) -> str:
-    """The prompt the sandboxed agent implements: the directive text plus an explicit
-    scope note (belt-and-braces alongside the ENFORCED canUseTool policy)."""
+    """The prompt the sandboxed agent implements: the directive text and a note
+    naming the files it may edit. The tool policy enforces the same scope."""
     text = (directive.get("text") or "").strip() or "Implement the requested change."
     lines = [text, ""]
     if scope:
@@ -141,12 +137,12 @@ def _default_resolve(host: str) -> list[str]:
 
 def _run_sandboxed_sdk(*, prompt: str, worktree_path: str, policy) -> bool:
     """Run one directive on the Claude Agent SDK with the sandbox installed as a
-    **PreToolUse hook**. Returns True if the session ran (under the enforced
-    policy), False if the sandbox could not be installed (SDK missing /
-    unsupported) so the caller fails safe.
+    PreToolUse hook. Returns True if the session ran under the policy, False if
+    the sandbox could not be installed (the SDK missing or too old), so the
+    caller runs nothing.
 
     A hook and not ``can_use_tool``: an ``allowed_tools`` entry naming a whole
-    tool auto-approves it BEFORE the permission callback runs (the SDK warns
+    tool auto-approves it before the permission callback runs (the SDK warns
     about this with a ``CanUseToolShadowedWarning``), so with the five tools we
     guard listed there, a callback would never be asked about them. A
     PreToolUse hook runs whatever the allow rules say. ``allowed_tools`` stays,

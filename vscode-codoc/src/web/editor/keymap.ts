@@ -9,7 +9,8 @@
  *
  * Enter and Shift-Enter do the same thing: a heading or prose block holds one
  * line, so a line break is a new block. In a source block both type a newline,
- * and Mod-Enter leaves it for a new paragraph after it.
+ * and Mod-Enter leaves it for a new paragraph after it. In a code block Tab
+ * and Shift-Tab indent lines, as typed text the recorder reads.
  *
  * Undo and redo are bound to nothing: ProseMirror's history is not installed,
  * and the page's own handler submits recorded inverses (app.ts).
@@ -17,7 +18,7 @@
 import { baseKeymap, toggleMark } from '@tiptap/pm/commands';
 import { InputRule, inputRules } from '@tiptap/pm/inputrules';
 import { keymap } from '@tiptap/pm/keymap';
-import { Selection, type Command, type EditorState, type Plugin } from '@tiptap/pm/state';
+import { Selection, type Command, type EditorState, type Plugin, type Transaction } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 
 import { ITEMS, SOURCE, kindOf } from '../calc/projection';
@@ -76,6 +77,14 @@ export function gestureKeys(env: Env, openLink: () => boolean): Plugin[] {
         return run(view!, item ? setKind(state, env, 'paragraph') : sourceFromMarker(state, env) ?? splitBlock(state, env)) || true;
     };
 
+    /** Tab never leaves the editor: where nothing indents, it does nothing. */
+    const tab = (delta: 1 | -1): Command => (state, _dispatch, view) => {
+        const code = indentCode(state, delta);
+        if (code) view!.dispatch(code);
+        else run(view!, indent(state, delta));
+        return true;
+    };
+
     const keys = keymap({
         Enter: enter,
         'Shift-Enter': enter,
@@ -85,23 +94,22 @@ export function gestureKeys(env: Env, openLink: () => boolean): Plugin[] {
             const { $from, empty } = state.selection;
             if (empty && $from.parentOffset === 0 && ITEMS.has(caretKind(state) ?? '')) {
                 // An item steps out one level at a time, then becomes a paragraph.
-                return run(view!, $from.parent.attrs.level > 1 ? indent(state, env, -1) : setKind(state, env, 'paragraph'));
+                return run(view!, $from.parent.attrs.level > 1 ? indent(state, -1) : setKind(state, env, 'paragraph'));
             }
             if (empty && $from.parentOffset === 0 && caretKind(state) === 'heading') {
                 // A plain heading becomes a paragraph, so a stray `# ` is undone in one key. One that
-                // owns code, has a child heading, has a hand-off not yet realized, is named by an open
-                // plan, or is in any phase but edited or synced is a feature to keep.
+                // owns code, has a child heading, has work in flight (a hand-off not yet realized, a
+                // plan offered for a verdict), or is in any phase but edited or synced is a feature to keep.
                 const fid = $from.parent.attrs.bid as string, level = $from.parent.attrs.level as number;
                 const proj = env.projection?.();
                 let next: number | null = null;
                 for (let i = $from.index(0) + 1; i < state.doc.childCount && next === null; i++) {
                     if (state.doc.child(i).type.name === 'heading') next = state.doc.child(i).attrs.level;
                 }
-                const w = proj?.watermarks?.[fid], phase = proj?.phases[fid];
+                const phase = proj?.phases[fid];
                 const keep = !!proj?.bindings.by_feature[fid]?.length || (next !== null && next > level)
                     || (phase !== undefined && phase !== 'edited' && phase !== 'synced')
-                    || (!!w && Object.entries(w.handoff).some(([s, seq]) => (w.realized[s] ?? 0) < seq))
-                    || !!proj?.plans.some(p => p.status === 'open' && (p.target === fid || p.handoff?.includes(fid)));
+                    || !!proj?.in_flight?.includes(fid);
                 if (!keep) return run(view!, setKind(state, env, 'paragraph'));
                 env.refuse?.('Delete feature from the / menu');
                 return true;
@@ -112,9 +120,8 @@ export function gestureKeys(env: Env, openLink: () => boolean): Plugin[] {
             if (cutAcross(state, view!) !== 'none') return true;
             return run(view!, mergeForward(state, env) ?? removeEmpty(state, env, 'forward')) || stepAcross(state, view!, 'forward');
         },
-        // Tab never leaves the editor: where nothing indents, it does nothing.
-        Tab: (state, _dispatch, view) => { run(view!, indent(state, env, 1)); return true; },
-        'Shift-Tab': (state, _dispatch, view) => { run(view!, indent(state, env, -1)); return true; },
+        Tab: tab(1),
+        'Shift-Tab': tab(-1),
         'Mod-b': (state, dispatch) => toggleMark(state.schema.marks.bold)(state, dispatch),
         'Mod-e': (state, dispatch) => toggleMark(state.schema.marks.code)(state, dispatch),
         'Mod-k': () => openLink(),
@@ -136,4 +143,32 @@ export function gestureKeys(env: Env, openLink: () => boolean): Plugin[] {
         rule(/^[-*]\s$/, 'bullet', () => 1),
         rule(/^\d{1,9}\.\s$/, 'numbered', () => 1),
     ] }), keymap(baseKeymap)];
+}
+
+/**
+ * Tab or Shift-Tab in a code block: the block's indent unit (its smallest
+ * leading run of spaces, else four) typed at the start of each line the
+ * selection touches, or up to one unit removed from it. Ordinary text edits,
+ * which the recorder reads. Null outside a code block or when nothing changes.
+ */
+function indentCode(state: EditorState, delta: 1 | -1): Transaction | null {
+    const { $from, $to } = state.selection;
+    if (!$from.sameParent($to) || kindOf($from.parent) !== 'code') return null;
+    const lines = $from.parent.textContent.split('\n');
+    const lead = (line: string): number => /^ */.exec(line)![0].length;
+    const indented = lines.map(lead).filter(n => n > 0);
+    const unit = indented.length ? Math.min(...indented) : 4;
+    const f = $from.parentOffset, t = $to.parentOffset;
+    let tr = state.tr;
+    let at = 0;
+    for (const line of lines) {
+        // The line holding the selection's start, and each line that starts before its end.
+        if (at + line.length >= f && (at <= f || at < t)) {
+            const pos = tr.mapping.map($from.start() + at);
+            if (delta > 0) tr = tr.insertText(' '.repeat(unit), pos);
+            else if (lead(line)) tr = tr.delete(pos, pos + Math.min(unit, lead(line)));
+        }
+        at += line.length + 1;
+    }
+    return tr.docChanged ? tr : null;
 }
