@@ -23,7 +23,7 @@ This repo has a codoc feature tree: an outline of what the code is for.
 | `codoc_context(feature_id=…)` | that feature, the features under it, and the features owning code it calls or that calls it | before building one feature |
 | `codoc_tree` | the whole tree and the open plans | tree-wide work only |
 | `codoc_status` | `state` (`synced`, `edited`, `queued`, `realizing`, `reported`, `proposed`), what is left to build (`queued_list`) and what you reported this turn (`reported_list`) | to decide what to do |
-| `codoc_history(feature_id)` | a feature's ops and who wrote which words | to see why it reads as it does |
+| `codoc_history(feature_id)` | a feature's changes (one per gesture, plan or ingest, with the hand-off each answers) and who wrote which words | to see why it reads as it does |
 
 Every read returns `doc_language`. When its `code` is not `en`, write every
 title, description and rationale in that language. Identifiers, paths, `codoc:`

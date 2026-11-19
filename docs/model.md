@@ -606,7 +606,13 @@ Pure functions of the store. Nothing here writes.
 | `live` | shown | shown | not applied | the projection; the editor draws proposals over it |
 | `rejected` | hidden | shown | not applied | the export, the directive, every agent read and every model pass but reflect, kind codecs |
 | `accepted` | shown | removed | applied | nothing shipped |
-| `loop` | the loop's shown, others hidden | the loop's removed | the loop's applied | the reflect pass |
+| `loop` | shown for the loop's plans and plans that answer a hand-off, others hidden | removed for those | applied for those | the reflect pass |
+
+A plan answers a hand-off when one of its ops cites one in `caused_by` and it was not
+opened with `build`: an agent's `codoc_reflect` while it builds, or the loop's pass after
+the session. It describes code that was built, so the reflect pass reads it as taken and
+does not describe that code a second time. A `codoc_propose` plan may cite a hand-off too,
+but it comes before the code, so the reflect pass leaves its words out.
 
 A decided plan changes no mode: an accepted plan's words are ordinary text, and a
 rejected plan's words are dead.

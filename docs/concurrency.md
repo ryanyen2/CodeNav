@@ -198,10 +198,11 @@ name. Ack files are trimmed to their newest 2000 lines when a session opens, and
 `offsets.json` keeps the applier from re-reading lines it has drained.
 
 **The daemon's batch.** File events are debounced (600 ms). A batch starts on a change to
-a code file the index reads, to `activity.json`, to a client's `inbox/<client>.jsonl`, or
-to a file in `log/` other than the daemon's own session file. It never starts on a file
-the daemon writes itself (its session file, acks, `offsets.json`), so a batch does not
-start the next. A batch that did nothing prints nothing. For each batch the daemon does,
+a code file the index reads, to `activity.json`, to a client's `inbox/<client>.jsonl`, to
+a file in `log/` other than the daemon's own session file, or to its own session file
+when git took or replaced it (`git stash -u`, `git clean`, a `stash pop` that puts it
+back). It never starts on the daemon's own writes (its appends to its session file, acks,
+`offsets.json`), so a batch does not start the next. A batch that did nothing prints nothing. For each batch the daemon does,
 in order:
 
 1. Follow the logs on disk (section 5). If `HEAD` moved (its commit or its branch), or

@@ -78,7 +78,7 @@ codoc handoff <feature> --asked "…"   # the CLI's ⌘S
 codoc accept | reject <plan>          # verdicts
 codoc done <feature>                  # mark a request realized when the build moved no bound symbol
 codoc realize                         # build the queue now, in the foreground
-codoc history <feature>               # ops and per-word attribution
+codoc history <feature>               # one row per change (--ops for each op), and who wrote which words
 codoc lang [tag] | codoc translate    # the authoring language; convert an existing tree
 codoc rebuild | codoc snapshot        # replay the logs; fold them
 codoc validate-logs                   # check the session logs a pull request adds

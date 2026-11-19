@@ -64,11 +64,14 @@ def codoc_status() -> dict:
 
 
 @mcp.tool
-def codoc_history(feature_id: str, limit: int = 20) -> dict:
-    """One feature's history: its ops newest-last (who, when, what) and the
-    current attribution of every paragraph as runs (who wrote which words)."""
+def codoc_history(feature_id: str, limit: int = 20, ops: bool = False) -> dict:
+    """One feature's history: its last `limit` changes newest-last, one row per
+    batch (a gesture, an ingest or a plan) with when, who, the plan, the
+    hand-off it answers and a one-line summary; `ops` lists each row's ops too.
+    Then the current attribution of every paragraph as runs (who wrote which
+    words)."""
     cd, err = _need_dir()
-    return err or reads.read_history(cd, feature_id, limit)
+    return err or reads.read_history(cd, feature_id, limit, ops=ops)
 
 
 @mcp.tool

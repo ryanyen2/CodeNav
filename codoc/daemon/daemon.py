@@ -109,9 +109,11 @@ class Daemon:
 
     def wakes(self, _change, path: str) -> bool:
         """Whether a filesystem event starts a batch: a code file the index
-        reads, ``activity.json``, a client's inbox file, or a log file other
-        than this daemon's own session (another writer, or git, changed the
-        logs on disk). The daemon's own writes (its session file, the acks,
+        reads, ``activity.json``, a client's inbox file, a log file other than
+        this daemon's own session (another writer, or git, changed the logs on
+        disk), or its own session file when git took or replaced it (``git
+        stash -u``, ``git clean``, a ``stash pop`` that puts it back). The
+        daemon's own writes (its appends to its session file, the acks,
         ``offsets.json``, ``atomic_write``'s tmp files) never do, or every
         batch would start the next."""
         rp = Path(path).resolve()
@@ -120,7 +122,7 @@ class Daemon:
         if rp.suffix == ".jsonl" and rp.parent == I.inbox_dir(self.codoc_dir).resolve():
             return not rp.name.endswith(".ack.jsonl")
         if rp.suffix == ".jsonl" and rp.parent == L.log_dir(self.codoc_dir).resolve():
-            return rp.name != f"{self.ws.session}.jsonl"
+            return rp.name != f"{self.ws.session}.jsonl" or not self.ws.writer.intact()
         return self.code_path(path) is not None
 
     def batch(self, paths: list[str]) -> None:

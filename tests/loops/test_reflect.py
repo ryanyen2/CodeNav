@@ -1,4 +1,6 @@
 """The reflect loop on the calculus, with an injected LLM."""
+import pytest
+
 from codoc.calculus import ops as K
 from codoc.calculus.derive import description, markdown, phase, plan_claims, title
 from codoc.calculus.doc import HEADING, PARAGRAPH
@@ -377,3 +379,33 @@ def test_the_reflect_line_reports_what_its_calls_cost(tmp_path, monkeypatch):
     r = reflect(ws, ChangeSet(modified=[chunk("c.py::send", "f2", "t1")]), Graph(),
                 propose=lambda *a, **k: provider.complete("p", provider.LLMConfig("claude", "haiku")) and [])
     assert "1 LLM call(s), $0.0031" in r.summary()
+
+
+@pytest.mark.parametrize("build", [False, True])
+def test_the_loop_does_not_propose_again_what_an_answer_to_a_hand_off_proposes(tmp_path, build):
+    """An agent's amend that answers a hand-off became a plan (the feature was
+    queued). The pass after its session reads the feature with that plan's words
+    in, so it has nothing left to propose and opens no second plan. A build plan
+    (`codoc_propose`) comes before its code, so the loop does not read its words
+    as built."""
+    from codoc.calculus.derive import open_plans_on
+    from codoc.loops.edits import Compiler
+    ws = Workspace(tmp_path / ".codoc")
+    seed_loop(ws)
+    asked = handoff(ws, "h1", actor=H, asked="add a conjunction keyword")
+    bullet = "- `conjunction` joins the last two items, `and` by default."
+    agent = Compiler(ws.store).compile({"kind": "amend", "feature_id": "h1", "blocks": [{"text": bullet}]})
+    if build:
+        theirs = ws.propose(actor="agent:claude-code", kind="edit", target="h1", note="adds the keyword", build=True,
+                            bodies=agent.bodies, caused_by=asked.id).plan
+    else:
+        theirs = ws.amend("h1", rewrites=[], bodies=agent.bodies, actor="agent:claude-code", caused_by=asked.id,
+                          structural=True).plan
+
+    def propose(changes, subtree, titles, **kw):
+        shown = [b["text"] for e in subtree if e["id"] == "f1" for b in e["blocks"]]
+        return [] if bullet in shown else [
+            {"kind": "amend", "feature_id": "f1", "blocks": [{"text": bullet}], "rationale": "adds the keyword"}]
+
+    r = reflect(ws, ChangeSet(modified=[chunk("c.py::send", "f2", "t1")]), Graph(), propose=propose, under_epoch=True)
+    assert theirs and len(r.plans) == build and set(open_plans_on(ws.store, "h1")) == {theirs, *r.plans}

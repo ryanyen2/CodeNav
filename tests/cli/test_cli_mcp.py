@@ -40,7 +40,7 @@ def test_status_handoff_history_and_verdicts_via_cli(tmp_path):
     r = runner.invoke(app, ["status", "--root", str(root)])
     assert "queued" in r.output and (cd / "realize.md").read_text().count("Author asked: retry thrice") == 1
     r = runner.invoke(app, ["history", "HTTP client", "--root", str(root)])
-    assert r.exit_code == 0 and "feature.handoff" in r.output and "who wrote it:" in r.output
+    assert r.exit_code == 0 and "hand-off: 'retry thrice'" in r.output and "who wrote it:" in r.output
     # An agent proposes an amend; the person rejects it from the CLI.
     st = client.read(cd).store
     client_id = next(h.id for h in st.headings() if "HTTP client" in tools.title(st, h.id))
@@ -289,9 +289,32 @@ def test_history_says_when_what_and_for_which_handoff(tmp_path, monkeypatch):
     assert tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": fid, "bindings": ["net/client.py::Client.retry"]}],
                          caused_by=ho, root_dir=str(root))["ok"]
     out = runner.invoke(app, ["history", "HTTP client", "--root", str(root)]).output
-    assert re.search(rf"\n  \d{{4}}-\d\d-\d\d \d\d:\d\d:\d\d  agent:claude-code +bind.attach +"
-                     rf"net/client.py::Client.retry  for hand-off d:{ho}\n", out), out
-    assert "feature.handoff 'retry thrice'" in out and "'Sends requests.'" in out and "00000" not in out
+    assert re.search(rf"\n  \d{{4}}-\d\d-\d\d \d\d:\d\d:\d\d  agent:claude-code +"
+                     rf"bound net/client.py::Client.retry  for hand-off d:{ho}\n", out), out
+    assert "hand-off: 'retry thrice'" in out and "'Sends requests.'" in out and "00000" not in out
+
+
+def test_history_is_one_row_per_change_so_a_plan_does_not_bury_the_handoff(tmp_path):
+    """A reader thinks in gestures: a plan of ten bullets is one change, not
+    the forty ops that wrote it, and `--limit` counts changes."""
+    from codoc.calculus.derive import history as feature_history
+    from codoc.daemon import reads
+    root, cd = seeded(tmp_path)
+    st = client.read(cd).store
+    fid = next(h.id for h in st.headings() if tools.title(st, h.id) == "HTTP client")
+    res = tools.propose(str(cd), ops=[{"kind": "amend", "feature_id": fid,
+                                       "blocks": [{"text": f"- step {i} of the retry"} for i in range(10)]}],
+                        note="steps", root_dir=str(root))
+    pid = res["plan_id"]
+    assert runner.invoke(app, ["accept", pid, "--root", str(root), "--no-build"]).exit_code == 0
+    assert runner.invoke(app, ["handoff", fid, "--root", str(root), "--asked", "retry thrice"]).exit_code == 0
+    assert len(feature_history(client.read(cd).store, fid)) > 15         # more ops than the default limit
+    out = runner.invoke(app, ["history", fid, "--root", str(root)]).output
+    assert f"plan {pid}: opened; 10 bullets added; 50 words added" in out and "hand-off: 'retry thrice'" in out, out
+    rows = reads.read_history(cd, fid, 2)["batches"]
+    assert [r["summary"] for r in rows] == [f"accepted plan {pid}", "hand-off: 'retry thrice'"] and "ops" not in rows[0]
+    detail = runner.invoke(app, ["history", fid, "--root", str(root), "--limit", "1", "--ops"]).output
+    assert "feature.handoff  'retry thrice'" in detail and "accepted plan" not in detail, detail
 
 
 def test_a_feature_name_that_matches_several_lists_them_with_their_ids(tmp_path):

@@ -103,6 +103,27 @@ def test_a_session_file_git_brings_back_wakes_the_daemon_and_is_read(repo):
     assert T(d.ws.store, "p1") == SEED + " One."
 
 
+def test_git_taking_or_putting_back_the_daemons_own_session_file_wakes_it(repo):
+    """The daemon's appends to its own session file do not start a batch, but
+    `git stash -u` taking that file does, and so does `git stash pop` putting
+    it back, so the editor stops showing the stashed words at once and shows
+    them again on the pop."""
+    root, git = repo
+    d = daemon(root)
+    seed_loop(d.ws)
+    git("add", "-A")
+    git("commit", "-qm", "docs")
+    type_(d, " One.", "c1")
+    own = d.ws.writer.path
+    assert not d.wakes(None, str(own))           # its own append
+    git("stash", "-u")
+    assert d.wakes(None, str(own))               # git took it
+    git("stash", "pop")
+    assert d.wakes(None, str(own))               # git put a file back at its name
+    d.process_batch([str(own)])
+    assert T(d.ws.store, "p1") == SEED + " One."
+
+
 def test_commit_then_checkout_back_before_the_daemon_looks(repo):
     """`git checkout -b feat`, type, `git commit -am wip && git checkout main`:
     the first batch after sees main's sha, the one it saw last, but not the

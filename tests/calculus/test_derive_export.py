@@ -357,3 +357,22 @@ def test_in_flight_lists_a_queued_feature_and_one_an_offered_plan_targets_whatev
                 "payload": {"after": list(ws.store.blocks["p1"].text().last_live_ref()), "text": " More."}}], actor=H)
     assert phase(ws.store, "h1") == "edited" and phase(ws.store, "h2") == "edited"
     assert in_flight(ws.store) == ["h1", "h2"]
+
+
+def test_the_loop_reads_a_plan_answering_a_hand_off_as_taken_but_not_a_build_plan(tmp_path):
+    """An agent's reflect of code it built for hand-off d, still open, is code
+    the loop must not describe again. A build plan citing d comes before the
+    code, so the loop leaves its words out."""
+    from tests.helpers import H, seed_loop
+    ws = Workspace(tmp_path / ".codoc"); seed_loop(ws)
+    d = ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {}}], actor=H)[0]
+    agent = "agent:claude-code"
+    end = lambda: list(ws.store.blocks["p1"].text().last_live_ref())   # noqa: E731
+    built = ws.open_plan(actor=agent, target="p1")
+    ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": end(), "text": " Built."}}],
+              actor=agent, plan=built, caused_by=d.id)
+    ws.submit([{"kind": K.PLAN_OPEN, "target": {"pid": "p-build"}, "payload": {"target": "p1", "build": True}}],
+              actor=agent, batch="p-build")
+    ws.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"}, "payload": {"after": end(), "text": " Wanted."}}],
+              actor=agent, plan="p-build", caused_by=d.id)
+    assert markdown(ws.store.blocks["p1"].text(), "loop", ws.store) == "Retries once before giving up. Built."

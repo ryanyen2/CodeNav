@@ -46,15 +46,21 @@ def live_spans(text: Text, kinds: frozenset | None = None) -> list[Span]:
 def _in_mode(text: Text, mode: str, store: Store | None) -> Text:
     """``text`` as it reads in a read mode. ``live``: the field as stored, an
     open plan's words included. ``rejected``: without any open plan's words.
-    ``accepted``: with every open plan taken. ``loop``: with the loop's own
-    open plans taken and every other open plan's words left out, which is what
-    the reflect pass reads, so it does not propose again what it already has.
+    ``accepted``: with every open plan taken. ``loop``: what the reflect pass
+    reads, with the loop's own open plans taken and every open plan that
+    answers a hand-off (an op of it cites one in ``caused_by``) and is not a
+    build plan, and every other open plan's words left out. Either kind
+    describes code the loop would otherwise describe a second time; a build
+    plan comes before the code.
     Returns ``text`` itself when the mode changes nothing, else a clone."""
     if mode == "live" or store is None:
         return text
     open_plans = store.open_plans
     taken = (set(open_plans) if mode == "accepted" else
-             {pid for pid, p in open_plans.items() if p.actor == LOOP} if mode == "loop" else set())
+             {pid for pid, p in open_plans.items()
+              if p.actor == LOOP or not p.build and any((o := store.by_id.get(i)) is not None and o.caused_by
+                                                        for i in p.ops)}
+             if mode == "loop" else set())
     if not (any(s.live and s.plan in open_plans and s.plan not in taken for s in text.segs)
             or any(m.attrs.get("plan") in taken for m in text.proposals())):
         return text

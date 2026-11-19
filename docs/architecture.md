@@ -127,7 +127,7 @@ Code written by hand settles with `codoc done`.
 | tool | does |
 |---|---|
 | `codoc_context` | Read: with `files`, the features bound in them, one hop along the code graph, their parents and children; with `feature_id`, that feature, the features under it and the features owning a symbol one call, import or inheritance away from their code, in either direction. |
-| `codoc_tree`, `codoc_status`, `codoc_history` | Read: the tree and its open plans; the queue of hand-offs, phases and the number of open plans; one feature's ops and attribution. |
+| `codoc_tree`, `codoc_status`, `codoc_history` | Read: the tree and its open plans; the queue of hand-offs, phases and the number of open plans; one feature's changes, one row per batch with a summary (its ops with `ops`), and attribution. |
 | `codoc_reflect` | Tree edits. `attach`, `detach` and a rewording `amend` land on the trunk (an `amend` through the machine gate); anything else becomes one plan. An `attach` or `add_node` binds only symbols the code index holds, with their hashes, and refuses any other; code written during the turn is indexed and bound by the pass when the turn ends. An `attach` of a symbol the feature already owns writes nothing. |
 | `codoc_propose` | Tree edits as one plan. |
 | `codoc_write_block` | Content for a kind block ([kinds.md](kinds.md#4-how-content-becomes-ops)). |

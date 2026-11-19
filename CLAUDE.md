@@ -18,7 +18,7 @@ codoc status | sync | realize    # where things stand; one pass; build the queue
 codoc handoff <feature> --asked  # hand a feature off (the editor's ⌘S)
 codoc accept | reject <plan>     # verdicts; accepting a codoc_propose plan also hands off
 codoc done <feature>             # mark a hand-off realized when the build moved no bound symbol
-codoc history <feature>          # ops and per-word attribution
+codoc history <feature>          # one row per change (--ops: each op); who wrote which words
 codoc lang [tag] | translate     # the authoring language; convert existing prose
 codoc rebuild | snapshot         # replay the logs; fold them
 codoc validate-logs              # check session logs a merge would add

@@ -332,25 +332,32 @@ def reject(plan: str, root: str = ROOT):
 
 
 @app.command()
-def history(feature: str, root: str = ROOT, limit: int = typer.Option(15, "--limit")):
-    """One feature's history (when, who, what, for which hand-off) and who wrote
-    each run of its words."""
+def history(feature: str, root: str = ROOT, limit: int = typer.Option(15, "--limit", help="How many changes to show."),
+            ops: bool = typer.Option(False, "--ops", help="List each change's ops under it.")):
+    """One feature's changes, newest last: when, who, what, under which plan,
+    for which hand-off; then who wrote each run of its words. A change is one
+    batch: a gesture, an ingest or a plan."""
     from datetime import datetime
     from codoc.daemon import client, reads
     from codoc.workspace.clock import parse
     cd = _require(root)
     fid = _resolve_feature(client.read(cd).store, feature)
-    h = reads.read_history(cd, fid, limit)
+    h = reads.read_history(cd, fid, limit, ops=ops)
 
     def words(text: str) -> str:
         text = " ".join(text.split())
         return repr(text if len(text) <= 60 else text[:59] + "…")
+
+    def when(at: str) -> str:
+        return datetime.fromtimestamp(parse(at)[0] / 1000).strftime("%Y-%m-%d %H:%M:%S")
     typer.echo(f"{h['title']}  ⟨{fid}⟩")
-    for e in h["ops"]:
-        when = datetime.fromtimestamp(parse(e["at"])[0] / 1000).strftime("%Y-%m-%d %H:%M:%S")
-        what = e.get("symbol") or e.get("mark") or (words(e["text"]) if e.get("text") else "")
-        cause = f"  for hand-off d:{e['caused_by']}" if e.get("caused_by") else ""
-        typer.echo(f"  {when}  {e['actor']:<20} {e['kind']:<14} {what}{cause}".rstrip())
+    for row in h["batches"]:
+        plan = f"plan {row['plan']}: " if row.get("plan") else ""
+        cause = f"  for hand-off d:{row['caused_by']}" if row.get("caused_by") else ""
+        typer.echo(f"  {when(row['at'])}  {row['actor']:<20} {plan}{row['summary']}{cause}")
+        for e in row.get("ops", []):
+            what = e.get("symbol") or e.get("mark") or e.get("block") or (words(e["text"]) if e.get("text") else "")
+            typer.echo(f"      {e['kind']:<16} {what}{'  refused: ' + e['conflict'] if e.get('conflict') else ''}".rstrip())
     typer.echo("who wrote it:")
     for bid, runs in h["attribution"].items():
         for i, r in enumerate(runs):
