@@ -183,7 +183,7 @@ projections the decorations move with the person's typing.
 | `plan-cut` | `removed` plan claims: the characters accepting the plan kills. | Struck gray. |
 | `plan-mark`, `plan-unmark` | `marked`, `unmarked` claims. | A dashed gray underline. |
 | `code-added`, `code-removed` | `code` claims (`ground`), where no ink overlaps. Removed words are a widget at their place. | Green, red. |
-| `author-*` | In History mode, merged runs per actor kind. | One colour per kind. |
+| `author-*` | In History mode, each field's runs, adjacent runs by one actor merged. | One colour per actor kind. |
 | Phase marker | `phases`, at each heading that is not `synced`. | A glyph with an `aria-label`. An `edited` feature whose `editors` do not include the viewer is a ring titled with who edited it. The tree row's glyph is the same. |
 
 Each painted run carries its meaning as `title` and `aria-description`. One palette on

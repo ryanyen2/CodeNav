@@ -25,7 +25,7 @@ import { CodocEditorProvider } from './host/provider';
 import { DEFAULT_HUB_PORT, serveArgs } from './host/serve-manager';
 import { bootstrapCredentials } from './host/setup/credentials';
 import { ProvisionCancelledError, WorkspaceUntrustedError, cachedCodoc, ensureUv, provisionCodoc } from './host/setup/provision';
-import { commandLine } from './host/shell';
+import { runInTerminal } from './host/terminal';
 import { Workspace, statusBarView } from './host/workspace';
 
 const DAEMON_RECONCILE_MS = 15_000;
@@ -94,9 +94,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const term = (name: string, args: string[], cwd = state.rootDir) => {
         const codoc = cachedCodoc(context);
         if (!codoc || !cwd) { void vscode.window.showWarningMessage('codoc is not set up yet. Run "codoc: Set up codoc".'); return; }
-        const t = vscode.window.createTerminal({ name: `codoc ${name}`, cwd });
-        t.show(true);
-        t.sendText(commandLine([codoc, ...args]));
+        void runInTerminal(codoc, name, args, cwd);
     };
 
     const setLanguage = (root: string, tag: string): Promise<void> => {
