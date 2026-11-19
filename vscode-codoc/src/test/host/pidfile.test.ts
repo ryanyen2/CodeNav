@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { parsePid, readPid, removePidfile } from '../../host/pidfile';
+import { parsePid, readPid } from '../../host/pidfile';
 
 describe('parsePid', () => {
     it('reads the bare decimal pid the daemon writes', () => {
@@ -34,12 +34,5 @@ describe('the pidfile on disk', () => {
     it('is read from watch.pid', () => {
         fs.writeFileSync(path.join(codocDir, 'watch.pid'), '4242');
         expect(readPid(codocDir)).toBe(4242);
-    });
-
-    it('can be removed, and removing a missing one is not an error', () => {
-        fs.writeFileSync(path.join(codocDir, 'watch.pid'), '4242');
-        removePidfile(codocDir);
-        expect(readPid(codocDir)).toBeUndefined();
-        removePidfile(codocDir);
     });
 });

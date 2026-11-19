@@ -1,12 +1,12 @@
 /**
  * pidfile.ts: `.codoc/watch.pid`, the daemon's claim on a repository.
  *
- * The file holds the daemon's process id as decimal text and nothing else. The
- * daemon writes it when it starts and removes it when it exits; a daemon that
- * finds a live pid there exits with status 3 instead of starting (`codoc
- * watch`, `write_pidfile` and `daemon_running` on the Python side). The
- * extension never writes the file. It reads it to decide whether a daemon is
- * running, and removes one that names a process which is not a daemon.
+ * The file holds the daemon's process id as decimal text. The daemon holds an
+ * exclusive lock on it for its whole life; a second `codoc watch` finds the
+ * lock held and exits with status 3 (`hold_pidfile` and `daemon_running` on the
+ * Python side). The lock is the truth, and the file is never removed: removing
+ * it while a daemon holds it would let another daemon lock a new file at the
+ * same path. The extension only reads the pid, as a hint.
  *
  * No `vscode` import, so vitest can load it.
  */
@@ -30,8 +30,4 @@ export function readPid(codocDir: string): number | undefined {
     } catch {
         return undefined;
     }
-}
-
-export function removePidfile(codocDir: string): void {
-    fs.rmSync(pidfilePath(codocDir), { force: true });
 }

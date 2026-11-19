@@ -25,7 +25,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { output } from './output';
-import { readPid, removePidfile } from './pidfile';
+import { readPid } from './pidfile';
 
 const FAST_EXIT_MS = 5_000;
 const MAX_FAST_EXITS = 3;
@@ -44,10 +44,9 @@ export function resetDaemonBackoff(): void {
 }
 
 /**
- * Whether `pid` is a running `codoc watch`. Liveness alone is not enough where
- * the command line can be read: process ids are reused, so a pidfile left by a
- * previous boot can name the person's browser. Windows has no `ps`, and there
- * liveness is the whole test, as it is for the daemon's own check.
+ * Whether `pid` looks like a running `codoc watch`: a hint that saves a spawn,
+ * not the truth. The daemon's lock on watch.pid decides; a `codoc watch` started
+ * while another holds it exits with status 3, which counts as standing down.
  */
 function isLiveDaemon(pid: number): boolean {
     try {
@@ -78,13 +77,7 @@ export function startDaemon(codocPath: string, rootDir: string): boolean {
 
     const log = output();
     const pid = readPid(codocDir);
-    if (pid !== undefined) {
-        if (isLiveDaemon(pid)) return false;
-        // The file names a process that is not a daemon. Left in place, the
-        // daemon about to start could take it for a live one and stand down.
-        removePidfile(codocDir);
-        log.appendLine(`codoc: removed a stale watch.pid (pid ${pid})`);
-    }
+    if (pid !== undefined && isLiveDaemon(pid)) return false;
 
     log.appendLine(`$ ${codocPath} watch --root ${rootDir}`);
     const proc = cp.spawn(codocPath, ['watch', '--root', rootDir], { cwd: rootDir, shell: false });
