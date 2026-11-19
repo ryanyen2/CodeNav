@@ -122,29 +122,65 @@ def unvetted_block(store: Store, b: Block) -> bool:
     return b.added_plan in store.open_plans
 
 
+def set_value(payload: dict) -> tuple[bool, object]:
+    """What a content ``block.set`` wrote, as (absent, value)."""
+    return (True, None) if payload.get("unset") else (False, payload.get("value"))
+
+
+def without_plans(store: Store, b: Block, path: str, past: tuple[str, ...], undoing: Op | None = None) -> tuple[bool, object]:
+    """Content field ``path`` of ``b`` with plans' sets taken out, as (absent,
+    value): the one rule for the value from before the plans (docs/model.md,
+    Read modes). ``Block.prior`` keeps each set with the value it replaced. The
+    walk goes from the newest set back, starting from the field as it is. A set
+    whose plan's status is in ``past`` is taken out: when it wrote the value in
+    hand, the value it replaced is the one in hand now; when the value in hand
+    is already the one it replaced (its own reject put the field back), it is
+    passed. Anything else ends the walk: a person's set, an accepted plan's, one
+    whose plan's status ``past`` leaves out, a value something else wrote since
+    (a lift), and a set whose op a fold archived.
+
+    ``undoing`` is a plan's set a verdict is taking back. The walk starts at it,
+    from the value it wrote (the caller checked the field still holds it), and
+    takes it out whatever its plan's status."""
+    sets = b.prior.get(path) or []
+    now = (path not in b.content, b.content.get(path))
+    if undoing is not None:
+        i = next((j for j, e in enumerate(sets) if e[0] == undoing.id), None)
+        # A set a realization covered has left `prior`; what it replaced is in its payload.
+        sets = sets[:i + 1] if i is not None else [[undoing.id, undoing.payload.get("prev"), undoing.plan or ""]]
+    for op_id, prev, pid in reversed(sets):
+        plan = store.plans.get(pid) if pid else None
+        if (undoing is None or op_id != undoing.id) and (plan is None or plan.status not in past):
+            break
+        was = (prev is None, prev)
+        if was == now:
+            continue
+        wrote = undoing if undoing is not None and op_id == undoing.id else store.by_id.get(op_id)
+        if wrote is None or set_value(wrote.payload) != now:
+            break
+        now = was
+    return now
+
+
 def rejected_content(store: Store, b: Block) -> dict:
     """``b.content`` as the ``rejected`` mode reads its JSON fields. A Text
     field carries its plan on every character, so the read modes hide an open
     plan's words; a JSON field (a url block's ``url``, a code block's ``lang``)
-    carries none. One an open plan's ``block.set`` wrote reads as the newest
-    value that neither an open nor a rejected plan wrote, which ``prior``
-    keeps: the owner's. A rejected plan's value can still be what a later
-    plan's set replaced (the reject found that set on the field and left it),
-    so the walk goes past it too and stops at a person's own set or an accepted
-    plan's. The export, the directive, the kind codecs and the lift read this,
-    so a value a suggester proposed is neither shown, nor put in front of the
-    agent, nor fetched before a verdict, and the owner's block is not hidden
-    meanwhile."""
+    carries none. While an open plan has a set on the field it reads as
+    ``without_plans`` takes every open and rejected plan's set out of it: the
+    owner's value. With none open it is the field as it is, which every reject
+    has already put back. The export, the directive, the kind codecs and the
+    lift read this, so a value a suggester proposed is neither shown, nor put in
+    front of the agent, nor fetched before a verdict, and the owner's block is
+    not hidden meanwhile."""
     out = dict(b.content)
     for k, sets in b.prior.items():
-        for _, prev, pid in reversed(sets):
-            p = store.plans.get(pid) if pid else None
-            if p is None or p.status == "accepted":
-                break
-            if prev is None:
+        if any(e[2] in store.open_plans for e in sets):
+            absent, value = without_plans(store, b, k, ("open", "rejected"))
+            if absent:
                 out.pop(k, None)
             else:
-                out[k] = prev
+                out[k] = value
     return out
 
 

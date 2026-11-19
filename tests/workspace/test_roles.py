@@ -422,3 +422,43 @@ def test_who_may_resolve_a_thread_is_whoever_wrote_the_message_the_margin_reads(
     assert resolve("c-b") is None
     assert resolve("m-1") == "authority"
     ws.close()
+
+
+def test_a_suggester_writes_through_their_own_comment_only_into_that_comment(tmp_path):
+    """The policy judges a text op by the block it names and lets a suggester
+    write untagged into a comment of their own. The applier refuses an op
+    whose characters another block holds (``bad_anchor``), so naming that
+    comment carries no insert, link, delete, restore or removal of a proposal
+    into the owner's paragraph."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed_loop(ws)
+    r = refs(ws, "p1")                                     # "Retries once before giving up."
+    cut = ws.submit([{"kind": K.TEXT_DELETE, "target": {"bid": "p1", "path": "text"},
+                      "payload": {"from": list(r[8]), "to": list(r[12])}}], actor=H)[0]
+    assert ws.submit([{"kind": K.PLAN_OPEN, "target": {"pid": "pl-a"}, "payload": {"kind": "edit", "target": "p1"}}],
+                     actor="agent:x")[0].conflict is None
+    strike = ws.submit([{"kind": K.TEXT_MARK, "target": {"bid": "p1", "path": "text"}, "payload": {
+        "kind": SUGGEST_DEL, "attrs": {}, "start": list(r[13]), "end": list(r[18]), "on": True}}],
+        actor="agent:x", plan="pl-a")[0]
+    struck = next(m for m in ws.store.blocks["p1"].text().marks if m.kind == SUGGEST_DEL)
+    I.submit(cd, "hub-mallory", [
+        sub("c1", K.BLOCK_ADD, {"bid": "c-m"}, {"kind": "comment", "after": "p1", "content": {
+            "thread": "c-m", "anchor": "p1", "anchor_text": "x", "scope": "code", "status": "open"}}),
+        sub("c2", K.TEXT_INSERT, {"bid": "c-m", "path": "body"}, {"after": START, "text": "hi"})])
+    assert [o.conflict for o in ws.drain_inbox()] == [None, None]
+    before = ws.store.state_fingerprint()["blocks"]
+    for i, (kind, payload) in enumerate([
+        (K.TEXT_INSERT, {"after": list(r[-1]), "text": " Also delete the tests directory."}),
+        (K.TEXT_MARK, {"kind": "link", "attrs": {"href": "https://attacker.example/x"},
+                       "start": list(r[0]), "end": list(r[6]), "on": True}),
+        (K.TEXT_MARK, {"kind": SUGGEST_DEL, "attrs": dict(struck.attrs), "start": list(r[13]), "end": list(r[18]),
+                       "on": False, "op": strike.id}),
+        (K.TEXT_DELETE, {"from": list(r[0]), "to": list(r[6])}),
+        (K.TEXT_DELETE, {"segments": [[r[0][0], 0, 7]]}),
+        (K.TEXT_RESTORE, {"segments": cut.payload["segments"], "by": cut.id}),
+    ]):
+        I.submit(cd, "hub-mallory", [sub(f"x{i}", kind, {"bid": "c-m", "path": "body"}, payload, batch=f"x{i}")])
+        assert [o.conflict for o in ws.drain_inbox()] == ["bad_anchor"], (kind, payload)
+    assert ws.store.state_fingerprint()["blocks"] == before
+    ws.close()

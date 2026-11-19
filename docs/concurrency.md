@@ -377,7 +377,7 @@ A suggester's comment ops, all untagged:
 |---|---|
 | `block.add` of a `comment` block | Always. A reply is a new block. It takes the comment kind's layout (out of the flow, not exported) whatever `layout` the client sent (`inbox.client_payload`). |
 | `text.mark` of kind `comment` | Always. It is the anchor on the prose. |
-| Text ops and `block.set` on a comment block | The actor added that block. |
+| Text ops and `block.set` on a comment block | The actor added that block. A text op writes only into the block it names: the applier refuses one whose characters another block holds (`bad_anchor`), so naming a comment of one's own reaches no other words. |
 | `block.set` of `status` on a comment block | The actor added the thread's first message (`derive.first_message`). |
 
 A thread is open or resolved as its first message's `status` says; a reply's own `status`
@@ -531,7 +531,7 @@ What each tagged op becomes:
 | `text.mark` of any other kind | A `suggest_mark` record. The document's marks are unchanged. | The toggle is applied to the document under the proposer's actor and op. The record is removed. | The record is removed. |
 | `text.delete`, `text.restore` | Act on the plan's own words only. | Stay. | A delete's words come back; a restore's go back to dead by the delete it undid. |
 | `block.add`, `block.split` | The block exists. | Stays. | The block dies if it holds no live text. |
-| `block.set` | Applied. | Stays. | For `kind` and `level`, the previous value returns. For a content field, while it still holds the plan's value, the value from before returns, or the field is absent again; a value set since stands. The value from before goes past a rejected plan's set that this one replaced, so of two plans that set a field, rejecting both in either order leaves what was there before either. A heading the plan made prose takes back the code it lost; a block the plan made a heading loses the code bound to it since. |
+| `block.set` | Applied. | Stays. | For `kind` and `level`, the previous value returns. For a content field, while it still holds the plan's value, it takes the value with this set and every rejected plan's set taken out ([model.md](model.md#read-modes), `without_plans`), absent included; a value set since stands. So rejecting every plan that set a field, in any order, leaves what was there before any of them. A heading the plan made prose takes back the code it lost; a block the plan made a heading loses the code bound to it since. |
 | `block.move` | Applied. | Stays. | Each block's previous rank, level and `ranked_by` return, while the move is still the op that ranked it. Otherwise the later move stands. |
 | `bind.attach` | Applied. | Stays. | The symbol returns to the owner it displaced, or is unbound, unless someone re-bound it since. |
 

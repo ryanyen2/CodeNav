@@ -160,7 +160,7 @@ def _h_text_insert(store: Store, op: Op, touched: set[str]):
     elif after == END:
         raise Conflict("bad_anchor", "insert after END; use the last character")
     else:
-        block, path = store.locate_char(after, (bid, path))  # type: ignore[arg-type]
+        block, path = _holder(store, op, after)  # type: ignore[arg-type]
         if not block.live:
             raise Conflict("dead_block", block.id)
         text = block.text(path)
@@ -173,15 +173,37 @@ def _h_text_insert(store: Store, op: Op, touched: set[str]):
     return canonical, [body(K.TEXT_DELETE, {"bid": block.id, "path": path}, {"segments": [[seg.op, seg.k0, seg.len]]})]
 
 
-def _segment_holders(store: Store, segs: list[tuple[str, int, int]], hint: tuple[str, str],
-                     live_only: bool) -> list[tuple[Block, str]]:
+def _holder(store: Store, op: Op, ref: CharRef) -> tuple[Block, str]:
+    """The field holding character ``ref``, as ``store.locate_char`` finds it
+    from the op's target (``_named``)."""
+    block, path = store.locate_char(ref, (op.target["bid"], op.target.get("path", "text")))
+    _named(store, op, block)
+    return block, path
+
+
+def _named(store: Store, op: Op, block: Block) -> None:
+    """A text op writes into the block that holds its characters, and the
+    policy judged it by the block it names (``roles.Roles.policy``), so the
+    two must be one block: a suggester's op on their own comment must not
+    reach the paragraph its anchor is in. The one exception is a split or a
+    merge since the client read. Those move characters between headings and
+    prose blocks only, so between two of those the name is a hint and the op
+    follows the characters. Any other kind's characters, a comment's among
+    them, never move."""
+    bid = op.target["bid"]
+    named = store.blocks.get(bid)
+    if block.id != bid and not (named is not None and is_one_line(named.kind) and is_one_line(block.kind)):
+        raise Conflict("bad_anchor", f"{block.id} holds it, not {bid}")
+
+
+def _segment_holders(store: Store, op: Op, segs: list[tuple[str, int, int]], live_only: bool) -> list[tuple[Block, str]]:
     """The holders of the named characters: both ends of every segment are
     located by identity (a segment split across two blocks has two holders).
     Other blocks holding other characters of the same op are not touched."""
     work: list[tuple[Block, str]] = []
     for o, k, n in segs:
         for ref in ((o, k), (o, k + n - 1)):
-            h = store.locate_char(ref, hint)
+            h = _holder(store, op, ref)
             if live_only and not h[0].live:
                 raise Conflict("dead_block", h[0].id)
             if h not in work:
@@ -198,7 +220,7 @@ def _h_text_delete(store: Store, op: Op, touched: set[str]):
     bid, path = op.target["bid"], op.target.get("path", "text")
     if "segments" in op.payload:
         segs = [(str(o), int(k), int(n)) for o, k, n in op.payload["segments"]]
-        work = _segment_holders(store, segs, (bid, path), live_only=True)
+        work = _segment_holders(store, op, segs, live_only=True)
         _only_own_plan(store, op, work, segs)
         if not work:
             # Nothing named is held anywhere (a replayed no-op): the block the
@@ -215,7 +237,7 @@ def _h_text_delete(store: Store, op: Op, touched: set[str]):
         canonical = {"segments": killed, "bid": bid, "path": path}
         return canonical, [body(K.TEXT_RESTORE, {"bid": bid, "path": path}, {"segments": killed, "by": op.id})]
     start, end = _char(op.payload["from"]), _char(op.payload["to"])
-    block, p = store.locate_char(start, (bid, path))
+    block, p = _holder(store, op, start)
     if not block.live:
         raise Conflict("dead_block", block.id)
     text = block.text(p)
@@ -260,7 +282,7 @@ def _h_text_restore(store: Store, op: Op, touched: set[str]):
     bid, path = op.target["bid"], op.target.get("path", "text")
     by = op.payload.get("by")
     segs = [(str(o), int(k), int(n)) for o, k, n in op.payload["segments"]]
-    work = _segment_holders(store, segs, (bid, path), live_only=False)
+    work = _segment_holders(store, op, segs, live_only=False)
     _only_own_plan(store, op, work, segs)
     revived: list[list] = []
     for block, p in work:
@@ -273,14 +295,13 @@ def _h_text_restore(store: Store, op: Op, touched: set[str]):
 
 
 def _h_text_mark(store: Store, op: Op, touched: set[str]):
-    bid, path = op.target["bid"], op.target.get("path", "text")
     kind = op.payload["kind"]
     attrs = dict(op.payload.get("attrs") or {})
     start, end = _char(op.payload["start"]), _char(op.payload["end"])
     on = bool(op.payload.get("on", True))
     if not on and kind in WHOLE and op.payload.get("op"):
         return _whole_mark_off(store, op, kind, attrs, touched)
-    block, p = store.locate_char(start, (bid, path))
+    block, p = _holder(store, op, start)
     if not block.live:
         raise Conflict("dead_block", block.id)
     text = block.text(p)
@@ -363,6 +384,8 @@ def _whole_mark_off(store: Store, op: Op, kind: str, attrs: dict, touched: set[s
     gone = [(b, f, m) for b, f, m in store.placed_by(placer) if m.kind == kind and m.attrs == attrs]
     if not gone:
         raise MarkError(f"no {kind} mark placed by {placer}")
+    for b, _, _ in gone:
+        _named(store, op, b)
     for b, f, m in gone:
         b.text(f).marks.remove(m)
         touched.add(b.id)

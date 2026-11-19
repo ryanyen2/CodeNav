@@ -73,7 +73,7 @@ shows ink and ground as a paragraph does. Any other field is replaced whole by
 | `pdf` | `caption` | Extracts text from a file under `.codoc/media/` when `pypdf` is installed. | | The excerpt, or the file path. |
 | `image` | `alt`, `caption` | | | The alt text, caption and file. |
 | `screenshot` | `caption` | | | The file and caption. |
-| `comment` | `body` | | While the thread is open (its first message says so) and the body is not empty: the anchor text and the body; with `scope: both`, also a request to amend the description through `codoc_reflect`. | The anchor text and the body. |
+| `comment` | `body` | | While the thread is open (its first message says so) and the body is not empty: the anchor text and the body; with `scope: both`, also a request to amend the description through `codoc_reflect`. | |
 
 `table` and `code` are part of the feature's description, so the agent reads them there.
 The `url` and `pdf` extractors are in the optional `media` extra.
@@ -104,9 +104,9 @@ in a model's description is dropped.
 
 For each block of the feature's body (`loops/realize.py`, `_kind_lines`) except one an
 open plan added (`derive.unvetted_block`), with its content in the `rejected` mode
-(`kinds.plain`). A JSON field carries no plan tag, so one an open plan set reads as the
-newest value neither an open nor a rejected plan wrote, which `Block.prior` keeps
-(`derive.rejected_content`):
+(`kinds.plain`). A JSON field carries no plan tag, so one an open plan set reads as its
+value from before the plans, the owner's (`derive.rejected_content`, by the rule in
+[model.md](model.md#read-modes)):
 
 - An in-flow block adds its `consult` line.
 - A block whose kind has a `lower` adds what `lower` makes of `(old, new)`. `old` is the

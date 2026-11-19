@@ -1,4 +1,5 @@
 """Block kinds: declarations, writes, lift and lower (docs/kinds.md)."""
+import itertools
 import json
 from pathlib import Path
 
@@ -427,7 +428,7 @@ def test_a_thread_reads_as_the_margin_reads_it(case):
         first = first_message(store, msgs[0])
         assert all(first_message(store, b) is first for b in msgs)
         got.append({"id": tid, **{k: first.content[k] for k in ("status", "scope", "anchor_text")},
-                    "messages": [b.id for b in msgs]})
+                    "first": first.id, "messages": [b.id for b in msgs]})
     assert got == case["threads"]
 
 
@@ -509,28 +510,40 @@ def test_a_comments_line_breaks_write_no_directive_lines_of_their_own(tmp_path):
     ws.close()
 
 
-def _two_plans_on_url(tmp_path, monkeypatch):
-    """The owner's url block, and two open plans of a suggester's that each
-    point it elsewhere, P then Q."""
+_OWNERS = "https://docs.example/retry"
+
+
+def _two_plans_on_url(tmp_path, monkeypatch, urls=("https://attacker.example/one", "https://attacker.example/two")):
+    """The owner's url block, and open plans of a suggester's that each point
+    it elsewhere, P then Q (one per url)."""
     from codoc.kinds import fetch_guard
-    from codoc.workspace import inbox as I
     fetched: list = []
     monkeypatch.setattr(fetch_guard, "safe_get", lambda url, **kw: fetched.append(url) or None)
     codoc = tmp_path / ".codoc"
     ws = Workspace(codoc)
     seed_loop(ws)
-    bid = kind_block(ws, "url", {"url": "https://docs.example/retry"}, after="p1")
-    pids = []
-    for i, url in enumerate(("https://attacker.example/one", "https://attacker.example/two")):
-        pid = f"pl-m{i}"
-        I.submit(codoc, "hub-mallory", [
-            I.Submission(cid=f"o{i}", kind=K.PLAN_OPEN, target={"pid": pid}, payload={"kind": "edit", "target": bid},
-                         batch=f"b{i}"),
-            I.Submission(cid=f"s{i}", kind=K.BLOCK_SET, target={"bid": bid, "path": "url"}, payload={"value": url},
-                         batch=f"b{i}", plan=pid)])
-        assert [o.conflict for o in ws.drain_inbox()] == [None, None]
-        pids.append(pid)
+    bid = kind_block(ws, "url", {"url": _OWNERS}, after="p1")
+    pids = [_url_plan(codoc, ws, bid, i, url) for i, url in enumerate(urls)]
     return codoc, ws, bid, pids, fetched
+
+
+def _url_plan(codoc, ws, bid, i, url) -> str:
+    """Open the suggester's plan ``pl-m<i>`` setting the block's url to ``url``."""
+    from codoc.workspace import inbox as I
+    pid = f"pl-m{i}"
+    I.submit(codoc, "hub-mallory", [
+        I.Submission(cid=f"o{i}", kind=K.PLAN_OPEN, target={"pid": pid}, payload={"kind": "edit", "target": bid},
+                     batch=f"b{i}"),
+        I.Submission(cid=f"s{i}", kind=K.BLOCK_SET, target={"bid": bid, "path": "url"}, payload={"value": url},
+                     batch=f"b{i}", plan=pid)])
+    assert [o.conflict for o in ws.drain_inbox()] == [None, None]
+    return pid
+
+
+def _verdict(ws, kind, pid, **payload):
+    v = ws.submit([{"kind": kind, "target": {"pid": pid}, "payload": payload}], actor="human:local")[0]
+    assert v.conflict is None
+    return v
 
 
 def test_rejecting_the_older_of_two_plans_on_a_url_makes_neither_value_the_owners(tmp_path, monkeypatch):
@@ -543,7 +556,7 @@ def test_rejecting_the_older_of_two_plans_on_a_url_makes_neither_value_the_owner
     ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": p}, "payload": {}}], actor="human:local")
     b = ws.store.blocks[bid]
     assert b.content["url"] == "https://attacker.example/two"
-    assert rejected_content(ws.store, b)["url"] == "https://docs.example/retry"
+    assert rejected_content(ws.store, b)["url"] == _OWNERS
     lift_pass(ws, None, str(codoc))
     assert fetched == ["https://docs.example/retry"]
     handoff(ws, "h1", actor="human:local")
@@ -566,4 +579,69 @@ def test_rejecting_two_plans_on_a_url_in_either_order_puts_the_owners_back(tmp_p
         ws.submit([{"kind": K.PLAN_REOPEN, "target": {"pid": v.target["pid"]}, "payload": {"by": v.id}}],
                   actor="human:local")
     assert ws.store.blocks[bid].content["url"] == "https://attacker.example/two"
+    ws.close()
+
+
+@pytest.mark.parametrize("order", list(itertools.permutations(range(3))))
+def test_rejecting_three_plans_on_a_url_in_any_order_puts_the_owners_back(tmp_path, monkeypatch, order):
+    """Every reject takes out the plan's set and every rejected plan's set it
+    stood on (``derive.without_plans``), so once all three are rejected the
+    owner's url is back, whichever went first."""
+    from codoc.calculus.derive import rejected_content
+    urls = ("https://x.example/B", "https://x.example/C", "https://x.example/E")
+    codoc, ws, bid, pids, _ = _two_plans_on_url(tmp_path, monkeypatch, urls)
+    for i in order:
+        _verdict(ws, K.PLAN_REJECT, pids[i])
+    b = ws.store.blocks[bid]
+    assert b.content["url"] == rejected_content(ws.store, b)["url"] == _OWNERS
+    ws.close()
+
+
+def test_a_reject_reaches_past_a_rejected_plan_whose_own_reject_put_the_field_back(tmp_path, monkeypatch):
+    """P sets B and Q sets C. Rejecting Q puts back P's B, which is still
+    proposed. R then sets E over it, and P is rejected while R stands. Rejecting
+    R passes Q (its reject already took C out) and takes out P's B too: the
+    owner's url, as the ``rejected`` read said all along. Undoing that last
+    reject gives back R's E, still read as the owner's, and a rebuild and a fold
+    keep both."""
+    from codoc.calculus.derive import rejected_content
+    from tests.helpers import fold
+    codoc, ws, bid, (p, q), _ = _two_plans_on_url(tmp_path, monkeypatch, ("https://x.example/B", "https://x.example/C"))
+    _verdict(ws, K.PLAN_REJECT, q)
+    b = ws.store.blocks[bid]
+    assert b.content["url"] == "https://x.example/B"
+    r = _url_plan(codoc, ws, bid, 2, "https://x.example/E")
+    _verdict(ws, K.PLAN_REJECT, p)
+    assert rejected_content(ws.store, b)["url"] == _OWNERS
+    last = _verdict(ws, K.PLAN_REJECT, r)
+    assert b.content["url"] == rejected_content(ws.store, b)["url"] == _OWNERS
+    _verdict(ws, K.PLAN_REOPEN, r, by=last.id)
+    assert b.content["url"] == "https://x.example/E" and rejected_content(ws.store, b)["url"] == _OWNERS
+    _verdict(ws, K.PLAN_REJECT, r)
+    fp = ws.store.state_fingerprint()
+    ws.close()
+    ws = Workspace(codoc)
+    assert ws.store.state_fingerprint() == fp
+    ws.close()
+    fold(codoc)
+    ws = Workspace(codoc)
+    b = ws.store.blocks[bid]
+    assert b.content["url"] == rejected_content(ws.store, b)["url"] == _OWNERS
+    ws.close()
+
+
+def test_with_no_plan_open_the_rejected_read_is_the_field(tmp_path, monkeypatch):
+    """P sets B and Q sets C; both are rejected, which puts the owner's url
+    back. Undoing P's reject and accepting P leaves the field as it is, and
+    with no plan open the ``rejected`` read, and so the export, say what the
+    field says, not the B that Q's rejected set replaced."""
+    from codoc.calculus.derive import rejected_content
+    codoc, ws, bid, (p, q), _ = _two_plans_on_url(tmp_path, monkeypatch, ("https://x.example/B", "https://x.example/C"))
+    vp = _verdict(ws, K.PLAN_REJECT, p)
+    _verdict(ws, K.PLAN_REJECT, q)
+    _verdict(ws, K.PLAN_REOPEN, p, by=vp.id)
+    _verdict(ws, K.PLAN_ACCEPT, p)
+    b = ws.store.blocks[bid]
+    assert b.content["url"] == rejected_content(ws.store, b)["url"] == _OWNERS
+    assert "x.example" not in export_markdown(ws.store)
     ws.close()

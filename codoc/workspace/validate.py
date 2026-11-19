@@ -211,8 +211,11 @@ def _policy_view(store: Store | None, ops: list[Op]) -> Store:
         if op.kind == K.PLAN_OPEN and (pid := op.target.get("pid")):
             view.plans.setdefault(str(pid), Plan(id=str(pid), actor=op.actor))
         if op.kind == K.BLOCK_ADD and op.conflict is None and (bid := op.target.get("bid")):
-            view.blocks.setdefault(str(bid), Block(str(bid), str(op.payload.get("kind") or PARAGRAPH), "",
-                                                   content=dict(op.payload.get("content") or {})))
+            # Who added it is who may write in it, and its rank orders a
+            # thread's messages (`derive.first_message`), as the applier has them.
+            view.blocks.setdefault(str(bid), Block(str(bid), str(op.payload.get("kind") or PARAGRAPH),
+                                                   str(op.payload.get("rank") or ""),
+                                                   content=dict(op.payload.get("content") or {}), added_by=op.actor))
             view.ops_by_block.setdefault(str(bid), []).append(len(view.ops))
             view.ops.append(op)
     return view

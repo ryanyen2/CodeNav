@@ -306,9 +306,13 @@ Target `{bid, path}`; `path` defaults to `text`.
 | `text.restore` | `segments`, `by?` | `segments` it revived | `text.delete {segments}` |
 | `text.mark` | `kind`, `attrs`, `start`, `end`, `on` (default true) | `removed` and `added`, the marks it displaced and placed; or `proposed`, the `suggest_mark` record | off for each added mark, on for each removed mark with its original `actor`, `op`, `at`; for a plan toggle, the record turned off |
 
-- A character is found by identity. `bid` and `path` are a hint; the op acts on the field
-  that holds the character, preferring a live block. A split or a merge under a
-  concurrent text op costs nothing.
+- A character is found by identity, in the field that holds it, preferring a live block.
+  That field must be in the block `bid` names, because the policy judges the op by that
+  block (a suggester's comment, say). The one exception is a split or a merge since the
+  client read: those move characters between headings and prose blocks only, so when the
+  named block and the holder are both of those kinds the op acts on the holder, and a
+  split or a merge under a concurrent text op costs nothing. Any other mismatch is
+  `bad_anchor`.
 - `text.insert` mints one live segment directly after its anchor. Of two inserts after
   the same anchor, the one applied later sits nearer the anchor; neither is interleaved.
   At `START` the named block must be live and `path` a Text field. `END` is refused.
@@ -457,7 +461,7 @@ Codes are stable identifiers. A conflicted op changes nothing.
 | `not_plannable` | tagged ops | This kind may not ride in a plan. |
 | `missing:<key>` | any op | A target or payload entry the handler needs is absent. |
 | `malformed` | any op | A value has the wrong type, a pinned rank is not a rank, or `under` places a block that is not a heading. |
-| `bad_anchor` | text ops, split | Not a character reference, or `START` or `END` where a character is needed. |
+| `bad_anchor` | text ops, split | Not a character reference, or `START` or `END` where a character is needed, or a text op's character is held by a block other than the one it names (Text ops). |
 | `unknown_anchor` | text ops, split | No field holds the character, or the range ends are reversed. |
 | `range_spans_blocks` | delete, mark | The two ends are in different fields. The client reads again and sends one op per block. |
 | `empty_insert` | insert | No text. |
@@ -637,11 +641,17 @@ but it comes before the code, so the reflect pass leaves its words out.
 A decided plan changes no mode: an accepted plan's words are ordinary text, and a
 rejected plan's words are dead.
 
-A field that is not Text carries no plan tag. The `rejected` mode reads it from `prior`
-instead (`rejected_content(b)`): a field an open plan's `block.set` wrote reads as the
-newest value neither an open nor a rejected plan wrote, the owner's. A rejected plan's
-value can still be what a later plan's set replaced, so the walk back through `prior`
-passes it too, and stops at a person's own set or an accepted plan's. `unvetted_block(b)`
+A field that is not Text carries no plan tag, so its value from before the plans is read
+from `prior`, which keeps each set with the value it replaced, by one rule
+(`without_plans`). The walk goes from the newest set back, starting from the field as it
+is. A set of a plan being taken out gives back the value it replaced when it wrote the
+value in hand, and is passed when the value in hand is already the one it replaced (its
+own reject put the field back). A person's set, an accepted plan's, a value something else
+wrote since (a lift), and a set whose op a fold archived end the walk. The `rejected` mode
+(`rejected_content(b)`) takes out every open and rejected plan's set while an open plan
+has one on the field, which reads as the owner's value; with no plan open it reads the
+field as it is. A reject's undo of a content set takes out that set and every rejected
+plan's set under it ([concurrency.md](concurrency.md#9-plans-and-verdicts)). `unvetted_block(b)`
 holds when an open plan added `b` (`added_plan`); such a block says nothing in the
 `rejected` mode, the directive
 leaves it out, and the lift pass leaves it alone. The export, the directive, the kind

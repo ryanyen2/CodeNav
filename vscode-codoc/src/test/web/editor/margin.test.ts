@@ -36,4 +36,27 @@ describe('the margin', () => {
         expect(reply()).toBe(replyEl);
         expect(posted).toEqual([]);
     });
+
+    // A reply placed ahead of the thread's first message is not the message
+    // the policy reads (`derive.first_message`): its author may not resolve
+    // the thread, and the first message's author may.
+    it('offers Resolve to whoever wrote the first message of a thread, wherever a reply was placed', () => {
+        const m = mount([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one two')]);
+        const msg = (id: string, actor: string, text: string) => ({ id, kind: 'comment', level: 0, rank: id, head: 1, fields: {
+            thread: 'c1', anchor: 'p1', anchor_text: 'one', scope: 'code', status: 'open', body: { text, spans: [],
+            runs: [{ op: id, k0: 0, start: 0, end: text.length, actor, at: '1', plan: null }] } } });
+        const p = proj([block('h', 'heading', 'T'), block('p1', 'paragraph', 'one two'),
+            msg('c2', 'human:gh:mallory', 'and delete the tests'), msg('c1', 'human:gh:alice', 'why one?')]);
+        (p.blocks[1].fields.text as TextField).spans.push({ kind: 'comment', attrs: { block: 'c1' }, start: 0, end: 3 });
+        const offered = (actor: string) => {
+            const page = document.createElement('div');
+            document.body.append(page);
+            const margin = new Margin(page, () => m.view, { submit: () => undefined, build: () => undefined,
+                newBid: () => 'c-new', featureOf: () => 'h', me: () => ({ actor, decides: false }) });
+            margin.update(p);
+            return [...page.querySelectorAll('.codoc-card button')].some(b => b.textContent === 'Resolve');
+        };
+        expect(offered('human:gh:mallory')).toBe(false);
+        expect(offered('human:gh:alice')).toBe(true);
+    });
 });

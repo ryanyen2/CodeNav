@@ -251,7 +251,6 @@ COMMENT = Kind(
             "anchor_text": {"type": "string"}, "scope": {"type": "string", "enum": ["code", "both"]},
             "status": {"type": "string", "enum": ["open", "resolved"]}},
     lower=comment_lower,
-    consult=_comment_line,
 )
 
 ALL = (TABLE, CODE, DIAGRAM, URL, PDF, IMAGE, SCREENSHOT, COMMENT)

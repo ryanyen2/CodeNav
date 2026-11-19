@@ -21,6 +21,7 @@ export interface Thread {
     anchorText: string;
     scope: 'code' | 'both';
     status: 'open' | 'resolved';
+    first: string;           // the message that speaks for the thread (`derive.first_message`)
     messages: Message[];
 }
 
@@ -73,10 +74,11 @@ export function threadsOf(proj: Projection): Thread[] {
         if (g) g.push(b); else groups.set(id, [b]);
     }
     return [...groups].map(([id, blocks]) => {
-        const f = (blocks.find(b => b.id === id) ?? blocks[0]).fields as Record<string, unknown>;
+        const head = blocks.find(b => b.id === id) ?? blocks[0];
+        const f = head.fields as Record<string, unknown>;
         return { id, anchor: live.get(id) ?? String(f.anchor ?? ''), anchorText: String(f.anchor_text ?? ''),
                  scope: f.scope === 'both' ? 'both' : 'code', status: f.status === 'resolved' ? 'resolved' : 'open',
-                 messages: blocks.map(message) };
+                 first: head.id, messages: blocks.map(message) };
     });
 }
 
@@ -212,7 +214,9 @@ export class Margin {
         if (t) {
             const me = this.host.me?.() ?? { actor: '', decides: true };
             btn(actions, 'Reply', () => post(t.scope));
-            if (me.decides || t.messages[0]?.actor === me.actor) btn(actions, 'Resolve', () => { this.host.submit(resolveOps(t)); });
+            if (me.decides || t.messages.find(m => m.bid === t.first)?.actor === me.actor) {
+                btn(actions, 'Resolve', () => { this.host.submit(resolveOps(t)); });
+            }
             if (me.decides) btn(actions, 'Build it', () => this.host.build(t), 'codoc-btn-human');
         } else {
             btn(actions, 'Comment', () => post('code'));
