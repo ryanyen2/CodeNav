@@ -1,14 +1,13 @@
-You are organizing the top level of a **feature tree** for "{repo_name}". Each
-feature below was derived from one source file. Your job: group related features
-under a few broad **theme** nodes so the tree reads as a clear table of contents —
-without losing, renaming, or rewriting the existing features.
+You are organizing the top level of the feature tree for "{repo_name}".
 
-## The brief — what this project is, read from its own prose
+- Each feature below came from one source file.
+- Your job: group related features under a few theme nodes, so the top level reads as a table of contents.
+- You may only add themes and move existing features under them. Do not rename, re-describe, merge, retire or rebind anything.
 
-Formed before any file was looked at. Use its words for your theme names: a
-reader who has read the project's own README should recognise the top level of
-this tree as the same thing described again, not as a second vocabulary they now
-have to learn.
+## The brief: what this project says about itself
+
+Use its words for theme titles. Someone who has read the README should
+recognise the top level as the same thing, not a second vocabulary.
 
 {brief}
 
@@ -16,63 +15,58 @@ have to learn.
 
 {features}
 
-## How these features depend on each other (call / import coupling)
+## Coupling between features
 
 {edges}
 
-- Each line `A → B (n)` means feature A's code calls or imports feature B's code
-  `n` times. Strongly-coupled features usually belong under the same theme.
+`A → B: n` means A's code calls or imports B's code `n` times.
 
-## How work flows through this codebase (main call paths)
+## Main call paths
 
 {flows}
 
-- Each line follows one operation inward from where it enters the system,
-  through the modules it passes on the way. These are the paths a person has to
-  learn to work here, and they matter MORE than the coupling counts above:
-  coupling says two things touch often, a path says they are steps in the same
-  job, in this order.
-- Prefer themes that name a **stage of the work** ("Preparing a request",
-  "Sending and retrying") over themes that name a **kind of thing** ("Utilities",
-  "Models", "Helpers"). A reader who knows the stages can find anything; a
-  reader given a filing cabinet has to open every drawer.
-- A feature that appears early in several paths is usually an entry point and
-  belongs near the top of the tree, not filed under whatever it happens to call.
-- The opposite holds for **housekeeping metadata**: package identity, version
-  constants, packaging/build configuration, and similar "what this project is
-  called" features go at the BOTTOM of the tree, after everything that says what
-  the project does. They read early in files (a module docstring, a __version__)
-  but nobody opens a codebase to learn its version string — a reader's first
-  screen should be the work, not the label on the box.
+Each line follows one operation from where it enters the system through the
+modules it passes.
 
-## What to do
+## How to group
 
-1. Create a SMALL number of broad **theme** parents so that, after grouping, the
-   top level has roughly 3–6 nodes. Group features that collaborate (per the
-   coupling above) or share an obvious purpose under the same theme.
-2. Keep it SHALLOW: themes at the top, the existing features as their direct
-   children. Do NOT nest more than this one new level.
-3. It is fine to leave a genuinely standalone feature at the top level with no
-   theme. Do not force everything into a theme.
-4. Do NOT rename, re-describe, merge, retire, or rebind existing features. You may
-   ONLY add theme parents and move existing features under them.
+1. Aim for 3 to 8 nodes at the top level after grouping, and no more than about 12 features under one theme. A theme that would hold more is two themes: split it by stage, or by what a caller uses apart from the layer under it.
+2. One new level only: themes on top, existing features directly under them.
+3. Group by stage of the work ("Preparing a request", "Sending and retrying"), not by kind of thing ("Utilities", "Models", "Helpers", "Types").
+   - The call paths decide this, ahead of the coupling counts. Coupling says two things touch often. A path says they are steps of one job, in this order.
+4. A feature that appears early in several paths is an entry point. Put its theme near the top.
+5. Package identity, version constants and build configuration go last.
+6. A feature that stands alone stays at the top level only when a reader would look for it by its own name. A small helper or shared type goes under the theme whose features use it most (the coupling counts say which). Deprecated names and compatibility shims go together under one theme, after the rest.
+7. A theme's title names what its features do together. It is never the title of a feature under it.
 
-## How to express it
+## Fields
 
-Give each new theme a temporary id (`"id": "t1"`) and `add_node` it with a real
-1 to 3 sentence description: the theme's purpose in plain everyday words — what
-this group of features accomplishes together, understandable without reading
-any code. Say what the group is *for*; do not narrate decisions or history you
-were not shown, and do not hedge with "presumably" or "appears to". Then `move_node` each existing feature by its real `f-...` id under a
-theme via `parent_id`.
+- A theme: `add_node` with a temporary id (`"id": "t1"`), a `title`, and a `description`. The description is one sentence that names, in backticks, the one or two symbols a caller enters through and what they return or change. Add a numbered list of stages only when a call path above visits its features in that order; a list of the child titles is not stages.
+- A move: `move_node` with the feature's id from the list above (`f3`) as `feature_id` and the theme's temporary id as `parent_id`.
+- A feature that stays at the top level: `move_node` with no `parent_id`.
 
-## Output — return ONLY this, inside solution tags:
+## Order
+
+The ops are the top level in reading order (rules 4 and 5). Name every existing
+top-level feature once:
+
+1. a theme's `add_node`, then the moves that put features under it, in their order;
+2. a feature that stands alone, as a move with no `parent_id`, where a reader should meet it.
+
+A feature you do not name stays above everything you do name.
+
+## Output
+
+JSON inside solution tags, nothing else. `description` is a JSON string: a line
+break is `\n`, and it contains no double-quote character.
 
 <solution>
 {"ops": [
-  {"id": "t1", "kind": "add_node", "title": "HTTP request lifecycle", "description": "Everything a caller touches to make an HTTP request, meaning the public API and the session machinery underneath it that prepares a request, sends it, and works through the response.", "bindings": []},
-  {"kind": "move_node", "feature_id": "f-1a2b3c4d", "parent_id": "t1", "rationale": "public entry point into the lifecycle"},
-  {"kind": "move_node", "feature_id": "f-5e6f7a8b", "parent_id": "t1", "rationale": "session orchestration"}
+  {"id": "t1", "kind": "add_node", "title": "Sending a request", "description": "Turns a call like `get(url)` into bytes on a connection and a response object back.\n\n1. The public functions open a session.\n2. The session prepares the request and applies cookies, auth and redirects.\n3. The adapter sends it over a pooled connection.", "bindings": []},
+  {"kind": "move_node", "feature_id": "f1", "parent_id": "t1", "rationale": "the public entry point"},
+  {"kind": "move_node", "feature_id": "f4", "parent_id": "t1", "rationale": "session handling, step 2"},
+  {"kind": "move_node", "feature_id": "f2", "rationale": "the exception classes stand alone, after the request path"},
+  {"kind": "move_node", "feature_id": "f7", "rationale": "package version constants go last"}
 ]}
 </solution>
 

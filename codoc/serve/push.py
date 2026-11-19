@@ -1,68 +1,183 @@
-"""push.py — the SSE live channel host→browser (U3).
-
-The daemon re-renders whole files every pass (there is no delta primitive), so
-the hub pushes a full, version-guarded payload rather than deltas: a snapshot on
-connect, then a re-push whenever ``.codoc/*`` changes AND the derived payload
-actually differs from the last one sent. The differ is the broadcast-storm guard
-(KTD8): a no-op re-render — the same bytes — produces no event, so a normalization
-delta cannot fan out to every connected browser.
-
-``PayloadStream`` holds the dedup state and is synchronous + unit-testable; the
-async SSE generator (``event_source``) is the thin watchfiles wiring around it.
-"""
+"""The SSE channel to a browser: the same messages the extension host posts to
+its webview (``projection``, ``status``, ``acks``), so one bundle serves both.
+A snapshot on connect; then a message whenever the file behind it changed and
+its bytes differ (a no-op republish fans out to nobody)."""
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
-from codoc.serve.payload import build_browser_payload
+from codoc.workspace import inbox
+from codoc.workspace.layout import CONFIG, HISTORY, PROJECTION, STATUS
+from codoc.workspace.roles import NONE, Roles
 
 
-class PayloadStream:
-    """Yields the browser payload on first call, then only when it changes.
-
-    ``next_if_changed`` returns the current payload the first time (cold browser
-    needs the snapshot) and thereafter only when the serialized payload differs
-    from the last one emitted — so identical re-renders are suppressed."""
-
-    def __init__(self, codoc_dir: str | Path):
-        self._codoc_dir = Path(codoc_dir)
-        self._last: str | None = None
-
-    def next_if_changed(self) -> dict | None:
-        payload = build_browser_payload(self._codoc_dir)
-        serialized = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-        if serialized == self._last:
-            return None
-        self._last = serialized
-        return payload
+def _read(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
 
 
-async def event_source(codoc_dir: str | Path, *, is_disconnected=None, viewer=None):
-    """Async generator of SSE ``{"data": <json>}`` events.
+def _stamp(path: Path) -> tuple[float, int] | None:
+    """A file's mtime and size: what changed, without reading it. Ten viewers
+    of a large projection would otherwise read it all, twice a second, each."""
+    try:
+        st = path.stat()
+        return (st.st_mtime, st.st_size)
+    except OSError:
+        return None
 
-    Emits the snapshot immediately, then re-pushes on every ``.codoc`` change that
-    moves the payload. ``is_disconnected`` (an async predicate, e.g. Starlette's
-    ``request.is_disconnected``) lets the stream stop when the client drops, so a
-    closed browser doesn't leak the watch task.
 
-    ``viewer`` is THIS connection's capability block (payload.viewer_block). It is
-    merged into each payload on the way out rather than computed inside the shared
-    ``PayloadStream``, which caches one payload for every connected viewer — baking
-    a capability in there would serve one viewer's authority to all of them."""
-    from watchfiles import awatch
+def status_message(codoc_dir: Path, actor: str = "") -> dict | None:
+    """The status the editor reads, plus the facts only the host knows: the
+    tree's language, who this viewer is (undo inverts their batches), what they
+    may write, and that the hub has no terminal to build in. A contributor's
+    edits ride as a plan of theirs, so the page must not offer them a verdict
+    or a hand-off on somebody else's."""
+    st = _read(codoc_dir / STATUS)
+    if st is None:
+        return None
+    try:
+        status = json.loads(st)
+        cfg = json.loads(_read(codoc_dir / CONFIG) or "{}")
+    except ValueError:
+        return None
+    from codoc.workspace.roles import OWNER
+    role = Roles.from_config(cfg).role(actor) if actor else OWNER
+    return {"kind": "status", "status": {**status, "doc_language": cfg.get("doc_language", "en"),
+                                         "actor": actor, "role": role, "terminal": False}}
 
-    def _emit(payload: dict) -> str:
-        return json.dumps({**payload, "viewer": viewer} if viewer else payload,
-                          ensure_ascii=False)
 
-    stream = PayloadStream(codoc_dir)
-    first = stream.next_if_changed()
-    yield {"data": _emit(first)}
+def history_message(codoc_dir: str | Path) -> dict | None:
+    raw = _read(Path(codoc_dir) / HISTORY)
+    try:
+        return {"kind": "history", "history": json.loads(raw)} if raw else None
+    except ValueError:
+        return None
 
-    async for _changes in awatch(str(codoc_dir)):
+
+REPLAY_ACKS = 200
+
+
+class Feed:
+    """Per-connection state: what was last sent, and how far into the viewer's
+    ack file we have read. A new connection replays the last few acks rather
+    than starting at the end: an EventSource reconnects on its own, and an ack
+    written in that gap is the one telling the editor its op landed. The editor
+    ignores a cid it does not know."""
+
+    def __init__(self, codoc_dir: str | Path, client: str, replay: int = REPLAY_ACKS) -> None:
+        self.dir = Path(codoc_dir)
+        self.client = client
+        self.actor = inbox.actor_for(client, self.dir) or ""
+        self.sent: dict[str, str] = {}
+        self.stamps: dict[str, tuple[float, int] | None] = {}
+        ack = inbox.inbox_dir(self.dir) / f"{client}.ack.jsonl"
+        size = ack.stat().st_size if ack.exists() else 0
+        self.ack_offset = size
+        if size and replay:
+            # Count back from the end of the last complete line, not from the
+            # end of the file: a daemon caught mid-append leaves a half-written
+            # tail, and subtracting the complete lines from the file's size
+            # lands the offset that many bytes inside the oldest replayed line,
+            # which then parses as garbage and takes its ack with it.
+            data = ack.read_bytes()
+            complete = data.split(b"\n")[:-1]
+            whole = sum(len(line) + 1 for line in complete)
+            self.ack_offset = whole - sum(len(line) + 1 for line in complete[-replay:])
+
+    def pending(self) -> list[dict]:
+        # Acks first, which is the order on disk: the daemon acks during the
+        # drain and publishes afterwards. A projection ahead of the ack that
+        # releases a block is skipped for that block (the page is right about a
+        # block it still holds), so sending the projection first would make the
+        # hub the only surface where that always happens. The editor recovers
+        # either way (it re-reads a released block the projection's frontier
+        # covers), but the two surfaces should not differ in the order they
+        # deliver.
+        out: list[dict] = []
+        acks = self._acks()
+        if acks:
+            out.append({"kind": "acks", "acks": acks})
+        proj = self._if_changed(PROJECTION)
+        if proj is not None and proj != self.sent.get(PROJECTION):
+            self.sent[PROJECTION] = proj
+            try:
+                out.append({"kind": "projection", "proj": json.loads(proj)})
+            except ValueError:
+                pass
+        # Status is two files and a roles table; this runs twice a second per
+        # connection, so it is read only when one of them has been written.
+        if self._moved(STATUS) or self._moved(CONFIG):
+            st = status_message(self.dir, self.actor)
+            key = json.dumps(st, sort_keys=True) if st else ""
+            if st and key != self.sent.get(STATUS):
+                self.sent[STATUS] = key
+                out.append(st)
+        return out
+
+    def _if_changed(self, name: str) -> str | None:
+        return None if not self._moved(name) else _read(self.dir / name)
+
+    def _moved(self, name: str) -> bool:
+        """Whether this file has been written since we last looked. A file that
+        does not exist has no stamp, and is looked at every time."""
+        stamp = _stamp(self.dir / name)
+        if stamp is not None and stamp == self.stamps.get(name):
+            return False
+        self.stamps[name] = stamp
+        return True
+
+    def _acks(self) -> list[dict]:
+        path = inbox.inbox_dir(self.dir) / f"{self.client}.ack.jsonl"
+        if not path.exists():
+            return []
+        # A file shorter than where we stopped has been rotated (`rotate_acks`
+        # trims to the newest lines at session open), not gone quiet. Reading
+        # from the start again costs a replay of acks the page already has,
+        # which is idempotent; not reading would leave every block held.
+        if path.stat().st_size < self.ack_offset:
+            self.ack_offset = 0
+        with path.open("rb") as fh:
+            fh.seek(self.ack_offset)
+            data = fh.read()
+        nl = data.rfind(b"\n")
+        if nl < 0:
+            return []
+        self.ack_offset += nl + 1
+        out = []
+        for line in data[:nl].splitlines():
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                continue
+        return out
+
+
+async def event_source(codoc_dir: str | Path, client: str, *, is_disconnected=None,
+                       still_allowed=None, poll_s: float = 0.5):
+    """Async generator of SSE events; polls the few files it cares about (a
+    watch on ``.codoc`` would also wake on every index write).
+
+    The door is re-asked every tick, because a stream is a long-lived read of
+    the whole tree: a door checked only at connect would let a collaborator
+    removed from the repository keep receiving every projection for as long as
+    the browser held the tab open. It asks two questions: the tracked roles
+    table, which is what a revocation writes, and ``still_allowed``, which the
+    app fills in with its own session check. A revoked viewer's stream ends;
+    their next request meets the door.
+    """
+    feed = Feed(codoc_dir, client)
+    actor = inbox.actor_for(client, codoc_dir)
+    while True:
+        if still_allowed is not None and not still_allowed():
+            return
+        if actor and Roles.load(codoc_dir).role(actor) == NONE:
+            return
+        for m in feed.pending():
+            yield {"event": m["kind"], "data": json.dumps(m, ensure_ascii=False)}
         if is_disconnected is not None and await is_disconnected():
             return
-        payload = stream.next_if_changed()
-        if payload is not None:
-            yield {"data": _emit(payload)}
+        await asyncio.sleep(poll_s)

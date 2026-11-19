@@ -1,146 +1,147 @@
-"""auth.py — GitHub-App authorization for the codoc serve hub (U4).
+"""Sessions and roles for the hub.
 
-The hub is gated on GitHub identity. A visitor signs in (auth-code + PKCE web
-flow), and their REPO-COLLABORATOR permission decides their capability:
+A visitor signs in with GitHub; their collaborator permission on the served
+repository is their role in the calculus's ``Roles`` table:
 
-    read / triage        → SUGGEST  (suggest, comment, withdraw your own)
-    write / maintain / admin → HANDOFF  (also accept, hand off, write verdicts)
-    not a collaborator   → NONE     (denied)
+    admin / write / maintain   → maintainer   (trunk, verdicts, hand-offs)
+    read / triage              → suggest      (plans of their own)
+    not a collaborator         → none         (denied)
 
-The permission check runs with the MAINTAINER / App-installation identity — the
-`GET /repos/{owner}/{repo}/collaborators/{user}/permission` endpoint requires the
-CALLER to have push access, so it must NOT use the visitor's token (KTD4).
+``none`` is recorded in the tracked table on revocation and denied by the
+applier as well as at the door: it is the absence of a role, not a quieter
+one, and treating it as "everyone else" would make the record of a removal
+grant exactly what a contributor has.
 
-This module is the pure, fully-tested decision layer: the permission→capability
-mapping, the `authorize()` gate, and a server-side `SessionStore` (the browser
-holds only an opaque HTTP-only cookie — never a GitHub token). The live GitHub
-OAuth + REST calls are injected behind :class:`CollaboratorResolver`, so the
-trust boundary is mockable here and a real GitHub App (client id/secret,
-installation token) is deployment configuration, documented in U6's deploy doc.
+The permission check runs with the maintainer's token (the endpoint requires
+push access), never the visitor's. The browser holds only an opaque cookie.
 """
 from __future__ import annotations
 
-import enum
 import secrets
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Protocol
 
 COOKIE_NAME = "codoc_session"
 DEFAULT_TTL_SECONDS = 8 * 3600
+# How often a live session's collaborator permission is asked of GitHub again.
+# A role is decided at sign-in and a sign-in lasts a working day, so without
+# this a collaborator removed from the repository keeps the authority they
+# arrived with until the cookie expires.
+DEFAULT_RECHECK_SECONDS = 600.0
+MAINTAINER, SUGGEST, NONE = "maintainer", "suggest", "none"
+
+_WRITE = frozenset({"admin", "write", "maintain"})
+_READ = frozenset({"read", "triage"})
 
 
-class Capability(enum.Enum):
-    NONE = "none"
-    SUGGEST = "suggest"
-    HANDOFF = "handoff"
-
-    def can_suggest(self) -> bool:
-        return self in (Capability.SUGGEST, Capability.HANDOFF)
-
-    def can_hand_off(self) -> bool:
-        return self is Capability.HANDOFF
-
-
-# GitHub permission level → capability. `maintain` collapses to write, `triage`
-# to read (the legacy mapping the REST `permission` field uses).
-_WRITE_LEVELS = frozenset({"admin", "write", "maintain"})
-_READ_LEVELS = frozenset({"read", "triage"})
-
-
-def capability_for_permission(permission: str | None) -> Capability:
-    """Map a GitHub collaborator permission level to a codoc capability."""
-    if not permission:
-        return Capability.NONE
-    p = permission.strip().lower()
-    if p in _WRITE_LEVELS:
-        return Capability.HANDOFF
-    if p in _READ_LEVELS:
-        return Capability.SUGGEST
-    return Capability.NONE
+def role_for_permission(permission: str | None) -> str:
+    p = (permission or "").strip().lower()
+    return MAINTAINER if p in _WRITE else SUGGEST if p in _READ else NONE
 
 
 class CollaboratorResolver(Protocol):
-    """Resolves a GitHub login to its repo-collaborator permission level, using
-    the maintainer/App identity. Returns None when the user is not a collaborator
-    (or the lookup is unauthorized) so :func:`authorize` denies by default."""
-
-    def permission(self, login: str) -> str | None:
-        ...
+    def permission(self, login: str) -> str | None: ...
 
 
-def authorize(login: str | None, resolver: CollaboratorResolver) -> Capability:
-    """The authorization gate: a visitor's capability for the served repo.
-
-    Denies by default — an empty login, a non-collaborator, or a resolver that
-    returns None all yield :attr:`Capability.NONE`."""
-    if not login:
-        return Capability.NONE
-    return capability_for_permission(resolver.permission(login))
+def authorize(login: str | None, resolver: CollaboratorResolver) -> str:
+    """Deny by default: no login, no collaborator, no answer → ``none``."""
+    return role_for_permission(resolver.permission(login)) if login else NONE
 
 
 @dataclass
 class Session:
     sid: str
     login: str
-    capability: Capability
+    role: str
     created_at: float
+    checked_at: float = 0.0        # when the role was last re-asked of GitHub
 
 
 @dataclass
 class SessionStore:
-    """Server-side sessions keyed by an opaque id (the cookie value).
-
-    In-memory for Tier 1 — one always-on hub process owns the repo. The browser
-    receives only the opaque ``sid`` as an HTTP-only ``Secure`` ``SameSite`` cookie;
-    GitHub tokens never reach the client. ``clock`` is injectable for TTL tests."""
-
+    """Server-side sessions keyed by the cookie value; in memory (one hub
+    process owns the repo). ``clock`` is injectable for TTL tests."""
     ttl_seconds: float = DEFAULT_TTL_SECONDS
     clock: Callable[[], float] = time.time
     _sessions: dict[str, Session] = field(default_factory=dict)
 
-    def create(self, login: str, capability: Capability) -> Session:
-        sid = secrets.token_urlsafe(32)
-        session = Session(sid=sid, login=login, capability=capability,
-                          created_at=self.clock())
-        self._sessions[sid] = session
-        return session
+    def create(self, login: str, role: str) -> Session:
+        now = self.clock()
+        s = Session(secrets.token_urlsafe(32), login, role, now, now)
+        self._sessions[s.sid] = s
+        return s
 
     def get(self, sid: str | None) -> Session | None:
-        if not sid:
+        s = self._sessions.get(sid or "")
+        if s is None:
             return None
-        session = self._sessions.get(sid)
-        if session is None:
+        if self.clock() - s.created_at > self.ttl_seconds:
+            self._sessions.pop(s.sid, None)
             return None
-        if self.clock() - session.created_at > self.ttl_seconds:
-            self._sessions.pop(sid, None)  # expired → evict
-            return None
-        return session
+        return s
 
     def delete(self, sid: str | None) -> None:
-        if sid:
-            self._sessions.pop(sid, None)
-
-    def capability_for(self, sid: str | None) -> Capability:
-        session = self.get(sid)
-        return session.capability if session else Capability.NONE
+        self._sessions.pop(sid or "", None)
 
 
 @dataclass
 class AuthContext:
-    """What the hub needs to authorize requests: the session store, the collaborator
-    resolver, and the OAuth helper that drives the sign-in flow. ``resolver``/``oauth``
-    are None in tests that drive the session store directly; deployment supplies a
-    GitHub-App-backed pair (see :func:`codoc.serve.github_auth.build_auth_context`)."""
-
     store: SessionStore
     resolver: CollaboratorResolver | None = None
-    oauth: object | None = None  # a github_auth.GithubOAuth in deployment
+    oauth: object | None = None           # github_auth.GithubOAuth in deployment
+    recheck_seconds: float = DEFAULT_RECHECK_SECONDS
+
+    def session(self, sid: str | None, codoc_dir: str | Path | None = None) -> Session | None:
+        """The session behind this cookie, with its role re-asked of GitHub on a
+        cadence. Revoking access has to reach a tab that is already open, and
+        the role it signed in with is a decision somebody has since changed.
+
+        A changed role is written back to the tracked ``config.json`` as well:
+        the session gate decides what the HTTP routes allow, and the roles table
+        decides what the applier allows. A demotion that reached only the first
+        would leave the daemon accepting their verdicts."""
+        s = self.store.get(sid)
+        if s is None:
+            return None
+        now = self.store.clock()
+        if self.resolver is None or now - s.checked_at < self.recheck_seconds:
+            return s
+        s.checked_at = now
+        role = authorize(s.login, self.resolver)
+        if role == NONE:
+            self.store.delete(s.sid)
+            if codoc_dir is not None:
+                record_role(codoc_dir, s.login, NONE)
+            return None
+        if role != s.role and codoc_dir is not None:
+            record_role(codoc_dir, s.login, role)
+        s.role = role
+        return s
 
 
-def capability_from_request(request, store: SessionStore) -> Capability:
-    """Capability for an incoming request, read from its session cookie.
+def record_role(codoc_dir: str | Path, login: str, role: str) -> None:
+    """Remember a login's role where every clone reads it: the tracked
+    ``config.json`` (``roles: {actor: role}``), so a rebuild on any
+    machine applies that contributor's ops under the same authority. The actor
+    is ``inbox.hub_actor``, never a bare ``human:<login>``, so no GitHub login can
+    name the maintainer's own identity.
 
-    Duck-typed on ``request.cookies`` (a Starlette ``Request``), so this module
-    stays free of any web-framework import."""
-    return store.capability_for(request.cookies.get(COOKIE_NAME))
+    This adds the person to the role table, or changes their entry, and so
+    edits a tracked file: signing in for the first time, and a re-check that
+    finds a changed role, leave ``config.json`` modified for the maintainer to
+    commit. It writes the ``roles`` key and nothing else."""
+    from codoc.workspace.config import read_config, write_config
+    from codoc.workspace.inbox import hub_actor
+    roles = dict(read_config(codoc_dir).get("roles") or {})
+    if roles.get(hub_actor(login)) == role:
+        return                       # a tracked file: signing in is not a change
+    roles[hub_actor(login)] = role
+    write_config(codoc_dir, roles=roles)
+
+
+def read_roles(codoc_dir: str | Path) -> dict[str, str]:
+    from codoc.workspace.config import read_config
+    d = read_config(codoc_dir).get("roles")
+    return {str(k): str(v) for k, v in d.items()} if isinstance(d, dict) else {}

@@ -1,12 +1,12 @@
-"""codoc serve — the home-hub web server (Tier 1).
+"""The hub (`codoc serve`): the same editor, served to GitHub-authorized people
+from the maintainer's machine.
 
-A separate-process web server, peer to the VS Code extension and the MCP
-server, that exposes the intent tree to GitHub-authorized remote users over a
-tunnel. It supervises a single ``codoc watch`` daemon and is a file-channel
-client: it reads ``.codoc/*`` to derive the browser UI and writes only the
-verdict/draft channels (never ``tree.codoc``).
-
-Unit U1 lands the supervision + server skeleton; auth (U4), SSE (U3), command
-handlers (U5), the tunnel (U6), and the sandboxed realize→PR flow (U7/U8/U11)
-land in later units.
+It adds nothing to the format. A contributor's edits are submissions appended
+to ``inbox/hub-<login>.jsonl``; the daemon stamps ``human:gh:<login>`` and applies
+them under the role the hub recorded for that login (``roles`` in ``config.json``):
+collaborators with push access are ``maintainer``, the rest ``suggest`` (plans
+only). Acks and projections reach the browser over one SSE stream carrying the
+same messages the extension host posts to its webview, so one bundle serves
+both. Every route sits behind the session cookie once auth is configured; with
+no auth the hub binds localhost and treats its one viewer as the owner.
 """

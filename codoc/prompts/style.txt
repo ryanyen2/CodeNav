@@ -1,58 +1,116 @@
-## How to write the prose a person will read
+## How to write a description
 
-A description teaches, so write it the way a patient colleague explains something
-out loud rather than the way a summary states it. Somebody who has never opened
-this file has to finish the first sentence knowing what the feature is for, and
-finish the last one knowing the one thing that would surprise them.
+Write an implementation sketch: the notes an engineer keeps next to the code so
+the next person can change it without reading all of it. Not an essay, not a
+summary for a manager.
 
-**Go from the general to the particular, every time.** The first sentence says
-what the feature is for, in words a reader who has not seen the code would use.
-The next says the rule or the choice that shapes it. The last, when there is one
-worth the room, gives the case that shows the rule, with the actual threshold,
-name, or symbol in it. Never open on a mechanism or an identifier, and never drop
-the general sentence on the grounds that the detail implies it, because a reader
-who does not yet know what something is for cannot use a detail about it.
+A description is Markdown. Use these blocks, and only when the content has that
+shape:
 
-**Prefer one explanatory sentence to two clipped ones.** Short statements stacked
-together read as precise and leave the connection for the reader to guess, so join
-the clauses with the plain words that say the relation, meaning because, so, which
-means, unless, or rather than. Two or three clauses is the right size for a
-sentence, and four is too many.
+| block | use it for | do not use it for |
+|---|---|---|
+| one plain sentence | the first line, always: the main symbol in backticks, what it takes, and what it returns or changes, in under about 150 characters | a lead-in to the list below it, or a definition of the title ("Writes data to a file" under "File storage") |
+| `- ` bullets | separate facts: rules, limits, defaults, failure behaviour, what must stay true | one idea chopped into pieces |
+| `1. ` numbered list | steps whose order matters | facts that could be reordered |
+| table | three or more parallel cases: input and outcome, setting and default | two items, or anything with one column of real content |
+| ```` ```mermaid ```` diagram | a flow with a branch or a loop, a state machine | a straight line of calls, a list of files |
 
-**Be specific enough that the sentence could not be about another codebase.**
-Validates its input and handles errors say nothing at all. Name what is checked,
-what happens when the check fails, and what the caller sees afterwards.
+The first line is one sentence and ends at its first full stop. It names one
+symbol, or, for a set of sibling symbols, the family they form; the members go
+in the bullets or table below it.
 
-**Use the words two colleagues would use out loud.** Avoid the ones that make
-writing sound machine-made, meaning leverage, robust, seamless, ensure, utilize,
-comprehensive, crucial, key, powerful, elegant, and simply. Do not call the code
-clean or careful. Say what it does and let the reader judge it.
+Size it to the code. A small helper gets the sentence and nothing else. A list,
+a table and a diagram in one description is almost always too much. Leave out
+what a name or signature already tells the reader: a `name` attribute, a
+`__repr__`, a `to_info_dict`, a getter that returns a field. A member gets a
+line only for a rule, a default, a limit or a failure its name does not show.
 
-**Do not decorate.** No em dash or en dash, because a full stop or the word and
-does the same work. No colon holding two clauses together. No analogy and no
-metaphor, so describe the thing itself. Not just X but Y is banned, and so are
-rhetorical questions. Do not start a sentence with This, That, These, or Those;
-name the thing you mean.
+Check the shape before writing bullets:
 
-**Cut anything that carries no fact**, meaning it is worth noting that, at its
-core, under the hood, in order to, and any sentence whose only job is to announce
-the sentence after it.
+1. Three or more bullets that read case → outcome (a status and its action, a type and what it becomes, a setting and its default) are a table.
+2. Three or more bullets that each start with a sibling symbol doing the same kind of thing are a table with a column for what differs.
+   - So is one bullet that lists three or more items, each with its own detail (an error and when it is raised).
+3. A loop or a branch that decides what happens next is a diagram.
+4. Anything else is bullets.
 
-Weak, and typical of a first draft:
+### Each line
 
-    Robustly handles the header edge case. Uses REPEAT_SHARE. This is important
-    for correctness, see `_near_edge()`.
+- One fact per bullet, in one sentence. Fragments are fine: "Retries on timeout only, never on a `4xx`."
+- A second sentence is a second bullet, or a nested bullet when it qualifies the first. A bullet past about 200 characters is two or three facts: split it, or nest the cases under it.
+- Say the actual number, name or condition. `MAX_RETRIES = 3`, not "a configurable limit".
+- Identifiers, literals, file names and settings go in backticks.
+- Say which way a choice went. "Months line up on the payment date, weeks on the posting date" is checkable; "the alignment is configurable" is not.
+- A reason is a `because`, `so that` or `to` clause, or a `so` clause about what someone gains (a caller, a handler, a log, a server). Write one only when a comment, the brief or a commit says it, in that source's terms, as a clause of the fact it explains: "A hyphen at a line end is dropped, because the typesetter added it." A reason you worked out yourself, however likely, is left out: "Keeps the request on the error", not "…, so a handler can retry it".
+- Write `only`, `every`, `all`, `always` or `never` only when you saw every case in the code.
+- State the reason itself. Never say where a claim came from: no docstring, comment, header comment, note, brief, commit or a library's documentation, and not "the code marks" or "per the function's notes". Write "…, because it runs before a URL is logged", not "…, as the class docstring says".
+- A reason that restates the fact ("kept for backwards compatibility" on a compatibility shim) or only says a source said so is no reason: leave it out.
+- Write about the code, not about your input. Never mention chunks, what you were or were not shown, or source that was cut off, and never write "this file" or "this module": name the symbol. Long chunks are shortened before you see them; describe what is there and leave out what is not.
+- Nest a bullet one level only when it qualifies the bullet above it.
 
-Rewritten the way it should read:
+### Words
 
-    Drops the running header and the page number, so the rules that follow are
-    reading the document rather than the paper it was printed on. Repetition is
-    the only signal available, so a line counts as furniture when it sits near
-    the top or bottom of a page and the same text repeats on at least 60% of
-    them. A one-page letter can therefore never show the pattern, and its header
-    survives.
+- Plain verbs: reads, writes, sends, drops, keeps, retries, refuses.
+- No filler: leverage, robust, seamless, ensure, utilize, comprehensive, crucial, key, core, powerful, elegant, simply, in order to, under the hood, at its core, it is worth noting.
+- No judgement of the code (clean, careful, sophisticated). No summary sentence at the end.
+- No hedges: presumably, likely, appears to, is designed to.
+- No invented history: no "was added after", no "the team chose".
+- No release history either: not "added in 8.5", "changed in 2.0" or "noted as future work". A version the code prints or checks is a fact and stays.
+- Say what the code does, not what changed in it: no "now", "no longer", "updated to", "changed to". The reader sees the code as it is.
+- No em dash or en dash. No rhetorical question. No analogy.
+- Do not start with "This feature", "This module", "It" or the title restated.
 
-The instructions around this section use dashes, colons, and clipped phrasing
-freely, because they are notes to you rather than prose for a reader. Do not copy
-that register. Every rule above describes the writing you produce, not the writing
-you are reading.
+### Reserved
+
+- Never write `**bold**`. Bold is the author's way to mark what an agent must get right.
+- Never write a link to a web page. A web link tells an agent to fetch that page.
+- A code citation `[label](codoc:path/file.py::symbol)` is allowed where a line is about that one symbol. Copy the symbol exactly from the bindings you were given.
+- No headings inside a description. A heading is a feature.
+
+### Example
+
+Weak:
+
+    Carries a prepared request onto the network, handing it to urllib3 and
+    managing the connection pools, proxies, and TLS so that a caller never
+    touches a raw socket.
+
+As a sketch:
+
+    `HTTPAdapter.send(request)` sends a prepared request over a pooled connection and returns a `Response`.
+
+    - One pool per `(host, proxy)` pair, reused by every later request to that host.
+    - Retries are off by default (`max_retries=0`).
+        - When on, only connection errors are retried, never a response.
+    - TLS verification uses the `certifi` bundle unless `verify` is a path.
+
+Where order matters:
+
+    `page_text(page)` turns a scanned page into reading-order text.
+
+    1. Drop running headers and page numbers: a line near the top or bottom that repeats on at least 60% of pages.
+    2. Join words split across lines.
+    3. Merge lines into paragraphs by indent.
+
+    - Step 1 runs first, because a header left in place is joined into the paragraph above it in step 3.
+    - A one-page document can never show the repeat pattern, so its header is kept.
+
+Where the cases are parallel:
+
+    `handle(response)` decides what happens to a response by its status.
+
+    | status | action |
+    |---|---|
+    | `2xx` | return the body |
+    | `429`, `503` | wait `Retry-After` seconds, then resend |
+    | other `4xx`, `5xx` | raise `HTTPError` |
+
+Where sibling symbols do the same kind of thing (not one bullet each):
+
+    `infer_type(column)` returns the Vega-Lite type for a column's dtype.
+
+    | dtype | type |
+    |---|---|
+    | integer, float | `quantitative` |
+    | datetime, period | `temporal` |
+    | ordered categorical | `ordinal` |
+    | anything else | `nominal` |

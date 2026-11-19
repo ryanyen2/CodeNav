@@ -1,14 +1,20 @@
 ## Set up codoc
 
-One click provisions everything codoc needs — no terminal, no manual `pip`, no API key in the common case.
+**Set up codoc** does the following, with no terminal and no manual `pip`:
 
-When you run **Set up codoc**, the extension will:
+1. Installs Python and the codoc core in an isolated environment with `uv`. No system
+   Python is needed.
+2. Asks which model provider codoc's own passes use: your existing **Claude Code**
+   login (no API key), an **OpenAI** API key or an **Anthropic** API key. The choice is
+   written to the repository's `.env`, and `.env` is added to `.gitignore` before a key
+   goes into it.
+3. Indexes the repository and builds the first feature tree (`codoc init`), and
+   installs the Claude Code hooks, the MCP server and the `/codoc:*` commands.
+4. Starts the `codoc watch` daemon, which keeps the tree and the code in step. The
+   extension keeps it running.
 
-1. Install an isolated, version-pinned Python environment (via `uv`) — no system Python required.
-2. Index your repo and propose an initial **feature tree** (`codoc init`).
-3. Reuse your existing **Claude Code** login for codoc's reflection (or fall back to an OpenAI key).
-4. Start the managed `codoc watch` daemon so the tree stays in sync as you edit — you never start or stop it.
-
-> Setup requires a **trusted workspace** (it installs and runs the Python core). Tree navigation works untrusted; provisioning and the daemon do not.
+> Setup needs a **trusted workspace**, because it installs and runs the Python core. An
+> untrusted workspace can open a tree the daemon has already built, but cannot set up or
+> run the daemon.
 
 [Set up codoc](command:codoc.setup)

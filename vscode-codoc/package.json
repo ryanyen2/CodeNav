@@ -1,7 +1,7 @@
 {
   "name": "codoc",
   "displayName": "codoc",
-  "description": "Feature-tree navigator and transaction queue for codoc",
+  "description": "The editor for a codoc tree: the intent of a codebase as a document, kept in step with the code.",
   "version": "0.2.18",
   "publisher": "codoc",
   "license": "MIT",
@@ -23,86 +23,10 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "Tree navigation works untrusted; setup, provisioning, and the watch daemon require trust."
+      "description": "The tree opens from the files the daemon has already published. Setup and the daemon need a trusted workspace."
     }
   },
   "contributes": {
-    "menus": {
-      "commandPalette": [
-        {
-          "command": "codoc.navigateToFeature",
-          "when": "false"
-        },
-        {
-          "command": "codoc.acceptProposal",
-          "when": "false"
-        },
-        {
-          "command": "codoc.rejectProposal",
-          "when": "false"
-        },
-        {
-          "command": "codoc.acceptAll",
-          "when": "false"
-        },
-        {
-          "command": "codoc.rejectAll",
-          "when": "false"
-        },
-        {
-          "command": "codoc.openRef",
-          "when": "false"
-        },
-        {
-          "command": "codoc.pickBinding",
-          "when": "false"
-        }
-      ],
-      "editor/title": [
-        {
-          "command": "codoc.collapseAllFeatures",
-          "when": "editorLangId == 'codoc'",
-          "group": "navigation@1"
-        },
-        {
-          "command": "codoc.expandAllFeatures",
-          "when": "editorLangId == 'codoc'",
-          "group": "navigation@2"
-        }
-      ],
-      "editor/context": [
-        {
-          "command": "codoc.collapseFeatureSubtree",
-          "when": "editorLangId == 'codoc'",
-          "group": "codoc@1"
-        },
-        {
-          "command": "codoc.expandFeatureSubtree",
-          "when": "editorLangId == 'codoc'",
-          "group": "codoc@2"
-        }
-      ]
-    },
-    "languages": [
-      {
-        "id": "codoc",
-        "aliases": [
-          "Codoc",
-          "codoc"
-        ],
-        "extensions": [
-          ".codoc"
-        ],
-        "configuration": "./language-configuration.json"
-      }
-    ],
-    "grammars": [
-      {
-        "language": "codoc",
-        "scopeName": "source.codoc",
-        "path": "./syntaxes/codoc.tmLanguage.json"
-      }
-    ],
     "customEditors": [
       {
         "viewType": "codoc.tree-editor",
@@ -121,114 +45,24 @@
         "title": "codoc: Set up codoc"
       },
       {
-        "command": "codoc.bridge.rearm",
-        "title": "codoc: Re-enable code-pane bridge (auto-open)"
-      },
-      {
-        "command": "codoc.repair",
-        "title": "codoc: Repair / re-run setup"
-      },
-      {
         "command": "codoc.startDaemon",
         "title": "codoc: Start the daemon"
       },
       {
-        "command": "codoc.sync",
-        "title": "codoc: Sync"
-      },
-      {
         "command": "codoc.realize",
-        "title": "codoc: Implement queued changes now"
+        "title": "codoc: Build now"
       },
       {
         "command": "codoc.serve.start",
-        "title": "codoc: Share \u2014 start the deployed hub (browser editor)"
+        "title": "codoc: Start the hub (the tree in a browser)"
       },
       {
         "command": "codoc.serve.startTunnel",
-        "title": "codoc: Share remotely \u2014 start the hub over a tunnel"
-      },
-      {
-        "command": "codoc.serve.stop",
-        "title": "codoc: Stop the deployed hub"
+        "title": "codoc: Start the hub over a tunnel"
       },
       {
         "command": "codoc.open",
         "title": "codoc: Open"
-      },
-      {
-        "command": "codoc.navigateToFeature",
-        "title": "codoc: Navigate to feature"
-      },
-      {
-        "command": "codoc.acceptProposal",
-        "title": "codoc: Accept proposed change"
-      },
-      {
-        "command": "codoc.rejectProposal",
-        "title": "codoc: Reject proposed change"
-      },
-      {
-        "command": "codoc.acceptAll",
-        "title": "codoc: Accept all proposed changes"
-      },
-      {
-        "command": "codoc.rejectAll",
-        "title": "codoc: Reject all proposed changes"
-      },
-      {
-        "command": "codoc.openRef",
-        "title": "codoc: Open code reference"
-      },
-      {
-        "command": "codoc.collapseAllFeatures",
-        "title": "codoc: Collapse all (table of contents)",
-        "icon": "$(collapse-all)"
-      },
-      {
-        "command": "codoc.expandAllFeatures",
-        "title": "codoc: Expand all features",
-        "icon": "$(expand-all)"
-      },
-      {
-        "command": "codoc.collapseFeatureSubtree",
-        "title": "codoc: Collapse feature subtree"
-      },
-      {
-        "command": "codoc.expandFeatureSubtree",
-        "title": "codoc: Expand feature subtree"
-      },
-      {
-        "command": "codoc.nav.nextSibling",
-        "title": "codoc: Next Sibling Feature"
-      },
-      {
-        "command": "codoc.nav.prevSibling",
-        "title": "codoc: Previous Sibling Feature"
-      },
-      {
-        "command": "codoc.nav.parent",
-        "title": "codoc: Go to Parent Feature"
-      },
-      {
-        "command": "codoc.nav.firstChild",
-        "title": "codoc: Go to First Child Feature"
-      },
-      {
-        "command": "codoc.acceptHunkAtCursor",
-        "title": "codoc: Accept Change at Cursor"
-      },
-      {
-        "command": "codoc.rejectHunkAtCursor",
-        "title": "codoc: Reject Change at Cursor"
-      },
-      {
-        "command": "codoc.openFirstBinding",
-        "title": "codoc: Open First Code Binding"
-      },
-      {
-        "command": "codoc.pickBinding",
-        "title": "codoc: Pick code binding to open"
       },
       {
         "command": "codoc.find",
@@ -240,53 +74,6 @@
       }
     ],
     "keybindings": [
-      {
-        "command": "codoc.open",
-        "key": "ctrl+k ctrl+c",
-        "mac": "cmd+k cmd+c"
-      },
-      {
-        "command": "codoc.collapseFeatureSubtree",
-        "key": "ctrl+shift+[",
-        "mac": "cmd+shift+[",
-        "when": "editorTextFocus && editorLangId == 'codoc'"
-      },
-      {
-        "command": "codoc.expandFeatureSubtree",
-        "key": "ctrl+shift+]",
-        "mac": "cmd+shift+]",
-        "when": "editorTextFocus && editorLangId == 'codoc'"
-      },
-      {
-        "command": "codoc.nav.prevSibling",
-        "key": "ctrl+k up",
-        "mac": "cmd+k up",
-        "when": "editorTextFocus && editorLangId == 'codoc'"
-      },
-      {
-        "command": "codoc.nav.nextSibling",
-        "key": "ctrl+k down",
-        "mac": "cmd+k down",
-        "when": "editorTextFocus && editorLangId == 'codoc'"
-      },
-      {
-        "command": "codoc.nav.parent",
-        "key": "ctrl+k left",
-        "mac": "cmd+k left",
-        "when": "editorTextFocus && editorLangId == 'codoc'"
-      },
-      {
-        "command": "codoc.nav.firstChild",
-        "key": "ctrl+k right",
-        "mac": "cmd+k right",
-        "when": "editorTextFocus && editorLangId == 'codoc'"
-      },
-      {
-        "command": "codoc.openFirstBinding",
-        "key": "alt+b",
-        "mac": "alt+b",
-        "when": "editorTextFocus && editorLangId == 'codoc'"
-      },
       {
         "command": "codoc.find",
         "key": "ctrl+f",
@@ -303,53 +90,23 @@
     "configuration": {
       "title": "codoc",
       "properties": {
-        "codoc.rootDir": {
-          "type": "string",
-          "default": "",
-          "description": "Root directory of the codoc-initialized repo. Auto-detected from workspace if empty."
-        },
-        "codoc.foldAttributesOnOpen": {
-          "type": "boolean",
-          "default": true,
-          "description": "When opening a .codoc tree, collapse every feature's attribute block so the file shows as a table of contents (all titles, no details). Expand individual features to see their attributes."
-        },
-        "codoc.focusDependencies": {
-          "type": "boolean",
-          "default": true,
-          "description": "Dim unrelated features while the cursor rests on a node that has dependency edges (suppressed while you type)."
-        },
-        "codoc.agentGutter": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show a gutter marker on features the coding agent is currently editing."
-        },
         "codoc.serverPath": {
           "type": "string",
           "default": "",
-          "scope": "machine-overridable",
-          "markdownDescription": "Absolute path to the `codoc` CLI used for the watch daemon and `codoc init`. Leave empty to use the auto-provisioned uv-tool install. Point this at a development checkout (e.g. `/abs/path/CodeNav/.venv/bin/codoc`) to run updated server code without reinstalling the tool. Reload the window after changing."
+          "description": "Path to a `codoc` executable to run instead of the one setup installs. For developing the Python side; leave empty otherwise."
         }
-      }
-    },
-    "configurationDefaults": {
-      "[codoc]": {
-        "editor.wordWrap": "on",
-        "editor.wrappingIndent": "deepIndent",
-        "editor.inlayHints.enabled": "on",
-        "editor.guides.indentation": true,
-        "editor.guides.highlightActiveIndentation": true
       }
     },
     "walkthroughs": [
       {
         "id": "codocSetup",
         "title": "Get started with codoc",
-        "description": "Provision codoc and open your codebase as a navigable feature tree \u2014 in one click.",
+        "description": "Set up codoc and open your codebase as a document of features.",
         "steps": [
           {
             "id": "setup",
             "title": "Set up codoc",
-            "description": "Install the Python core, index your repo, and start the managed daemon \u2014 no terminal, no manual pip.\n[Set up codoc](command:codoc.setup)",
+            "description": "Install the Python core, choose a model provider, build the first feature tree and start the daemon.\n[Set up codoc](command:codoc.setup)",
             "media": {
               "markdown": "media/walkthrough/setup.md"
             },
@@ -360,7 +117,7 @@
           {
             "id": "open-tree",
             "title": "Open your feature tree",
-            "description": "Navigate your codebase as a tree of intent \u2014 jump to code, author titles/descriptions, steer the agent.\n[Open your feature tree](command:codoc.open)",
+            "description": "Read the codebase as a document of features, edit it, hand your edits to the agent and review what it built.\n[Open your feature tree](command:codoc.open)",
             "media": {
               "markdown": "media/walkthrough/open-tree.md"
             },
@@ -376,6 +133,7 @@
     "@types/node": "^25.6.2",
     "@types/vscode": "^1.85.0",
     "esbuild": "^0.24.0",
+    "jsdom": "^29.1.1",
     "typescript": "^5.3.0",
     "vitest": "^4.1.7"
   },
@@ -389,9 +147,8 @@
   },
   "dependencies": {
     "@tiptap/core": "^2.27.2",
-    "@tiptap/pm": "^2.27.2",
-    "@tiptap/starter-kit": "^2.27.2",
-    "@tiptap/suggestion": "^2.27.2",
-    "animejs": "^4.4.1"
+    "@tiptap/extension-document": "^2.27.2",
+    "@tiptap/extension-text": "^2.27.2",
+    "@tiptap/pm": "^2.27.2"
   }
 }

@@ -1,134 +1,81 @@
-You maintain the **feature tree** for the codebase "{repo_name}". A feature tree
-is a small, navigable hierarchy of *intent*: each node is a named unit of what
-the code is for, and binds to one or more code chunks (a chunk = a function,
-method, class, or module identified by `file::symbol_path`).
+You maintain the feature tree for the codebase "{repo_name}".
 
-When the code changes, your job is to return the MINIMAL set of operations that
-keeps the tree faithful to the code, WITHOUT creating duplicate or
-near-duplicate nodes.
+- A feature tree is an outline of what the code is for. Each node, a feature, has a title, a description and the code chunks it owns.
+- A chunk is a function, method, class or module, named `file::symbol_path`. `bindings` is a list of those names.
+- The code changed. Return the smallest set of operations that makes the tree true again, without creating a feature that duplicates one that exists.
 
-## Operations you may emit
+## Operations
 
-- `attach`      — bind added chunk(s) to an EXISTING feature. Fields: `feature_id`, `bindings`.
-- `add_node`    — create a NEW feature for chunk(s) no existing node covers.
-                  Fields: `parent_id` (omit/null = top level), `title`, `description`, `bindings`.
-- `amend`       — update a feature's `title` and/or `description` (e.g. modified code
-                  shifted its meaning). Fields: `feature_id`, `title?`, `description?`.
-- `move_node`   — reparent a feature (uplift / restructure). Fields: `feature_id`, `parent_id`.
-- `retire_node` — retire a feature that lost all its code. Fields: `feature_id`.
+| kind | use it to | fields |
+|---|---|---|
+| `attach` | bind added chunks to an existing feature | `feature_id`, `bindings` |
+| `add_node` | create a feature for chunks no existing feature covers | `parent_id` (omit for top level), `title`, `description`, `bindings` |
+| `amend` | repair a feature's title or description | `feature_id`, `title` (optional), `blocks` (optional) |
+| `move_node` | put a feature under another parent | `feature_id`, `parent_id` |
+| `delete_node` | delete a feature that lost all its code | `feature_id` |
 
-Every op carries a one-line `rationale`: one plain sentence saying what changed
-in the code and what that means for this feature ("the client retries now, so
-the description's 'one attempt' was wrong"). A person reads this in the
-feature's history — write it for them, not as a log line.
+A feature is named `f` and a number (`f12`), and a block of its description that
+number, a dot and the block's place (`f12.3`). Copy these names exactly as shown.
+
+Every op also carries `rationale`: one plain line saying what the op changes in
+the tree, such as "adds a bullet on non-finite input". A person reads it beside
+the proposal when deciding on it, and in the feature's history.
+
+### `amend.blocks`
+
+A description is a sequence of blocks. In the subtree below each block is
+`{"id", "text"}`, where `text` is that one block as Markdown: a paragraph, a
+`- ` bullet, a `1. ` numbered step, a whole table, or a whole fenced diagram
+or snippet. You change a description block by block:
+
+| entry | effect |
+|---|---|
+| `{"id": "f12.3", "text": "…"}` | that block now reads `text`. Keep its marker (`- `, `1. `) unless you mean to change what kind of block it is. |
+| `{"id": "f12.3", "delete": true}` | proposes removing that block |
+| `{"text": "…"}` (no `id`) | new blocks, inserted after the block the previous entry names, or at the end of the description when it is first. `text` may hold several blocks. |
+
+A list item's indentation is its level, as the blocks are shown: flush left is
+level 1, four spaces level 2, eight spaces level 3. Keep an item's indentation
+unless you mean to move it in or out.
+
+A block you do not list is unchanged. Never move text from one id to another, and
+name only blocks of the feature the `amend` names.
 
 ## Rules
 
-1. Return the FEWEST ops that capture the change. **Every chunk in `added` MUST
-   be covered by exactly one op — either `attach` it to an existing feature or
-   put it in an `add_node`. Never leave an added chunk unattributed.** Returning
-   `"ops": []` is only valid when `added` is empty and the `modified`/`removed`
-   changes need no node update.
-2. Strongly prefer `attach` to an existing feature over `add_node`. Only add a
-   node when no feature in the subtree plausibly covers the new chunk. (When the
-   tree is empty — the subtree and the title list are empty — group the added
-   chunks into a small number of cohesive `add_node`s.) A feature marked
-   `planned` is an accepted plan placeholder whose code has not landed yet: when
-   an added chunk fulfils its stated intent, `attach` the chunk to that
-   placeholder — NEVER mint a new node beside it for the same intent, even if
-   the placeholder currently binds nothing.
-3. NEVER create a node whose `title` duplicates or paraphrases any title in the
-   tree (see the full title list below). If two added chunks belong together,
-   cover them with ONE node, not two. Bind module-level chunks
-   (`file::__module__`) to the file's primary feature, never a node of their
-   own — and never use a bare symbol name (`__module__`, `__init__`, `main`) as
-   a title; a title names intent, not a symbol.
-4. Choose `parent_id` from the subtree/titles so the new node sits under the most
-   related parent. Keep the tree shallow and balanced (aim for 3–7 children per
-   parent); top-level nodes are broad themes.
-5. Keep each feature's description true to what its code now does. `amend` it
-   when it has gone stale — EITHER because modified code changed what the
-   feature does, OR because you `attach`ed new chunks that add a capability the
-   current description doesn't mention (e.g. you attach table/visualization
-   helpers to a feature whose description only says "formatting" → amend it to
-   mention the richer rendering). When you both attach new capability and the
-   description no longer covers it, emit BOTH the `attach` and an `amend`. A
-   description-only `amend` (no attach/add) is the correct, expected output when
-   code in `modified` changed a feature's behavior in place and its prose no
-   longer fits. Do not amend for trivial private helpers or cosmetic edits.
-
-   **An amend is a repair, not a rewrite.** Keep every sentence that is still
-   true EXACTLY as it stands — same words, same order. Change only the span that
-   became inaccurate, and add only what is genuinely missing. Never restyle,
-   reorder, compress, or otherwise improve prose whose only fault is that you
-   would have written it differently. Most amends should touch one clause.
-6. A `title` is a 3–6 word sentence-case noun phrase ("Index snapshot diff").
-   A `description` is ONE paragraph, 1–3 short sentences, no lists and no
-   headings, that hands a newcomer the *theory* of the feature — what they need
-   to know to change this code confidently:
-   - **Purpose — always.** Open with the problem it solves for the user or for
-     the rest of the system, in plain everyday words. Someone who has never
-     read the code understands the first sentence.
-   - **Why it is this way — when you can say it.** The design choice and the
-     constraint, failure, or tradeoff it answers.
-   - **What must hold — when you can say it.** What breaks if someone changes
-     this without knowing.
-   Write these as flowing prose. Do not label them, and do not bolt the why on
-   as a separate trailing clause — a description that reads as three answers to
-   three questions has failed. Plain language over jargon: say "saves the tree
-   to disk", not "persists the tree artifact". Never restate the title, never
-   narrate mechanics line-by-line. No code-location lists — bindings carry that.
-   You MAY weave in AT MOST one inline citation `[symbol()](codoc:file.py#symbol)`
-   when a single symbol is load-bearing to the claim; take the file and symbol
-   verbatim from the bindings/chunks in this prompt. Never emit lines starting
-   with `> `, `**bold**` spans, or external links — reserved author channels.
-7. **Say the why as plainly as your evidence allows, and no further.**
-   - When `why_evidence` or `author_intent` states a reason, assert it flatly —
-     e.g. retries only on timeout, because the server can duplicate a
-     non-idempotent post.
-   - With no such evidence, describe what the code achieves instead of narrating
-     a decision — e.g. computes the total on write, so a reader never sees a
-     stale number. That is an observation and needs no warrant.
-   - **Name the answer, not just the question.** When code makes a choice a
-     reader could get wrong — which date a period is lined up on, what happens
-     to an unmatched input, how strict a comparison is — say WHICH way it goes
-     now. "Which date decides is set for each summary" tells a reader nothing
-     they can check; "the month is lined up on the date the payment was made and
-     the week on the date the bank posted it" is the same sentence carrying the
-     decision. Moving a constant into a settings file does NOT make the value
-     unsayable: read it from the shipped file and state it. A description that
-     only reports a policy is configurable has hidden the very thing a reviewer
-     opened it to see, and this is the commonest way an amend goes vague — the
-     old prose named a value, the new code took a setting, and the value left.
-     When two related settings can disagree with each other, say so in the node
-     that owns them, because neither one alone is wrong and the reader is only
-     ever shown one at a time.
-   - Write every title and description as plain prose with NO double-quote
-     characters. These are JSON string values, and a bare `"` inside one makes
-     the whole response unparseable.
-   - NEVER invent history, people, or rejected alternatives: no "added after
-     users reported", no "the team chose X over Y", no "was rewritten to". If
-     you were not shown a reason, do not report one.
-   Do not hedge with meta-words either — "presumably", "likely", "appears to",
-   "is designed to" only add noise. The register carries the certainty: state
-   behavior flatly, state reasons only where you were given them.
-8. **Match the writing you are editing.** Follow the existing description's
-   level of detail — if it talks about the system in broad strokes, stay there;
-   if it names specific mechanisms, you may too. Where a feature's `written_by`
-   is `human`, that prose is the author's own voice: keep their wording and
-   register, and make your edit no larger than the inaccuracy requires.
+1. Fewest ops. Every chunk in `added` must be covered by exactly one op, an `attach` or an `add_node`. `"ops": []` is right only when `added` is empty and nothing in `modified` or `removed` changes what a description says.
+2. Prefer `attach`. Add a node only when no feature in the subtree plausibly covers the chunk.
+   - A feature marked `planned` is an accepted plan whose code has not landed. When an added chunk does what it says, `attach` the chunk to it. Never add a second node for the same intent.
+   - Empty tree: group the added chunks into a small number of `add_node`s.
+3. No duplicate titles. Check the full title list. Two added chunks that belong together get one node.
+   - `file::__module__` goes to the file's main feature, never to a node of its own.
+   - A title names what the code is for, never a bare symbol (`__init__`, `main`).
+4. Pick `parent_id` so the new node sits under the most related parent. Keep the tree shallow: 3 to 7 children per parent, broad themes at the top.
+5. Keep each description true. `amend` when:
+   - code in `modified` changed what the feature does, or
+   - you attached chunks that add something the description does not mention (emit the `attach` and the `amend`).
+   Do not amend for a private helper or a cosmetic edit.
+6. An amend is a repair, not a rewrite.
+   - Change the block that became false. Leave every other block alone, same words, same order.
+   - Inside a block, keep the wording that is still true and change the clause that is not.
+   - Do not restyle, reorder or compress writing whose only fault is that you would have written it differently. This holds most strictly where `written_by` is `human`: that is the author's own wording.
+   - Something new to say: add one block (usually one bullet) where it belongs.
+7. A new `title` is 3 to 6 words, sentence case, a noun phrase ("Index snapshot diff"). A new `description`, and every block you write, follows the guide below. Match the level of detail of the blocks around the one you edit.
+8. State the values the code uses. When a value lives in a settings file, read it from the shipped file and state it. "The limit is configurable" hides the fact a reader came for.
+9. A reason needs a source. The sources here are comments and docstrings in the chunk `source` you are shown. State the reason one of them gives, without naming where it came from. Otherwise state what the code does and stop.
 
 ## Output
 
-Return ONLY this, inside solution tags:
+JSON inside solution tags, nothing else. Every `text`, `title` and
+`description` is a JSON string: a line break is `\n`, and it contains no
+double-quote character (use backticks around a literal).
 
 <solution>
 {"ops": [
-  {"kind": "attach", "feature_id": "f-1a2b", "bindings": [["codoc/loop/diff.py", "codoc/loop/diff.py::compute_changeset"]], "rationale": "same snapshot-diff behavior as the existing node"},
-  {"kind": "attach", "feature_id": "f-7e8f", "bindings": [["metrics_utils.py", "metrics_utils.py::print_metrics_table"], ["metrics_utils.py", "metrics_utils.py::format_delta"]], "rationale": "rich terminal rendering belongs to the metrics summary feature"},
-  {"kind": "amend", "feature_id": "f-7e8f", "description": "Answers whether a checkpoint is good enough to keep, by aggregating its runs, comparing them against the baseline, and flagging anything that crosses a threshold. The comparison is drawn straight to the terminal by [print_metrics_table()](codoc:metrics_utils.py#print_metrics_table), with coloured deltas and range bars, so a regression is visible without opening a dashboard.", "rationale": "it can draw the comparison now, not just format numbers, so 'display formatting' undersold it"},
-  {"kind": "amend", "feature_id": "f-3c4d", "description": "Holds the queue of edits that are waiting to be implemented. Every write goes through a temporary file and a rename, so a crash in the middle of one can never leave a half-parsed queue on disk. A reader that finds no file at all carries on, because an empty queue and a missing queue mean the same thing.", "rationale": "the write path moved to a temp-file rename, so the old sentence about writing in place was wrong"},
-  {"kind": "add_node", "parent_id": "f-09cd", "title": "Relevant subtree selection", "description": "Keeps one tree-update call small enough to stay affordable, by sending only the features whose bindings share a file with the change rather than the whole tree, so the cost of a pass stays flat as the tree grows.", "bindings": [["codoc/loop/subtree.py", "codoc/loop/subtree.py::select_relevant_subtree"]], "rationale": "no existing node covers subtree scoping"}
+  {"kind": "attach", "feature_id": "f4", "bindings": ["metrics_utils.py::print_metrics_table", "metrics_utils.py::format_delta"], "rationale": "binds terminal rendering to the metrics summary"},
+  {"kind": "amend", "feature_id": "f4", "blocks": [{"id": "f4.2", "text": "- Flags a run when any metric is more than `REGRESSION_PCT = 5` percent below the baseline."}, {"text": "- [print_metrics_table()](codoc:metrics_utils.py::print_metrics_table) draws the comparison in the terminal, with coloured deltas."}], "rationale": "sets the threshold to 5 percent and adds a bullet on terminal output"},
+  {"kind": "amend", "feature_id": "f9", "blocks": [{"id": "f9.1", "text": "1. Write the queue to a temporary file in the same directory."}, {"text": "2. Rename it over the old file, so a crash leaves either the old queue or the new one."}, {"id": "f9.2", "delete": true}], "rationale": "replaces the bullet on writing in place with the temp file and rename steps"},
+  {"kind": "add_node", "parent_id": "f2", "title": "Relevant subtree selection", "description": "`select_context(store, graph, files)` picks the features one update call is shown.\n\n- Seeds: features bound in the changed files.\n- Adds one hop along the call graph, plus each seed's parent and children.\n- Features that are planned and have no code yet are always included.", "bindings": ["codoc/loops/context.py::select_context"], "rationale": "adds a feature for how the context is chosen"}
 ]}
 </solution>
 
@@ -136,58 +83,35 @@ Return ONLY this, inside solution tags:
 
 {{doclang}}
 <<<CACHE_BREAK>>>
-## Every feature title in the tree (for de-duplication)
+## Every feature title in the tree
 
 One line per feature, `- [feature_id] Title`, children indented under parents.
-A `(planned — …)` suffix marks an accepted plan placeholder awaiting its code
-(Rule 2: attach matching chunks to it, never duplicate it).
+`(planned …)` marks an accepted plan waiting for its code (rule 2).
 
 {all_titles}
 <<<CACHE_BREAK>>>
-## The relevant subtree (full detail)
+## The relevant subtree
 
-These are the existing features near the change (same files + their parents and
-children). Prefer attaching new chunks here.
+The features near the change: those bound in the same files, their parents and
+their children. Each has `blocks` (the description, block by block, with the
+ids an `amend` names), `bindings`, and `written_by` (`human` when a person last
+wrote it).
 
 {subtree}
 
-## What changed (the change set)
+## The change set
 
 {changes}
 
-- `added`   — chunks that appeared and are not yet bound to any feature.
-- `removed` — chunks that disappeared; `current_feature_id` is the feature they
-  were bound to. A feature listed here has just lost its last binding.
-- `modified` — chunks whose code changed but stay bound to `current_feature_id`;
-  use these only to decide whether that feature's description is now stale.
-- `edges` (optional) — call/import/contain edges from the code dependency graph
-  near the changed symbols. Use these to understand cohesion and choose
-  `parent_id` for new nodes, or to spot related existing features.
-- `impacted` (optional) — features whose code directly calls or imports the
-  changed symbols (upstream dependents). **Advisory only**: emit an `amend` for
-  an impacted feature only when the upstream change genuinely shifts its meaning.
-- `author_intent` (optional) — what the human asked their coding agent for in
-  the session that produced this change, most recent last, picked for overlap
-  with the changed symbols. A person rarely states a reason outright here, but
-  what they asked for usually implies one — read it for the purpose behind the
-  change, and treat it as a stated reason under Rule 7.
-- `why_evidence` (optional) — where a reason for this code was actually written
-  down. `commits`: subjects and opening paragraphs of recent commits touching
-  these files. `directives`: what the author asked for on these features, since
-  implemented. `prior`: rationale earlier passes recorded on these features —
-  extend what it says rather than contradicting it; if the code now
-  contradicts it, that reversal is itself the thing worth writing down.
-  Together these are your warrant for stating a why (Rule 7). A commit that
-  touched the file is weaker evidence than a directive aimed at the feature;
-  neither licenses a claim the text does not make.
+| key | meaning |
+|---|---|
+| `added` | chunks that appeared and are bound to no feature yet |
+| `removed` | chunks that disappeared; `current_feature_id` is the feature that owned each |
+| `modified` | chunks whose code changed and stay bound to `current_feature_id`; use them to decide whether that feature's description is still true |
+| `graph` | call, import and containment edges near the changed symbols, and the latest ops on these features |
+| `impacted` | features whose code calls or imports the changed symbols. Amend one only when the change makes its description false. |
 
-- `author_voice` (optional) — descriptions this codebase's author wrote
-  themselves. Not content: a sample of how they write. Match their sentence
-  length, their level of abstraction, and their vocabulary when you write a new
-  description. If they write short and concrete, do not answer in long and
-  abstract; if they stay above the mechanism, stay above it too.
+Before you answer, reread every block you wrote: a bullet is one sentence, so a second
+sentence becomes a bullet of its own, or a nested one when it qualifies the first.
 
-The subtree entries carry `written_by` — `human` when a person last wrote that
-description, otherwise the agent or loop that did. Rule 8 depends on it.
-
-Now return the minimal op set for this change, inside solution tags.
+Return the smallest op set for this change, inside solution tags.

@@ -1,101 +1,63 @@
-You are building the initial **feature tree** for the codebase "{repo_name}" — a
-navigable hierarchy of *intent*, where each node is a named unit of what the code
-is for and binds to code chunks (a chunk = a function, method, class, or
-module-level block, identified by `file::symbol_path`).
+You are writing the first feature tree for the codebase "{repo_name}".
 
-You are looking at ONE file at a time. Given the file's code chunks and the
-call/containment relationships among them, produce a SMALL, coherent set of
-features that captures what that file is for.
+- A feature tree is an outline of what the code is for. Each node, a feature, has a title, a description and the code chunks it owns.
+- A chunk is a function, method, class or module-level block, named `file::symbol_path`.
+- You see ONE file per call: its chunks and the call and containment relations among them.
 
-## How to choose nodes
+Return a small set of features that says what this file is for.
 
-1. **Group coarsely — prefer FEW nodes.** A small or single-purpose file is
-   usually ONE feature. Only split a file when it clearly does two or more
-   unrelated things.
-   - **Upper-bound check:** If a single node would own more than ~12 bindings,
-     ask whether the bindings represent genuinely one concern. If your description
-     needs to comma-list 4+ distinct subsystems (e.g. "config, attention, MLP,
-     generation, analysis"), split it — that description is signaling multiple nodes.
-   - **Two parallel implementations rule:** If a file contains two classes with
-     independent implementations of the same interface (e.g. two different tokenizer
-     backends, two different optimizer variants), give each class its own node rather
-     than lumping them. They serve different purposes even if they share a protocol.
-2. A class and its methods are normally ONE feature (the class). Only break out a
-   cluster of methods as a CHILD node when they form a clearly separable concern.
-3. **Every chunk listed MUST be bound by exactly one node you emit.** Bind
-   module-level chunks (`<file>::__module__`) to the file's primary feature, not a
-   node of their own. Bind module-level constants to the node that primarily *uses*
-   them, not to a generic utilities node.
-4. Do not invent a node whose title merely paraphrases one already created from
-   another file (see the list below); name this file's intent on its own terms.
+## Choosing features
 
-## Relationships legend
+1. Few. A small or single-purpose file is one feature. Split only when the file does two or more unrelated things.
+   - If one feature would own more than about 12 chunks, check that they are one concern. An opening sentence that has to list four subsystems means four features.
+   - Two classes that implement the same interface independently (two tokenizer backends) are two features.
+2. A class and its methods are one feature. Add a child feature only for a group of methods that is a separable concern.
+3. Every chunk listed must be bound by exactly one feature you return. A parent does not list the chunks its children bind.
+   - `<file>::__module__` (imports, module setup) goes to the first feature you return, never to a feature of its own. Never describe imports.
+   - A module-level constant, type variable or type alias goes to the feature that uses it most, never to a feature of its own.
+4. Do not add a feature whose title paraphrases one in the list of existing titles below.
+5. A file with no logic of its own (it only re-exports names, or only lists literal values or type aliases) is one feature with one sentence saying what it is for. Do not list its names.
+   - A file of type declarations whose comments state behaviour (when a callback runs, what it may return, a default, an allowed value) is not such a file: describe that behaviour as you would code.
 
-- `calls` / `called_by` are other symbols (some in other files) — use them to
-  judge cohesion, NOT to bind anything outside this file.
-- `contained_in` means the symbol is a method/member of that class.
+## Relations
 
-## Nesting (within this file)
+- `calls` / `called_by`: other symbols, some in other files. Use them to judge what belongs together. Never bind a symbol outside this file.
+- `contained_in`: the symbol is a member of that class.
 
-To nest, give each new node a temporary id (`"id": "n1"`) and set a child's
-`"parent_id"` to that temporary id. Parents must appear before their children.
+## Nesting
 
-## Field rules
+Give a feature a temporary id (`"id": "n1"`). A child sets `"parent_id": "n1"`. Parents come before their children.
 
-- `title`: a 3–6 word sentence-case noun phrase naming the intent ("HTTP
-  transport adapter") — NEVER the bare filename.
-- `description`: ONE paragraph of 1 to 3 sentences that hands a newcomer the
-  *theory* of the feature — what they need to know to change this code
-  confidently. Open with its purpose: the problem it solves, in plain everyday
-  words a reader who has never seen the code understands. Then, when you can
-  say it, why it is built this way — the constraint, failure, or tradeoff the
-  design answers — and what would break if someone changed it without knowing.
-  Write it as flowing prose, not as labelled parts.
+## Fields
 
-  **Say the why as plainly as your evidence allows, and no further.** You have
-  three sources of intent and all three count:
+| field | what goes in it |
+|---|---|
+| `title` | 3 to 6 words, sentence case, a noun phrase naming what the code is for ("HTTP transport adapter"). Never the file name, and never the kind of code instead of its concern: no "type definitions", "helpers", "module", "plumbing" or "re-exports". A file of types is titled by what the types describe ("Parsed config file shape"). |
+| `description` | Markdown, written as the guide below says. Never empty. |
+| `bindings` | the chunks this feature owns, each by its full name `file::symbol_path` as listed below |
+| `rationale` | one short line: why this is a feature of its own |
 
-  1. **The brief below**, which is what the project says about itself.
-  2. **Comments and docstrings in the code you are shown.** These are the author
-     writing down what the code cannot say, and they are evidence in exactly the
-     way a commit message is. A comment that says a hyphen is dropped because the
-     typesetter put it there IS the reason; report it. A comment naming what a
-     choice gives up, or saying that one step must run before another, is the
-     most valuable thing in the file — those are the things a reader cannot
-     recover from the code and will otherwise break.
-  3. **The commit history**, when it states a reason.
+## Evidence for a reason
 
-  When any of them states a reason, assert it flatly — e.g. retries only on
-  timeout, because the server can duplicate a non-idempotent post. Where none
-  does, describe what the code achieves rather than narrating a decision — e.g.
-  computes the total on write, so a reader never sees a stale number, which
-  needs no warrant.
+Three sources count, and nothing else:
 
-  **Where the code chose between two defensible options, say which and why.**
-  Most rules in most codebases could have gone the other way, and which way this
-  one went is the single thing a reader most needs and can least infer. If the
-  source says what the alternative was, or what this choice costs, that belongs
-  in the description ahead of anything about how it is implemented. Write descriptions as plain prose with NO double-quote
-  characters in them; every field here is a JSON string, and a bare `"` inside
-  one makes the whole response unparseable.
-  NEVER invent history, people, or rejected alternatives — no "added after users
-  reported", no "the team chose X over Y". If you were not shown a reason, do
-  not report one. Do not hedge with "presumably" / "appears to" either; state
-  behavior flatly and reasons only where you have them.
+1. the brief below, which is what the project says about itself;
+2. comments and docstrings in the chunks you are shown;
+3. the commit messages below, where one states a reason.
 
-  No jargon, no restating the title, no lists of code locations (bindings carry
-  that). You MAY include AT MOST one inline citation
-  `[symbol()](codoc:file.py#symbol)` — file and symbol verbatim from your own
-  bindings — when one symbol anchors the claim. Never emit lines starting with
-  `> ` or `**bold**` spans (reserved author channels). NEVER leave it empty.
-- `bindings`: the `[file, symbol_path]` pairs this node owns.
+- A source states a reason for a fact you write: add it to that fact as a clause (", because …"). The reader sees the code, not the source, so never name it.
+- The code chose between two workable options and a source says which and why: that goes directly after the opening sentence.
 
-## Output — return ONLY this, inside solution tags (example for a file `adapters.py`):
+## Output
+
+JSON inside solution tags, nothing else. `description` is a JSON string: a line
+break is `\n`, and it contains no double-quote character (use backticks around
+a literal).
 
 <solution>
 {"ops": [
-  {"id": "n1", "kind": "add_node", "title": "HTTP transport adapter", "description": "Carries a prepared request onto the network, handing it to urllib3 and managing the connection pools, proxies, and TLS so that a caller never touches a raw socket.", "bindings": [["adapters.py", "adapters.py::HTTPAdapter"], ["adapters.py", "adapters.py::HTTPAdapter.send"]], "rationale": "the file's primary class"},
-  {"id": "n2", "kind": "add_node", "parent_id": "n1", "title": "Connection pool configuration", "description": "Reuses connections instead of opening one per request, by keeping a pool for each host and proxy pair, so a second request to the same host skips the TCP and TLS setup entirely.", "bindings": [["adapters.py", "adapters.py::HTTPAdapter.get_connection"]], "rationale": "separable pooling concern"}
+  {"id": "n1", "kind": "add_node", "title": "HTTP transport adapter", "description": "`HTTPAdapter.send(request)` sends a prepared request over a pooled connection and returns a `Response`.\n\n- One pool per `(host, proxy)` pair, reused by every later request to that host.\n- Retries are off by default (`max_retries=0`).\n    - When on, only connection errors are retried, never a response.\n- TLS verification uses the `certifi` bundle unless `verify` is a path.", "bindings": ["adapters.py::HTTPAdapter", "adapters.py::HTTPAdapter.send"], "rationale": "the file's main class"},
+  {"id": "n2", "kind": "add_node", "parent_id": "n1", "title": "Proxy connection setup", "description": "`proxy_manager_for(proxy)` returns the connection pool for a request that goes through `proxy`.\n\n| proxy scheme | pool |\n|---|---|\n| `socks*` | a `SOCKSProxyManager`, created once per proxy URL |\n| `http`, `https` | urllib3's `proxy_from_url`, with the proxy auth headers attached |\n| none | the adapter's own pool manager |", "bindings": ["adapters.py::HTTPAdapter.proxy_manager_for"], "rationale": "separable: proxy handling"}
 ]}
 </solution>
 
@@ -103,37 +65,42 @@ To nest, give each new node a temporary id (`"id": "n1"`) and set a child's
 
 {{doclang}}
 <<<CACHE_BREAK>>>
-## The brief — what this project is, read from its own prose
+## The brief: what this project says about itself
 
-Formed before any file was looked at, from the README and the opening of every
-source file. Use it to place this file inside the whole, to use the project's own
-vocabulary, and to know which of its rules were choices. Where it and the code in
-front of you disagree, the code is what is true now; say what the code does.
+Read from the README and the opening of every source file, before any file was
+described. Use it to place this file in the whole and to use the project's own
+words. Where the brief and the code disagree, the code is what is true now.
 
 {brief}
 <<<CACHE_BREAK>>>
-## Features already created from other files (for naming consistency only — do NOT bind to them)
+## Titles already created from other files
+
+For naming only. Do not bind to them.
 
 {existing_titles}
 <<<CACHE_BREAK>>>
-## The file to analyze: `{file}`
+## The file: `{file}`
 
-### Chunks in {file}
+### Chunks
 
 {chunks}
 
-### Relationships near these chunks
+### Relations near these chunks
 
 {edges}
 
-### Why this file looks the way it does — recent commits touching it
+### Recent commits touching this file
 
 {why}
 
-Each entry is a commit that changed this file: its `subject`, and `why` (the
-opening of its message) when the author wrote one. This is the only record of
-intent you have — the code itself cannot tell you why a choice was made. Use it
-for the *why* half of a description, and only for claims the text actually
-makes. Ignore entries that describe the edit without giving a reason.
+Each entry has the commit's `subject` and, when the author wrote one, `why`
+(the opening of its message). Use an entry only for a claim its text makes.
+Ignore entries that describe the edit without giving a reason.
 
-Now return this file's feature set, inside solution tags.
+Before you answer, reread what you wrote:
+
+- Each `because`, `so that` and `to` clause: keep it only if a comment above, the brief or a commit gives that reason; otherwise cut the clause.
+- Each first line: one sentence of under about 150 characters, stopping at its first full stop.
+- Each bullet: one sentence. Move a second sentence to a bullet of its own, or nest it under the first when it qualifies it.
+
+Return this file's features, inside solution tags.

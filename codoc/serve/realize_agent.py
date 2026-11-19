@@ -1,24 +1,23 @@
-"""realize_agent.py — the ENFORCED sandbox for hub-triggered realization (U7/U11 wiring).
+"""The sandboxed agent that realizes a hand-off on the hub.
 
-``sandbox.py`` is the pure policy (allowed tools, scope, secret-read/edit denylist);
-``consult.py`` is the pure SSRF-hardened Consult-URL gate. This module is the live
-wiring that binds BOTH onto a Claude-Agent-SDK run so a remote-authored directive can
-only touch what it is allowed to:
+``sandbox.py`` is the policy (allowed tools, scope, the read and edit denylist);
+``consult.py`` is the gate on Consult URLs. This module applies both to a Claude
+Agent SDK run, so a hand-off written by a remote contributor can only touch what it
+is allowed to:
 
-  • tool use goes through ``realize_tool_policy`` — ``sandbox.can_use_tool`` for
-    everything, plus a WebFetch branch that defers to ``consult_url_allowed`` (default
-    allowlist EMPTY → every WebFetch denied) so a Consult link cannot reach the LAN or a
-    cloud metadata endpoint;
-  • the agent runs with ``HUB_ALLOWED_TOOLS`` (Read/Edit/Write/Glob/Grep + a
-    consult-gated WebFetch — NO Bash) and its environment SCRUBBED of every GitHub
-    token, so it can never push or authenticate as the maintainer (the orchestrator in
-    ``realize_pr.py`` holds the token and opens the PR);
-  • FAIL-SAFE: if the SDK cannot be loaded or the canUseTool hook cannot be installed,
-    the agent runs NOTHING and reports zero changes rather than falling back to an
-    unsandboxed run.
+- Every tool call goes through ``realize_tool_policy``, installed as the SDK's
+  PreToolUse hook: ``sandbox.can_use_tool`` for everything, and for WebFetch also
+  ``consult_url_allowed``, whose allowlist is empty by default, so a Consult link
+  cannot reach the local network or a cloud metadata endpoint.
+- The agent runs with ``HUB_ALLOWED_TOOLS`` (Read, Edit, Write, Glob, Grep and the
+  gated WebFetch; no Bash), and every GitHub token is removed from its environment,
+  so it cannot push or authenticate as the maintainer. The orchestrator in
+  ``worker.py`` holds the token and opens the pull request.
+- When the SDK cannot be loaded or the hook cannot be installed, the agent runs
+  nothing and reports no changes; it never falls back to an unsandboxed run.
 
-The tool policy and the git change-detection are pure (tested here); the SDK call is
-the thin live edge.
+The tool policy and the git change detection are pure functions; the SDK call is
+the only part that talks to the outside.
 """
 from __future__ import annotations
 
@@ -28,15 +27,22 @@ from typing import Callable
 from codoc.serve import sandbox
 from codoc.serve.consult import consult_url_allowed
 
-# The sandbox's minimal set PLUS a consult-gated WebFetch (sandbox.ALLOWED_TOOLS omits
-# WebFetch precisely because it must go through the consult gate, wired below).
+# The sandbox's set and WebFetch, which sandbox.ALLOWED_TOOLS omits because it must
+# go through the consult gate, wired below.
 HUB_ALLOWED_TOOLS = (*sandbox.ALLOWED_TOOLS, "WebFetch")
+# Named so the model is never offered them; the PreToolUse hook refuses anything
+# outside HUB_ALLOWED_TOOLS in any case. `Agent` is the subagent tool, and `Task`
+# is the name an older `claude` CLI on the maintainer's machine gives it.
+DENIED_TOOLS = ("Bash", "BashOutput", "KillShell", "Agent", "Task", "NotebookEdit", "TodoWrite",
+                "WebSearch", "SlashCommand", "ExitPlanMode")
 
 
-def realize_tool_policy(scope, *, consult_allowlist, resolve) -> Callable[[str, dict | None], "tuple[bool, str]"]:
+def realize_tool_policy(scope, *, consult_allowlist, resolve, root=None) -> Callable[[str, dict | None], "tuple[bool, str]"]:
     """The (allowed, reason) decision for one tool call, combining the sandbox policy
-    with the consult-URL gate. Pure — the single enforcement point for a remote run."""
-    base = sandbox.tool_policy(scope)
+    with the consult-URL gate. Pure, and the single enforcement point for a remote run.
+    ``root`` is the worktree the agent runs in, so the absolute paths its tools
+    send are checked against the repo-relative scope."""
+    base = sandbox.tool_policy(scope, root)
 
     def predicate(tool_name: str, tool_input: dict | None) -> "tuple[bool, str]":
         if tool_name == "WebFetch":
@@ -49,14 +55,15 @@ def realize_tool_policy(scope, *, consult_allowlist, resolve) -> Callable[[str, 
 
 
 def consult_allowlist_from_env(environ: dict | None = None) -> frozenset:
-    """The Consult-URL host allowlist — comma-separated in ``CODOC_CONSULT_ALLOWLIST``,
-    default EMPTY (every WebFetch denied). A maintainer opts specific doc hosts in."""
+    """The Consult-URL host allowlist, comma-separated in ``CODOC_CONSULT_ALLOWLIST``,
+    empty by default, which denies every WebFetch. A maintainer lists the hosts to allow."""
     env = environ if environ is not None else os.environ
     raw = env.get("CODOC_CONSULT_ALLOWLIST", "")
     return frozenset(h.strip().lower() for h in raw.split(",") if h.strip())
 
 
-_GH_TOKEN_KEYS = ("CODOC_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN", "GITHUB_APP_PRIVATE_KEY")
+_GH_TOKEN_KEYS = ("CODOC_GITHUB_TOKEN", "CODOC_GITHUB_CLIENT_SECRET", "GITHUB_TOKEN", "GH_TOKEN",
+                  "GITHUB_APP_PRIVATE_KEY")
 
 
 def changed_files(worktree_path: str, *, run_capture) -> list[str]:
@@ -69,7 +76,7 @@ def changed_files(worktree_path: str, *, run_capture) -> list[str]:
         if len(line) < 4:
             continue
         path = line[3:]
-        if " -> " in path:  # a rename: "old -> new" — take the destination
+        if " -> " in path:  # a rename: "old -> new"; take the destination
             path = path.split(" -> ", 1)[1]
         files.append(path.strip().strip('"'))
     return files
@@ -82,8 +89,8 @@ def _default_run_capture(argv, cwd) -> str:
 
 
 def build_directive_prompt(directive: dict, scope) -> str:
-    """The prompt the sandboxed agent implements — the directive text plus an explicit
-    scope note (belt-and-braces alongside the ENFORCED canUseTool policy)."""
+    """The prompt the sandboxed agent implements: the directive text and a note
+    naming the files it may edit. The tool policy enforces the same scope."""
     text = (directive.get("text") or "").strip() or "Implement the requested change."
     lines = [text, ""]
     if scope:
@@ -95,25 +102,28 @@ def build_directive_prompt(directive: dict, scope) -> str:
 
 def make_sandboxed_agent(*, consult_allowlist=None, resolve=None, run_capture=None):
     """Return an ``agent(directive, worktree_path, scope) -> list[str]`` for
-    :func:`codoc.serve.realize_pr.realize_directive`.
+    :func:`codoc.serve.worker.realize_one`.
 
     The returned agent runs the directive on a Claude-Agent-SDK session bound to
     :func:`realize_tool_policy` and ``HUB_ALLOWED_TOOLS``, in a token-scrubbed env, and
     returns the files it changed. FAIL-SAFE: any inability to enforce the sandbox (SDK
-    missing, hook unsupported) yields an empty change list — never an unsandboxed run."""
+    missing, hook unsupported) yields ``None``, never an unsandboxed run, and never
+    the empty list, which means "ran and changed nothing" and buries the request as a
+    refusal. With the empty list, a hub without the SDK would refuse every hand-off it
+    will ever see, with the wrong reason."""
     allowlist = consult_allowlist if consult_allowlist is not None else consult_allowlist_from_env()
     resolver = resolve or _default_resolve
     capture = run_capture or _default_run_capture
 
-    def agent(directive: dict, worktree_path: str, scope=None) -> list[str]:
-        policy = realize_tool_policy(scope, consult_allowlist=allowlist, resolve=resolver)
+    def agent(directive: dict, worktree_path: str, scope=None) -> list[str] | None:
+        policy = realize_tool_policy(scope, consult_allowlist=allowlist, resolve=resolver, root=worktree_path)
         ran = _run_sandboxed_sdk(
             prompt=build_directive_prompt(directive, scope),
             worktree_path=worktree_path,
             policy=policy,
         )
         if not ran:
-            return []  # fail-safe: sandbox not enforceable → produced nothing
+            return None  # fail-safe: the sandbox is not enforceable, so nothing ran
         return changed_files(worktree_path, run_capture=capture)
 
     return agent
@@ -126,28 +136,51 @@ def _default_resolve(host: str) -> list[str]:
 
 
 def _run_sandboxed_sdk(*, prompt: str, worktree_path: str, policy) -> bool:
-    """Run one directive on the Claude Agent SDK with the sandbox hook installed.
-    Returns True if the session ran (under the enforced policy), False if the sandbox
-    could not be installed (SDK missing / unsupported) so the caller fails safe."""
+    """Run one directive on the Claude Agent SDK with the sandbox installed as a
+    PreToolUse hook. Returns True if the session ran under the policy, False if
+    the sandbox could not be installed (the SDK missing or too old), so the
+    caller runs nothing.
+
+    A hook and not ``can_use_tool``: an ``allowed_tools`` entry naming a whole
+    tool auto-approves it before the permission callback runs (the SDK warns
+    about this with a ``CanUseToolShadowedWarning``), so with the five tools we
+    guard listed there, a callback would never be asked about them. A
+    PreToolUse hook runs whatever the allow rules say. ``allowed_tools`` stays,
+    so a headless run never stops to prompt, and everything else is named in
+    ``disallowed_tools`` so the model is not offered it in the first place."""
     try:
-        from claude_agent_sdk import ClaudeAgentOptions, query
-    except Exception:  # noqa: BLE001 — SDK not installed → cannot sandbox → refuse
+        from claude_agent_sdk import ClaudeAgentOptions, HookMatcher, query
+    except Exception:  # noqa: BLE001 (SDK not installed → cannot sandbox → refuse)
         return False
 
     async def can_use_tool(tool_name, tool_input, *_a, **_k):
         allowed, reason = policy(tool_name, tool_input if isinstance(tool_input, dict) else {})
         return _permission_result(allowed, reason)
 
+    async def pre_tool_use(payload, _tool_use_id, _ctx):
+        name = (payload or {}).get("tool_name", "")
+        got = (payload or {}).get("tool_input")
+        allowed, reason = policy(name, got if isinstance(got, dict) else {})
+        return {"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow" if allowed else "deny",
+            "permissionDecisionReason": reason or "permitted by the codoc realize sandbox",
+        }}
+
     try:
         options = ClaudeAgentOptions(
             cwd=worktree_path,
             allowed_tools=list(HUB_ALLOWED_TOOLS),
-            permission_mode="default",  # so the canUseTool hook is consulted
-            can_use_tool=can_use_tool,
+            disallowed_tools=list(DENIED_TOOLS),
+            permission_mode="default",
+            can_use_tool=can_use_tool,        # for a build whose hooks do not fire
+            hooks={"PreToolUse": [HookMatcher(hooks=[pre_tool_use])]},
         )
     except TypeError:
-        # This SDK build does not accept a canUseTool hook — we cannot guarantee the
+        # This SDK build does not accept the hook. We cannot guarantee the
         # boundary, so refuse rather than run unsandboxed.
+        return False
+    if not getattr(options, "hooks", None):
         return False
 
     import asyncio
@@ -158,13 +191,13 @@ def _run_sandboxed_sdk(*, prompt: str, worktree_path: str, policy) -> bool:
 
     # Scrub GitHub credentials from the env the SDK's agent subprocess inherits, so the
     # agent can never authenticate/push as the maintainer (the orchestrator holds the
-    # token and opens the PR). Restored after the run — the orchestrator's `gh` calls
-    # in realize_pr run later, in the hub process, and still need it.
+    # token and opens the PR). Restored after the run, because the orchestrator's `gh` calls
+    # in ``worker.py`` run later, in the hub process, and still need it.
     saved = {k: os.environ.pop(k) for k in _GH_TOKEN_KEYS if k in os.environ}
     try:
         asyncio.run(_drive())
-    except Exception:  # noqa: BLE001 — a run failure just means no (or partial) changes;
-        pass           # the post-run out-of-scope gate + git diff still decide the PR
+    except Exception:  # noqa: BLE001 (a failed run leaves no changes or partial ones,
+        pass           # and the post-run out-of-scope gate and git diff still decide the PR)
     finally:
         os.environ.update(saved)
     return True
@@ -177,7 +210,7 @@ def _permission_result(allowed: bool, reason: str):
         from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
         return PermissionResultAllow() if allowed else PermissionResultDeny(message=reason)
-    except Exception:  # noqa: BLE001 — older/newer SDK: return a duck-typed decision
+    except Exception:  # noqa: BLE001 (older/newer SDK: return a duck-typed decision)
         class _Result:
             def __init__(self, allow: bool, message: str):
                 self.allow = allow

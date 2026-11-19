@@ -1,0 +1,621 @@
+"""Properties of the applier: verdicts and undo resolve by identity under
+concurrent structure; a conflict never moves the state; un-applying a suffix
+equals replaying the prefix."""
+import copy
+import random
+
+import pytest
+
+from codoc.calculus import ops as K
+from codoc.calculus.apply import apply, replay_recorded
+from codoc.calculus.doc import HEADING, PARAGRAPH
+from codoc.calculus.ids import START
+from codoc.calculus.ops import Op
+from codoc.calculus.store import Store
+from codoc.calculus.text import BOLD, SUGGEST_DEL
+from codoc.workspace.snapshot import settled_prefix, snapshot_ops, state_at
+from tests.helpers import Clock, Mint, T, heading, invert, paragraph, replay
+
+# ── one holder per identity; verdicts find their characters ──────────
+
+def test_merge_moves_characters_and_lookup_follows_them():
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Top")
+    a = paragraph(m, s, "a", "first", after="h1")
+    paragraph(m, s, "b", "second", after="a")
+    mg = apply(s, m.op(K.BLOCK_MERGE, {"into": "b", "bid": "a"}, {}))
+    assert mg.conflict is None and T(s, "b") == "firstsecond"
+    assert not s.blocks["a"].text().holds((a.id, 0))                     # the dead block holds nothing
+    ins = apply(s, m.op(K.TEXT_INSERT, {"bid": "a", "path": "text"}, {"after": [a.id, 4], "text": "!"}))
+    assert ins.conflict is None and T(s, "b") == "first!second"         # the stale hint is corrected
+    invert(s, m, ins)
+    un = invert(s, m, mg)
+    assert un[0].conflict is None and T(s, "a") == "first" and T(s, "b") == "second"
+
+
+def test_verdicts_resolve_by_identity_under_split_move_merge():
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Top")
+    ins = paragraph(m, s, "p1", "alpha beta gamma", after="h1")
+    paragraph(m, s, "p2", "delta", after="p1")
+    ag = Mint("a", "agent:x")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "pl"}, {"kind": "edit"}))
+    si = apply(s, ag.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [ins.id, 15], "text": " epsilon"}, plan="pl"))
+    sd = apply(s, ag.op(K.TEXT_MARK, {"bid": "p1", "path": "text"},
+                        {"kind": SUGGEST_DEL, "attrs": {}, "start": [ins.id, 6], "end": [ins.id, 9], "on": True}, plan="pl"))
+    assert si.conflict is None and sd.conflict is None
+    # The person restructures around the suggestion.
+    assert apply(s, m.op(K.BLOCK_SPLIT, {"bid": "p1", "path": "text"}, {"at": [ins.id, 4], "new": "p3"})).conflict is None
+    assert apply(s, m.op(K.BLOCK_MOVE, {"bid": "p3"}, {"after": "p2"})).conflict is None
+    assert apply(s, m.op(K.BLOCK_MERGE, {"into": "p2", "bid": "p3"}, {})).conflict is None
+    assert T(s, "p2") == "delta beta gamma epsilon"
+    snap = replay(s)
+    rj = apply(s, m.op(K.PLAN_REJECT, {"pid": "pl"}, {}))
+    assert rj.conflict is None
+    assert not [g for b in s.blocks.values() for g in b.text().segs if g.plan == "pl" and g.live]
+    assert not [mk for b in s.blocks.values() for mk in b.text().marks if mk.kind == SUGGEST_DEL]
+    assert T(s, "p2") == "delta beta gamma"
+    acc = apply(snap, m.op(K.PLAN_ACCEPT, {"pid": "pl"}, {}))
+    assert acc.conflict is None
+    assert T(snap, "p2") == "delta  gamma epsilon"
+    invert(snap, m, acc)
+    assert T(snap, "p2") == "delta beta gamma epsilon" and snap.plans["pl"].status == "open"
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+    assert replay(snap).state_fingerprint() == snap.state_fingerprint()
+
+
+# ── segment deletes kill only the named characters ──────────────────────
+
+def test_redo_of_a_segment_delete_spares_characters_typed_inside_the_range():
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Top")
+    ins = paragraph(m, s, "p1", "hello", after="h1")
+    d = apply(s, m.op(K.TEXT_DELETE, {"bid": "p1", "path": "text"}, {"from": [ins.id, 0], "to": [ins.id, 4]}))
+    (r,) = invert(s, m, d)
+    apply(s, m.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [ins.id, 2], "text": "X"}))
+    redo = invert(s, m, r)
+    assert redo[0].conflict is None and T(s, "p1") == "X"
+
+
+# ── a conflict never moves the state ────────────────────────────────────
+
+def test_midway_conflict_leaves_state_untouched():
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Top")
+    ins = paragraph(m, s, "p1", "abc", after="h1")
+    before = copy.deepcopy(s.state_fingerprint())
+    bad = apply(s, m.op(K.TEXT_DELETE, {"bid": "p1", "path": "text"},
+                        {"segments": [[ins.id, 0, 3], ["ghost:1", 0, 1]]}))
+    assert bad.conflict is not None and bad.inverse == []
+    assert s.state_fingerprint() == before
+
+
+# ── subsets govern marks; reopen carries the subset ──────────────────
+
+def test_subset_accept_rejects_unaccepted_marks_and_redo_keeps_subset():
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Top")
+    ins = paragraph(m, s, "p1", "keep this", after="h1")
+    ag = Mint("a", "agent:x")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "pl"}, {"kind": "edit"}))
+    sd = apply(s, ag.op(K.TEXT_MARK, {"bid": "p1", "path": "text"},
+                        {"kind": SUGGEST_DEL, "attrs": {}, "start": [ins.id, 5], "end": [ins.id, 8], "on": True}, plan="pl"))
+    i1 = apply(s, ag.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [ins.id, 8], "text": "!"}, plan="pl"))
+    i2 = apply(s, ag.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [i1.id, 0], "text": "?"}, plan="pl"))
+    acc = apply(s, m.op(K.PLAN_ACCEPT, {"pid": "pl"}, {"subset": [i1.id]}))
+    assert sorted(acc.payload["rejected"]) == sorted([sd.id, i2.id])
+    assert T(s, "p1") == "keep this!"
+    assert not [mk for mk in s.blocks["p1"].text().marks if mk.kind == SUGGEST_DEL]
+    (ro,) = invert(s, m, acc)
+    assert T(s, "p1") == "keep this!?" and s.plans["pl"].status == "open"
+    redo = invert(s, m, ro)
+    assert redo[0].conflict is None and T(s, "p1") == "keep this!"
+
+
+def test_a_subset_accept_without_the_plans_own_delete_gives_its_words_back():
+    """The plan proposed "abc", then took back "b". Accepting only the insert
+    keeps "abc"; reopening the verdict kills "b" again, as the plan's delete."""
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Top")
+    ins = paragraph(m, s, "p1", "x", after="h1")
+    ag = Mint("a", "agent:x")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "pl"}, {"kind": "edit"}))
+    i1 = apply(s, ag.op(K.TEXT_INSERT, {"bid": "p1", "path": "text"}, {"after": [ins.id, 0], "text": "abc"}, plan="pl"))
+    d1 = apply(s, ag.op(K.TEXT_DELETE, {"bid": "p1", "path": "text"}, {"segments": [[i1.id, 1, 1]]}, plan="pl"))
+    assert d1.conflict is None and T(s, "p1") == "xac"
+    acc = apply(s, m.op(K.PLAN_ACCEPT, {"pid": "pl"}, {"subset": [i1.id]}))
+    assert acc.payload["rejected"] == [d1.id] and T(s, "p1") == "xabc"
+    (ro,) = invert(s, m, acc)
+    assert ro.conflict is None and T(s, "p1") == "xac"
+    b = next(sg for sg in s.blocks["p1"].text().segs if sg.op == i1.id and sg.k0 == 1)
+    assert b.dead == d1.id
+
+
+# ── ranks are re-derived on restore ─────────────────────────────────────
+
+def test_move_undo_never_collides_ranks():
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Top")
+    paragraph(m, s, "a", "a", after="h1")
+    paragraph(m, s, "c", "c", after="a")
+    paragraph(m, s, "b", "b", after="a")
+    mv = apply(s, m.op(K.BLOCK_MOVE, {"bid": "b"}, {"after": "c"}))
+    paragraph(m, s, "y", "y", after="a")
+    invert(s, m, mv)
+    ranks = [x.rank for x in s.ordered()]
+    assert len(set(ranks)) == len(ranks)
+    nxt = apply(s, m.op(K.BLOCK_ADD, {"bid": "z"}, {"kind": PARAGRAPH, "after": "b"}))
+    assert nxt.conflict is None
+
+
+# ── set(kind) keeps the level through undo ──────────────────────────────
+
+def test_set_kind_round_trip_keeps_level():
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Top", level=3)
+    sk = apply(s, m.op(K.BLOCK_SET, {"bid": "h1", "path": "kind"}, {"value": PARAGRAPH}))
+    assert s.blocks["h1"].kind == PARAGRAPH and s.blocks["h1"].level == 0
+    invert(s, m, sk)
+    assert s.blocks["h1"].kind == HEADING and s.blocks["h1"].level == 3
+
+
+# ── reject undoes every plan op kind, without clobbering later moves ────
+
+def test_reject_undoes_split_and_set_and_respects_later_human_move():
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Top", level=1)
+    ins = paragraph(m, s, "p1", "one", after="h1")
+    ag = Mint("a", "agent:x")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "pl"}, {"kind": "edit"}))
+    apply(s, ag.op(K.BLOCK_SPLIT, {"bid": "p1", "path": "text"}, {"at": [ins.id, 2], "new": "p2"}, plan="pl"))
+    apply(s, ag.op(K.TEXT_INSERT, {"bid": "p2", "path": "text"}, {"after": [ins.id, 2], "text": "xx"}, plan="pl"))
+    apply(s, ag.op(K.BLOCK_SET, {"bid": "h1", "path": "level"}, {"value": 3}, plan="pl"))
+    rj = apply(s, m.op(K.PLAN_REJECT, {"pid": "pl"}, {}))
+    assert rj.conflict is None
+    assert not s.blocks["p2"].live or T(s, "p2") != ""
+    assert s.blocks["h1"].level == 1
+    # A plan move, then the person moves the same block: reject leaves the person's move.
+    m2, s2 = Mint(), Store()
+    heading(m2, s2, "h1", "Top")
+    paragraph(m2, s2, "a", "a", after="h1"); paragraph(m2, s2, "b", "b", after="a"); paragraph(m2, s2, "c", "c", after="b")
+    apply(s2, ag.op(K.PLAN_OPEN, {"pid": "pm"}, {"kind": "move"}))
+    apply(s2, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "c"}, plan="pm"))
+    apply(s2, m2.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "b"}))
+    apply(s2, m2.op(K.PLAN_REJECT, {"pid": "pm"}, {}))
+    assert [x.id for x in s2.ordered()] == ["h1", "b", "a", "c"]
+    # The plan moves one block twice: undoing the second is not "someone moved it since" for the first.
+    m3, s3 = Mint(), Store()
+    heading(m3, s3, "h1", "Top")
+    paragraph(m3, s3, "a", "a", after="h1"); paragraph(m3, s3, "b", "b", after="a"); paragraph(m3, s3, "c", "c", after="b")
+    apply(s3, ag.op(K.PLAN_OPEN, {"pid": "pm"}, {"kind": "move"}))
+    apply(s3, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "b"}, plan="pm"))
+    apply(s3, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "c"}, plan="pm"))
+    apply(s3, m3.op(K.PLAN_REJECT, {"pid": "pm"}, {}))
+    assert [x.id for x in s3.ordered()] == ["h1", "a", "b", "c"]
+
+
+def _four() -> tuple[Mint, Store]:
+    m, s = Mint("s", "human:a"), Store()
+    heading(m, s, "h1", "Top")
+    for x, a in (("a", "h1"), ("b", "a"), ("c", "b"), ("d", "c")):
+        paragraph(m, s, x, x, after=a)
+    return m, s
+
+
+def test_a_move_made_between_two_plan_moves_stands_on_reject():
+    """The plan moves a, B moves a, the plan moves a again. The reject puts
+    back the plan's second move, to where B left a, and not its first, which
+    B's move came after."""
+    m, s = _four()
+    ag, b = Mint("g", "agent:x"), Mint("B", "human:b")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "pm"}, {"kind": "move"}))
+    apply(s, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "b"}, plan="pm"))
+    apply(s, b.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "d"}))
+    apply(s, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "c"}, plan="pm"))
+    apply(s, m.op(K.PLAN_REJECT, {"pid": "pm"}, {}))
+    assert [x.id for x in s.ordered()] == ["h1", "b", "c", "d", "a"]
+
+
+def test_a_move_made_after_a_reject_survives_its_undo_and_redo():
+    m, s = _four()
+    ag, b = Mint("g", "agent:x"), Mint("B", "human:b")
+    apply(s, ag.op(K.PLAN_OPEN, {"pid": "pm"}, {"kind": "move"}))
+    apply(s, ag.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "c"}, plan="pm"))
+    rj = apply(s, m.op(K.PLAN_REJECT, {"pid": "pm"}, {}))
+    apply(s, b.op(K.BLOCK_MOVE, {"bid": "a"}, {"after": "d"}))
+    (ro,) = invert(s, m, rj)
+    assert ro.conflict is None and [x.id for x in s.ordered()] == ["h1", "b", "c", "d", "a"]
+    (rd,) = invert(s, m, ro)
+    assert rd.conflict is None and [x.id for x in s.ordered()] == ["h1", "b", "c", "d", "a"]
+
+
+# ── refusals ───────────────────────────────────────────────────
+
+def test_refusals():
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Top")
+    ins = paragraph(m, s, "p1", "abcd", after="h1")
+    heading(m, s, "h9", "Gone", after="p1")
+    apply(s, m.op(K.BLOCK_DELETE, {"bid": "h9"}, {}))
+    assert apply(s, m.op(K.BLOCK_SPLIT, {"bid": "p1", "path": "text"}, {"at": [ins.id, 1], "new": "h9"})).conflict == "duplicate_block"
+    assert apply(s, m.op(K.BIND_ATTACH, {"fid": "h9"}, {"symbol": "s"})).conflict == "dead_block"
+    dead_title = s.blocks["h9"].text()
+    assert apply(s, m.op(K.TEXT_MARK, {"bid": "h9", "path": "text"},
+                         {"kind": BOLD, "attrs": {}, "start": list(dead_title.ref_at(0)), "end": list(dead_title.ref_at(1)), "on": True})).conflict == "dead_block"
+    assert apply(s, m.op(K.BLOCK_SET, {"bid": "p1", "path": "rank"}, {"value": "Z"})).conflict == "reserved_path"
+    assert apply(s, m.op(K.BLOCK_MERGE, {"into": "h1", "bid": "p1"}, {})).conflict == "merge_heading"
+    h1 = apply(s, m.op(K.FEATURE_HANDOFF, {"fid": "h1"}, {"asked": "one"}))
+    h2 = apply(s, m.op(K.FEATURE_HANDOFF, {"fid": "h1"}, {"asked": "two"}))
+    invert(s, m, h1)
+    assert s.watermarks("h1").handoffs == [h2.id]
+
+
+# ── replay carries the policy ──────────────────────────────────────────
+
+def test_replay_with_policy_keeps_forged_writes_out():
+    def policy(store, op):
+        return "suggest" if op.actor == "human:contrib" and op.plan is None and op.kind != K.PLAN_OPEN else None
+    m, s = Mint(), Store(policy)
+    heading(m, s, "h1", "Top")
+    c = Mint("c", "human:contrib")
+    apply(s, c.op(K.TEXT_INSERT, {"bid": "h1", "path": "text"}, {"after": START, "text": "X"}))
+    assert T(s, "h1") == "Top"
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+# ── the fuzz properties ──────────────────────────────────────────────
+
+AGENT = "agent:x"
+
+
+def plan_op(rng: random.Random, m: Mint, s: Store, step: int, undos: bool) -> Op:
+    """Plan work: open a plan, insert words under it, take some back and give
+    some back, propose a cut or a kind, level or field change, and decide it.
+    With ``undos``, also reopen a verdict or redo one through the inverses
+    recorded on the log."""
+    if undos and rng.random() < 0.15:
+        last = {o.target["pid"]: o for o in s.ops if o.kind in K.TURNS and o.conflict is None and o.inverse}
+        if last:
+            (inv,) = rng.choice(list(last.values())).inverse
+            return m.op(inv["kind"], inv["target"], inv["payload"])
+    if not s.open_plans:
+        return m.op(K.PLAN_OPEN, {"pid": f"P{step}"}, {"kind": "edit", "target": "h1"}, actor=AGENT)
+    pid = rng.choice(sorted(s.open_plans))
+    blocks = s.ordered()
+    r = rng.random()
+    if r < 0.30:
+        b = rng.choice(blocks)
+        live = list(b.text().live_refs())
+        after = list(rng.choice(live)) if live else START
+        return m.op(K.TEXT_INSERT, {"bid": b.id, "path": "text"}, {"after": after, "text": rng.choice(["ab", " cde", "f"])},
+                    actor=AGENT, plan=pid)
+    if r < 0.45:
+        own = [(b, g) for b in blocks for g in b.text().segs if g.plan == pid and g.live]
+        if own:
+            b, g = rng.choice(own)
+            k = rng.randrange(len(g.chars))
+            return m.op(K.TEXT_DELETE, {"bid": b.id, "path": "text"},
+                        {"segments": [[g.op, g.k0 + k, rng.randint(1, len(g.chars) - k)]]}, actor=AGENT, plan=pid)
+    if r < 0.55:
+        back = [(b, g) for b in blocks for g in b.text().segs if g.plan == pid and not g.live
+                and (d := s.by_id.get(g.dead)) is not None and d.plan == pid and d.kind == K.TEXT_DELETE]
+        if back:
+            b, g = rng.choice(back)
+            return m.op(K.TEXT_RESTORE, {"bid": b.id, "path": "text"},
+                        {"segments": [[g.op, g.k0, len(g.chars)]], "by": g.dead}, actor=AGENT, plan=pid)
+    if r < 0.70:
+        prose = [b for b in blocks if b.kind in (PARAGRAPH, "bullet", "numbered")]
+        b = rng.choice(prose or blocks)
+        q = rng.random()
+        if q < 0.4 and prose:
+            payload, path = {"value": rng.choice([x for x in (PARAGRAPH, "bullet", "numbered") if x != b.kind])}, "kind"
+        elif q < 0.6 and b.kind != PARAGRAPH:
+            payload, path = {"value": rng.randint(1, 4)}, "level"
+        else:
+            payload, path = ({"unset": True} if rng.random() < 0.4 else {"value": rng.randint(0, 9)}), "note"
+        return m.op(K.BLOCK_SET, {"bid": b.id, "path": path}, payload, actor=AGENT, plan=pid)
+    if r < 0.78:
+        # A cut proposal. Its undo names it by the op that placed it, so a
+        # split since that cut it in two does not stop the undo.
+        b = rng.choice(blocks)
+        live = list(b.text().live_refs())
+        if len(live) > 1:
+            a, z = sorted(rng.sample(range(len(live)), 2))
+            return m.op(K.TEXT_MARK, {"bid": b.id, "path": "text"},
+                        {"kind": SUGGEST_DEL, "attrs": {}, "start": list(live[a]), "end": list(live[z]), "on": True},
+                        actor=AGENT, plan=pid)
+    if rng.random() < 0.4:
+        return m.op(K.PLAN_REJECT, {"pid": pid}, {})
+    ops = s.plans[pid].ops
+    payload = {"subset": rng.sample(ops, rng.randint(0, len(ops)))} if ops and rng.random() < 0.5 else {}
+    return m.op(K.PLAN_ACCEPT, {"pid": pid}, payload)
+
+
+def random_op(rng: random.Random, m: Mint, s: Store, step: int, plans: bool = False, undos: bool = False) -> Op:
+    if plans and rng.random() < 0.35:
+        return plan_op(rng, m, s, step, undos)
+    blocks = s.ordered()
+    b = rng.choice(blocks)
+    t = b.text()
+    live = list(t.live_refs())
+    r = rng.random()
+    if r < 0.30 or not live:
+        after = START if not live or rng.random() < 0.2 else rng.choice(live)
+        return m.op(K.TEXT_INSERT, {"bid": b.id, "path": "text"},
+                    {"after": after if isinstance(after, str) else list(after),
+                     "text": "".join(rng.choice("xyz ") for _ in range(rng.randint(1, 4)))})
+    if r < 0.48:
+        a, z = sorted(rng.sample(range(len(live)), 2)) if len(live) > 1 else (0, 0)
+        return m.op(K.TEXT_DELETE, {"bid": b.id, "path": "text"}, {"from": list(live[a]), "to": list(live[z])})
+    if r < 0.58:
+        a, z = sorted(rng.sample(range(len(live)), 2)) if len(live) > 1 else (0, 0)
+        return m.op(K.TEXT_MARK, {"bid": b.id, "path": "text"},
+                    {"kind": BOLD, "attrs": {}, "start": list(live[a]), "end": list(live[z]), "on": rng.random() < 0.7})
+    if r < 0.66:
+        at = START if rng.random() < 0.2 else rng.choice(live)
+        return m.op(K.BLOCK_SPLIT, {"bid": b.id, "path": "text"}, {"at": at if isinstance(at, str) else list(at), "new": f"n{step}"})
+    if r < 0.74:
+        paras = [x for x in blocks if x.kind == PARAGRAPH]
+        for _ in range(3):
+            if not paras:
+                break
+            v = rng.choice(paras)
+            i = blocks.index(v)
+            nb = blocks[i - 1] if i > 0 and rng.random() < 0.5 else (blocks[i + 1] if i + 1 < len(blocks) else None)
+            if nb is not None and nb.kind == PARAGRAPH:
+                return m.op(K.BLOCK_MERGE, {"into": nb.id, "bid": v.id}, {})
+        return m.op(K.TEXT_INSERT, {"bid": b.id, "path": "text"}, {"after": START, "text": "q"})
+    if r < 0.82:
+        return m.op(K.BLOCK_ADD, {"bid": f"a{step}"}, {"kind": rng.choice([PARAGRAPH, HEADING]), "level": rng.randint(1, 3), "after": b.id})
+    if r < 0.88:
+        target = rng.choice(blocks)
+        others = [x for x in blocks if x.id != target.id]
+        after = START if not others or rng.random() < 0.2 else rng.choice(others).id
+        return m.op(K.BLOCK_MOVE, {"bid": target.id}, {"after": after, "level_delta": rng.choice([-1, 0, 1])})
+    if r < 0.93:
+        heads = [x for x in blocks if x.kind == HEADING]
+        h = rng.choice(heads)
+        return m.op(K.BLOCK_SET, {"bid": h.id, "path": "level"}, {"value": rng.randint(1, 4)})
+    if r < 0.97:
+        victim = rng.choice([x for x in blocks if x.id != "h1"] or blocks)
+        return m.op(K.BLOCK_DELETE, {"bid": victim.id}, {})
+    heads = [x for x in blocks if x.kind == HEADING]
+    return m.op(K.BIND_ATTACH, {"fid": rng.choice(heads).id}, {"symbol": rng.choice(["a", "b", "c"])})
+
+
+def soup(seed: int, steps: int, plans: bool = False) -> Store:
+    rng = random.Random(seed)
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Root")
+    paragraph(m, s, "p1", "seed text here", after="h1")
+    for step in range(steps):
+        if not s.ordered():
+            break
+        apply(s, random_op(rng, m, s, step, plans=plans))
+    return s
+
+
+@pytest.mark.parametrize("seed,plans", [(3, False), (3, True), (8, True), (13, True)])
+def test_unapply_suffix_equals_prefix_replay(seed, plans):
+    s = soup(seed, 220, plans)
+    if plans:
+        assert sum(o.kind in (K.PLAN_ACCEPT, K.PLAN_REJECT) and o.conflict is None for o in s.ops) > 3
+    log = [Op.from_json(copy.deepcopy(o.to_json())) for o in s.ops]
+    for k in (len(log) // 4, len(log) // 2, len(log) - 3):
+        probe = replay(s)
+        undo = Mint("u", "human:a")
+        for o in reversed(log[k:]):
+            if o.conflict is not None:
+                continue
+            for b in o.inverse:          # an inverse is a list of bodies applied in order
+                un = apply(probe, undo.op(b["kind"], b["target"], b["payload"]))
+                assert un.conflict is None, (o.kind, o.payload, b, un.conflict)
+        prefix = Store()
+        for o in log[:k]:
+            apply(prefix, Op.from_json(copy.deepcopy(o.to_json())))
+        # Undo kills what the suffix minted rather than un-minting it, so the
+        # tombstones differ; what must agree is everything a reader can see.
+        assert live_view(probe) == live_view(prefix), k
+        assert probe.state_fingerprint()["bindings"] == prefix.state_fingerprint()["bindings"], k
+
+
+def live_view(store: Store):
+    from codoc.calculus.derive import live_spans
+    out = []
+    for b in store.ordered():
+        t = b.text()
+        spans = sorted((sp.kind, tuple(sorted(sp.attrs.items())), sp.start, sp.end) for sp in live_spans(t)
+                       if sp.kind != SUGGEST_DEL)
+        fields = {k: v for k, v in b.content.items() if k not in b.layout.text}
+        out.append((b.id, b.kind, b.level, t.live_text(), spans, fields))
+    return out
+
+
+def test_conflict_never_moves_the_state_fuzz():
+    rng = random.Random(5)
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Root")
+    p = paragraph(m, s, "p1", "seed text", after="h1")
+    for step in range(400):
+        if not s.ordered():
+            break
+        op = random_op(rng, m, s, step, plans=True, undos=True)
+        if rng.random() < 0.3:
+            keys = [k for k in ("after", "from", "to", "start", "end", "at") if k in op.payload]
+            if keys and rng.random() < 0.7:
+                op.payload[rng.choice(keys)] = ["ghost:1", 0]
+            elif op.kind == K.TEXT_DELETE and rng.random() < 0.5:
+                op.payload = {"segments": [[p.id, 0, 2], ["ghost:1", 0, 1]]}
+            else:
+                op.target = {**op.target, "bid": "ghost"}
+        before = copy.deepcopy(s.state_fingerprint())
+        done = apply(s, op)
+        if done.conflict is not None:
+            assert s.state_fingerprint() == before, (op.kind, done.conflict)
+            assert done.inverse == []
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+def test_a_verdict_then_its_reopen_is_the_document_before_it_fuzzed():
+    """Undoing a verdict straight after it gives back the exact state before
+    it, tombstones included, and redoing it gives a reader what the verdict
+    did. The plans insert, take back and give back their own words and change
+    kinds, levels and fields: the cases whose order a record by category lost.
+    Headings made prose and back with code bound between are the case where a
+    feature leaves and comes back."""
+    for seed in range(6):
+        rng = random.Random(seed)
+        m, s = Mint(), Store()
+        heading(m, s, "h1", "Root")
+        paragraph(m, s, "p1", "seed text here", after="h1")
+        checked = 0
+        for step in range(200):
+            if not s.ordered():
+                break
+            op = _fold_soup_op(rng, m, s, step) if seed % 2 else random_op(rng, m, s, step, plans=True, undos=True)
+            before = copy.deepcopy(s.state_fingerprint()) if op.kind in K.TURNS else None
+            done = apply(s, op)
+            if before is None or done.conflict is not None:
+                continue
+            probe, undo = replay(s), Mint("u", "human:a")
+            (back,) = invert(probe, undo, done)
+            assert back.conflict is None, (seed, step, back.conflict)
+            if done.kind != K.PLAN_REOPEN:
+                # A redo kills as itself, so only a verdict's reopen restores the tombstones too.
+                assert probe.state_fingerprint() == before, (seed, step, done.kind)
+            (again,) = invert(probe, undo, back)
+            assert again.conflict is None and live_view(probe) == live_view(s), (seed, step, done.kind)
+            checked += 1
+        assert checked > 5, seed
+        assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+@pytest.mark.parametrize("seed", [13, 15, 21, 29, 38])
+def test_a_fold_then_the_rest_of_the_log_replays_to_the_live_store(seed):
+    """Fold a prefix that leaves no plan in flight across the cut (none open
+    at it, none answered or reopened after it: what `settled_prefix` keeps
+    to), replay the rest as recorded, and get the same store. Nothing replayed
+    after the cut needs an op the fold archived. A cut with a plan in flight
+    across it cannot be folded at all: a verdict after it judges the plan's
+    ops, which the fold would take."""
+    rng = random.Random(seed)
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Root")
+    paragraph(m, s, "p1", "seed text here", after="h1")
+    for step in range(160):
+        if not s.ordered():
+            break
+        apply(s, random_op(rng, m, s, step, plans=True, undos=True))
+    folds = 0
+    for cut in [*range(len(s.ops) // 4, len(s.ops), 2), settled_prefix(s)]:
+        prefix = state_at(s, cut)
+        if prefix.open_plans or any(o.kind in K.TURNS and o.target.get("pid") in prefix.plans for o in s.ops[cut:]):
+            assert cut != settled_prefix(s), cut
+            continue
+        folded = Store()
+        for d in snapshot_ops(prefix, "snap", Clock()):
+            assert replay_recorded(folded, Op.from_json(d)).conflict is None
+        for o in s.ops[cut:]:
+            replay_recorded(folded, Op.from_json(copy.deepcopy(o.to_json())))
+        assert folded.state_fingerprint() == s.state_fingerprint(), (seed, cut)
+        folds += 1
+    assert folds > 2, seed
+
+
+def _fold_soup_op(rng: random.Random, m: Mint, s: Store, step: int) -> Op:
+    """`random_op`, plus plans on any heading, so a fold can stop part way,
+    and moves under them, so "their move stands" meets a fold. Headings are
+    made prose and back and code is bound, on the trunk and in plans, and the
+    newest op is undone under its own plan as the drain tags a suggester's
+    ⌘Z, so a feature leaving and coming back meets a verdict and a fold."""
+    if not s.open_plans and rng.random() < 0.3:
+        target = rng.choice(s.headings()).id
+        return m.op(K.PLAN_OPEN, {"pid": f"Q{step}"}, {"kind": "edit", "target": target}, actor=AGENT)
+    blocks = s.ordered()
+    plan = rng.choice(sorted(s.open_plans)) if s.open_plans and rng.random() < 0.5 else None
+    who = {"actor": AGENT, "plan": plan} if plan else {}
+    r = rng.random()
+    if plan and r < 0.1:
+        b = rng.choice(blocks)
+        others = [x.id for x in blocks if x.id != b.id]
+        return m.op(K.BLOCK_MOVE, {"bid": b.id}, {"after": rng.choice(others) if others else START}, **who)
+    flip = [x for x in blocks if x.kind in (HEADING, PARAGRAPH) and x.id != "h1"]   # h1 stays the root
+    if r < 0.2 and flip:
+        b = rng.choice(flip)
+        return m.op(K.BLOCK_SET, {"bid": b.id, "path": "kind"},
+                    {"value": PARAGRAPH if b.kind == HEADING else HEADING, "level": 2}, **who)
+    if r < 0.3:
+        return m.op(K.BIND_ATTACH, {"fid": rng.choice(s.headings()).id}, {"symbol": rng.choice("abcd")}, **who)
+    if r < 0.35:
+        last = next((o for o in reversed(s.ops) if o.conflict is None and o.kind not in K.PLAN_KINDS), None)
+        if last is not None and last.inverse and (not last.plan or last.plan in s.open_plans):
+            inv = last.inverse[0]
+            return m.op(inv["kind"], inv["target"], inv["payload"], actor=last.actor, plan=last.plan)
+    return random_op(rng, m, s, step, plans=True, undos=True)
+
+
+def _code_on_live_headings(s: Store) -> bool:
+    return all(s.blocks[b.feature].live and s.blocks[b.feature].kind == HEADING for b in s.bindings.values())
+
+
+@pytest.mark.parametrize("seed", [5, 14, 20, 32])
+def test_a_folded_store_goes_on_as_the_unfolded_one(seed):
+    """Fold at `settled_prefix` mid-run, then send the same ops to the folded
+    store and to the unfolded one: each applies or conflicts alike and leaves
+    the same state. Undo reads only the folded store's inverses, and a fold's
+    ops have none. The folded log rebuilt from its records, which is what the
+    next fold replays, is the folded store."""
+    rng, clock = random.Random(seed), Clock()
+    m, s = Mint(f"s{seed}", "human:a", clock), Store()
+    heading(m, s, "h1", "Root")
+    paragraph(m, s, "p1", "seed text here", after="h1")
+    heading(m, s, "h2", "Second", after="p1")
+    paragraph(m, s, "p2", "more words", after="h2")
+    step, cut = 0, 0
+    while step < 150 or cut <= len(s.ops) // 3:
+        assert step < 400 and s.ordered(), seed
+        apply(s, _fold_soup_op(rng, m, s, step))
+        assert _code_on_live_headings(s), (seed, step)
+        step += 1
+        cut = settled_prefix(s) if step >= 150 else 0
+    f = Store()
+    for d in snapshot_ops(state_at(s, cut), "snap", clock):
+        got = replay_recorded(f, Op.from_json(d))
+        assert got.conflict is None and got.inverse == [], (d["kind"], got.conflict)
+    for o in s.ops[cut:]:
+        replay_recorded(f, Op.from_json(copy.deepcopy(o.to_json())))
+    for step in range(step, step + 150):
+        if not f.ordered():
+            break
+        op = _fold_soup_op(rng, m, f, step)
+        a = apply(f, Op.from_json(copy.deepcopy(op.to_json())))
+        b = apply(s, op)
+        assert a.conflict == b.conflict and f.state_fingerprint() == s.state_fingerprint(), (seed, step, op.kind)
+        assert _code_on_live_headings(s), (seed, step)
+    assert replay(f).state_fingerprint() == f.state_fingerprint(), seed
+
+
+def test_a_fold_carries_the_code_a_reopen_kept_on_a_dead_heading():
+    """A reject took code off a block a plan made a heading, the block died as
+    prose, and a reopen made it a heading while dead, which keeps that code on
+    the block. The plan is then accepted and the log folded. The delete's undo
+    re-attaches the code on the folded store as on the unfolded one."""
+    clock = Clock()
+    m, s = Mint("s", "human:a", clock), Store()
+    heading(m, s, "h1", "Root")
+    paragraph(m, s, "x", "would be a feature", after="h1")
+    apply(s, m.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit", "target": "h1"}, actor=AGENT))
+    apply(s, m.op(K.BLOCK_SET, {"bid": "x", "path": "kind"}, {"value": HEADING, "level": 2}, actor=AGENT, plan="P"))
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "x"}, {"symbol": "a"}))
+    rej = apply(s, m.op(K.PLAN_REJECT, {"pid": "P"}, {}))
+    dele = apply(s, m.op(K.BLOCK_DELETE, {"bid": "x"}, {}))
+    invert(s, m, rej)
+    assert apply(s, m.op(K.PLAN_ACCEPT, {"pid": "P"}, {})).conflict is None and settled_prefix(s) == len(s.ops)
+    f = Store()
+    for d in snapshot_ops(s, "snap", clock):
+        assert replay_recorded(f, Op.from_json(d)).conflict is None
+    assert f.state_fingerprint() == s.state_fingerprint() and s.bindings == {}
+    (inv,) = dele.inverse
+    undo = m.op(inv["kind"], inv["target"], inv["payload"])
+    assert apply(f, Op.from_json(copy.deepcopy(undo.to_json()))).conflict is None and apply(s, undo).conflict is None
+    assert s.bindings["a"].feature == "x" and f.state_fingerprint() == s.state_fingerprint()

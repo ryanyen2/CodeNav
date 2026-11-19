@@ -1,15 +1,7 @@
 .env
 .env.*
 
-# codoc — share the AUTHORED INTENT, keep the DERIVED state local.
-# Commit `tree.codoc` (and the webview's `tree.doc.json`): the feature tree is the
-# team's shared intent map, versioned with the code. Everything else under .codoc/
-# (the chunk index, the SQLite db + event log, and the transient control files) is
-# rebuilt per checkout by `codoc init` / `codoc watch`, so it is NOT committed.
-# (To also share the binding db, force-add it: `git add -f .codoc/codoc.db`.)
-**/.codoc/*
-!**/.codoc/tree.codoc
-!**/.codoc/tree.doc.json
+# .codoc/ is governed by the .gitignore that `codoc init` writes inside it.
 
 # Python
 __pycache__/
@@ -43,8 +35,7 @@ uv.lock
 
 .hypothesis/
 
-node_modules/
-dist/
+node_modules
 
 # Bundled Python wheel — a build artifact produced by scripts/bundle-wheel.mjs
 # at VSIX package time; shipped inside the .vsix, never committed.
@@ -53,20 +44,9 @@ vscode-codoc/bundled/*.whl
 # Packaged extension — a build artifact produced by `vsce package`, never committed.
 vscode-codoc/*.vsix
 
-# Root-level real-world corpora only (requests/, altair/, …); anchored so it does
-# NOT swallow nested source test dirs like vscode-codoc/src/test/.
+# Real-world corpora for trying codoc end to end (requests/, nanochat/, …); local
+# only. Anchored so it does not match vscode-codoc/src/test/.
 /test/
-# LaTeX build artifacts
-paper/main.aux
-paper/main.log
-paper/main.blg
-paper/main.out
-paper/main.pdf
-evals/work/
-evals/out/
-
-# Rendered by study-app/scripts/preview.mjs, for looking at the pages.
-study-app/preview/
 
 
 review.md

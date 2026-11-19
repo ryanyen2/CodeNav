@@ -1,9 +1,10 @@
-"""consult.py — SSRF-hardened Consult-URL allowlist (U8).
+"""The Consult-URL gate for a realize run the hub starts.
 
 A feature description can carry external `[label](https://…)` links that the
-realizing agent WebFetches. On a remote-triggered run those links are attacker-
-authorable, so the fetch path is locked down: https only, the host must be in a
-default-EMPTY allowlist, and the resolved IP must be public — loopback,
+realizing agent fetches. On a run a remote contributor asked for, anyone with
+suggest access could have written those links, so a fetch is allowed only over
+https, to a host in an allowlist that is empty by default, at an address that
+resolves to public IPs: loopback,
 link-local/metadata (169.254/16), RFC1918, CGNAT, and reserved ranges are refused
 so a Consult link cannot reach the home LAN or a cloud metadata endpoint. DNS
 resolution is injected so the resolve-and-pin check is testable; the caller must
@@ -11,28 +12,16 @@ also disable HTTP redirects (or re-validate each hop).
 """
 from __future__ import annotations
 
-import ipaddress
 from urllib.parse import urlparse
 
-_CGNAT = ipaddress.ip_network("100.64.0.0/10")
-
-
-def _blocked_ip(ip_str: str) -> bool:
-    try:
-        ip = ipaddress.ip_address(ip_str)
-    except ValueError:
-        return True  # unparseable → refuse
-    if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-            or ip.is_multicast or ip.is_unspecified):
-        return True
-    return ip.version == 4 and ip in _CGNAT
+from codoc.kinds.fetch_guard import blocked_ip
 
 
 def consult_url_allowed(url: str, allowlist, *, resolve) -> tuple[bool, str]:
     """(allowed, reason) for fetching ``url``.
 
     ``allowlist`` is the set of permitted hostnames (empty → deny everything).
-    ``resolve(host) -> list[str]`` returns the host's IPs; ALL must be public."""
+    ``resolve(host) -> list[str]`` returns the host's IPs; every one must be public."""
     try:
         parsed = urlparse(url)
     except Exception:
@@ -51,6 +40,6 @@ def consult_url_allowed(url: str, allowlist, *, resolve) -> tuple[bool, str]:
     if not ips:
         return False, "host did not resolve"
     for ip in ips:
-        if _blocked_ip(ip):
+        if blocked_ip(ip):
             return False, f"host resolves to a blocked address ({ip})"
     return True, ""

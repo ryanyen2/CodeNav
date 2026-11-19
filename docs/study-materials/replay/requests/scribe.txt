@@ -1,3 +1,0 @@
-Different documents need different rules, and I should not have to edit the
-source to convert one properly. Make that configurable, and tell me what the
-conversion actually did to each document.

@@ -1,6 +1,6 @@
 [project]
 name = "codoc"
-version = "0.2.18"
+version = "0.3.0"
 description = "codoc: a feature-tree system that maintains a human-intent-level view of a codebase, synchronized to the underlying code."
 license = { text = "MIT" }
 readme = "README.md"
@@ -10,18 +10,13 @@ readme = "README.md"
 # is unaffected.)
 requires-python = ">=3.11,<3.13"
 dependencies = [
-    "pydantic>=2.0.0",
     "tree-sitter>=0.23.0",
     "tree-sitter-languages>=1.10.2",
-    "sentence-transformers>=3.0.0",
     "cocoindex>=1.0.0",
     "lancedb>=0.30.0",
-    "openai>=1.50.0",
-    "ollama>=0.3.0",
+    "openai>=1.50.0",            # also the Anthropic-compatible and local paths; the claude CLI needs no SDK
     "typer>=0.12.0",
     "python-dotenv>=1.0.0",
-    "numpy>=1.24.0",
-    "filelock>=3.13.0",
     "watchfiles>=0.21.0",
     "fastmcp>=2.0.0",
 ]
@@ -41,12 +36,18 @@ serve = [
     "httpx>=0.27.0",  # the GitHub OAuth + collaborator-permission calls (serve/github_auth.py)
 ]
 media = [
-    # Enriches url/pdf reference blocks (codoc/blocks/reference.py) with real
-    # extracted content instead of a bare reference. Lazily imported — absent,
-    # those blocks just carry the reference and skip enrichment.
+    # Enriches url/pdf blocks (codoc/kinds/builtins.py) with extracted content
+    # instead of a bare reference. Lazily imported — absent, those blocks just
+    # carry the reference and skip enrichment.
     "httpx>=0.27.0",
     "trafilatura>=1.12.0",
     "pypdf>=5.0.0",
+]
+local = [
+    "ollama>=0.3.0",             # provider="ollama"; imported only on that path
+]
+anthropic = [
+    "anthropic>=0.40.0",         # provider="anthropic"; imported only on that path
 ]
 
 [project.scripts]
@@ -63,12 +64,12 @@ include = ["codoc*"]
 
 [tool.setuptools.package-data]
 "codoc" = ["py.typed"]
-"codoc.plugin" = ["**/*"]
+"codoc.claude.plugin" = ["**/*"]
 "codoc.prompts" = ["*.txt"]
 
 [tool.pytest.ini_options]
-# The study codebases carry their own suites and are run from inside
-# themselves, the way a participant runs them. Collected from here they
-# fail on import, because they are not installed and are not meant to be.
-norecursedirs = ["docs/study-materials/projects/*"]
 testpaths = ["tests"]
+
+[tool.ruff]
+# Source samples the language-adapter tests parse; not code that runs.
+extend-exclude = ["tests/fixtures"]

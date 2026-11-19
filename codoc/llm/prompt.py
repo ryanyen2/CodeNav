@@ -1,0 +1,340 @@
+"""Prompt templates in, parsed JSON out: what every LLM pass shares.
+
+``load_prompt`` reads ``codoc/prompts/{name}.txt`` and expands ``{{include:X}}``
+and ``{{doclang}}``; ``split_prompt`` separates the cacheable prefix from the
+per-call tail; ``format_prompt`` does brace-safe substitution; ``parse_solution``
+extracts JSON from ``<solution>`` tags, a fence, or bare JSON, repairing the
+mistakes a model reliably makes; ``run_agent`` calls the configured LLM and
+returns the parsed answer. ``titles_outline`` renders the every-title context.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import threading
+from collections import OrderedDict
+from pathlib import Path
+
+from codoc.llm.provider import LLMConfig, complete, get_llm_config
+from codoc.doclang import DocLanguage, prompt_directive, resolve
+
+
+CACHE_BREAK = "<<<CACHE_BREAK>>>"
+
+
+def load_prompt(name: str, *, doc_language: DocLanguage | None = None,
+                for_code_agent: bool = False) -> str:
+    """The prompt template with ``{{include:X}}`` and ``{{doclang}}`` expanded.
+
+    ``{{doclang}}`` expands to the authoring-language directive for
+    ``doc_language`` (empty for English, so an English repo's prompt text is
+    unchanged). It is expanded at load time, as includes are, so that it
+    happens before :func:`split_prompt`: the directive lands inside the cached
+    prefix, and a marker-shaped value substituted later cannot displace it.
+    Omitting the argument yields English.
+    """
+    prompts_dir = Path(__file__).parent.parent / "prompts"
+    text = (prompts_dir / f"{name}.txt").read_text(encoding="utf-8")
+
+    def _expand(m: re.Match) -> str:
+        inc_name = m.group(1).strip()
+        inc_path = prompts_dir / f"{inc_name}.txt"
+        try:
+            return inc_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return f"[missing include: {inc_name}]"
+
+    text = re.sub(r"\{\{include:(.*?)\}\}", _expand, text)
+    return expand_doclang(text, doc_language, for_code_agent=for_code_agent)
+
+
+def expand_doclang(text: str, doc_language: DocLanguage | None, *,
+                   for_code_agent: bool = False) -> str:
+    """Replace the ``{{doclang}}`` marker with its directive block.
+
+    For English the directive is empty, and the marker collapses together with the
+    blank lines around it into a single paragraph break, so an English prompt
+    has no gap where the section would have been.
+    """
+    lang = doc_language or resolve(None)
+    block = prompt_directive(lang, for_code_agent=for_code_agent)
+    if block:
+        return text.replace("{{doclang}}", block)
+    # Two cases, because "one paragraph break" is not what a marker at the very end
+    # of a template should leave behind: interior markers collapse to a blank line,
+    # a trailing one to the file's own single newline.
+    text = re.sub(r"\n*[ \t]*\{\{doclang\}\}[ \t]*\n*\Z", "\n", text)
+    return re.sub(r"\n*[ \t]*\{\{doclang\}\}[ \t]*\n*", "\n\n", text)
+
+
+def split_prompt(template: str) -> tuple[list[str], str]:
+    """Split a template on ``CACHE_BREAK`` markers.
+
+    Returns ``(prefix_parts, volatile_tail)``: everything before the last
+    marker is the stable prefix (one part per marker-delimited segment,
+    most-stable-first, in the template author's order), the remainder is the
+    per-call tail. A template without markers is all tail (no caching).
+
+    Call it on the raw template, before ``format_prompt`` substitutes values.
+    Substituted content comes from the repository (chunk source,
+    descriptions), and a literal marker inside it (codoc's own source holds
+    one) would move the split point and put untrusted text in the
+    system-prompt prefix. Splitting first leaves a marker in a value inert.
+    """
+    if CACHE_BREAK not in template:
+        return [], template
+    segments = [s.strip("\n") for s in template.split(CACHE_BREAK)]
+    return [s for s in segments[:-1] if s.strip()], segments[-1].strip("\n")
+
+
+def titles_outline(all_titles: list[dict]) -> str:
+    """Serialize the every-node-title context as a compact indented outline,
+    in the order given (document order). Roughly a third the tokens of indented
+    JSON, and byte-stable between tree mutations, which is what makes it
+    cacheable. Shown to the tree-update pass and to an agent reading
+    ``codoc_context``."""
+    children: dict[str | None, list[dict]] = {}
+    for t in all_titles:
+        children.setdefault(t.get("parent_id"), []).append(t)
+    lines: list[str] = []
+
+    def _line(t: dict, depth: int) -> str:
+        # The planned marker is the outline's one annotation. A node an
+        # accepted plan added has no bindings, so context seeded from files
+        # never shows it; this line is where a reader (the tree-update pass, an
+        # agent reading codoc_context) learns the node exists and waits for
+        # code, so it does not add a second one.
+        mark = "  (planned: attach its code, do not add a second node)" if t.get("planned") else ""
+        return f"{'  ' * depth}- [{t.get('id')}] {t.get('title', '')}{mark}"
+
+    def _emit(parent: str | None, depth: int, seen: set[str]) -> None:
+        for t in children.get(parent, []):
+            tid = str(t.get("id"))
+            if tid in seen:  # defensive: a parent-cycle must not hang the render
+                continue
+            seen.add(tid)
+            lines.append(_line(t, depth))
+            _emit(tid, depth + 1, seen)
+
+    emitted: set[str] = set()
+    _emit(None, 0, emitted)
+    # Every title appears, since this list is what keeps the model from adding
+    # a duplicate. Nodes the walk from the roots cannot reach (an orphaned
+    # parent link, a cycle and what hangs off it) are appended flat; leaving
+    # them out would invite duplicates of the features already in a broken
+    # state.
+    for t in all_titles:
+        if str(t.get("id")) not in emitted:
+            lines.append(_line(t, 0))
+    return "\n".join(lines) if lines else "(the tree is empty)"
+
+
+def format_prompt(template: str, **kwargs) -> str:
+    """Substitute {variable} placeholders, leaving literal JSON braces intact."""
+    result = template
+    for key, value in kwargs.items():
+        result = result.replace(f"{{{key}}}", str(value))
+    return result
+
+
+def repair_json(text: str) -> str:
+    """Escape the two things a model reliably gets wrong inside a JSON string.
+
+    Descriptions are prose, and prose contains quotation marks and line breaks.
+    A model asked to state a reason will write ``"description": "Signs
+    the request the server calls "stale"."``, where the inner quote closes the
+    string and the parser then asks for a comma it will never find. Raw newlines inside
+    a string fail the same way.
+
+    Both are recoverable without guessing at meaning: walk the text tracking
+    string state, and treat a quote as *closing* only when the next non-space
+    character is one that can legally follow a string (``,:}]`` or the end).
+    Anything else is a quote the model meant literally, so escape it.
+
+    The prompts still ask for clean JSON. Without this, one malformed sample
+    costs a whole call, and a description is the field most likely to hold a
+    quotation.
+    """
+    out: list[str] = []
+    in_string = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if not in_string:
+            out.append(ch)
+            if ch == '"':
+                in_string = True
+            i += 1
+            continue
+        if ch == "\\":            # already escaped: copy the pair verbatim
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if ch == '"':
+            nxt = next((c for c in text[i + 1:] if not c.isspace()), "")
+            if nxt in (",", ":", "}", "]", ""):
+                in_string = False
+                out.append(ch)
+            else:
+                out.append('\\"')  # a quote the model meant as punctuation
+            i += 1
+            continue
+        if ch == "\n":
+            out.append("\\n")
+            i += 1
+            continue
+        if ch == "\t":
+            out.append("\\t")
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _concatenated(raw: str) -> dict | list | None:
+    """Every complete JSON value in ``raw``, combined; None when nothing parses
+    or a value that opens like JSON is broken.
+
+    A model asked for one object sometimes answers with several, back to back:
+    `{"ops": [...]}\\n{"ops": [...]}`. ``json.loads`` reads the first, finds more
+    after it, and raises "Extra data", so the whole call is lost. On a
+    bootstrap that is a whole file described as a bare filename with no prose.
+
+    Reading only the first value would be worse than the error, because the rest
+    of the file's features would vanish with nothing said. So every value is
+    decoded and combined: lists concatenate, objects merge with their list-valued
+    keys concatenated. Prose after the last value is dropped.
+    """
+    decoder = json.JSONDecoder()
+    values: list[dict | list] = []
+    i, n = 0, len(raw)
+    while i < n:
+        while i < n and raw[i] in " \t\r\n,":   # a separator between values
+            i += 1
+        if i >= n:
+            break
+        try:
+            value, i = decoder.raw_decode(raw, i)
+        except json.JSONDecodeError:
+            # Something here is not a complete JSON value. If it opens like one
+            # it is a broken one (truncated, or with a stray quote in it), and
+            # the repair pass is likelier to recover it than dropping it is. If
+            # it does not, it is the model talking after its answer, and keeping
+            # what parsed is right.
+            if raw[i] in "[{":
+                return None
+            break
+        values.append(value)
+    if not values:
+        return None                            # nothing gained; let the caller repair
+    if len(values) == 1:
+        return values[0]
+    if all(isinstance(v, list) for v in values):
+        return [item for v in values for item in v]
+    if all(isinstance(v, dict) for v in values):
+        out: dict = {}
+        for v in values:
+            for key, val in v.items():
+                if isinstance(val, list) and isinstance(out.get(key), list):
+                    out[key] = out[key] + val
+                else:
+                    out.setdefault(key, val)   # a scalar said twice: the first wins
+        return out
+    return values[0]
+
+
+def _loads(raw: str) -> dict | list:
+    """Strict first, concatenated second, repaired third.
+
+    A clean sample is never rewritten, and the repair pass stays the last resort
+    because it rewrites the text: anything that can be read as it stands should be.
+    """
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        if exc.msg == "Extra data":
+            merged = _concatenated(raw)
+            if merged is not None:
+                return merged
+        return json.loads(repair_json(raw))
+
+
+def parse_solution(response: str) -> dict | list:
+    match = re.search(r"<solution>(.*?)</solution>", response, re.DOTALL)
+    if match:
+        return _loads(match.group(1).strip())
+
+    fence = re.search(r"```(?:json)?\s*([\[{].*?)\s*```", response, re.DOTALL)
+    if fence:
+        return _loads(fence.group(1))
+
+    for start_char, end_char in (("[", "]"), ("{", "}")):
+        idx = response.find(start_char)
+        if idx != -1:
+            depth = 0
+            in_string = False
+            escape = False
+            for i, ch in enumerate(response[idx:], start=idx):
+                if escape:
+                    escape = False
+                    continue
+                if ch == "\\" and in_string:
+                    escape = True
+                    continue
+                if ch == '"':
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if ch == start_char:
+                    depth += 1
+                elif ch == end_char:
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            return _loads(response[idx : i + 1])
+                        except json.JSONDecodeError:
+                            break
+
+    raise ValueError(f"No parseable JSON found in LLM response: {response[:300]!r}")
+
+
+# In-process response memo (bounded LRU). The loops re-derive their state per
+# pass, so a pass that failed after its LLM call sends a byte-identical prompt
+# again, which would be billed again in full. Keyed on provider, model,
+# temperature and the whole prompt; only a response that parsed is kept, so a
+# malformed sample is retried fresh. Process-local: the daemon is long-lived,
+# and a CLI one-shot misses.
+_MEMO_MAX = 32
+_memo: "OrderedDict[str, str]" = OrderedDict()
+_memo_lock = threading.Lock()
+
+
+def run_agent(
+    prompt: str,
+    config: LLMConfig | None = None,
+    *,
+    prefix_parts: list[str] | None = None,
+) -> dict | list:
+    cfg = config or get_llm_config()
+    key = hashlib.sha256(
+        "\x1f".join(
+            [cfg.provider, cfg.model, str(cfg.temperature), *(prefix_parts or []), prompt]
+        ).encode()
+    ).hexdigest()
+    with _memo_lock:
+        cached = _memo.get(key)
+        if cached is not None:
+            _memo.move_to_end(key)
+    if cached is not None:
+        return parse_solution(cached)
+    response = complete(prompt, cfg, prefix_parts=prefix_parts)
+    result = parse_solution(response)  # raises before caching on a bad sample
+    with _memo_lock:
+        _memo[key] = response
+        _memo.move_to_end(key)
+        while len(_memo) > _MEMO_MAX:
+            _memo.popitem(last=False)
+    return result

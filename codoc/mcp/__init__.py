@@ -1,1 +1,5 @@
-"""codoc MCP server package — agent-driven reflection into the feature tree."""
+"""The MCP server: the coding agent's read and write surface.
+
+- ``server``:  the FastMCP tools (``codoc-mcp``).
+- ``tools``:   what each tool does.
+"""

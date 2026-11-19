@@ -1,1033 +1,408 @@
-"""codoc MCP tool implementations — plain, testable functions.
+"""The agent's read and write surface, used by the MCP server.
 
-Each function opens the store, routes through the same ``apply_op`` seam that
-Loop A / the CLI use (so identity-minting, the ``UNIQUE(file, symbol_path)``
-binding constraint, and rendering are all reused), re-renders ``tree.codoc`` +
-the sidecar, and returns a JSON-ready dict. The FastMCP server in
-:mod:`codoc.mcp.server` is a thin wrapper that resolves the ``.codoc`` dir from
-the agent's cwd and calls these.
+Reads replay the logs into a read-only workspace and derive from it. Writes
+go through ``daemon.client`` (the daemon's inbox when a daemon owns the
+checkout, the applier otherwise) as client ``agent-<CODOC_AGENT>``, and the
+receiving side stamps ``actor=agent:<CODOC_AGENT>``, never the agent. A
+binding op that cites a hand-off in ``caused_by`` settles it when it lands.
 
-Agent-driven reflection (the code-first loop) is the reason these exist: the
-agent that just wrote the code knows *why*, so it can submit precise structural
-ops with real intent — richer than Loop A's blind index-diff can infer. Safe ops
-(attach/detach/refresh/small-amend) apply immediately; structural ops
-(add_node/move_node/retire_node, large amend) become ``applied=False`` proposals
-the user reviews in the IDE.
+Two writes take tree edits (``loops.edits``). Every edit is compiled against
+the current tree and the code on disk before anything is written; if one is
+refused, nothing is written and the error names it. A symbol an ``attach`` or
+``add_node`` binds must be a chunk the files hold now, hashed as the index
+hashes it (``index.app.code_on_disk``), so code written during the turn binds
+before any pass has indexed it. An ``attach`` of a symbol the feature already
+owns writes a ``bind.refresh`` when it cites a hand-off whose build changed
+that code, and nothing otherwise: a re-attach of unchanged code would report
+work that did not happen (docs/concurrency.md, Hand-off and realization).
+
+| tool | edit | lands |
+|---|---|---|
+| ``reflect`` | ``attach``, ``detach`` on an existing feature | on the trunk |
+| ``reflect`` | ``amend`` | ``Workspace.amend``: all of it on the trunk when it only rewords and passes the machine gate, else one plan |
+| ``reflect`` | ``add_node``, ``move_node``, ``delete_node`` | as ``propose`` writes them, but accepting them builds nothing |
+| ``propose`` | all | one plan for everything but deletions; each ``delete_node`` is its own delete plan |
+
+A ``propose`` plan is opened with ``build: true``: it comes before the code,
+so accepting it (in the editor or with ``codoc accept``) also hands off the
+features it touches (``derive.accept_handoffs``). A ``reflect`` plan describes
+code already written, and accepting it takes the words only.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
-from codoc.doclang import (
-    detect_prose_language, language_tag_for, prose_letters, workspace_doc_language,
+from codoc.calculus.derive import (
+    description, offered_plans, phase, title,
 )
-from codoc.loop.activity import PHASE_DONE, mark_feature_phase
-from codoc.loop.apply import apply_op, should_auto_apply
-from codoc.loop.ask import (
-    MAX_STEPS,
-    AskStep,
-    build_walkthrough,
-    clear_walkthrough as ask_clear,
-    read_walkthrough as ask_read,
-    write_walkthrough,
-)
-from codoc.loop.classify import suppressed_by_hold
-from codoc.loop.edits import hold_set, read_manifest
-from codoc.loop.inbox import read_verdicts as inbox_read
-from codoc.loop.locks import loop_lock
-from codoc.loop.reconcile import safe_write_tree
-from codoc.model.event import (
-    LOOP_A_AGENT_SOURCE,
-    PLAN_SOURCE,
-    NodeOp,
-    NodeOpKind,
-)
-from codoc.store.db import Store, open_store
-
-# Ops that update an existing live feature's content/bindings — marking these
-# "done" resolves the IDE doc view's skeleton into the reflected content.
-_LIVE_FEATURE_KINDS = {
-    NodeOpKind.ATTACH, NodeOpKind.DETACH, NodeOpKind.REFRESH,
-    NodeOpKind.AMEND, NodeOpKind.MOVE_NODE, NodeOpKind.RETIRE_NODE,
-}
+from codoc.calculus.doc import HEADING, fold_tree
+from codoc.calculus.ids import new_plan_id
+from codoc.daemon import client
+from codoc.daemon.reads import doc_language_block
+from codoc.workspace.epoch import note_cited, read_activity
+from codoc.daemon.publish import REALIZE_OWNER_ENV, write_realizing
+from codoc.doclang import detect_prose_language, workspace_doc_language
+from codoc.index.graph import Graph
+from codoc.llm.prompt import titles_outline
+from codoc.loops.context import description_blocks, feature_context, select_context, written_by
+from codoc.calculus.block_md import BlockSpec
+from codoc.calculus.ingest import block_bodies, concat_bodies
+from codoc.loops.edits import PLAN_KIND, Change, Compiler, delete_open, symbol
+from codoc.workspace.inbox import AGENT_CLIENT
+from codoc.workspace.layout import GRAPH_CACHE
 
 
-def _mark_reflected(codoc_dir: str, ops: list[NodeOp]) -> None:
-    """Best-effort: flag the live features these ops touched as reflection-done."""
-    fids = [op.feature_id for op in ops
-            if op.kind in _LIVE_FEATURE_KINDS and op.feature_id]
-    mark_feature_phase(codoc_dir, fids, PHASE_DONE)
-
-
-def _parse_binds(binds: list[str] | None) -> list[tuple[str, str]]:
-    """Parse "file.py::symbol" bind strings into ``(file, symbol_path)`` pairs.
-
-    The stored ``symbol_path`` is the FULL "file::qualified" form the indexer
-    emits (``codoc/lang/python.py`` builds ``f"{file}::{qualified}"``), so the
-    binding matches a real chunk and Loop A can resolve / dedup against it. The
-    ``file`` is the prefix before the first ``::``.
-
-    A bind with no ``::`` names a file rather than a chunk. It used to be stored
-    as ``(b, b)``, which produced a binding whose symbol_path could never match
-    any indexed chunk — permanently dangling, and invisible to the temporal diff
-    that would otherwise repair it. Dropping it is the honest outcome: the
-    caller asked to bind something that is not addressable.
-    """
-    out: list[tuple[str, str]] = []
-    for b in binds or []:
-        if "::" in b:
-            file = b.split("::", 1)[0]
-            out.append((file, b))  # symbol_path keeps the full "file::symbol"
-    return out
+def agent_client() -> str:
+    """The inbox this server writes to, ``agent-<CODOC_AGENT>``, from which the
+    applier stamps ``agent:<CODOC_AGENT>``. The one place the agent's name is
+    read: set CODOC_AGENT in the MCP server's environment (cursor, codex, ...)."""
+    name = f"agent-{os.environ.get('CODOC_AGENT') or 'claude-code'}"
+    if not AGENT_CLIENT.fullmatch(name):
+        raise ValueError(f"CODOC_AGENT must be lowercase letters, digits, '-' or '_': {name[6:]!r}")
+    return name
 
 
 def _err(msg: str) -> dict:
     return {"ok": False, "error": msg}
 
 
-def _op_summary(op: NodeOp, store: Store) -> str:
-    if op.kind is NodeOpKind.ADD_NODE:
-        return f'add "{op.title}"'
-    target = op.feature_id or ""
-    f = store.get_feature(target) if target else None
-    name = f.title if f else target
-    return f"{op.kind.value} {name}".strip()
+def _open(codoc_dir: str):
+    ws = client.read(codoc_dir)
+    return ws, Graph.load(Path(codoc_dir) / GRAPH_CACHE)
 
 
-# ─── reads ────────────────────────────────────────────────────────────────────
-
-def read_tree(
-    codoc_dir: str,
-    *,
-    root_id: str | None = None,
-    depth: int = 0,
-    include_bindings: bool = False,
-) -> dict:
-    """The live feature tree (incl. ``realized`` + per-feature ``drift``) + pending
-    proposals — SCOPED by default so the payload stays reasoning-sized.
-
-    ``drift`` surfaces the loop-computed per-feature trust signal
-    (``"questioned"`` / ``"binding-lost"``) the same way the IDE sidecar does, so an
-    agent reconciling via ``/codoc:sync`` can see which features the last code-side
-    pass questioned. It is read from ``.codoc/drift.json`` (one dict lookup per
-    feature; no index read) — ``followed`` is the absence of an entry, so the field
-    is omitted (None) for features the loop did not flag.
-
-    Scoping (all optional): ``root_id`` limits output to that feature's subtree;
-    ``depth`` (>0) caps levels below the root(s); ``include_bindings=False`` (the
-    default) returns per-feature ``binding_count`` + ``files`` instead of every
-    qualified symbol_path — measured, symbol paths were ~2/3 of the old payload
-    and the least useful part for reasoning about intent. Pass
-    ``include_bindings=True`` for the full lists when actually needed.
-    """
-    from codoc.loop.edits import read_drift
-
-    drift = read_drift(codoc_dir)
-    with open_store(codoc_dir) as store:
-        all_feats = store.list_features()
-        by_parent: dict[str | None, list] = {}
-        for f in all_feats:
-            by_parent.setdefault(f.parent_id, []).append(f)
-
-        selected: list = []
-        if root_id is None:
-            roots = by_parent.get(None, [])
-        else:
-            root = store.get_feature(root_id)
-            if root is None:
-                return _err(f"unknown root_id {root_id!r}")
-            roots = [root]
-
-        seen: set[str] = set()
-
-        def _walk(feats, level: int) -> None:
-            for f in feats:
-                if f.id in seen:  # a parent-cycle must not recurse forever
-                    continue
-                seen.add(f.id)
-                selected.append(f)
-                if depth <= 0 or level < depth:
-                    _walk(by_parent.get(f.id, []), level + 1)
-
-        _walk(roots, 1)
-        # Nothing may silently vanish: features unreachable from the roots
-        # (orphaned parent link, cycle members) still exist and still bind code
-        # — surface them flat at the end of the whole-tree read instead of
-        # hiding them from the agent the way a broken parent link hides them
-        # from every render walk.
-        if root_id is None and depth <= 0:
-            selected.extend(f for f in all_feats if f.id not in seen)
-
-        grouped = store.bindings_by_feature()  # one bulk read, not per-feature
-        default = workspace_doc_language(codoc_dir)
-        feats = []
-        for f in selected:
-            binds = grouped.get(f.id, [])
-            row = {
-                "id": f.id,
-                "title": f.title,
-                "description": f.description,
-                "parent_id": f.parent_id,
-                "realized": f.realized,
-                "drift": drift.get(f.id),
-                "binding_count": len(binds),
-                "files": sorted({b.file for b in binds}),
-                # Present only when this node reads as a DIFFERENT language than the
-                # tree's — the absence means "the tree's language", the same
-                # presence-keyed convention the sidecar uses. It is what tells an
-                # agent that amending this particular node means writing English in
-                # an otherwise-Chinese tree, which is the author's choice to keep.
-                **_lang_field(f.description or f.title, default),
-            }
-            if include_bindings:
-                row["bindings"] = [b.symbol_path for b in binds]
-            feats.append(row)
-        proposals = [
-            {"event_id": e.id, "kind": e.op.kind.value, "feature_id": e.op.feature_id,
-             "parent_id": e.op.parent_id, "title": e.op.title, "source": e.source,
-             "rationale": e.op.rationale}
-            for e in store.pending_events()
-        ]
-        return {"ok": True, "features": feats, "proposals": proposals,
-                "truncated_to_depth": depth if depth > 0 else None,
-                "doc_language": doc_language_block(codoc_dir)}
+def _lang(text: str, default) -> dict:
+    got = detect_prose_language(text, default)
+    return {"lang": got.code} if got.code != default.code else {}
 
 
-def read_context(
-    codoc_dir: str,
-    *,
-    files: list[str] | None = None,
-    feature_id: str | None = None,
-    include_bindings: bool = True,
-) -> dict:
-    """The RELEVANT slice of the tree for what an agent is working on.
+# ── reads ────────────────────────────────────────────────────────────────────
 
-    This is the primary agent read: given the file(s) being edited (repo-relative
-    paths) and/or a feature id, it runs the same ego-graph relevance selection
-    Loop A uses for its own LLM context (features bound in those files, expanded
-    one hop along call/import edges, plus parents/children) and returns that
-    bounded subtree + a compact whole-tree title outline for orientation. Payload
-    is proportional to the *edit*, not the repo — prefer this over ``codoc_tree``.
-    """
-    from codoc.agent.base import titles_outline
-    from codoc.loop.subtree import select_context
-
-    with open_store(codoc_dir) as store:
-        file_set = set(files or [])
-        extra_symbols: set[str] = set()
-        if feature_id:
-            f = store.get_feature(feature_id)
-            if f is None:
-                return _err(f"unknown feature_id {feature_id!r}")
-            for b in store.bindings_for_feature(feature_id):
-                file_set.add(b.file)
-                extra_symbols.add(b.symbol_path)
-        if not file_set and not extra_symbols:
-            return _err("pass files=[...] and/or feature_id")
-        subtree, all_titles, context = select_context(store, file_set, extra_symbols)
-        default = workspace_doc_language(codoc_dir)
-        for row in subtree:
-            row.update(_lang_field(row.get("description") or row.get("title") or "",
-                                   default))
+def read_context(codoc_dir: str, *, files: list[str] | None = None, feature_id: str | None = None,
+                 include_bindings: bool = True) -> dict:
+    """``files``: the features bound in them and their neighbours
+    (``select_context``). ``feature_id``: that feature, the features under it
+    and the features one call away from its code (``feature_context``), then
+    any the files add."""
+    ws, graph = _open(codoc_dir)
+    store = ws.store
+    if not files and not feature_id:
+        return _err("pass files=[...] and/or feature_id")
+    if feature_id:
+        b = store.blocks.get(feature_id)
+        if b is None or not b.live or b.kind != HEADING:
+            return _err(f"unknown feature_id {feature_id!r}")
+        subtree, all_titles, ctx = feature_context(store, graph, feature_id)
+        if files:
+            have = {e["id"] for e in subtree}
+            subtree += [e for e in select_context(store, graph, set(files))[0] if e["id"] not in have]
+    else:
+        subtree, all_titles, ctx = select_context(store, graph, set(files))
+    default = workspace_doc_language(codoc_dir)
+    for row in subtree:
+        row.update(_lang(" ".join(b["text"] for b in row.get("blocks", [])) or row["title"], default))
         if not include_bindings:
-            for row in subtree:
-                row["binding_count"] = len(row.pop("bindings", []))
-        return {
-            "ok": True,
-            "subtree": subtree,
-            "titles_outline": titles_outline(all_titles),
-            "graph": context,
-            "doc_language": doc_language_block(codoc_dir),
-        }
+            row["binding_count"] = len(row.pop("bindings", []))
+    return {"ok": True, "subtree": subtree, "titles_outline": titles_outline(all_titles), "graph": ctx,
+            "doc_language": doc_language_block(codoc_dir)}
 
 
-def doc_language_block(codoc_dir: str) -> dict:
-    """The tree's authoring language, as an agent-readable block.
+def read_tree(codoc_dir: str, *, root_id: str | None = None, depth: int = 0, include_bindings: bool = False) -> dict:
+    ws, _ = _open(codoc_dir)
+    store = ws.store
+    heads = store.headings()
+    ids = {h.id for h in heads}
+    if root_id and root_id not in ids:
+        return _err(f"unknown root_id {root_id!r}")
+    default = workspace_doc_language(codoc_dir)
+    by_feature: dict[str, list] = {}
+    for b in store.bindings.values():
+        by_feature.setdefault(b.feature, []).append(b)
+    out: list[dict] = []
 
-    Rides on every read an agent makes before it writes, because the agent is the
-    one writer codoc cannot put a prompt in front of: Loop A's own LLM call gets
-    the directive injected into its template, but a coding agent calling
-    ``codoc_reflect`` has only what these tools told it. Without this, the
-    considerate thing for the model to do — write documentation in English,
-    because that is what documentation is usually in — silently mixes languages
-    into somebody's Chinese tree.
+    def walk(nodes, level, parent):
+        for n in nodes:
+            binds = by_feature.get(n.id, [])
+            out.append({"id": n.id, "title": title(store, n.id, "rejected"), "blocks": description_blocks(store, n.id),
+                        "parent_id": parent,
+                        "phase": phase(store, n.id), "binding_count": len(binds),
+                        "files": sorted({b.file for b in binds}), "written_by": written_by(store, n.id),
+                        **({"bindings": sorted(b.symbol for b in binds)} if include_bindings else {}),
+                        **_lang(description(store, n.id, "rejected") or title(store, n.id), default)})
+            if depth <= 0 or level < depth:
+                walk(n.children, level + 1, n.id)
 
-    ``instruction`` is present only for a non-English tree, so the common case
-    costs one short field rather than a paragraph.
-    """
-    lang = workspace_doc_language(codoc_dir)
-    block = {"code": lang.code, "name": lang.name}
-    if not lang.is_default:
-        block["instruction"] = (
-            f"Write prose you ORIGINATE in {lang.name} — a new node's title "
-            f"(a title is {lang.title_rule}), description, and rationale. When you "
-            f"AMEND an existing description, keep the language it is already "
-            f"written in: a feature row carrying its own `lang` differs from the "
-            f"tree's, and rewriting it into {lang.name} would translate the "
-            f"author's words without being asked. Technical terms, library names, "
-            f"and API names stay in the form readers use — {lang.name} prose with "
-            f"English terms in it is correct, not something to clean up. Never "
-            f"translate identifiers, symbol paths, file paths, or codoc: link "
-            f"targets. Source code you write keeps the language its neighbours use."
-        )
-    return block
-
-
-# Enough prose to support a claim about its language. Below this a "description"
-# is a fragment or a bare identifier, and any verdict on it is noise.
-_MIN_PROSE_LETTERS = 12
-
-
-def _lang_field(text: str, default) -> dict:
-    """``{"lang": tag}`` when ``text`` reads as a different language than the tree's,
-    else ``{}`` — so the field's presence is itself the signal and an all-one-language
-    tree pays nothing for the feature."""
-    tag = language_tag_for(text, default)
-    return {} if tag == default.code else {"lang": tag}
+    roots = fold_tree(heads)
+    if root_id:
+        roots = [_find(roots, root_id)]
+    walk(roots, 1, None)
+    # `offered_plans`, not every open plan: one with nothing left on the page
+    # (its target and its words gone) cannot be answered from any surface, so
+    # offering it asks for a verdict nobody can give. It comes back with them.
+    plans = [{"plan_id": p.id, "kind": p.kind, "target": p.target, "actor": p.actor, "note": p.note}
+             for p in offered_plans(store)]
+    return {"ok": True, "features": out, "plans": plans, "doc_language": doc_language_block(codoc_dir)}
 
 
-def _language_advice(store: Store, op: NodeOp, default) -> str | None:
-    """A warning when submitted prose is in the wrong language for its target.
-
-    "Wrong" is decided per NODE, not per repo, because the tree is allowed to be
-    bilingual: an author describing intent in Chinese may still have written one
-    node in English, and an amend that translates it back is an unrequested rewrite
-    of their words. So an AMEND is judged against the description it is replacing,
-    and only an ADD — prose with nothing behind it — against the workspace default.
-
-    Chinese prose carrying English technical terms is *correct* and never flagged;
-    that falls out of :func:`codoc.doclang.detect_prose_language` weighting an
-    unspaced script far more heavily than its character share.
-
-    Deliberately advisory. Rejecting would throw away work the agent has already
-    done and leave the tree describing code that has already changed — worse than
-    one node in the wrong language, which the next amend can fix.
-    """
-    submitted = op.description or op.title or ""
-    if prose_letters(submitted) < _MIN_PROSE_LETTERS:
-        return None
-
-    expected = default
-    if op.kind is NodeOpKind.AMEND and op.feature_id:
-        existing = store.get_feature(op.feature_id)
-        prior = (existing.description if existing else "") or ""
-        if prose_letters(prior) >= _MIN_PROSE_LETTERS:
-            expected = detect_prose_language(prior, default)
-
-    got = detect_prose_language(submitted, expected)
-    if got.code == expected.code:
-        return None
-    if op.kind is NodeOpKind.AMEND:
-        return (f"the description you replaced was written in {expected.name}, but "
-                f"the new one reads as {got.name} — an amend should keep the "
-                f"author's language unless they asked for the switch (identifiers "
-                f"and paths stay as they are either way)")
-    return (f"this tree is authored in {expected.name} but this prose reads as "
-            f"{got.name} — amend it to {expected.name}. Technical terms may stay in "
-            f"their original form; identifiers and paths always do")
+def _find(nodes, fid):
+    for n in nodes:
+        if n.id == fid:
+            return n
+        hit = _find(n.children, fid)
+        if hit is not None:
+            return hit
+    return None
 
 
-def _dead_refs(codoc_dir: str) -> list[dict]:
-    """Unresolved inline ``codoc:`` refs from the cross-reference registry.
+# ── writes ───────────────────────────────────────────────────────────────────
 
-    The registry (``.codoc/tree.index.json``, written by ``render.write_registry``)
-    tags every authored ref ``resolved`` per the leaf-matching rule. We read it
-    tolerantly (missing / corrupt → no dead refs) and return one entry per ref
-    whose ``resolved`` is False, so an agent can fix dead links instead of only the
-    IDE seeing the decoration."""
-    from codoc.codoc_file.render import INDEX_FILENAME
-    from codoc.loop.fsio import read_json
+def _compile(codoc_dir: str, root_dir: str | None, store, ops: list[dict],
+             cites: str | None) -> tuple[list[Change], str | None]:
+    """Every edit compiled in order, or the first refusal as an error (see the
+    module docstring for what a binding may name). ``cites`` is the hand-off
+    the edits report as built.
 
-    data = read_json(Path(codoc_dir) / INDEX_FILENAME, default={})
-    refs = data.get("refs", []) if isinstance(data, dict) else []
-    return [
-        {"feature_id": r.get("feature_id"), "file": r.get("file"),
-         "symbol": r.get("symbol")}
-        for r in refs
-        if isinstance(r, dict) and not r.get("resolved", True)
-    ]
+    A binding's file is first put the way the index names it
+    (``index.app.canonical_file``: repo-relative POSIX, ``./``, ``..`` and an
+    absolute path folded lexically, a linked file under its link's name), so
+    the compiler sees only keys a reflect pass would produce, and a file
+    outside the repository is refused."""
+    from codoc.index.app import canonical_file, code_on_disk
+    root = root_dir or Path(codoc_dir).parent
+    ops = [dict(raw) if isinstance(raw, dict) else raw for raw in ops or []]
+    binds: dict[int, list[str]] = {}
+    for i, raw in enumerate(ops):
+        if not isinstance(raw, dict) or not isinstance(raw.get("bindings"), list):
+            continue
+        named = []
+        for b in raw["bindings"]:
+            if (sym := symbol(b)) is None:
+                continue                # not a binding: dropped, as the compiler drops it
+            file, _, name = sym.partition("::")
+            if (rel := canonical_file(root, file)) is None:
+                return [], f"ops[{i}] ({raw.get('kind')}): {sym} names a file outside the repository"
+            named.append(f"{rel}::{name}")
+        raw["bindings"] = named
+        if raw.get("kind") in ("attach", "add_node"):
+            binds[i] = named
+    hashes = code_on_disk(root, {s.split("::")[0] for named in binds.values() for s in named})
+    compiler = Compiler(store, hashes=hashes, bindable=set(hashes), cites=cites)
+    changes = []
+    for i, raw in enumerate(ops):
+        missing = [s for s in binds.get(i, []) if s not in hashes]
+        if missing:
+            return [], f"ops[{i}] ({raw['kind']}): " + "; ".join(_unbindable(root, s) for s in missing)
+        change = compiler.compile(raw)
+        if change.refused:
+            return [], f"ops[{i}] ({change.kind}): {change.refused}"
+        changes.append(change)
+    return changes, None
 
 
-def read_status(codoc_dir: str) -> dict:
-    """Feature / proposal counts + the current pipeline state, plus a dead-ref
-    summary (count + list) sourced from the cross-reference registry so an agent
-    can see which inline ``codoc:`` links no longer resolve to a binding."""
-    from codoc.loop.status import refresh_status
-    import json
+def _unbindable(root, sym: str) -> str:
+    """Why ``sym`` cannot be bound. Its file is on disk but the index's walk
+    leaves it out, through a directory it does not enter (a symlinked one, or
+    one the excludes cover) or the file's own exclude; or no file defines it.
+    The walk is ``index.app.source_matcher``, asked as ``code_on_disk`` asks it."""
+    from pathlib import PurePosixPath
+    from codoc.index.app import source_matcher
+    from codoc.index.lang import detect_language
+    file = sym.split("::")[0]
+    if (Path(root) / file).is_file() and detect_language(file) is not None:
+        base = Path(root).resolve()
+        matcher, rel = source_matcher(base), PurePosixPath(file)
+        for d in reversed(rel.parents[:-1]):            # the outermost directory first
+            if (base / d).is_symlink():
+                return (f"{sym} is under {d}/, a symlinked directory the index does not enter, so it cannot "
+                        "be bound; bind it by the path of the real directory")
+            if not matcher.is_dir_included(d):
+                return (f"{sym} is under {d}/, a directory codoc does not index (index_exclude in "
+                        ".codoc/config.json, or the root .gitignore, covers it), so it cannot be bound")
+        if not matcher.is_file_included(rel):
+            return (f"{sym} is in a file codoc does not index (index_exclude in .codoc/config.json, or the root "
+                    ".gitignore, covers it), so it cannot be bound")
+    return f"the code does not define {sym}; bind only symbols the files hold now"
 
-    # Fold the IDE's append log into edits.json first (locked, idempotent, cheap).
-    # This status call is the first thing /codoc:sync runs, and when the daemon is
-    # not running it is the only consumer left: without the merge, an edit the
-    # author just typed exists only in edits.host.jsonl, the recomputed state says
-    # in_sync, and the sync dispatch concludes there is nothing to do — which is
-    # how a pilot edited a description, saw "in sync", and got nothing.
-    try:
-        from codoc.loop.edits import merge_host_ops
-        merge_host_ops(codoc_dir)
-    except Exception:  # noqa: BLE001 — status must stay readable regardless
-        pass
 
-    with open_store(codoc_dir) as store:
-        feats = store.list_features()
-        pending = store.pending_events()
-        unrealized = [f.id for f in feats if not f.realized]
+def _handoff(caused_by: str | None) -> str | None:
+    """The hand-off op id a call cites. The queue shows a hand-off as
+    ``⟨d:<op id>⟩`` and tells the agent to pass that ``d:`` id; ops cite the op
+    id itself."""
+    return caused_by.removeprefix("d:") if caused_by else caused_by
+
+
+def _cite(codoc_dir: str, did: str | None, results: list[dict]) -> None:
+    """Record on the open epoch, where the Stop hook reads what this turn
+    reported, that the call cited ``did``, once an op of it landed, applied
+    or planned: ``results`` are the call's acks and plan results."""
+    if did and any(r.get("ops") and not r.get("conflict") for r in results):
         try:
-            st = refresh_status(codoc_dir, store)
-            state = json.loads(st.read_text(encoding="utf-8")).get("state", "in_sync")
-        except Exception:
-            state = "in_sync"
-        dead = _dead_refs(codoc_dir)
-        # Recent author prompts (UserPromptSubmit capture) — lets a fresh
-        # session resume where the author left off without re-asking.
-        try:
-            from codoc.loop.intent import recent_intent
-            intent = recent_intent(codoc_dir)
-        except Exception:  # noqa: BLE001 — advisory
-            intent = []
-        # Directives minted from the author's own edits and not yet handed off.
-        # They are invisible to `state` by design (a held draft is the author's to
-        # release), but a sync dispatch that cannot see them tells an author who
-        # just typed an edit that there is nothing to do — the exact wrong answer.
-        try:
-            from codoc.loop.edits import read_manifest
-            held = [{"feature_id": d.feature_id, "id": d.id}
-                    for d in read_manifest(codoc_dir) if not d.handed_off]
-        except Exception:  # noqa: BLE001 — advisory
-            held = []
-        return {
-            "ok": True, "features": len(feats), "pending": len(pending),
-            "unrealized": len(unrealized), "state": state,
-            "held_drafts": len(held), "held_draft_list": held[:20],
-            # Count is exact; the list is capped so a repo with hundreds of stale
-            # refs doesn't flood the agent's context through a status call.
-            "dead_refs": len(dead), "dead_ref_list": dead[:20],
-            "recent_intent": intent,
-            "doc_language": doc_language_block(codoc_dir),
-        }
-
-
-def feature_history(codoc_dir: str, feature_id: str, limit: int = 20) -> dict:
-    """The blame timeline of one feature: every applied change newest-first,
-    each with who (actor) / how (mode) / why (caused_by + rationale), plus the
-    title/description snapshot an AMEND left behind — enough to reconstruct how
-    the feature's story evolved without reading the whole ledger."""
-    from datetime import datetime, timezone
-
-    fid = feature_id.strip("⟨⟩")
-    with open_store(codoc_dir) as store:
-        f = store.get_feature(fid)
-        if f is None:
-            return {"ok": False, "error": f"no feature {feature_id!r}"}
-        entries = []
-        for e in store.events_for_feature(fid, limit=limit):
-            entry: dict = {
-                "event_id": e.id,
-                "at": datetime.fromtimestamp(
-                    e.at.wall_clock / 1000, tz=timezone.utc).isoformat(),
-                "kind": e.op.kind.value,
-                "source": e.source,
-                "actor": e.actor,
-                "mode": e.mode,
-            }
-            if e.caused_by:
-                entry["caused_by"] = e.caused_by
-            if e.op.rationale:
-                entry["rationale"] = e.op.rationale
-            if e.op.title is not None:
-                entry["title"] = e.op.title
-            if e.op.description is not None:
-                entry["description"] = e.op.description
-            # What the change DISPLACED. Both this tool's docstring and the CLI's have
-            # promised these since the field shipped, and neither emitted them — so an
-            # agent asking "what did this feature used to say?" got the current text back
-            # and no way to tell it apart from an answer.
-            if e.op.prev_title is not None:
-                entry["prev_title"] = e.op.prev_title
-            if e.op.prev_description is not None:
-                entry["prev_description"] = e.op.prev_description
-            if e.op.prev_parent_id is not None:
-                entry["prev_parent_id"] = e.op.prev_parent_id
-            if e.op.bindings:
-                entry["bindings"] = [s for (_, s) in e.op.bindings]
-            entries.append(entry)
-        return {"ok": True, "feature_id": fid, "title": f.title,
-                "events": entries}
-
-
-# ─── single-op proposals / binds ───────────────────────────────────────────────
-
-def _auto_apply_allowed(codoc_dir: str, op: NodeOp, held: set[str], own_holds: set[str]) -> bool:
-    """Whether an agent op may write straight through, or must become a proposal.
-
-    Doc always wins (classify row 13): a feature with pending doc-ahead intent is
-    being re-specified by its author, so a code-side amend must not rewrite the
-    prose under their cursor. Loop A has honoured this from the start; the MCP path
-    never did, which is how an agent's ``codoc_reflect`` could silently overwrite an
-    author's in-progress description — the very "the model rewrote what I was
-    writing" failure the hold exists to prevent.
-
-    Suppressed here means PROPOSED, not dropped. Loop A can drop its own
-    observation and recompute it next pass; an agent's reflection is a one-shot
-    report of work already done, so discarding it would lose the information for
-    good. As a proposal it reaches the author's review surface intact.
-
-    ``own_holds`` is the exception that keeps the loop closing: when an agent
-    finishes realizing a directive it reflects the result while that very directive
-    still holds the feature. It is completing the hold, not fighting it.
-    """
-    if op.feature_id in own_holds:
-        return True
-    return not suppressed_by_hold(op, held)
-
-
-def _hold_context(codoc_dir: str, caused_by: str) -> tuple[set[str], set[str]]:
-    """(features currently held, features this call is itself the completion of)."""
-    held = hold_set(codoc_dir)
-    own: set[str] = set()
-    if caused_by:
-        own = {d.feature_id for d in read_manifest(codoc_dir)
-               if d.id == caused_by and d.feature_id}
-    return held, own
-
-
-def _close_satisfied_queue(codoc_dir: str, store: Store) -> bool:
-    """After a mutation that may have satisfied a queued directive (a bind flipping a
-    plan placeholder realized, a reflect citing a ⟨d-…⟩ id), prune the realize queue
-    and re-derive status so the IDE stops asking for work that is demonstrably done.
-
-    Loop B does this once per pass, but a /codoc:plan session may never cause a Loop B
-    pass at all — the daemon suppresses doc/inbox batches while an agent epoch is open
-    and runs only Loop A at epoch close — so the MCP write path closes the queue on
-    its own evidence. Runs BEFORE the caller's re-render, so the sidecar holds the
-    render emits already reflect the closed entries (the "sent" badge clears in the
-    same projection that shows the new binding). Best-effort: queue hygiene must never
-    fail the op that triggered it."""
-    from codoc.loop.loop_b import prune_satisfied_directives
-    from codoc.loop.status import refresh_status
-    try:
-        root_dir = str(Path(codoc_dir).resolve().parent)
-        if prune_satisfied_directives(store, root_dir, codoc_dir):
-            refresh_status(codoc_dir, store)
-            return True
-    except Exception:  # noqa: BLE001
-        pass
-    return False
-
-
-def _apply_single(codoc_dir: str, op: NodeOp, *, source: str,
-                  caused_by: str = "", actor: str = "") -> dict:
-    # Hold the shared codoc-loop lock across the agent's mutation + re-render so an MCP
-    # op never interleaves with a concurrent Loop A/Loop B pass (loop/locks.py). Reentrant,
-    # so safe_write_tree re-acquiring it inside is fine.
-    with loop_lock(codoc_dir), open_store(codoc_dir) as store:
-        # Validation: targets must exist for ops that reference them.
-        if op.kind in (NodeOpKind.AMEND, NodeOpKind.RETIRE_NODE, NodeOpKind.MOVE_NODE,
-                       NodeOpKind.ATTACH):
-            if not op.feature_id or store.get_feature(op.feature_id) is None:
-                return _err(f"unknown feature_id {op.feature_id!r}")
-        if op.kind in (NodeOpKind.ADD_NODE, NodeOpKind.MOVE_NODE) and op.parent_id:
-            if store.get_feature(op.parent_id) is None:
-                return _err(f"unknown parent_id {op.parent_id!r}")
-
-        held, own_holds = _hold_context(codoc_dir, caused_by)
-        applied = should_auto_apply(op, store) and _auto_apply_allowed(
-            codoc_dir, op, held, own_holds)
-        ev = apply_op(op, store, source=source, applied=applied,
-                      caused_by=caused_by, actor=actor)
-        _close_satisfied_queue(codoc_dir, store)
-        wrote = safe_write_tree(store, codoc_dir)
-        _mark_reflected(codoc_dir, [op])
-        out = {"ok": True, "event_id": ev.id, "applied": applied,
-               "rendered": wrote, "summary": _op_summary(op, store)}
-        warning = _language_advice(store, op, workspace_doc_language(codoc_dir))
-        if warning:
-            out["warning"] = warning
-        return out
-
-
-def _origin_source(explicit: str | None, is_plan: bool) -> str:
-    """The ledger ``source`` for an agent-authored proposal.
-
-    Plan-ness is recorded TWICE and the two were written independently: ``realized is
-    False`` says the prose describes code that does not exist yet, and ``source`` says
-    which channel authored the proposal. ``builds=True`` set only the first, so a plan
-    amend went into the ledger tagged ``loop_a_agent`` — an agent REFLECTION — and
-    ``render._source_tag`` duly labelled it "agent reflection". The node then said two
-    contradictory things at once: "Accept & build" (read off ``realized``) beside an
-    origin claiming the code already did this (read off ``source``). Same event, two
-    fields, opposite stories.
-
-    An explicit ``source`` from the caller still wins; only the DEFAULT is derived.
-    """
-    if explicit is not None:
-        return explicit
-    return PLAN_SOURCE if is_plan else LOOP_A_AGENT_SOURCE
-
-
-def propose_add(codoc_dir: str, *, title: str, description: str = "",
-                parent_id: str | None = None, binds: list[str] | None = None,
-                rationale: str = "", source: str | None = None,
-                realized: bool | None = None, caused_by: str = "",
-                actor: str = "", after_id: str = "", before_id: str = "") -> dict:
-    """``after_id``/``before_id`` name the siblings the new node goes between — the same
-    identity-anchored ordering a human drag emits. Both empty means no opinion, which
-    appends (every caller's behaviour before ordering existed)."""
-    op = NodeOp(kind=NodeOpKind.ADD_NODE, title=title, description=description,
-                parent_id=parent_id, bindings=_parse_binds(binds),
-                rationale=rationale, realized=realized,
-                after_id=after_id, before_id=before_id)
-    return _apply_single(codoc_dir, op, source=_origin_source(source, realized is False),
-                         caused_by=caused_by, actor=actor)
-
-
-def propose_amend(codoc_dir: str, *, feature_id: str, title: str | None = None,
-                  description: str | None = None, rationale: str = "",
-                  source: str | None = None, caused_by: str = "",
-                  actor: str = "", builds: bool = False) -> dict:
-    """Propose new wording for an existing feature.
-
-    ``builds`` is the plan-vs-reflection distinction, and it is the difference between
-    two opposite requests that look identical on the wire:
-
-    * ``builds=False`` (default) — a REFLECTION. The code already changed; this is the
-      tree catching up. Accepting reconciles the description and asks for no code work.
-    * ``builds=True`` — a PLAN. The description says what the feature WILL do; the code
-      does not do it yet. Accepting is a build request: it queues a realize directive,
-      the IDE says so on the button, and the plan's wording stays in the plan channel
-      (faded, not the reader's own ink) until the code catches up.
-
-    ``/codoc:plan`` uses the second, and defaults to amending rather than adding because
-    most tasks change what an existing feature does. Before ``builds`` existed there was
-    no way to say it: every amend was read as a reflection, so accepting a plan made
-    entirely of amends queued nothing and the session had nothing to resume from.
-    """
-    op = NodeOp(kind=NodeOpKind.AMEND, feature_id=feature_id, title=title,
-                description=description, rationale=rationale,
-                realized=False if builds else None)
-    return _apply_single(codoc_dir, op, source=_origin_source(source, builds),
-                         caused_by=caused_by, actor=actor)
-
-
-def propose_move(codoc_dir: str, *, feature_id: str, parent_id: str | None,
-                 rationale: str = "", source: str = LOOP_A_AGENT_SOURCE,
-                 caused_by: str = "", actor: str = "",
-                 after_id: str = "", before_id: str = "") -> dict:
-    """``after_id``/``before_id`` name the siblings the node lands between, so a move can
-    say WHERE and not only under whom. Without them every agent move appended, which made
-    ordering a human-only capability even though the rank machinery is symmetric: an agent
-    could not put a newly-split feature back beside the one it came from. Reordering
-    within one parent is a move whose ``parent_id`` is unchanged and whose anchors move."""
-    op = NodeOp(kind=NodeOpKind.MOVE_NODE, feature_id=feature_id,
-                parent_id=parent_id, rationale=rationale,
-                after_id=after_id, before_id=before_id)
-    return _apply_single(codoc_dir, op, source=source, caused_by=caused_by, actor=actor)
-
-
-def propose_retire(codoc_dir: str, *, feature_id: str, rationale: str = "",
-                   delete_code: bool = False, source: str = LOOP_A_AGENT_SOURCE,
-                   caused_by: str = "", actor: str = "") -> dict:
-    """Propose retiring a feature. ``delete_code=False`` (default) is detach-only:
-    accepting untracks the feature without removing code. ``delete_code=True`` is the
-    agent-side parity for a human ``~`` retire — accepting queues a code-removal
-    directive (use only when the code should genuinely be deleted)."""
-    op = NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=feature_id, rationale=rationale,
-                delete_code=delete_code)
-    return _apply_single(codoc_dir, op, source=source, caused_by=caused_by, actor=actor)
-
-
-def attach(codoc_dir: str, *, feature_id: str, binds: list[str],
-           rationale: str = "", source: str = LOOP_A_AGENT_SOURCE,
-           caused_by: str = "", actor: str = "") -> dict:
-    op = NodeOp(kind=NodeOpKind.ATTACH, feature_id=feature_id,
-                bindings=_parse_binds(binds), rationale=rationale)
-    return _apply_single(codoc_dir, op, source=source, caused_by=caused_by, actor=actor)
-
-
-# ─── bulk reflection ────────────────────────────────────────────────────────────
-
-def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "",
-            source: str = LOOP_A_AGENT_SOURCE, caused_by: str = "",
-            actor: str = "") -> dict:
-    """Submit the whole change set the agent just made, in one call.
-
-    Each op is ``{kind, feature_id?, parent_id?, title?, description?, binds?,
-    rationale?, realized?, after_id?, before_id?}``. Safe ops apply immediately;
-    structural ops become proposals. Returns per-op results plus applied/proposed counts.
-
-    ``after_id``/``before_id`` (add_node / move_node) name the siblings the node goes
-    between. They used to be dropped here, which silently made every agent-side move an
-    append — the one tree gesture a human could make and an agent could not.
-    """
-    results: list[dict] = []
-    applied_ops: list[NodeOp] = []
-    applied_n = proposed_n = mismatches = 0
-    lang = workspace_doc_language(codoc_dir)
-    # Serialize the whole reflection (mutation + render) against the loops (loop/locks.py).
-    with loop_lock(codoc_dir), open_store(codoc_dir) as store:
-        held, own_holds = _hold_context(codoc_dir, caused_by)
-        for raw in ops:
-            try:
-                kind = NodeOpKind(raw["kind"])
-            except (KeyError, ValueError):
-                results.append(_err(f"bad op kind {raw.get('kind')!r}"))
-                continue
-            op = NodeOp(
-                kind=kind,
-                feature_id=raw.get("feature_id"),
-                parent_id=raw.get("parent_id"),
-                title=raw.get("title"),
-                description=raw.get("description"),
-                bindings=_parse_binds(raw.get("binds")),
-                rationale=raw.get("rationale") or rationale,
-                realized=raw.get("realized"),
-                # Sibling order, by neighbour IDENTITY (never an index — by the time this
-                # applies, Loop A may have added or retired a sibling and "third child"
-                # would mean something else).
-                after_id=str(raw.get("after_id") or ""),
-                before_id=str(raw.get("before_id") or ""),
-            )
-            # Validate references.
-            if kind in (NodeOpKind.AMEND, NodeOpKind.RETIRE_NODE, NodeOpKind.MOVE_NODE,
-                        NodeOpKind.ATTACH) and (
-                    not op.feature_id or store.get_feature(op.feature_id) is None):
-                results.append(_err(f"unknown feature_id {op.feature_id!r}"))
-                continue
-            if kind in (NodeOpKind.ADD_NODE, NodeOpKind.MOVE_NODE) and op.parent_id \
-                    and store.get_feature(op.parent_id) is None:
-                results.append(_err(f"unknown parent_id {op.parent_id!r}"))
-                continue
-
-            op_cause = raw.get("caused_by") or caused_by
-            op_own = own_holds
-            if op_cause != caused_by:
-                _, op_own = _hold_context(codoc_dir, op_cause)
-            applied = should_auto_apply(op, store) and _auto_apply_allowed(
-                codoc_dir, op, held, op_own)
-            ev = apply_op(op, store, source=source, applied=applied,
-                          caused_by=op_cause, actor=actor)
-            applied_ops.append(op)
-            applied_n += int(applied)
-            proposed_n += int(not applied)
-            row = {"ok": True, "event_id": ev.id, "applied": applied,
-                   "summary": _op_summary(op, store)}
-            warning = _language_advice(store, op, lang)
-            if warning:
-                row["warning"] = warning
-                mismatches += 1
-            results.append(row)
-        _close_satisfied_queue(codoc_dir, store)
-        wrote = safe_write_tree(store, codoc_dir)
-        _mark_reflected(codoc_dir, applied_ops)
-        out = {"ok": True, "applied": applied_n, "proposed": proposed_n,
-               "rendered": wrote, "results": results}
-        if mismatches:
-            out["doc_language"] = doc_language_block(codoc_dir)
-        return out
-
-
-# ─── realize progress ────────────────────────────────────────────────────────
-
-def realize_progress(codoc_dir: str, *, done: int, total: int, current: str = "") -> dict:
-    """Stamp ``done/total`` realize progress into ``status.json`` so the IDE shows
-    "implementing M of N" while the live session works through ``.codoc/realize.md``.
-    """
-    from codoc.loop.sdk_realize import format_realize_detail
-    from codoc.loop.status import REALIZING, write_status
-    # One shared shape ("implementing N/M: title") for BOTH progress producers (this
-    # MCP tool + sdk_realize), so the IDE's anchored parser has a single head to
-    # match and a stray "d/d" in some other detail can't be misread as progress.
-    detail = format_realize_detail(done, total, current)
-    try:
-        write_status(codoc_dir, REALIZING, pending=max(0, total - done), detail=detail)
-    except Exception:  # noqa: BLE001 — progress is advisory
-        return {"ok": False}
-    return {"ok": True, "done": done, "total": total}
-
-
-# ─── plan loop ──────────────────────────────────────────────────────────────────
-
-def plan_add(codoc_dir: str, *, title: str, description: str = "",
-             parent_id: str | None = None, binds: list[str] | None = None,
-             rationale: str = "") -> dict:
-    """Propose a PLAN placeholder node (source='plan', realized=False).
-
-    Accepted in the IDE, it enters the tree as an unrealized placeholder; the
-    first code bound to it (via :func:`attach` / :func:`reflect`) flips it real.
-    """
-    return propose_add(codoc_dir, title=title, description=description,
-                       parent_id=parent_id, binds=binds, rationale=rationale,
-                       source=PLAN_SOURCE, realized=False)
-
-
-def await_verdicts(codoc_dir: str, *, event_ids: list[str],
-                   timeout: float = 86400.0, poll_interval: float = 1.0) -> dict:
-    """Block until the user Accepts/Rejects the given proposals in the IDE.
-
-    This is the in-session realization trigger (modeled on plannotator's blocking
-    review hook): instead of ending the turn at "stop here", ``/codoc:plan`` calls
-    this after proposing nodes, waits for every ``event_ids`` proposal to resolve
-    (or the timeout), and the same turn continues to implement what was accepted.
-
-    Loop B is the SOLE applier of verdicts. With a live ``codoc watch`` daemon
-    this tool only OBSERVES — racing the daemon (the old behaviour) made accept
-    semantics depend on who won: an await-applied accept minted no realize
-    directive, a daemon-applied one did. With no daemon, an in-process Loop B
-    pass drains the inbox here, so the semantics are identical either way
-    (directives minted, tree rendered, status stamped).
-
-    Outcomes are recovered from the event LEDGER, not from the inbox: accepting a
-    proposal applies a new event stamped ``caused_by=<proposal id>`` and deletes
-    the proposal row, so a proposal that is gone resolves to **accepted** (an
-    applied event cites it — its op carries the feature id an ADD minted) or
-    **rejected** (nothing cites it; rejection, withdrawal, and supersede all mean
-    "will never be applied", which is what the caller must know so it doesn't
-    implement it). This is the lookup the old ``ev is None`` branch promised in a
-    comment and never performed — verdicts that landed before the first poll came
-    back as empty lists with no error.
-
-    A verdict that has landed but that the loop is REFUSING to apply resolves as
-    ``deferred`` rather than being waited on. The daemon defers a code-implying accept
-    on a ``--dry`` / ``--no-realize`` pass, leaving the verdict in the inbox and the
-    proposal in the store — which is exactly the state this loop treats as "still
-    awaiting the user", so it used to spin until the (24 hour) timeout while the user
-    stared at a plan they had already accepted. Nothing here can clear it; saying so and
-    returning is the only honest move.
-
-    Returns ``{accepted:[{event_id, feature_id, title}], rejected:[event_id],
-    deferred:[event_id], pending:[event_id], timed_out}``.
-    """
-    import time as _time
-
-    from codoc.loop.watch import daemon_running
-
-    targets = list(dict.fromkeys(event_ids))  # de-dupe, preserve order
-    accepted: list[dict] = []
-    rejected: list[str] = []
-    deferred: list[str] = []
-    resolved: set[str] = set()
-    # How many consecutive polls have seen a verdict sitting un-applied on a proposal
-    # that is still in the store. One poll is not evidence — the daemon's Loop B takes a
-    # moment, and the ordinary case passes through this state on its way to applied.
-    # Two consecutive sightings across a full poll interval means nobody is going to
-    # apply it (see the docstring): the loop is refusing, not lagging.
-    stuck: dict[str, int] = {}
-    DEFER_POLLS = 2
-    deadline = _time.monotonic() + max(0.0, timeout)
-    root_dir = str(Path(codoc_dir).resolve().parent)
-
-    def _drain_if_daemonless() -> None:
-        wanted = {v.event_id for v in inbox_read(codoc_dir)} & set(targets)
-        if not wanted or daemon_running(codoc_dir):
-            return  # nothing for us yet, or the daemon owns the drain
-        from codoc.loop.loop_b import run_loop_b
-        try:
-            run_loop_b(root_dir, codoc_dir)
-        except Exception:  # noqa: BLE001 — the next poll retries; observation still runs
+            note_cited(codoc_dir, did)
+        except OSError:          # a lock timeout: at worst the Stop hook asks once more
             pass
 
-    def _observe() -> None:
-        # Verdicts that HAVE landed on disk, so a proposal still in the store can be
-        # told apart from one nobody has answered yet.
-        voted = {v.event_id for v in inbox_read(codoc_dir)}
-        with loop_lock(codoc_dir), open_store(codoc_dir) as store:
-            for eid in targets:
-                if eid in resolved:
-                    continue
-                if store.get_event(eid) is not None:
-                    if eid not in voted:
-                        stuck.pop(eid, None)
-                        continue          # genuinely still awaiting the user
-                    # Answered, and the proposal is STILL here. Give the loop one more
-                    # poll to be mid-pass, then stop pretending the user hasn't clicked.
-                    stuck[eid] = stuck.get(eid, 0) + 1
-                    if stuck[eid] < DEFER_POLLS:
-                        continue
-                    deferred.append(eid)
-                    resolved.add(eid)
-                    continue
-                done = store.applied_event_for_cause(eid)
-                if done is not None:
-                    fid = done.op.feature_id
-                    feat = store.get_feature(fid) if fid else None
-                    accepted.append({"event_id": eid, "feature_id": fid,
-                                     "title": (feat.title if feat else done.op.title) or ""})
-                else:
-                    rejected.append(eid)
-                resolved.add(eid)
 
-    while True:
-        _drain_if_daemonless()
-        _observe()
-        if resolved >= set(targets) or _time.monotonic() >= deadline:
-            break
-        _time.sleep(poll_interval)
-
-    # Deliberately NO phase stamp here. Accepting is not implementing: bulk-marking
-    # every accepted placeholder "editing" grayed all of their prose the instant the
-    # user clicked — for up to the phase TTL (120 s) on nodes the session had not
-    # reached yet, since it implements one at a time. The truthful signals are the
-    # ones tied to actual work: the tool hook stamps "editing" per feature when a
-    # bound file is really written, and codoc_realize_progress narrates the pass.
-
-    pending = [e for e in targets if e not in resolved]
-    out = {"ok": True, "accepted": accepted, "rejected": rejected,
-           "deferred": deferred, "pending": pending, "timed_out": bool(pending)}
-    if deferred:
-        out["note"] = (
-            f"{len(deferred)} accepted proposal(s) are not being applied: the codoc "
-            "daemon is running with --dry / --no-realize, which defers a code-implying "
-            "accept. The user HAS accepted — tell them the daemon is suppressing "
-            "realization (restart `codoc watch` without those flags, or run "
-            "`codoc sync`) rather than waiting or re-proposing."
-        )
+def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "", caused_by: str | None = None,
+            root_dir: str | None = None) -> dict:
+    """What the agent did to the code, as tree edits (see the module table)."""
+    caused_by = _handoff(caused_by)
+    ws, _ = _open(codoc_dir)
+    changes, err = _compile(codoc_dir, root_dir, ws.store, ops, caused_by)
+    if err:
+        return _err(err)
+    minted = {c.target for c in changes if c.kind == "add_node"}
+    trunk = [c for c in changes if c.kind in ("attach", "detach") and c.target not in minted]
+    amends = [c for c in changes if c.kind == "amend" and c.target not in minted]
+    planned = [c for c in changes if c not in trunk and c not in amends]
+    out: dict = {"ok": True, "applied": [], "amended": [], "planned": None}
+    bodies = [b for c in trunk for b in c.bodies]
+    if bodies:
+        out["applied"] = client.write(codoc_dir, client=agent_client(), bodies=bodies, caused_by=caused_by, root_dir=root_dir)
+    for c in amends:
+        rewrites = [{"bid": r.bid, "path": r.path, "new_md": r.new_md,
+                     "base_text": ws.store.blocks[r.bid].text(r.path).live_text()} for r in c.rewrites]
+        got = client.amend(codoc_dir, client=agent_client(), fid=c.target, rewrites=rewrites, bodies=c.bodies,
+                           strikes=c.strikes, structural=c.structural, note=c.note or rationale,
+                           caused_by=caused_by, root_dir=root_dir)
+        out["amended"].append({"feature_id": c.target, **got})
+    if planned:
+        out["planned"] = _write_plans(codoc_dir, ws.store, planned, note=rationale, caused_by=caused_by,
+                                      root_dir=root_dir, build=False)
+    _cite(codoc_dir, caused_by, [*out["applied"], *out["amended"], out["planned"] or {}])
     return out
 
 
-def plan_status(codoc_dir: str) -> dict:
-    """Which plan placeholders are still unrealized vs realized — AND what the
-    realize queue still holds.
-
-    These are two different ledgers (the store's lifecycle bit vs the queued
-    directives in ``.codoc/realize.json``), and reporting only the first is how a
-    session could honestly say "all realized" while the IDE status bar kept counting
-    directives "to implement". The queue is pruned against current evidence first,
-    so what remains in ``queued_directives`` is genuinely outstanding work — e.g. a
-    tree edit the user made while the plan was being implemented."""
-    with loop_lock(codoc_dir), open_store(codoc_dir) as store:
-        _close_satisfied_queue(codoc_dir, store)
-        unrealized = [{"id": f.id, "title": f.title}
-                      for f in store.list_features() if not f.realized]
-        queued = [{"id": d.id, "feature_id": d.feature_id, "kind": d.kind}
-                  for d in read_manifest(codoc_dir) if d.handed_off]
-        out = {"ok": True, "unrealized": unrealized,
-               "all_realized": len(unrealized) == 0,
-               "queued_directives": queued}
-        if queued:
-            out["note"] = (
-                "Directives remain queued in .codoc/realize.md (edits made outside "
-                "this plan — e.g. the user changed a description while you worked). "
-                "Read that file and implement them, reflecting each with "
-                "caused_by=<its ⟨d-…⟩ id> — or tell the user to run /codoc:sync.")
-        return out
-
-
-# ─── ask / walkthrough ─────────────────────────────────────────────────────────
-
-def _norm_ws(text: str) -> str:
-    """Whitespace-collapsed form, for matching a quote against prose that may have
-    been re-wrapped between the read and the write."""
-    return " ".join((text or "").split())
-
-
-def _quotable_blocks(title: str, description: str) -> list[str]:
-    """The spans a highlight can actually cover: the title, and each PARAGRAPH of
-    the description.
-
-    Paragraph-wise rather than whole-description on purpose — the editor draws a
-    highlight as one decoration inside one block, so a quote straddling a
-    paragraph break is one the IDE could not render. Accepting it here would put
-    the failure on screen instead of in the tool result.
-    """
-    blocks = [title or ""]
-    para: list[str] = []
-    for line in (description or "").split("\n"):
-        if line.strip():
-            para.append(line)
-        elif para:
-            blocks.append("\n".join(para))
-            para = []
-    if para:
-        blocks.append("\n".join(para))
-    return blocks
-
-
-def walkthrough(codoc_dir: str, *, question: str, answer: str = "",
-                steps: list[dict] | None = None) -> dict:
-    """Lay a numbered reading path over features that already exist.
-
-    Validates every step against the store BEFORE writing, because a step naming a
-    feature that is gone would render as a numbered chip on nothing, and a quote
-    that is not in the description would highlight nothing — both of which read to
-    the user as the tool being broken rather than the answer being wrong.
-    """
-    rows = list(steps or [])
-    if not rows:
-        return _err("pass steps=[{feature_id, note, quote?, group?, file?, symbol?, line?}, ...]")
-
-    with open_store(codoc_dir) as store:
-        feats = {f.id: f for f in store.list_features()}
-        by_title = {f.title.strip().lower(): f for f in feats.values() if f.title}
-
-        built: list[AskStep] = []
-        dropped: list[dict] = []
-        unresolved: list[dict] = []
-        seen: set[str] = set()
-        for row in rows:
-            if not isinstance(row, dict):
-                dropped.append({"step": str(row), "why": "not an object"})
-                continue
-            fid = str(row.get("feature_id") or "").strip()
-            feat = feats.get(fid)
-            if feat is None and fid:
-                # A title is what a human would paste, and the agent has just read
-                # the tree — accept it rather than failing the whole walkthrough.
-                feat = by_title.get(fid.lower())
-            if feat is None:
-                dropped.append({"feature_id": fid, "why": "no such live feature"})
-                continue
-            if feat.id in seen:
-                # One chip per feature: a node carrying "1b" and "3a" at once has
-                # no legible rendering, and the reader cannot tell which note
-                # belongs to which number. The first visit is the one that counts.
-                dropped.append({"feature_id": feat.id, "why": "already a stop on this path"})
-                continue
-            seen.add(feat.id)
-            quote = str(row.get("quote") or "").strip()
-            if quote:
-                needle = _norm_ws(quote)
-                blocks = _quotable_blocks(feat.title, feat.description)
-                if not any(needle in _norm_ws(b) for b in blocks):
-                    unresolved.append({"feature_id": feat.id, "quote": quote})
-                    quote = ""  # keep the step; drop the highlight that would miss
-            line = row.get("line")
-            built.append(AskStep(
-                feature_id=feat.id,
-                note=str(row.get("note") or ""),
-                quote=quote,
-                group=str(row.get("group") or ""),
-                file=str(row.get("file") or ""),
-                symbol=str(row.get("symbol") or ""),
-                line=int(line) if isinstance(line, (int, float)) else None,
-            ))
-
-        if not built:
-            return _err("no step named a live feature — read the tree with "
-                        "codoc_context or codoc_tree first, and pass real f-ids")
-
-        walk = build_walkthrough(question, answer, built)
-        write_walkthrough(codoc_dir, walk)
-
-    out: dict = {"ok": True, "id": walk.id, "steps": len(walk.steps),
-                 "labels": [s.label for s in walk.steps]}
-    if len(built) > len(walk.steps):
-        out["truncated"] = len(built) - len(walk.steps)
-        out["note"] = (f"kept the first {MAX_STEPS} steps — a walkthrough longer "
-                       f"than that stops being followed in order")
-    if dropped:
-        out["dropped"] = dropped
-    if unresolved:
-        out["unresolved_quotes"] = unresolved
-        out["quote_note"] = ("these quotes are not present in their feature's prose, "
-                             "so those steps show without a highlight — quote the "
-                             "description verbatim to highlight a span")
+def propose(codoc_dir: str, *, ops: list[dict], note: str = "", caused_by: str | None = None,
+            root_dir: str | None = None) -> dict:
+    """A plan of tree edits, drawn in place for the person to accept or reject."""
+    caused_by = _handoff(caused_by)
+    ws, _ = _open(codoc_dir)
+    # A plan describes code not yet written, so it reports no build: an owned
+    # symbol is not refreshed under it.
+    changes, err = _compile(codoc_dir, root_dir, ws.store, ops, None)
+    if err:
+        return _err(err)
+    if not changes:
+        return _err("no ops")
+    out = _write_plans(codoc_dir, ws.store, changes, note=note, caused_by=caused_by, root_dir=root_dir, build=True)
+    _cite(codoc_dir, caused_by, [out])
     return out
 
 
-def clear_walkthrough_tool(codoc_dir: str) -> dict:
-    """Dismiss the overlay. Idempotent — clearing nothing is not an error."""
-    return {"ok": True, "cleared": ask_clear(codoc_dir)}
+def _write_plans(codoc_dir: str, store, changes: list[Change], *, note: str, caused_by: str | None,
+                 root_dir: str | None, build: bool) -> dict:
+    """Each deletion as its own delete plan (accepting one deletes that
+    feature), everything else as one plan. A feature already proposed for
+    deletion, by an open plan or earlier in this call, is not proposed again.
+    ``build`` says accepting the plan asks for the code: true for a plan
+    made before the code, false for a reflection of code already written.
+    Returns every plan written, and why each part that was not written was
+    refused; an error only when no plan was written."""
+    deletions: dict[str, Change] = {}
+    for c in changes:
+        if c.kind == "delete_node" and c.target not in deletions and not delete_open(store, c.target):
+            deletions[c.target] = c
+    rest = [c for c in changes if c.kind != "delete_node"]
+    groups = ([(rest, note, build)] if rest else []) + [([c], c.note or note, False) for c in deletions.values()]
+    results = [_write_plan(codoc_dir, store, group, note=n, caused_by=caused_by, root_dir=root_dir, build=b)
+               for group, n, b in groups]
+    written = [r for r in results if r.get("ok")]
+    if not written:
+        return results[0] if results else _err("every feature named is already proposed for deletion")
+    out = {"ok": True, "plan_id": written[0]["plan_id"], "plan_ids": [r["plan_id"] for r in written],
+           "ops": sum(r["ops"] for r in written), "note": written[0]["note"]}
+    refused = [x for r in written for x in r.get("refused", [])] + [r["error"] for r in results if not r.get("ok")]
+    if refused:
+        out["refused"] = refused
+    return out
 
 
-def read_walkthrough_tool(codoc_dir: str) -> dict:
-    """The overlay currently on screen, or ``{"ok": True, "walkthrough": None}``."""
-    return {"ok": True, "walkthrough": ask_read(codoc_dir)}
+def _write_plan(codoc_dir: str, store, changes: list[Change], *, note: str, caused_by: str | None,
+                root_dir: str | None, build: bool) -> dict:
+    """One plan holding every change, written as one ``propose`` submission:
+    the applier opens it, writes the bodies, rewrites and strikes under it, and
+    takes it back when nothing landed (``Workspace.propose``)."""
+    kinds = {PLAN_KIND.get(c.kind, "edit") for c in changes}
+    kind = kinds.pop() if len(kinds) == 1 else "edit"      # a delete plan holds exactly one deletion
+    target = changes[0].target if len(changes) == 1 and kind != "add" else None
+    pid, bodies = new_plan_id(), []
+    for c in changes:
+        bodies = concat_bodies(bodies, c.bodies)
+    got = client.propose(codoc_dir, client=agent_client(), pid=pid, kind=kind, target=target, note=note, build=build, bodies=bodies,
+                         rewrites=[{"bid": r.bid, "path": r.path, "new_md": r.new_md,
+                                    "base_text": store.blocks[r.bid].text(r.path).live_text()}
+                                   for c in changes for r in c.rewrites],
+                         strikes=[bid for c in changes for bid in c.strikes], caused_by=caused_by, root_dir=root_dir)
+    if got["status"] == "unchanged":
+        return _err("nothing was written: " + ("; ".join(got["refused"]) or "no block would change"))
+    out = {"ok": True, "plan_id": pid, "ops": len(got["ops"]),
+           "note": "The person accepts or rejects this plan in the editor. "
+                   + ("Accepting it deletes the feature; removing its code is a separate hand-off."
+                      if kind == "delete" else
+                      "Accepting it queues the work for you." if build else
+                      "Accepting it takes the words only; nothing is queued.")}
+    if got["status"] is None:
+        out["note"] += " The daemon has not answered yet; read the tree to see the plan."
+    if got["refused"]:
+        out["refused"] = got["refused"]
+    return out
+
+
+def write_block(codoc_dir: str, *, content: dict, bid: str | None = None, kind: str | None = None,
+                feature_id: str | None = None, plan: str | None = None, caused_by: str | None = None,
+                root_dir: str | None = None) -> dict:
+    """An agent writes content to a kind block (or adds one at the end of a
+    feature's body). Content in, ops out: non-Text fields become ``block.set``,
+    Text fields go through ``ingest``, all as the agent, all under ``plan``
+    when the agent is proposing rather than reflecting."""
+    from codoc.kinds import get, kinds
+    from codoc.kinds.write import plan_write
+    caused_by = _handoff(caused_by)
+    ws, _ = _open(codoc_dir)
+    store = ws.store
+    if not isinstance(content, dict):
+        return _err("content must be an object")
+    if bid is None:
+        # A new block and its text are one batch: nothing waits for the add
+        # to be applied before the words are written.
+        k = get(kind) if kind else None
+        if k is None:
+            return _err(f"unknown kind {kind!r}; known: {sorted(x.name for x in kinds())}")
+        if feature_id not in store.blocks or not store.blocks[feature_id].live:
+            return _err(f"unknown feature_id {feature_id!r}")
+        if err := k.validate(content):
+            return _err(err)
+        bodies, (bid,) = block_bodies([BlockSpec(kind, content=content)], after=store.body(feature_id)[-1].id)
+        added = client.write(codoc_dir, client=agent_client(), bodies=bodies, plan=plan, caused_by=caused_by, root_dir=root_dir)
+        refused = [a["conflict"] for a in added if a.get("conflict")]
+        if refused:
+            return _err(f"block.add refused: {refused[0]}")
+        _cite(codoc_dir, caused_by, added)
+        return {"ok": True, "bid": bid, "applied": added, "ingested": []}
+    else:
+        current = store.blocks.get(bid)
+        if current is None:
+            return _err(f"unknown block {bid!r}")
+        p = plan_write(current, content)
+        if p.refused:
+            return _err(p.refused)
+    results: dict = {"ok": True, "bid": bid, "applied": [], "ingested": []}
+    if p.sets:
+        results["applied"] = client.write(codoc_dir, client=agent_client(), bodies=p.sets, plan=plan, caused_by=caused_by, root_dir=root_dir)
+    for f, base, new_md in p.ingests:
+        results["ingested"].append({"field": f, **client.ingest(codoc_dir, client=agent_client(), bid=bid, path=f, base_text=base,
+                                                                 new_md=new_md, plan=plan, caused_by=caused_by, root_dir=root_dir)})
+    _cite(codoc_dir, caused_by, [*results["applied"], *results["ingested"]])
+    return results
+
+
+def realize_progress(codoc_dir: str, *, done: int, total: int, current: str = "") -> dict:
+    """Renew the realizing lease so the editor shows 'building n of m'.
+    The lease is this server's own (the realize pass's that started the agent,
+    else this process's), so this agent's status does not read it as another
+    pass. Returns the hand-offs this turn has reported."""
+    shown = min(done + 1, total)
+    write_realizing(codoc_dir, pending=max(0, total - done), owner=os.environ.setdefault(REALIZE_OWNER_ENV, f"mcp-{os.getpid()}"),
+                    detail=f"building {shown} of {total}" + (f": {current}" if current else ""))
+    return {"ok": True, "reported": [f"d:{d}" for d in read_activity(codoc_dir).get("cited") or []]}

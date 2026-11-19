@@ -1,7 +1,7 @@
-"""ratelimit.py — per-identity request rate limiting for the hub (U6).
+"""Per-identity request rate limiting for the hub.
 
 A remote user (or a misconfiguration window past the Access edge) must not be
-able to flood the write/SSE endpoints — each write wakes the daemon and fans out
+able to flood the write/SSE endpoints: each write wakes the daemon and fans out
 to every connected browser, so an unbounded request rate is both a daemon DoS and
 a broadcast amplifier. This is a small, dependency-free token bucket keyed per
 GitHub identity; the route rejects with HTTP 429 when a key runs dry.
@@ -25,12 +25,17 @@ class RateLimiter:
     Each key (a GitHub login, or ``"anon"``) gets ``capacity`` tokens that refill at
     ``refill_per_sec``. ``allow(key)`` consumes one token and returns True; when the
     bucket is empty it returns False. A burst up to ``capacity`` is permitted; the
-    sustained rate is bounded by ``refill_per_sec``. ``clock`` is injectable for tests."""
+    sustained rate is bounded by ``refill_per_sec``. ``clock`` is injectable for tests.
+
+    The defaults are the hub's policy, and they live here rather than at the
+    call site so no caller can build one without one: a burst of a minute's
+    editing, then five writes a second, which is far above what a person types
+    through a settle timer and far below what a loop can wake a daemon with."""
 
     def __init__(
         self,
-        capacity: float,
-        refill_per_sec: float,
+        capacity: float = 60.0,
+        refill_per_sec: float = 5.0,
         *,
         clock: Callable[[], float] = time.monotonic,
     ):
