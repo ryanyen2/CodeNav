@@ -19,7 +19,7 @@ from codoc.calculus.doc import (
 )
 from codoc.calculus.ids import LOOP, OpId, is_human
 from codoc.calculus.inline_md import Span, render
-from codoc.calculus.ops import Op, in_frontier
+from codoc.calculus.ops import BLOCK_SET, Op, in_frontier
 from codoc.calculus.store import Store
 from codoc.calculus.text import CITE, COMMENT, PROPOSALS, SUGGEST_DEL, SUGGEST_MARK, Mark, Seg, Text, struck_chars
 
@@ -127,42 +127,80 @@ def set_value(payload: dict) -> tuple[bool, object]:
     return (True, None) if payload.get("unset") else (False, payload.get("value"))
 
 
-def without_plans(store: Store, b: Block, path: str, past: tuple[str, ...], undoing: Op | None = None) -> tuple[bool, object]:
-    """Content field ``path`` of ``b`` with plans' sets taken out, as (absent,
-    value): the one rule for the value from before the plans (docs/model.md,
-    Read modes). ``Block.prior`` keeps each set with the value it replaced. The
-    walk goes from the newest set back, starting from the field as it is. A set
-    whose plan's status is in ``past`` is taken out: when it wrote the value in
+_SHAPE = ("kind", "level")      # the block's own attributes a `block.set` writes; any other path is a content field
+
+
+def _field(b: Block, path: str) -> tuple[bool, object]:
+    """Field ``path`` of ``b`` as it is, as (absent, value)."""
+    return (False, getattr(b, path)) if path in _SHAPE else (path not in b.content, b.content.get(path))
+
+
+def _wrote(op: Op, path: str) -> tuple[bool, object]:
+    """What ``block.set`` ``op`` wrote to ``path``, as (absent, value). A kind
+    set writes the level too."""
+    if path == "level" and op.target.get("path") == "kind":
+        return False, op.payload.get("level")
+    return (False, op.payload.get("value")) if path in _SHAPE else set_value(op.payload)
+
+
+def _replaced(op: Op, path: str):
+    return op.payload.get("prev_level" if path == "level" and op.target.get("path") == "kind" else "prev")
+
+
+def _sets_on(op: Op, b: Block, path: str) -> bool:
+    """Whether ``op`` is a ``block.set`` on ``path`` of ``b``: a kind set is
+    one on the level too, since it writes both."""
+    return op.kind == BLOCK_SET and op.target.get("bid") == b.id \
+        and op.target.get("path") in (path, "kind" if path == "level" else path)
+
+
+def _sets(store: Store, b: Block, path: str) -> list:
+    """The sets on ``path`` of ``b``, oldest first, as [op, the value it
+    replaced, plan]. A content field keeps them in ``Block.prior``; ``kind``
+    and ``level`` are read from the block's own ops."""
+    if path not in _SHAPE:
+        return b.prior.get(path) or []
+    return [[o.id, _replaced(o, path), o.plan or ""] for o in store.ops_on([b.id])
+            if o.conflict is None and _sets_on(o, b, path)]
+
+
+def without_plans(store: Store, b: Block, path: str, past: tuple[str, ...],
+                  undoing: list[Op] | tuple = ()) -> tuple[bool, object, Op | None]:
+    """Field ``path`` of ``b`` with plans' sets taken out, as (absent, value,
+    by): the one rule for the value from before the plans (docs/model.md,
+    Read modes), for a content field and for ``kind`` and ``level`` alike.
+    ``by`` is the oldest set taken out, whose replaced value this is, or None.
+    ``Block.prior`` keeps each content set with the value it replaced; a kind
+    or level set carries it in its payload. The walk goes from the newest set
+    back, starting from the field as it is. A set whose plan's status is in
+    ``past``, or that is one of ``undoing`` (the ops a verdict is taking back,
+    whatever their plan's status), is taken out: when it wrote the value in
     hand, the value it replaced is the one in hand now; otherwise a verdict
     already took it back (its own reject, or the reject of a plan that set the
     field twice), and it is passed. Anything else ends the walk: a person's
     set, an accepted plan's, one whose plan's status ``past`` leaves out, and a
-    set whose op a fold archived. A value a lift wrote since matches no set, so
-    it stays.
-
-    ``undoing`` is a plan's set a verdict is taking back. The walk starts at it,
-    from the value it wrote (the caller checked the field still holds it), and
-    takes it out whatever its plan's status."""
-    sets = b.prior.get(path) or []
-    now = (path not in b.content, b.content.get(path))
-    if undoing is not None:
-        i = next((j for j, e in enumerate(sets) if e[0] == undoing.id), None)
-        # A set a realization covered has left `prior`; what it replaced is in its payload.
-        sets = sets[:i + 1] if i is not None else [[undoing.id, undoing.payload.get("prev"), undoing.plan or ""]]
+    set whose op a fold archived. So a value someone set since stands. A value
+    a lift wrote since matches no set, so it stays."""
+    sets = _sets(store, b, path)
+    taking = {o.id: o for o in undoing if _sets_on(o, b, path)}
+    # A set a realization covered has left `prior`; what it replaced is in its payload.
+    have = {e[0] for e in sets}
+    sets = [[i, _replaced(o, path), o.plan or ""] for i, o in taking.items() if i not in have] + sets
+    now, by = _field(b, path), None
     for op_id, prev, pid in reversed(sets):
         plan = store.plans.get(pid) if pid else None
-        if (undoing is None or op_id != undoing.id) and (plan is None or plan.status not in past):
+        if op_id not in taking and (plan is None or plan.status not in past):
             break
         was = (prev is None, prev)
         if was == now:
             continue
-        wrote = undoing if undoing is not None and op_id == undoing.id else store.by_id.get(op_id)
-        if wrote is None:
+        op = taking.get(op_id) or store.by_id.get(op_id)
+        if op is None:
             break
-        if set_value(wrote.payload) != now:
+        if _wrote(op, path) != now:
             continue        # a verdict already took this set back
-        now = was
-    return now
+        now, by = was, op
+    return now[0], now[1], by
 
 
 def rejected_content(store: Store, b: Block) -> dict:
@@ -179,7 +217,7 @@ def rejected_content(store: Store, b: Block) -> dict:
     out = dict(b.content)
     for k, sets in b.prior.items():
         if any(e[2] in store.open_plans for e in sets):
-            absent, value = without_plans(store, b, k, ("open", "rejected"))
+            absent, value, _ = without_plans(store, b, k, ("open", "rejected"))
             if absent:
                 out.pop(k, None)
             else:

@@ -18,7 +18,7 @@ two-phase rule: everything they read is resolved before the first mutation.
 from __future__ import annotations
 
 from codoc.calculus import ops as K
-from codoc.calculus.derive import set_value, without_plans
+from codoc.calculus.derive import without_plans
 from codoc.calculus.doc import HEADING, Block, level_for
 from codoc.calculus.ids import OpId
 from codoc.calculus.ops import Conflict, Op, body
@@ -229,16 +229,20 @@ def _holders_of(store: Store, segs) -> list[tuple[Block, str]]:
     return list(seen.values())
 
 
-def _undo_steps(store: Store, o: Op) -> list[dict]:
+def _undo_steps(store: Store, o: Op, undone: list[Op]) -> list[dict]:
     """What undoes one plan op, read from the op and the store as they are
     now. An insert's characters die. A delete's come back and a restore's go
     back to dead by the delete it undid, so a plan that typed, took back and
     gave back the same words is undone one op at a time. A mark record is
-    dropped. A block the plan created dies if it is now empty. A kind or level
-    set goes back to the previous value; a content set does while the field
-    still holds what it wrote (otherwise the later set stands), to the value
-    with it and every rejected plan's set taken out (``derive.without_plans``),
-    absent included. A move is put back while it is
+    dropped. A block the plan created dies if it is now empty. A set, of a
+    content field, ``kind`` or ``level``, takes the field to its value with
+    every set ``undone`` (what this verdict takes back) and every rejected
+    plan's set taken out, walking back from the newest (``derive.without_plans``),
+    absent included: a set since by anyone else, an open plan included, stands,
+    and so rejecting every plan that set a field, in any order, leaves what was
+    there before any of them. A kind set wrote the level too, which goes back
+    by the same rule; a heading given back takes back the code the set that
+    made it something else took off. A move is put back while it is
     still the op that ranked the block; otherwise the later move stands and
     this one's place is void. A binding goes back to the owner it displaced
     unless someone re-bound it since (their attach stands)."""
@@ -266,19 +270,23 @@ def _undo_steps(store: Store, o: Op) -> list[dict]:
         b, path = store.blocks.get(t["bid"]), t["path"]
         if b is None or not b.live:
             return []
-        if path == "kind":
-            to = {"kind": p["prev"], "level": p["prev_level"]}
-        elif path == "level":
-            to = {"level": p["prev"]}
-        elif _holds(b, path, p):
-            absent, value = without_plans(store, b, path, ("rejected",), o)
-            to = {} if absent else {path: value}
-        else:
-            return []           # set since: that value stands, as a later move does
+        absent, value, by = without_plans(store, b, path, ("rejected",), undone)
+        to = {} if absent else {path: value}
+        if path == "kind":                                  # a kind set wrote the level too
+            to["level"] = without_plans(store, b, "level", ("rejected",), undone)[1]
         step = {"do": "set", "bid": b.id, "from": _read(b, list(to) or [path]), "to": to}
-        if p.get("detached"):
-            step["bindings"] = p["detached"]      # a heading the plan made prose takes its code back
-        return [step]
+        lost = by.payload.get("detached") if path == "kind" and by is not None else None
+        if not lost:
+            return [step]
+        if b.kind != HEADING:
+            step["bindings"] = lost         # the heading it gives back takes back the code it lost
+            return [step]
+        # Still a heading (an open plan made it one again): the code comes back
+        # by itself, as the kind change would take it, from what the block kept.
+        names = {e["symbol"] for e in lost}
+        return [step] + [{"do": "bind", "symbol": e["symbol"], "from": None,
+                          "to": {k: e.get(k, "") for k in ("feature", "symbol", "fingerprint", "types_hash", "set_by")}}
+                         for e in b.detached if e.get("set") and e["symbol"] in names and e["symbol"] not in store.bindings]
     if o.kind == K.BLOCK_MOVE:
         out = []
         for bid, *was in p.get("prev", []):
@@ -299,11 +307,6 @@ def _undo_steps(store: Store, o: Op) -> list[dict]:
               "set_by": p.get("prev_set_by", "")} if "prev_fingerprint" in p else p.get("displaced")
         return [{"do": "bind", "symbol": p["symbol"], "from": cur.to_json(), "to": to}]
     return []
-
-
-def _holds(b: Block, path: str, p: dict) -> bool:
-    """Whether a content field still holds what this ``block.set`` wrote."""
-    return (path not in b.content, b.content.get(path)) == set_value(p)
 
 
 def _proposed_marks(store: Store, pid: str, accepted: set[str]) -> list[tuple[Block, str, Mark]]:
@@ -377,9 +380,9 @@ def verdict(store: Store, op: Op, touched: set[str], accept: bool):
               and o.payload.get("kind") == SUGGEST_DEL and o.payload.get("on", True)
               for b, f, m in store.placed_by(o.id)]
     steps: list[dict] = []
-    for o in reversed(every):
-        if o.id not in take:
-            steps += _run(store, op, _undo_steps(store, o), touched)
+    undone = [o for o in every if o.id not in take]
+    for o in reversed(undone):
+        steps += _run(store, op, _undo_steps(store, o, undone), touched)
     for b, f, m in strike:
         if m in b.text(f).marks:
             steps += _run(store, op, [{"do": "kill", "bid": b.id, "path": f, "segments": [list(c) for c in struck_chars(m)]},

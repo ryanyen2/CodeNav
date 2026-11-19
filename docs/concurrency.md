@@ -545,7 +545,7 @@ What each tagged op becomes:
 | `text.mark` of any other kind | A `suggest_mark` record. The document's marks are unchanged. | The toggle is applied to the document under the proposer's actor and op. The record is removed. | The record is removed. |
 | `text.delete`, `text.restore` | Act on the plan's own words only. | Stay. | A delete's words come back; a restore's go back to dead by the delete it undid. |
 | `block.add`, `block.split` | The block exists. | Stays. | The block dies if it holds no live text. |
-| `block.set` | Applied. | Stays. | For `kind` and `level`, the previous value returns. For a content field, while it still holds the plan's value, it takes the value with this set and every rejected plan's set taken out ([model.md](model.md#read-modes), `without_plans`), absent included; a value set since stands. So rejecting every plan that set a field, in any order, leaves what was there before any of them. A heading the plan made prose takes back the code it lost; a block the plan made a heading loses the code bound to it since. |
+| `block.set` | Applied. | Stays. | The field, a content field, `kind` or `level` alike, takes its value with every set the verdict takes back and every rejected plan's set taken out, walking back from the newest set ([model.md](model.md#read-modes), `without_plans`), absent included; a kind set wrote the level too. A value set since by anyone else, an open plan included, stands. So rejecting every plan that set a field, in any order, leaves what was there before any of them. A heading given back takes back the code the set that made it something else took off, whether or not another plan had made it a heading again meanwhile; a block the plan made a heading loses the code bound to it since. |
 | `block.move` | Applied. | Stays. | Each block's previous rank, level and `ranked_by` return, while the move is still the op that ranked it. Otherwise the later move stands. |
 | `bind.attach` | Applied. | Stays. | The symbol returns to the owner it displaced, or is unbound, unless someone re-bound it since. |
 
@@ -691,7 +691,8 @@ removed. The paragraph reads `Retries once.`
 - The directive, the queue in `realize.md`, and the hub worker's queue, title and write
   scope read the document as it would be with every open plan rejected, structural ops
   included (`realize.rejected_view`: each open plan rejected by the applier's own
-  `plan.reject` on a copy of the store, [model.md](model.md#read-modes)). Neither the
+  `plan.reject` on a fork of the store, then every block an open plan added killed but a
+  heading the owner handed off, [model.md](model.md#read-modes)). Neither the
   worker nor the queue waits for verdicts, so an open plan's move, kind or level change,
   split or attach would otherwise reach a building agent as the owner's text or scope:
   the owner's sentence moved out of the feature, another feature's comment moved into it

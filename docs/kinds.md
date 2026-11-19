@@ -102,8 +102,10 @@ in a model's description is dropped.
 
 ## 5. Kinds in the directive
 
-For each block of the feature's body (`loops/realize.py`, `_kind_lines`) except one an
-open plan added (`derive.unvetted_block`), with its content in the `rejected` mode
+For each block of the feature's body (`loops/realize.py`, `_kind_lines`), read from
+`realize.rejected_view`, which holds no block an open plan added (`derive.unvetted_block`):
+the view kills each, though a reject keeps one holding another's words, so a url a plan
+gave a block at add is never a `consult` line. Its content is read in the `rejected` mode
 (`kinds.plain`). A JSON field carries no plan tag, so one an open plan set reads as its
 value from before the plans, the owner's (`derive.rejected_content`, by the rule in
 [model.md](model.md#read-modes)):

@@ -19,8 +19,6 @@ A person's edits are already ops on the trunk, and their hand-off
 """
 from __future__ import annotations
 
-import copy
-import uuid
 from pathlib import Path
 
 from codoc import kinds as registry
@@ -28,7 +26,7 @@ from codoc.calculus import ops as K
 from codoc.calculus.apply import apply
 from codoc.calculus.derive import (
     description, first_message, in_mode, ink, kind_words, live_spans, one_line, prose_blocks, queued, realized_content,
-    removals, title, unvetted_block,
+    removals, title,
 )
 from codoc.calculus.doc import BUILTIN
 from codoc.calculus.ids import IMPORT, LOOP, is_human
@@ -49,27 +47,31 @@ def rejected_view(store: Store) -> Store:
     move, a kind or level change or a split, so a contributor's open plan
     could drop the owner's sentences out of a handed-off feature, or carry
     another feature's comment into it, before any verdict. Here each open plan
-    is rejected by the applier's own ``plan.reject`` on a copy (the calculus is
+    is rejected by the applier's own ``plan.reject`` on a fork (the calculus is
     pure), so every op it carries is taken back by the one undo a verdict
-    uses. The recorded ops are shared, since nothing mutates one once it is
-    recorded; the copy gets an id of its own, so no cache keyed on the store
-    mistakes it for the original. With no open plan holding an op, the store
-    itself."""
+    uses. Then every block one of them added dies (``unvetted_block``: an open
+    plan's block says nothing), though a reject keeps one that holds another's
+    words, since it would keep what the plan gave it at add (a url, a ref, a
+    heading that cuts the feature short). A heading the owner handed off stays:
+    it is their request, which a dead heading would turn into a removal. With
+    no open plan holding an op, the store itself."""
     plans = [p.id for p in store.open_plans.values() if p.ops]
     if not plans:
         return store
-    # ponytail: a whole-store copy, about 0.3 s at 2,400 blocks, paid only while a
-    # feature is queued and an open plan holds an op; copy just the blocks the
-    # open plans reach if that shows up in a publish.
-    memo = {id(o): o for o in store.ops}
-    memo[id(store.policy)] = None               # the view judges no one
-    view = copy.deepcopy(store, memo)
-    view.id = uuid.uuid4().hex[:12]
     at = store.ops[-1].at
-    for n, pid in enumerate(reversed(plans)):
-        # `import`: not a person, so no reader takes the reject's kills for anyone's removal.
-        apply(view, Op(id=f"view:{n}", at=at, actor=IMPORT, batch="", kind=K.PLAN_REJECT, target={"pid": pid}))
-    return view
+
+    def reject_all(view: Store) -> None:
+        for n, pid in enumerate(reversed(plans)):
+            # `import`: not a person, so no reader takes the reject's kills for anyone's removal.
+            apply(view, Op(id=f"view:{n}", at=at, actor=IMPORT, batch="", kind=K.PLAN_REJECT, target={"pid": pid}))
+        asked = {fid for fid, w in view.watermarks_by_fid.items() if w.queued}
+        for bid in [b.id for b in view.blocks.values() if b.live and b.added_plan in plans and b.id not in asked]:
+            view.blocks[bid].kill(f"view:{len(plans)}", IMPORT, at)
+
+    # ponytail: a fork, so the cost is the blocks the open plans reach and a few
+    # dict copies the size of the tree, not the log; computed again per call
+    # (render_queue, pending), memoize on (store.id, store.pos) if that shows.
+    return store.fork(reject_all)
 
 
 def render_queue(store: Store, root_dir: str = ".", doc_language=None, roles: Roles | None = None) -> str:
@@ -241,14 +243,12 @@ def _kind_lines(store: Store, fid: str, w: Watermarks, roles: Roles) -> tuple[li
     the person's note, and anyone else's (a hub contributor's) is marked as a
     contributor's suggestion (``contributor``), so a reply in an owner's
     thread is not read as the owner's. A kind this process
-    has no code for says its Text fields' words under its name. A block an
-    open plan added says nothing (``unvetted_block``)."""
+    has no code for says its Text fields' words under its name. ``store`` is
+    ``rejected_view``'s, which holds no block an open plan added."""
     reads: list[str] = []
     asks: list[str] = []
     ctx: object | None = None
     for b in store.body(fid):
-        if unvetted_block(store, b):
-            continue
         kind = registry.get(b.kind)
         if kind is None:
             if b.kind not in BUILTIN and b.layout.flow and (said := kind_words(b, store)):
@@ -305,13 +305,11 @@ def _all_links(store: Store, fid: str) -> list[tuple[str, str]]:
     which the agent fetches. A comment is not prose (``prose_blocks``): its
     words reach the agent only through its kind's ``lower``, voiced as a
     comment, so a link a contributor put in their own comment is not a page to
-    fetch. A block an open plan added is the plan's (``unvetted_block``), and
-    a label reads in the ``rejected`` mode, as the description does, so an open
-    plan's words inside it are not the person's."""
+    fetch. ``store`` is ``rejected_view``'s, which holds no block an open plan
+    added, and a label reads in the ``rejected`` mode, as the description does,
+    so an open plan's words inside it are not the person's."""
     out = []
     for b in prose_blocks(store, fid):
-        if unvetted_block(store, b):
-            continue
         for f in b.layout.text:
             t = in_mode(b.text(f), "rejected", store)
             lt = t.live_text()

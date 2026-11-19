@@ -13,7 +13,7 @@
 import { Fragment, Slice, type Node as PMNode } from '@tiptap/pm/model';
 import { TextSelection, type EditorState } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
-import { vi } from 'vitest';
+import { afterEach, vi } from 'vitest';
 
 import { newBid, newCid } from '../../../web/calc/ids';
 import { kindOf, pathOf, type Projection, type ProjectedBlock, type Submission } from '../../../web/calc/projection';
@@ -88,6 +88,21 @@ export interface Mounted {
     container: HTMLElement;
 }
 
+const live: Mounted[] = [];
+
+/** Flush and take down every editor mounted since the last call. A test that
+ *  types without flushing leaves the outbox's settle timer running, and one
+ *  that fires after the test file's environment is gone throws
+ *  `window is not defined`. Runs after every test of a file that imports this. */
+export function unmountAll(): void {
+    for (const m of live.splice(0)) {
+        m.handle.flush();
+        m.view.destroy();
+        m.container.remove();
+    }
+}
+afterEach(unmountAll);
+
 export function mountProj(p: Projection): Mounted {
     captured = null;
     const container = document.createElement('div');
@@ -97,7 +112,9 @@ export function mountProj(p: Projection): Mounted {
     // The viewer is human:a, the actor `block` mints its runs as.
     const handle = mountEditor(container, p, { submit: s => submitted.push(...s), onConflict: (_b, c) => conflicts.push(c), actor: () => 'human:a' });
     if (!captured) throw new Error('the docFrom mock did not capture the shadows');
-    return { handle, view: handle.view, shadows: captured, submitted, conflicts, proj: p, container };
+    const m = { handle, view: handle.view, shadows: captured, submitted, conflicts, proj: p, container };
+    live.push(m);
+    return m;
 }
 
 export const mount = (blocks: ProjectedBlock[], extra: Partial<Projection> = {}): Mounted => mountProj(proj(blocks, extra));

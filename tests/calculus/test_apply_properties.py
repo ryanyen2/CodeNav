@@ -656,3 +656,44 @@ def test_rejecting_every_plan_on_a_field_in_any_order_restores_it_fuzz(seed):
         apply(s, m.op(K.PLAN_REJECT, {"pid": pid}, {}))
     assert note(b.content) == start, (seed, b.prior)
     assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+@pytest.mark.parametrize("seed", range(200))
+def test_rejecting_every_plan_on_a_kind_or_level_in_any_order_restores_it_fuzz(seed):
+    """Several plans set one block's kind and level, interleaved, some rejected
+    on the way. Rejecting the rest in any order leaves the kind, the level and
+    the code from before any of them, as it does a JSON field: two plans whose
+    kind sets cancel are not undone into a kind neither started from."""
+    from codoc.calculus.doc import BULLET, NUMBERED
+    rng = random.Random(seed)
+    m, s = Mint(f"k{seed}"), Store()
+    heading(m, s, "h1", "Root")
+    paragraph(m, s, "p1", "text", after="h1")
+    if rng.random() < 0.5:
+        apply(s, m.op(K.BLOCK_SET, {"bid": "p1", "path": "kind"}, {"value": rng.choice([HEADING, BULLET]),
+                                                                    "level": rng.randint(1, 3)}))
+    if s.blocks["p1"].kind == HEADING:
+        apply(s, m.op(K.BIND_ATTACH, {"fid": "p1"}, {"symbol": "a"}))
+    b = s.blocks["p1"]
+    start = (b.kind, b.level, sorted(s.bindings))
+    for i in range(rng.randint(2, 4)):
+        apply(s, m.op(K.PLAN_OPEN, {"pid": f"P{i}"}, {"kind": "edit", "target": "p1"}, actor=AGENT))
+    for step in range(rng.randint(2, 12)):
+        if not s.open_plans:
+            break
+        pid = rng.choice(sorted(s.open_plans))
+        if rng.random() < 0.75:
+            if rng.random() < 0.5:
+                pl = {"value": rng.choice([HEADING, PARAGRAPH, BULLET, NUMBERED])}
+                if rng.random() < 0.5:
+                    pl["level"] = rng.randint(1, 4)
+                apply(s, m.op(K.BLOCK_SET, {"bid": "p1", "path": "kind"}, pl, actor=AGENT, plan=pid))
+            else:
+                apply(s, m.op(K.BLOCK_SET, {"bid": "p1", "path": "level"}, {"value": rng.randint(1, 4)},
+                              actor=AGENT, plan=pid))
+        else:
+            apply(s, m.op(K.PLAN_REJECT, {"pid": pid}, {}))
+    for pid in rng.sample(sorted(s.open_plans), len(s.open_plans)):
+        apply(s, m.op(K.PLAN_REJECT, {"pid": pid}, {}))
+    assert (b.kind, b.level, sorted(s.bindings)) == start, seed
+    assert replay(s).state_fingerprint() == s.state_fingerprint()

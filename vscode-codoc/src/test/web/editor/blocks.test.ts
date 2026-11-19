@@ -3,11 +3,11 @@
  * The block kinds and the gestures that make and change them, each driven
  * through the mounted editor and checked by the ops it recorded.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { ProjectedBlock, Projection } from '../../../web/calc/projection';
 import { bodies, block, ids, key, kindBlock, kinds, mount, para, pasteText, posIn, select, shadowFaults, shape, texts, typeRule, typeText,
-         type Mounted } from './harness';
+         unmountAll, type Mounted } from './harness';
 
 const ctrl = { ctrlKey: true };
 /** The bid of the n-th block on the page. */
@@ -689,5 +689,22 @@ describe('text over a selection across blocks lands inside it', () => {
         key(m2.view, 'Enter', 13);
         expect(texts(m2.view.state.doc)).toEqual(['A', 'one', '', '', 'C']);
         expect(shadowFaults(m2)).toEqual([]);
+    });
+});
+
+describe('the harness', () => {
+    it('sends what a test left queued and leaves no settle timer to fire after the file', () => {
+        vi.useFakeTimers();
+        try {
+            const m = mount([block('h', 'heading', 'T'), block('p', 'paragraph', 'ab')]);
+            select(m.view, posIn(m.view, 'p', 2));
+            typeText(m.view, 'x');
+            expect(vi.getTimerCount()).toBe(1);             // the outbox's settle
+            unmountAll();
+            expect(vi.getTimerCount()).toBe(0);
+            expect(bodies(m.submitted).map(o => o.kind)).toEqual(['text.insert']);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });

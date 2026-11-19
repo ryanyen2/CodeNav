@@ -642,17 +642,21 @@ A decided plan changes no mode: an accepted plan's words are ordinary text, and 
 rejected plan's words are dead.
 
 A field that is not Text carries no plan tag, so its value from before the plans is read
-from `prior`, which keeps each set with the value it replaced, by one rule
-(`without_plans`). The walk goes from the newest set back, starting from the field as it
-is. A set of a plan being taken out gives back the value it replaced when it wrote the
-value in hand, and is passed otherwise, since a verdict already took it back (its own
-reject put the field back, or a reject of a plan that set the field twice put back the
-value from before that plan). A person's set, an accepted plan's, and a set whose op a fold
-archived end the walk; a value a lift wrote since matches no set, so it stays. The `rejected` mode
+by one rule (`without_plans`), over the sets on the field, each with the value it
+replaced: a content field's are kept in `prior`, and a block's `kind` and `level` are its
+own `block.set` ops (a kind set writes the level too). The walk goes from the newest set
+back, starting from the field as it is. A set of a plan being taken out gives back the
+value it replaced when it wrote the value in hand, and is passed otherwise, since a
+verdict already took it back (its own reject put the field back, or a reject of a plan
+that set the field twice put back the value from before that plan). A person's set, an
+accepted plan's, any other plan's not being taken out, and a set whose op a fold archived
+end the walk, so a value one of them set stands; a value a lift wrote since matches no set,
+so it stays. The `rejected` mode
 (`rejected_content(b)`) takes out every open and rejected plan's set while an open plan
 has one on the field, which reads as the owner's value; with no plan open it reads the
-field as it is. A reject's undo of a content set takes out that set and every rejected
-plan's set under it ([concurrency.md](concurrency.md#9-plans-and-verdicts)). `unvetted_block(b)`
+field as it is. A verdict's undo of a set, of a content field, `kind` or `level`, takes out
+the sets it takes back and every rejected plan's set, from the newest
+([concurrency.md](concurrency.md#9-plans-and-verdicts)). `unvetted_block(b)`
 holds when an open plan added `b` (`added_plan`); such a block says nothing in the
 `rejected` mode, and the lift pass leaves it alone. The export, the kind
 codecs and the lift read `rejected_content`, so a url a suggester proposed is not fetched
@@ -663,12 +667,19 @@ added blocks, but not its layout or its code: a `block.move`, a `block.set` of `
 `level`, a `block.split`, a `bind.attach`. So everything that puts a feature in front of a
 building agent reads the document as it would be with every open plan rejected, structural
 ops included (`realize.rejected_view`): the directive, the queue in `realize.md`, and the
-hub worker's queue, title and write scope. The view is a copy of the store on which each
+hub worker's queue, title and write scope. The view is a fork of the store
+(`Store.fork`: it shares the log and copies only the blocks its ops reach) on which each
 open plan gets the applier's own `plan.reject`, so every op is taken back by the one undo
-a verdict uses; the store is not touched. Before any verdict, then, an open plan cannot
+a verdict uses; the store is not touched. A reject keeps a block its plan added that
+holds anyone else's words, and with it what the plan gave it at add, so the view then
+kills every block an open plan added, which says nothing until its verdict
+(`unvetted_block`); a heading the owner handed off stays, since killing it would turn their
+request into a removal.
+Before any verdict, then, an open plan, or several of one suggester's, cannot
 move the owner's sentences out of a handed-off feature, carry another feature's comment
-into it, take a queued heading off the queue, or put a file into the agent's scope or take
-one out. With no open plan holding an op, the view is the store.
+into it, put a url in front of the agent, take a queued heading off the queue, or put a
+file into the agent's scope or take one out. With no open plan holding an op, the view is
+the store.
 
 ### Views
 
