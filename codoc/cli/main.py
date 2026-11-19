@@ -30,14 +30,21 @@ from codoc.workspace.layout import CODOC_DIR, LOG_DIR, REALIZE, find_codoc_dir, 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help=__doc__)
 
 
+def _absolute(root: str) -> str:
+    """``root`` as an absolute path. Every command passes the root on, to a
+    child started in it among others, so a relative one would be resolved
+    twice."""
+    return os.path.abspath(root)
+
+
 def _find_root(root: str | None) -> str:
-    """``--root`` as given. Without one, the current directory or its nearest
-    ancestor that holds ``.codoc``, found as the hooks and the MCP server find
-    it; the current directory when none does."""
+    """``--root`` as given, made absolute. Without one, the current directory
+    or its nearest ancestor that holds ``.codoc``, found as the hooks and the
+    MCP server find it; the current directory when none does."""
     if root is not None:
-        return root
+        return _absolute(root)
     cd = find_codoc_dir(".")
-    return str(Path(cd).parent) if cd else "."
+    return str(Path(cd).parent) if cd else _absolute(".")
 
 
 ROOT = typer.Option(None, "--root", callback=_find_root, show_default=False,
@@ -107,7 +114,7 @@ def _main(version: bool = typer.Option(False, "--version", is_eager=True, callba
 
 
 @app.command()
-def init(root: str = typer.Option(".", "--root", help="Where to create the workspace, taken as given."),
+def init(root: str = typer.Option(".", "--root", callback=_absolute, help="Where to create the workspace, taken as given."),
          force: bool = typer.Option(False, "--force", help="Rebuild even if a workspace exists (the old log is kept as log.old)."),
          hooks: bool = typer.Option(True, "--hooks/--no-hooks", help="Install the Claude Code hooks and MCP server."),
          doc_language: str = typer.Option("", "--doc-language", "--lang", help="Language to author the tree in (BCP-47)."),

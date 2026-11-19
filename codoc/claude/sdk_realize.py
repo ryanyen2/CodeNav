@@ -233,7 +233,9 @@ def run_sdk_realize(root_dir: str, codoc_dir: str | None = None, *,
 def main(argv: list[str] | None = None) -> int:
     """``python -m codoc.claude.sdk_realize [<root> [<permission mode>]]``."""
     args = list(sys.argv[1:] if argv is None else argv)
-    return run_sdk_realize(args[0] if args else ".", permission_mode=args[1] if len(args) > 1 else "acceptEdits")
+    root = args[0] if args else "."
+    code = run_sdk_realize(root, permission_mode=args[1] if len(args) > 1 else "acceptEdits")
+    return autorealize.record_end(Path(root) / CODOC_DIR, code)
 
 
 if __name__ == "__main__":

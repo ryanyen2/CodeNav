@@ -59,23 +59,31 @@ def queue_status(codoc_dir: str | Path) -> dict:
 
 
 def read_history(codoc_dir: str | Path, feature_id: str, limit: int = 20, *, ops: bool = False) -> dict:
-    """One feature's last ``limit`` batches, newest last, and who wrote each
-    span of its body. A batch is one gesture, one ingest or one plan's ops, and
-    is what a reader means by a change: each row says when, who, the plan its
-    ops carry, the hand-off they answer (``caused_by``) and a one-line
-    ``summary`` of what they did. With ``ops`` a row also lists its ops, each
-    with what it touched: ``text``, the words inserted or removed or a
-    hand-off's ``asked``; ``symbol``, the code a binding names; ``mark``, a
-    mark's kind, on or off, and what it points at. Each attribution run
-    carries its words."""
+    """One feature's last ``limit`` changes, in the order they happened, and
+    who wrote each span of its body.
+
+    A change is what a reader means by one: a gesture, a reflect pass, an
+    amend, a plan's opening, a verdict. The writers give each one batch, so a
+    row is a run of consecutive ops of one batch in the log, except that a
+    hand-off, a verdict or a realization is a row of its own. Each row says
+    when, who, the plan its ops carry, the hand-off they answer
+    (``caused_by``) and a one-line ``summary`` of what they did. With ``ops`` a
+    row also lists its ops, each with what it touched: ``text``, the words
+    inserted or removed or a hand-off's ``asked``; ``symbol``, the code a
+    binding names; ``mark``, a mark's kind, on or off, and what it points at.
+    Each attribution run carries its words."""
     store = read(codoc_dir).store
     if feature_id not in store.blocks:
         return {"ok": False, "error": f"no feature {feature_id!r}"}
-    batches: dict[str, list] = {}
+    groups: list[list] = []
     for o in feature_history(store, feature_id):
-        batches.setdefault(o.batch or o.id, []).append(o)
+        if (o.kind in _GESTURES or not groups or groups[-1][-1].kind in _GESTURES
+                or (o.batch or o.id) != (groups[-1][-1].batch or groups[-1][-1].id)):
+            groups.append([])
+        groups[-1].append(o)
     rows = []
-    for batch, group in list(batches.items())[-limit:]:
+    for group in groups[-limit:]:
+        batch = group[0].batch or group[0].id
         entries = [_op_entry(store, o) for o in group]
         row = {"batch": batch, "at": group[0].at, "actor": ", ".join(dict.fromkeys(o.actor for o in group)),
                "summary": _summary(entries)}
@@ -121,6 +129,8 @@ def _op_entry(store, o) -> dict:
     return e
 
 
+# Ops that are a change on their own, whatever batch they share.
+_GESTURES = frozenset({K.FEATURE_HANDOFF, K.FEATURE_REALIZED, K.PLAN_ACCEPT, K.PLAN_REJECT, K.PLAN_REOPEN})
 # A plan.open is tagged with its own plan, which the row already names.
 _VERBS = {K.PLAN_OPEN: "opened", K.PLAN_ACCEPT: "accepted plan", K.PLAN_REJECT: "rejected plan",
           K.PLAN_REOPEN: "reopened plan"}

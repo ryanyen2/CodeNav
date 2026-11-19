@@ -46,6 +46,11 @@ from codoc.workspace.epoch import EPOCH_STALE_SECONDS, close_epoch, epoch_age, e
 from codoc.workspace.layout import ACTIVITY, APPLIER_LOCK, CODOC_DIR, GRAPH_CACHE, atomic_write, locked
 
 DEBOUNCE_MS = 600
+# With no file event for this long the daemon runs an empty batch: it closes a
+# stale agent epoch (EPOCH_STALE_SECONDS) and lets `after_batch` retry a
+# realize pass whose back-off has run out, neither of which a file event
+# would otherwise ever start in a quiet repository.
+TICK_MS = 30_000
 
 
 @dataclass
@@ -240,7 +245,8 @@ class Daemon:
         signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
         self.say(f"codoc watching {self.root} (session {self.ws.session})")
         self.batch([])           # what clients wrote while no daemon ran
-        for changes in watchfiles.watch(str(self.root), debounce=debounce_ms, watch_filter=self.wakes):
+        for changes in watchfiles.watch(str(self.root), debounce=debounce_ms, watch_filter=self.wakes,
+                                        rust_timeout=TICK_MS, yield_on_timeout=True):
             self.batch([p for _c, p in changes])
 
 

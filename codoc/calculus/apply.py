@@ -722,22 +722,35 @@ def _h_bind_attach(store: Store, op: Op, touched: set[str]):
     # a feature that never had code must not be remembered as one that lost it
     # (`reflect._emptied` proposes deleting exactly those).
     store.bound_once.add(fid)
-    fp, th = p.get("fingerprint", ""), p.get("types_hash", "")
+    fp, th, by = p.get("fingerprint", ""), p.get("types_hash", ""), _set_by(op)
     prior = store.bindings.get(key)
     touched.add(fid)
+    # The canonical says what the attach did, never what the payload claimed:
+    # a verdict reads `prev_*` to undo a refresh rather than an attach.
+    sent = {k: v for k, v in p.items() if k not in ("displaced", "prev_fingerprint", "prev_types_hash", "prev_set_by")}
     if prior and prior.feature == fid:
-        store.bindings[key] = replace(prior, fingerprint=fp, types_hash=th)
-        canonical = {**p, "displaced": None, "prev_fingerprint": prior.fingerprint, "prev_types_hash": prior.types_hash}
-        return canonical, [body(K.BIND_REFRESH, {"fid": fid}, {"symbol": key, "fingerprint": prior.fingerprint,
-                                                              "types_hash": prior.types_hash})]
-    store.bindings[key] = Binding(fid, key, fp, th)
-    canonical = {**p, "displaced": prior.to_json() if prior else None}
+        store.bindings[key] = replace(prior, fingerprint=fp, types_hash=th, set_by=by)
+        canonical = {**sent, "displaced": None, "prev_fingerprint": prior.fingerprint,
+                     "prev_types_hash": prior.types_hash, "prev_set_by": prior.set_by}
+        return canonical, [body(K.BIND_REFRESH, {"fid": fid}, _hashes(key, prior))]
+    store.bindings[key] = Binding(fid, key, fp, th, by)
+    canonical = {**sent, "displaced": prior.to_json() if prior else None}
     inverse = [body(K.BIND_DETACH, {"fid": fid}, {"symbol": key})]
     if prior:
         touched.add(prior.feature)
-        inverse.append(body(K.BIND_ATTACH, {"fid": prior.feature},
-                            {"symbol": key, "fingerprint": prior.fingerprint, "types_hash": prior.types_hash}))
+        inverse.append(body(K.BIND_ATTACH, {"fid": prior.feature}, _hashes(key, prior)))
     return canonical, inverse
+
+
+def _set_by(op: Op) -> str:
+    """Who set a binding's hashes: the op's actor, or, for an op that restores
+    a binding (an inverse, a snapshot), the actor its payload names."""
+    return op.payload.get("set_by") or op.actor
+
+
+def _hashes(key: str, b: Binding) -> dict:
+    """The payload that puts ``b``'s hashes back, with who set them."""
+    return {"symbol": key, "fingerprint": b.fingerprint, "types_hash": b.types_hash, "set_by": b.set_by}
 
 
 def _h_bind_detach(store: Store, op: Op, touched: set[str]):
@@ -750,8 +763,7 @@ def _h_bind_detach(store: Store, op: Op, touched: set[str]):
     store.watermarks(fid).code_at = max(store.watermarks(fid).code_at, op.at)
     touched.add(fid)
     canonical = {**op.payload, "fingerprint": prior.fingerprint, "types_hash": prior.types_hash}
-    return canonical, [body(K.BIND_ATTACH, {"fid": fid}, {"symbol": key, "fingerprint": prior.fingerprint,
-                                                          "types_hash": prior.types_hash})]
+    return canonical, [body(K.BIND_ATTACH, {"fid": fid}, _hashes(key, prior))]
 
 
 def _h_bind_refresh(store: Store, op: Op, touched: set[str]):
@@ -761,12 +773,11 @@ def _h_bind_refresh(store: Store, op: Op, touched: set[str]):
     if prior is None or prior.feature != fid:
         raise Conflict("not_bound", f"{key} on {fid}")
     store.bindings[key] = replace(prior, fingerprint=op.payload.get("fingerprint", ""),
-                                  types_hash=op.payload.get("types_hash", ""))
+                                  types_hash=op.payload.get("types_hash", ""), set_by=_set_by(op))
     store.watermarks(fid).code_at = max(store.watermarks(fid).code_at, op.at)
     touched.add(fid)
     canonical = {**op.payload, "prev_fingerprint": prior.fingerprint, "prev_types_hash": prior.types_hash}
-    return canonical, [body(K.BIND_REFRESH, {"fid": fid}, {"symbol": key, "fingerprint": prior.fingerprint,
-                                                           "types_hash": prior.types_hash})]
+    return canonical, [body(K.BIND_REFRESH, {"fid": fid}, _hashes(key, prior))]
 
 
 # ── plans ────────────────────────────────────────────────────────────────────

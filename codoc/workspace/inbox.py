@@ -267,6 +267,9 @@ def client_payload(store: Store, kind: str, payload: dict, actor: str = "", targ
     - Snapshot-only fields are removed, from an amend's or a plan's bodies
       too; a body keeps only its kind, target and payload, since the
       submission decides the plan.
+    - ``set_by`` and ``prev_set_by`` are removed from every op: the hashes a
+      client sends are set by that client. Naming another actor (the loop)
+      would tell the reflect pass the change had already been reviewed.
     - A mark that names its placer (``actor``/``op``/``at``) is honoured only
       as the inverse the applier recorded for the sender's own latest change
       of that mark kind on that field: an undo of their removal of a mark
@@ -274,6 +277,8 @@ def client_payload(store: Store, kind: str, payload: dict, actor: str = "", targ
       ``chars`` included. Any other mark is the sender's own, and a proposed
       deletion's ``chars`` are the ones the applier reads from its range."""
     out = {k: v for k, v in payload.items() if k not in K.SNAPSHOT_ONLY.get(kind, ())}
+    out.pop("set_by", None)
+    out.pop("prev_set_by", None)
     if kind in ("amend", "propose"):
         out["bodies"] = [{"kind": b["kind"], "target": b.get("target") or {},
                           "payload": client_payload(store, b["kind"], b.get("payload") or {}, actor,

@@ -25,13 +25,19 @@ import subprocess
 import sys
 import time
 import uuid
+from pathlib import Path
+
 from codoc.claude.hook import queued_ids
 from codoc.workspace.epoch import epoch_alive
 from codoc.daemon.publish import REALIZE_OWNER_ENV, realizing_is_fresh, write_realizing
+from codoc.workspace.layout import CODOC_DIR, atomic_write
 
-# After a failed pass the next waits this long, doubled for each failure in a
-# row, up to an hour.
+# After a failed pass the next waits this long from when it ended, doubled for
+# each failure in a row, up to an hour.
 FAILED_BACKOFF_S = 60.0
+# Where a pass's child records when it ended: the daemon may notice the exit
+# long after it happened, and the back-off counts from the exit.
+PASS_ENDED = "cache/realize-ended.json"
 
 
 class EngineMissing(RuntimeError):
@@ -102,7 +108,26 @@ def run_cli(root_dir: str, permission_mode: str, *, printer=print) -> int:
     return 0 if ok else 1
 
 
-def auto_realizer(root_dir: str, codoc_dir: str, *, clock=time.monotonic):
+def record_end(codoc_dir: str | Path, code: int) -> int:
+    """Record, as the pass's child exits, its pid, its exit code and the wall
+    time; returns ``code``. Both engines' entry points call it."""
+    try:
+        atomic_write(Path(codoc_dir) / PASS_ENDED, json.dumps({"pid": os.getpid(), "code": code, "at": time.time()}))
+    except OSError:  # the daemon then counts the back-off from the pass's start
+        pass
+    return code
+
+
+def _ended(codoc_dir: str, pid: int) -> float | None:
+    """When the pass with ``pid`` recorded its exit, or None."""
+    try:
+        d = json.loads((Path(codoc_dir) / PASS_ENDED).read_text(encoding="utf-8"))
+        return float(d["at"]) if d.get("pid") == pid else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def auto_realizer(root_dir: str, codoc_dir: str, *, clock=time.time):
     """A callable for ``Daemon(after_batch=…)``. After each batch it starts a
     pass when ``realize.md`` holds a hand-off no finished pass was started for,
     the pass this started last has ended, no other pass holds a fresh
@@ -113,15 +138,18 @@ def auto_realizer(root_dir: str, codoc_dir: str, *, clock=time.monotonic):
     is not started again for the same hand-offs: running it again would change
     nothing, and its own Stop hook wakes the daemon the moment it ends. A pass
     that failed (a nonzero exit, such as no login or a rate limit) leaves its
-    hand-offs to be tried again, after :data:`FAILED_BACKOFF_S`, doubled for
-    each failure in a row."""
+    hand-offs to be tried again :data:`FAILED_BACKOFF_S` after it ended, doubled
+    for each failure in a row. The daemon's periodic tick runs this between
+    file events, so the retry does not wait for one. ``clock`` is wall time,
+    as the child records it."""
     proc: subprocess.Popen | None = None
     tried: set[str] = set()           # hand-offs a pass that finished was started with
     started: list[str] = []
+    started_at = 0.0
     failures, wait_until = 0, 0.0
 
     def run(daemon) -> None:
-        nonlocal proc, started, failures, wait_until
+        nonlocal proc, started, started_at, failures, wait_until
         if proc is not None:
             if proc.poll() is None:
                 return
@@ -130,7 +158,8 @@ def auto_realizer(root_dir: str, codoc_dir: str, *, clock=time.monotonic):
                 failures = 0
             else:
                 failures += 1
-                wait_until = clock() + min(FAILED_BACKOFF_S * 2 ** (failures - 1), 3600.0)
+                ended = _ended(codoc_dir, proc.pid) or started_at
+                wait_until = ended + min(FAILED_BACKOFF_S * 2 ** (failures - 1), 3600.0)
             proc = None
         if daemon.state.epoch_open or clock() < wait_until or realizing_is_fresh(codoc_dir) or epoch_alive(codoc_dir):
             return
@@ -141,10 +170,10 @@ def auto_realizer(root_dir: str, codoc_dir: str, *, clock=time.monotonic):
             proc = start_realize(root_dir, codoc_dir, detail="building: codoc watch --auto-realize")
         except EngineMissing:
             return
-        started = queue
+        started, started_at = queue, clock()
 
     return run
 
 
 if __name__ == "__main__":
-    raise SystemExit(run_cli(sys.argv[1], sys.argv[2]))
+    raise SystemExit(record_end(Path(sys.argv[1]) / CODOC_DIR, run_cli(sys.argv[1], sys.argv[2])))

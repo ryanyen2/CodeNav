@@ -409,3 +409,26 @@ def test_the_loop_does_not_propose_again_what_an_answer_to_a_hand_off_proposes(t
 
     r = reflect(ws, ChangeSet(modified=[chunk("c.py::send", "f2", "t1")]), Graph(), propose=propose, under_epoch=True)
     assert theirs and len(r.plans) == build and set(open_plans_on(ws.store, "h1")) == {theirs, *r.plans}
+
+
+def test_code_an_agent_bound_is_still_judged_and_then_counts_as_described(tmp_path):
+    """The agent's codoc_reflect refreshed `c.py::send` to its new code and
+    attached a new `c.py::retry`, both citing the hand-off. The pass after the
+    session still shows both to the model: the agent's binding says whose code
+    it is, not that the prose fits it. The pass's refresh then records that the
+    loop has described them, so the same code reported again asks nothing."""
+    ws = Workspace(tmp_path / ".codoc")
+    seed_loop(ws)
+    asked = handoff(ws, "h1", actor=H, asked="retry with backoff")
+    ws.submit([{"kind": K.BIND_REFRESH, "target": {"fid": "h1"},
+                "payload": {"symbol": "c.py::send", "fingerprint": "f2", "types_hash": "t1"}},
+               {"kind": K.BIND_ATTACH, "target": {"fid": "h1"},
+                "payload": {"symbol": "c.py::retry", "fingerprint": "r1", "types_hash": "tr"}}],
+              actor="agent:claude-code", caused_by=asked.id)
+    shown = []
+    cs = ChangeSet(modified=[chunk("c.py::send", "f2", "t1")], added=[chunk("c.py::retry", "r1", "tr")])
+    r = reflect(ws, cs, Graph(), propose=lambda changes, *a, **k: shown.append(changes) or [], under_epoch=True)
+    assert r.llm_calls == 1 and sorted(m["symbol"] for m in shown[0]["modified"]) == ["c.py::retry", "c.py::send"]
+    assert {ws.store.bindings[s].set_by for s in ("c.py::send", "c.py::retry")} == {"loop"}
+    again = reflect(ws, ChangeSet(modified=[chunk("c.py::send", "f2", "t1")]), Graph(), propose=lambda *a, **k: [])
+    assert again.llm_calls == 0

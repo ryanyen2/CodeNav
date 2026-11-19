@@ -30,9 +30,9 @@ The excludes are:
 
 | step | ops, all by `loop` | lands |
 |---|---|---|
-| Binding maintenance: a modified bound chunk, a removed one, a relocated one (same content moved, or a unique AST shape renamed). | `bind.refresh`, `bind.detach`, `bind.attach` | trunk |
+| Binding maintenance: a changed bound chunk, a removed one, a relocated one (same content moved, or a unique AST shape renamed). A changed bound chunk is refreshed, and judged in the LLM pass below, unless `loop` set the hashes it has now (`Binding.set_by`): then the loop described that code already, as after switching back to a branch. An agent's or a person's binding is judged even when its hashes match. | `bind.refresh`, `bind.detach`, `bind.attach` | trunk |
 | A live feature that once had a binding, has none now, has never had a `delete` plan, and is not held. | `plan.open` with `kind = delete` | plan |
-| One LLM pass (`codoc/prompts/tree_update.txt`) over the added and modified chunks, with the ego-graph context of `loops/context.py`. It names features and blocks by short aliases (`f12`, `f12.3`), which are mapped back to ids; an alias that names nothing is refused. Its answer is a list of tree edits, compiled by `loops/edits.py`. | below | below |
+| One LLM pass (`codoc/prompts/tree_update.txt`) over the unbound added chunks and the bound chunks to judge, with the ego-graph context of `loops/context.py`. It names features and blocks by short aliases (`f12`, `f12.3`), which are mapped back to ids; an alias that names nothing is refused. Its answer is a list of tree edits, compiled by `loops/edits.py`. | below | below |
 | Chunks the model left unplaced: each goes to the feature that owns most of its graph neighbours, else to a new node named after its file. | `bind.attach`; `block.add` for a new node | trunk; a plan for a new node |
 | Kind blocks with a `lift` (a derived diagram, a `url`, a `pdf`) on features that are not held ([kinds.md](kinds.md)). | `block.set`, `ingest` | trunk |
 
@@ -69,8 +69,10 @@ pass caused by a hand edit cites nothing.
    `codoc watch --auto-realize` starts a pass only for a hand-off no finished pass was
    started for: a pass that ended with its hand-off still queued (one the agent could not
    satisfy, or a build that moved no bound symbol) is not run again for it. After a pass
-   that failed (no login, a rate limit) it waits a minute before the next, doubling with
-   each failure in a row, up to an hour.
+   that failed (no login, a rate limit) it waits a minute from when that pass ended before
+   the next, doubling with each failure in a row, up to an hour. The daemon runs an empty
+   batch after 30 seconds with no file event, so the retry and the close of a stale agent
+   epoch do not wait for an edit.
 5. The build cites the hand-off in binding ops, in any of three ways. The agent's
    `codoc_reflect` attaches the symbols it wrote or changed, with `caused_by` the
    hand-off's `d:` id; any agent that runs the MCP server can do this, with or without

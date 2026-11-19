@@ -269,8 +269,8 @@ class Workspace:
         return res, ops
 
     def amend(self, fid: str, *, rewrites: list[tuple], bodies: list[dict] = (), strikes: list[str] = (),
-              actor: str, note: str = "", caused_by: str | None = None, structural: bool = False,
-              whole: bool = False, join: str | None = None) -> "Amended":
+              actor: str, note: str = "", caused_by: str | None = None, batch: str | None = None,
+              structural: bool = False, whole: bool = False, join: str | None = None) -> "Amended":
         """A machine's repair of one feature, decided once for all of it.
 
         ``rewrites`` are ``(bid, path, new_md, base_text | None)``: new text
@@ -283,7 +283,13 @@ class Workspace:
         out and reported; with ``whole``, nothing lands when one is refused.
         ``join`` is an open plan of the actor's on this feature: the plan, when
         one is needed, is that one, and a field holding its words is rewritten
-        under it."""
+        under it.
+
+        Everything the amend writes is one batch, so it reads as one change: a
+        plan it opens is its batch, otherwise ``batch`` (the caller's, such as
+        a reflect pass's) or a new one. A joined plan's new words are a change
+        of their own, written later than the plan's first, so they are not
+        filed under the plan's batch."""
         out = Amended()
         store = self.store
         held = fid in store.blocks and phase(store, fid) in HELD
@@ -311,15 +317,16 @@ class Workspace:
         if need_plan and join:
             out.plan = join
         elif need_plan:
-            out.plan = self.open_plan(actor=actor, kind="edit", target=fid,
-                                      note=note or ("the document has pending intent" if held else "a larger repair"))
+            out.plan = batch = self.open_plan(actor=actor, kind="edit", target=fid,
+                                              note=note or ("the document has pending intent" if held else "a larger repair"))
             out.ops.append(store.by_id[store.plans[out.plan].opened_by])
+        batch = batch or new_batch_id()
         for ing in computed:
-            out.ops += self.commit_ingest(ing, actor=actor, plan=out.plan, batch=out.plan, base=base,
+            out.ops += self.commit_ingest(ing, actor=actor, plan=out.plan, batch=batch, base=base,
                                           caused_by=caused_by)
         tail = list(bodies) + (strike_bodies(store, list(strikes), out.plan) if out.plan else [])
         if tail:
-            out.ops += self.submit(tail, actor=actor, plan=out.plan, batch=out.plan, caused_by=caused_by)
+            out.ops += self.submit(tail, actor=actor, plan=out.plan, batch=batch, caused_by=caused_by)
         return out
 
     def propose(self, *, actor: str, kind: str, target: str | None, note: str, build: bool = False,

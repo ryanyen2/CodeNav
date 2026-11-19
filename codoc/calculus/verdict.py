@@ -193,7 +193,8 @@ def _step(store: Store, me: Op, s: dict, touched: set[str], undo_of: str | None)
             want = None
         cur = store.bindings.get(key)
         if want:
-            store.bindings[key] = Binding(want["feature"], key, want.get("fingerprint", ""), want.get("types_hash", ""))
+            store.bindings[key] = Binding(want["feature"], key, want.get("fingerprint", ""), want.get("types_hash", ""),
+                                          want.get("set_by", ""))
             touched.add(want["feature"])
         else:
             store.bindings.pop(key, None)
@@ -285,8 +286,8 @@ def _undo_steps(store: Store, o: Op) -> list[dict]:
         if cur is None or cur.feature != t["fid"]:
             return []
         # A plan that only refreshed a binding the feature already had gives the old hashes back.
-        to = {**cur.to_json(), "fingerprint": p.get("prev_fingerprint", ""), "types_hash": p.get("prev_types_hash", "")} \
-            if "prev_fingerprint" in p else p.get("displaced")
+        to = {**cur.to_json(), "fingerprint": p.get("prev_fingerprint", ""), "types_hash": p.get("prev_types_hash", ""),
+              "set_by": p.get("prev_set_by", "")} if "prev_fingerprint" in p else p.get("displaced")
         return [{"do": "bind", "symbol": p["symbol"], "from": cur.to_json(), "to": to}]
     return []
 

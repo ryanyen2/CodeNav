@@ -202,8 +202,10 @@ a code file the index reads, to `activity.json`, to a client's `inbox/<client>.j
 a file in `log/` other than the daemon's own session file, or to its own session file
 when git took or replaced it (`git stash -u`, `git clean`, a `stash pop` that puts it
 back). It never starts on the daemon's own writes (its appends to its session file, acks,
-`offsets.json`), so a batch does not start the next. A batch that did nothing prints nothing. For each batch the daemon does,
-in order:
+`offsets.json`), so a batch does not start the next. After 30 seconds with no such event a
+batch runs anyway (`TICK_MS`), so the close of a stale agent epoch and an auto-realize
+retry do not wait for an edit. A batch that did nothing prints nothing. For each batch the
+daemon does, in order:
 
 1. Follow the logs on disk (section 5). If `HEAD` moved (its commit or its branch), or
    git took the session file: start a new session and rebuild the store from the log
@@ -634,9 +636,13 @@ removed. The paragraph reads `Retries once.`
   checks at the end of every batch and after every reflect pass; a daemonless writer
   checks after it applies.
 - An agent's report is evidence only of code the files hold. Its `attach` is compiled
-  against the code on disk, hashed as the index hashes it, not against the index, so
-  code the turn wrote binds before any pass has indexed it, with or without a daemon,
-  for any agent:
+  against the code on disk, not against the index, so code the turn wrote binds before
+  any pass has indexed it, with or without a daemon, for any agent. The file is read
+  through the one path the indexer reads it by (`index.app.file_chunks`: decoded by its
+  byte-order mark, else as UTF-8 with undecodable bytes replaced, line endings kept), and
+  named as the index names it (`canonical_file`: repo-relative, with `./`, `..`, an
+  absolute path and a symlink resolved; a file outside the repository is refused), so the
+  evidence and the binding it is compared with are the same text under the same key:
   - a symbol the files do not define is refused, and nothing of the call is written;
   - a symbol the feature does not own is attached (`bind.attach`);
   - a symbol the feature owns is refreshed (`bind.refresh`) when its code changed since
@@ -646,7 +652,9 @@ removed. The paragraph reads `Retries once.`
     evidence.
   The attach reads the disk and never writes the index, so the daemon's reflect pass
   still sees the change, and whichever lands first, the other cannot make the agent's
-  report a no-op.
+  report a no-op. The pass shows the model a bound chunk whose hashes an agent or a
+  person set (`Binding.set_by`), even when they match the code, so the agent's report
+  does not hide its change from the prose review. A plan (`codoc_propose`) reports no build, so it refreshes nothing.
 - Nothing settles while an agent epoch is open (`activity.json`): the build is in
   progress, so the feature stays queued and the agent's amends land as plans. The batch
   that sees the epoch close runs the same check, so a Claude Code turn settles at its end;

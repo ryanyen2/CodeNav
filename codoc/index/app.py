@@ -10,6 +10,7 @@ Entry point: :func:`make_app`, called by :mod:`codoc.index.runner`.
 """
 from __future__ import annotations
 
+import codecs
 import json
 import pathlib
 from typing import AsyncIterator
@@ -129,14 +130,25 @@ async def _coco_lifespan(
     yield
 
 
-def file_chunks(file_str: str, source: str) -> list[tuple]:
-    """The chunks the index keeps for one file's source, each with its
-    ``tree_walk`` hashes. The symbol is a row's key: its id is
+# Byte-order marks, longest first: a file that starts with one is decoded in its
+# encoding, any other as UTF-8.
+_BOMS = ((codecs.BOM_UTF32_LE, "utf-32-le"), (codecs.BOM_UTF32_BE, "utf-32-be"),
+         (codecs.BOM_UTF16_LE, "utf-16-le"), (codecs.BOM_UTF16_BE, "utf-16-be"), (codecs.BOM_UTF8, "utf-8-sig"))
+
+
+def file_chunks(file_str: str, raw: bytes) -> list[tuple]:
+    """The chunks the index keeps for one file's bytes, each with its
+    ``tree_walk`` hashes: the one way codoc reads a source file, for the index
+    and for an agent's evidence alike. The bytes are decoded by their
+    byte-order mark, else as UTF-8, with undecodable bytes replaced and line
+    endings kept as they are. The symbol is a row's key: its id is
     ``generate_id(symbol)``, and the change set and the bindings are keyed by
     it. A class can define a name twice (a property's getter and setter, a
     redefinition), and a second row with the same id is a "target state already
     declared" error that drops the whole file, so the first chunk per symbol is
     kept."""
+    encoding = next((enc for bom, enc in _BOMS if raw.startswith(bom)), "utf-8")
+    source = raw.decode(encoding, "replace")
     adapter = get_adapter(detect_language(file_str))
     seen: set[str] = set()
     out = []
@@ -147,25 +159,37 @@ def file_chunks(file_str: str, source: str) -> list[tuple]:
     return out
 
 
+def canonical_file(sourcedir: str | pathlib.Path, file: str) -> str | None:
+    """``file`` as the index names it: repo-relative POSIX, with ``.``,
+    ``..`` and symlinks resolved, whether it was given relative or absolute.
+    None when it lies outside the repository."""
+    root = pathlib.Path(sourcedir).resolve()
+    try:
+        return (root / file).resolve().relative_to(root).as_posix()
+    except (ValueError, OSError):
+        return None
+
+
 def code_on_disk(sourcedir: str | pathlib.Path, files: set[str]) -> dict[str, tuple[str, str]]:
     """``(fingerprint, types_hash)`` of every chunk ``files`` hold on disk now,
-    as the index would hash them: what a binding may cite before the index has
-    caught up with an edit. A file the index does not read holds none."""
+    read and hashed as the index reads and hashes them (``file_chunks``): what
+    a binding may cite before the index has caught up with an edit. ``files``
+    are canonical (``canonical_file``); a file the index does not read holds
+    none."""
     root = pathlib.Path(sourcedir).resolve()
     matcher = source_matcher(root)
     out: dict[str, tuple[str, str]] = {}
     for rel in files:
-        path = (root / rel).resolve()
-        if (not path.is_relative_to(root) or detect_language(rel) is None
-                or not matcher.is_file_included(pathlib.PurePosixPath(rel))):
+        path = root / rel
+        if detect_language(rel) is None or not matcher.is_file_included(pathlib.PurePosixPath(rel)):
             continue
         try:
             if path.stat().st_size > _MAX_FILE_BYTES:
                 continue
-            source = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+            raw = path.read_bytes()
+        except OSError:
             continue
-        out.update({c.symbol: (w.fingerprint, w.types_hash) for c, w in file_chunks(rel, source)})
+        out.update({c.symbol: (w.fingerprint, w.types_hash) for c, w in file_chunks(rel, raw)})
     return out
 
 
@@ -187,8 +211,7 @@ async def _process_file(
             return
     except OSError:
         return
-    source = await file.read_text()
-    for c, walk_result in file_chunks(file_str, source):
+    for c, walk_result in file_chunks(file_str, await file.read()):
         target.declare_row(
             row=CodeChunk(
                 id=await generate_id(c.symbol), file=file_str, symbol=c.symbol, language=lang, source=c.source,

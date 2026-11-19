@@ -47,6 +47,11 @@ class Binding:
     symbol: str             # the key: ``file::symbol_path``, as the index names a chunk
     fingerprint: str = ""
     types_hash: str = ""
+    # The actor whose op set these hashes. The reflect pass leaves a chunk
+    # alone only when the loop set the hashes it now has: then the loop has
+    # already described that code. An agent's or a person's attach says the code
+    # is theirs, not that the prose fits it.
+    set_by: str = ""
 
     @property
     def file(self) -> str:
@@ -54,7 +59,7 @@ class Binding:
 
     def to_json(self) -> dict:
         return {"feature": self.feature, "symbol": self.symbol,
-                "fingerprint": self.fingerprint, "types_hash": self.types_hash}
+                "fingerprint": self.fingerprint, "types_hash": self.types_hash, "set_by": self.set_by}
 
 
 @dataclass
@@ -340,7 +345,8 @@ class Store:
             if owner is None or owner.kind != HEADING:
                 continue
             if key not in self.bindings:
-                self.bindings[key] = Binding(e["fid"], key, e.get("fingerprint", ""), e.get("types_hash", ""))
+                self.bindings[key] = Binding(e["fid"], key, e.get("fingerprint", ""), e.get("types_hash", ""),
+                                             e.get("set_by", ""))
                 got.add(e["fid"])
             owner.detached = [d for d in owner.detached if d["symbol"] != key or d.get("set")]
         return got

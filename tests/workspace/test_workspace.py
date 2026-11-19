@@ -674,3 +674,37 @@ def test_a_whole_line_that_is_not_an_op_is_reported_and_never_cut(tmp_path):
     assert not f.valid and f.torn_tail is None and "not an op" in f.problems[0].reason
     assert not truncate_torn(f) and path.read_bytes() == before
 
+
+def test_a_client_cannot_say_another_actor_set_a_bindings_hashes(tmp_path):
+    """`set_by` tells the reflect pass whether the loop already reviewed the
+    code under a binding. An agent's refresh is set by the agent, whatever its
+    payload claims."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed_loop(ws)
+    I.submit(cd, "agent-claude-code", [Submission(cid="r1", kind=K.BIND_REFRESH, target={"fid": "h1"}, payload={
+        "symbol": "c.py::send", "fingerprint": "f9", "types_hash": "t1", "set_by": "loop"})])
+    ws.drain_inbox(identity={"agent-claude-code": "agent:claude-code"})
+    assert ws.store.bindings["c.py::send"].set_by == "agent:claude-code"
+    ws.close()
+
+
+def test_a_contributor_cannot_dress_an_attach_as_a_loop_refresh(tmp_path):
+    """A hub contributor's attach claims the loop set the hashes and carries a
+    refresh's `prev_*`. It records the contributor as the setter, and rejecting
+    the plan it rode in takes the binding off rather than "restoring" the
+    hashes the payload named."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed_loop(ws)
+    I.submit(cd, "hub-alice", [Submission(cid="a1", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload={
+        "symbol": "c.py::retry", "fingerprint": "f9", "types_hash": "t9", "set_by": "loop",
+        "prev_fingerprint": "f9", "prev_types_hash": "t9", "prev_set_by": "loop"})])
+    (attach,) = [o for o in ws.drain_inbox() if o.kind == K.BIND_ATTACH]
+    assert attach.conflict is None and attach.plan
+    assert ws.store.bindings["c.py::retry"].set_by == "human:gh:alice"
+    assert not {"set_by", "prev_fingerprint", "prev_set_by"} & set(attach.payload)
+    ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": attach.plan}, "payload": {}}], actor=H)
+    assert "c.py::retry" not in ws.store.bindings
+    ws.close()
+

@@ -407,3 +407,127 @@ def test_auto_realize_starts_a_pass_once_per_handoff_and_backs_off_after_a_failu
     now[0] += A.FAILED_BACKOFF_S
     batch()
     assert len(started) == 4
+
+
+def test_a_relative_root_is_made_absolute_once(tmp_path, monkeypatch):
+    """`codoc realize --root repo` starts its child in the repo and names the
+    repo to it; a relative root would be resolved a second time there."""
+    import os
+    import stat
+    from pathlib import Path
+    root, cd = seeded(tmp_path)
+    runner.invoke(app, ["handoff", "HTTP client", "--root", str(root)])
+    bindir, seen = tmp_path / "bin", tmp_path / "claude-cwd"
+    bindir.mkdir()
+    fake = bindir / "claude"
+    fake.write_text(f"#!/bin/sh\npwd > {seen}\necho '{json.dumps({'result': 'ok'})}'\n")
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).resolve().parents[2]))     # the child imports this codoc
+    monkeypatch.chdir(tmp_path)
+    r = runner.invoke(app, ["realize", "--engine", "cli", "--root", "repo"])
+    assert r.exit_code == 0, r.output
+    assert os.path.realpath(seen.read_text().strip()) == os.path.realpath(root)
+
+
+def test_the_back_off_counts_from_when_the_failed_pass_ended(tmp_path, monkeypatch):
+    """The pass's child records when it exited (`record_end`); the daemon may
+    notice much later, or sooner, and the retry is timed from the exit."""
+    import os
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+    from codoc.claude import autorealize as A
+    from codoc.claude import sdk_realize
+    cd = tmp_path / ".codoc"
+    (cd / "cache").mkdir(parents=True)
+    (cd / "realize.md").write_text("### ⟨d:s:1⟩ Retry\n")
+    assert A.record_end(cd, 3) == 3 and abs(A._ended(str(cd), os.getpid()) - __import__("time").time()) < 60
+    ended = cd / A.PASS_ENDED
+    started, real, now = [], subprocess.Popen, [0.0]
+    child = ("import json, os, sys; open(sys.argv[1], 'w').write(json.dumps("
+             "{'pid': os.getpid(), 'code': 1, 'at': 500.0})); raise SystemExit(1)")
+
+    def fake_pass(argv, **kw):                   # a pass that ran until t=500, then failed
+        started.append(real([sys.executable, "-c", child, str(ended)]))
+        return started[-1]
+    monkeypatch.setattr(A.subprocess, "Popen", fake_pass)
+    monkeypatch.setattr(A, "find_claude", lambda: "/usr/bin/true")
+    monkeypatch.setattr(sdk_realize, "sdk_available", lambda: False)
+    run = A.auto_realizer(str(tmp_path), str(cd), clock=lambda: now[0])
+    daemon = SimpleNamespace(state=SimpleNamespace(epoch_open=False))
+    run(daemon)
+    started[0].wait()
+    now[0] = 500 + A.FAILED_BACKOFF_S - 1
+    run(daemon)
+    assert len(started) == 1                     # timed from the start, it would already retry
+    now[0] = 500 + A.FAILED_BACKOFF_S
+    run(daemon)
+    assert len(started) == 2
+
+
+def test_a_quiet_daemon_still_runs_its_batch_on_a_tick(tmp_path, monkeypatch):
+    """Auto-realize's retry and the stale-epoch close run in a batch; with no
+    file event the watch yields empty on a timeout, and that is a batch too."""
+    import atexit
+    import signal
+    import watchfiles
+    from codoc.daemon import daemon as D
+    root, cd = seeded(tmp_path)
+    seen, ran = {}, []
+    monkeypatch.setattr(signal, "signal", lambda *a: None)       # run() installs process-wide handlers
+    monkeypatch.setattr(atexit, "register", lambda *a: None)
+
+    def fake_watch(*paths, **kw):
+        seen.update(kw)
+        yield set()                              # the timeout, with no change
+    monkeypatch.setattr(watchfiles, "watch", fake_watch)
+    d = D.Daemon(root, cd, changeset=lambda *a: None, propose=lambda *a, **k: [], printer=lambda *_: None,
+                 after_batch=lambda daemon: ran.append(1))
+    d.run()
+    d.ws.close()
+    assert seen["yield_on_timeout"] and seen["rust_timeout"] == D.TICK_MS
+    assert len(ran) == 2                         # the startup batch, then the tick
+
+
+def test_history_rows_are_changes_in_the_order_they_happened(tmp_path):
+    """An agent's amend of two paragraphs is one row; one reflect pass is one
+    row; a later pass that joins the loop's open plan is a change of its own,
+    after what happened in between."""
+    from codoc.calculus import ops as K
+    from codoc.calculus.ids import START
+    from codoc.daemon import reads
+    from codoc.index.changes import ChangeSet
+    from codoc.index.graph import Graph
+    from codoc.loops.edits import Compiler
+    from codoc.loops.reflect import reflect
+    from codoc.workspace import Workspace
+    from tests.helpers import H, chunk, ins, seed_loop
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed_loop(ws)
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "p2"}, "payload": {"kind": "paragraph", "after": "p1"}},
+               {"kind": K.TEXT_INSERT, "target": {"bid": "p2", "path": "text"},
+                "payload": {"after": START, "text": "Logs each failure to the console."}}], actor="loop")
+    before = len(reads.read_history(cd, "h1", 100)["batches"])
+    done = ws.amend("h1", rewrites=[("p1", "text", "Retries three times before giving up.", None),
+                                    ("p2", "text", "Logs each failure to a file.", None)], actor="agent:claude-code")
+    assert done.ops and not done.plan
+
+    def propose(changes, subtree, titles, **kw):
+        return [{"kind": "amend", "feature_id": "f1", "rationale": "send retries twice",
+                 "blocks": [{"id": "p1", "text": "Retries twice before giving up."},
+                            {"id": "p2", "text": "Logs each failure to stderr."}]}]
+    res = reflect(ws, ChangeSet(modified=[chunk("c.py::send", "f2", "t1")]), Graph(), propose=propose)
+    assert not res.plans and res.ops, res.summary()
+    rows = reads.read_history(cd, "h1", 100)["batches"]
+    assert [r["actor"] for r in rows[before:]] == ["agent:claude-code", "loop"], [r["summary"] for r in rows[before:]]
+    first = Compiler(ws.store).compile({"kind": "amend", "feature_id": "h1", "blocks": [{"text": "- Retries on 503."}]})
+    pid = ws.amend("h1", rewrites=[], bodies=first.bodies, actor="loop", structural=True).plan
+    ins(ws, "h1", ws.store.blocks["h1"].text().last_live_ref(), " (HTTP)", actor=H)
+    later = Compiler(ws.store).compile({"kind": "amend", "feature_id": "h1", "blocks": [{"text": "- Gives up after 3 tries."}]})
+    newest = ws.amend("h1", rewrites=[], bodies=later.bodies, actor="loop", structural=True, join=pid).ops[-1]
+    ws.close()
+    rows = reads.read_history(cd, "h1", 3, ops=True)["batches"]
+    assert [(r["actor"], r.get("plan")) for r in rows] == [("loop", pid), (H, None), ("loop", pid)]
+    assert newest.id in [e["op"] for e in rows[-1]["ops"]] and rows[-1]["at"] > rows[-2]["at"] > rows[0]["at"]

@@ -4,6 +4,8 @@ An agent reaches the tree through the MCP tools and nothing else, so what the
 tools promise — "small repairs land, rewrites and repairs on a feature with
 pending intent become a plan" — has to be what the tree does.
 """
+import pytest
+
 from codoc.calculus import ops as K
 from codoc.calculus.derive import accept_handoffs, markdown, phase
 from codoc.calculus.doc import PARAGRAPH
@@ -384,6 +386,88 @@ def test_new_code_a_daemonless_turn_wrote_binds_and_settles_when_the_turn_ends(t
     client.settle_closed_epoch(cd)
     client.release(cd)
     assert queued(Workspace(cd, readonly=True).store) == []
+
+
+def _owned_as_indexed(tmp_path, raw: bytes):
+    """A workspace whose `h1` owns `c.py::send`, bound with the hashes the
+    index gives `raw` (it reads through `file_chunks`), and a hand-off of it."""
+    from codoc.calculus import ops as K
+    from codoc.index.app import file_chunks
+    (tmp_path / "c.py").write_bytes(raw)
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed(ws, bind=False)
+    w = {c.symbol: h for c, h in file_chunks("c.py", raw)}["c.py::send"]
+    ws.submit([{"kind": K.BIND_ATTACH, "target": {"fid": "h1"},
+                "payload": {"symbol": "c.py::send", "fingerprint": w.fingerprint, "types_hash": w.types_hash}}],
+              actor="loop")
+    ho = handoff(ws, "h1", actor=H)
+    publish(cd, ws.store, root_dir=str(tmp_path))
+    ws.close()
+    return cd, ho
+
+
+@pytest.mark.parametrize("raw", [
+    b'def send():\r\n    """Send once.\r\n\r\n    Then stop."""\r\n    return 1\r\n',
+    b"# caf\xe9\ndef send():\n    return 1\n",
+    "def send():\n    return 1\n".encode("utf-16"),
+], ids=["crlf", "latin-1 byte", "utf-16 bom"])
+def test_the_evidence_is_read_as_the_index_reads_the_file(tmp_path, raw):
+    """CRLF line endings, a byte that is not UTF-8, a UTF-16 file: an attach
+    reads the code the way the index does, so a re-attach of code nobody
+    changed writes nothing, and a function the build added binds."""
+    from codoc.calculus.derive import queued
+    cd, ho = _owned_as_indexed(tmp_path, raw)
+    try:
+        r = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::send"]}],
+                          caused_by=f"d:{ho.id}", root_dir=str(tmp_path))
+        assert r["ok"] and r["applied"] == [], r
+        added = raw.decode("utf-16") if raw.startswith(b"\xff\xfe") else None
+        with (tmp_path / "c.py").open("ab") as fh:
+            fh.write(("\n\ndef send_twice():\n    return send() + send()\n".encode("utf-16-le")) if added
+                     else b"\n\ndef send_twice():\n    return send() + send()\n")
+        r = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::send_twice"]}],
+                          caused_by=f"d:{ho.id}", root_dir=str(tmp_path))
+        assert r["ok"], r
+    finally:
+        client.release(cd)
+    assert queued(Workspace(cd, readonly=True).store) == []
+
+
+def test_a_binding_is_keyed_by_the_file_as_the_index_names_it(tmp_path):
+    """An agent may name a file absolutely, with `./`, or through `..`: the
+    binding lands under the key a reflect pass would produce, so it neither
+    doubles a binding the feature has nor hides from the pass. A file outside
+    the repository is refused."""
+    cd, ho = _owned_as_indexed(tmp_path, b"def send():\n    return 1\n\n\ndef retry():\n    return send()\n")
+    root = str(tmp_path)
+
+    def attach(*symbols):
+        try:
+            return tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": list(symbols)}],
+                                 caused_by=f"d:{ho.id}", root_dir=root)
+        finally:
+            client.release(cd)
+    assert attach(f"{tmp_path.resolve()}/c.py::send")["applied"] == []      # owned, unchanged
+    assert attach("./c.py::retry")["ok"]
+    r = attach("../elsewhere.py::x")
+    assert not r["ok"] and "outside the repository" in r["error"], r
+    st = Workspace(cd, readonly=True).store
+    assert sorted(st.bindings) == ["c.py::retry", "c.py::send"]
+
+
+def test_a_plan_reports_no_build_so_it_refreshes_nothing(tmp_path):
+    """`codoc_propose` describes code not yet written: an owned symbol whose
+    code changed is not refreshed under its plan, which would conflict
+    `not_plannable`."""
+    cd, ho = _owned_as_indexed(tmp_path, b"def send():\n    return 1\n")
+    (tmp_path / "c.py").write_bytes(b"def send():\n    return 2\n")
+    try:
+        r = tools.propose(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::send"]}],
+                          caused_by=f"d:{ho.id}", root_dir=str(tmp_path))
+    finally:
+        client.release(cd)
+    assert "not_plannable" not in str(r), r
 
 
 def test_context_for_a_feature_is_its_range_and_the_features_one_call_away(tmp_path):

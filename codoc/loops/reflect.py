@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 
 from codoc.calculus import ops as K
 from codoc.calculus.derive import HELD, open_plans_on, phase, title
-from codoc.calculus.ids import LOOP
+from codoc.calculus.ids import LOOP, new_batch_id
 from codoc.calculus.ingest import strike_bodies
 from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
@@ -80,11 +80,14 @@ class ReflectResult:
 
 
 class _Pass:
-    """One reflect pass's writer: every op it writes lands in ``res.ops``."""
+    """One reflect pass's writer: every op it writes lands in ``res.ops``, and
+    everything it writes on the trunk is one batch, so the pass reads as one
+    change (a plan it opens is a batch of its own)."""
 
     def __init__(self, ws: Workspace, res: ReflectResult, caused_by: dict[str, str]) -> None:
         self.ws, self.res, self._caused = ws, res, caused_by
         self.plan_of: dict[str, str] = {}      # a node this pass proposed -> its plan
+        self.batch = new_batch_id()
 
     @property
     def store(self) -> Store:
@@ -94,6 +97,7 @@ class _Pass:
         return self._caused.get(fid) if fid else None
 
     def submit(self, bodies: list[dict], **kw) -> list[Op]:
+        kw["batch"] = kw.get("batch") or self.batch
         ops = self.ws.submit(bodies, actor=LOOP, **kw)
         self.res.ops.extend(ops)
         return ops
@@ -123,13 +127,16 @@ def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: s
         if b:
             removed_owner[r.symbol] = b.feature
             bodies.append(_bind(K.BIND_DETACH, b.feature, r.symbol, caused_by=p.cause(b.feature)))
-    # A modified chunk whose binding already holds its fingerprint (a branch
-    # switched back to the code the binding was refreshed on) needs neither a
-    # refresh nor the model's judgment.
-    stale: dict[str, str] = {}                  # modified bound symbol -> its feature
-    for c in cs.modified:
+    # A changed chunk that is bound needs the model's judgment unless the loop
+    # itself set the hashes it has now: then the loop has described this code
+    # already (a branch switched back to code the loop refreshed on). An agent's
+    # or a person's attach or refresh says whose code it is, not that the prose
+    # fits it, so their chunk is judged, a new symbol an agent attached
+    # included. The refresh records that the loop has now described it.
+    stale: dict[str, str] = {}                  # bound symbol to judge -> its feature
+    for c in cs.modified + cs.added:
         b = store.bindings.get(c.symbol)
-        if b and (b.fingerprint != c.fingerprint or b.types_hash != c.types_hash):
+        if b and (b.fingerprint != c.fingerprint or b.types_hash != c.types_hash or b.set_by != LOOP):
             stale[c.symbol] = b.feature
             bodies.append(_bind(K.BIND_REFRESH, b.feature, c.symbol, c.fingerprint, c.types_hash,
                                 caused_by=p.cause(b.feature)))
@@ -161,7 +168,7 @@ def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: s
 
     # 3. The LLM pass over what needs judgment.
     added_unbound = [a for a in cs.added if a.symbol not in store.bindings and a.symbol not in relocated]
-    modified_bound = [(c, stale[c.symbol]) for c in cs.modified if c.symbol in stale]
+    modified_bound = [(c, stale[c.symbol]) for c in cs.modified + cs.added if c.symbol in stale]
     if not added_unbound and not modified_bound:
         return res
     changed_symbols = {c.symbol for c in cs.added + cs.modified + cs.removed}
@@ -355,7 +362,7 @@ def _land(p: _Pass, change: Change) -> bool:
         own = next((pid for pid in open_plans_on(p.store, fid) if p.store.plans[pid].actor == LOOP), None)
         done = p.ws.amend(fid, rewrites=[(r.bid, r.path, r.new_md, None) for r in change.rewrites],
                           bodies=change.bodies, strikes=change.strikes, actor=LOOP, note=change.note,
-                          caused_by=cause, structural=change.structural, join=own)
+                          caused_by=cause, structural=change.structural, join=own, batch=p.batch)
         p.res.ops.extend(done.ops)
         p.res.refused.extend(done.refused)
         if done.plan and done.plan != own:

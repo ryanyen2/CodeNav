@@ -88,7 +88,8 @@ cloning.
 
 - Open the agent epoch in `activity.json` while a turn runs and record the files it
   touched. The daemon defers those files and reflects them when the epoch closes, or after
-  900 seconds of silence, citing every queued hand-off in `caused_by`. The editor and the
+  900 seconds of silence (its quiet tick notices that with no file event), citing every
+  queued hand-off in `caused_by`. The editor and the
   hub do not read the file: they learn that a feature is being built from its
   `realizing` phase in the projection.
 - Tell the session when hand-offs are queued in `realize.md`.
@@ -131,7 +132,7 @@ Code written by hand settles with `codoc done`.
 | tool | does |
 |---|---|
 | `codoc_context` | Read: with `files`, the features bound in them, one hop along the code graph, their parents and children; with `feature_id`, that feature, the features under it and the features owning a symbol one call, import or inheritance away from their code, in either direction. |
-| `codoc_tree`, `codoc_status`, `codoc_history` | Read: the tree and its open plans; the queue of hand-offs, phases and the number of open plans; one feature's changes, one row per batch with a summary (its ops with `ops`), and attribution. |
+| `codoc_tree`, `codoc_status`, `codoc_history` | Read: the tree and its open plans; the queue of hand-offs, phases and the number of open plans; one feature's changes in log order, one row per change (a gesture, a reflect pass, an amend, a plan's opening, a verdict; its ops with `ops`) with a summary, and attribution. A writer gives each change one batch: a reflect pass writes its trunk ops under one, `Workspace.amend` writes all of an amend under one, and a later amend that joins an open plan writes under its own, not the plan's. |
 | `codoc_reflect` | Tree edits. `attach`, `detach` and a rewording `amend` land on the trunk (an `amend` through the machine gate); anything else becomes one plan. An `attach` or `add_node` binds only symbols the files on disk define, hashed as the index hashes them (`index.app.code_on_disk`), so code written during the turn binds at once, and refuses any other. An `attach` of a symbol the feature already owns writes a `bind.refresh` citing the hand-off when that code changed since the hand-off, and nothing otherwise. |
 | `codoc_propose` | Tree edits as one plan. |
 | `codoc_write_block` | Content for a kind block ([kinds.md](kinds.md#4-how-content-becomes-ops)). |
@@ -150,7 +151,11 @@ codoc.claude.autorealize`, which runs `claude -p --output-format json` and print
 agent's last message. Either engine ends with one line: how the pass ended, its time and
 its cost. `--auto-realize` (`auto_realizer`) starts a pass when no session is live and the
 queue holds a hand-off no finished pass was started for, and backs off after a pass that
-failed (`FAILED_BACKOFF_S`, doubled per failure in a row, at most an hour).
+failed (`FAILED_BACKOFF_S`, doubled per failure in a row, at most an hour), counted from
+when the pass ended: each engine's child records its pid, exit code and wall time in
+`.codoc/cache/realize-ended.json` as it exits (`record_end`). The daemon's quiet tick
+(`TICK_MS`, an empty batch after 30 seconds with no file event) runs `after_batch`, so
+the retry needs no file event.
 
 **Commands.** `/codoc:realize` builds the queue (`state` decides what it does, from
 `codoc_status`); `/codoc:plan <task>` proposes the change with `codoc_propose` and stops;

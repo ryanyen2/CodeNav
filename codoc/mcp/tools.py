@@ -161,14 +161,34 @@ def _compile(codoc_dir: str, root_dir: str | None, store, ops: list[dict],
              cites: str | None) -> tuple[list[Change], str | None]:
     """Every edit compiled in order, or the first refusal as an error (see the
     module docstring for what a binding may name). ``cites`` is the hand-off
-    the edits report."""
-    from codoc.index.app import code_on_disk
-    binds = {i: [s for b in raw.get("bindings") or [] if (s := symbol(b))]
-             for i, raw in enumerate(ops or []) if isinstance(raw, dict) and raw.get("kind") in ("attach", "add_node")}
-    hashes = code_on_disk(root_dir or Path(codoc_dir).parent, {s.split("::")[0] for named in binds.values() for s in named})
+    the edits report as built.
+
+    A binding's file is first put the way the index names it
+    (``index.app.canonical_file``: repo-relative POSIX, ``./``, ``..``, an
+    absolute path and a symlink resolved), so the compiler sees only keys a
+    reflect pass would produce, and a file outside the repository is refused."""
+    from codoc.index.app import canonical_file, code_on_disk
+    root = root_dir or Path(codoc_dir).parent
+    ops = [dict(raw) if isinstance(raw, dict) else raw for raw in ops or []]
+    binds: dict[int, list[str]] = {}
+    for i, raw in enumerate(ops):
+        if not isinstance(raw, dict) or not isinstance(raw.get("bindings"), list):
+            continue
+        named = []
+        for b in raw["bindings"]:
+            if (sym := symbol(b)) is None:
+                continue                # not a binding: dropped, as the compiler drops it
+            file, _, name = sym.partition("::")
+            if (rel := canonical_file(root, file)) is None:
+                return [], f"ops[{i}] ({raw.get('kind')}): {sym} names a file outside the repository"
+            named.append(f"{rel}::{name}")
+        raw["bindings"] = named
+        if raw.get("kind") in ("attach", "add_node"):
+            binds[i] = named
+    hashes = code_on_disk(root, {s.split("::")[0] for named in binds.values() for s in named})
     compiler = Compiler(store, hashes=hashes, bindable=set(hashes), cites=cites)
     changes = []
-    for i, raw in enumerate(ops or []):
+    for i, raw in enumerate(ops):
         missing = [s for s in binds.get(i, []) if s not in hashes]
         if missing:
             return [], (f"ops[{i}] ({raw['kind']}): the code does not define {', '.join(missing)}. "
@@ -233,7 +253,9 @@ def propose(codoc_dir: str, *, ops: list[dict], note: str = "", caused_by: str |
     """A plan of tree edits, drawn in place for the person to accept or reject."""
     caused_by = _handoff(caused_by)
     ws, _ = _open(codoc_dir)
-    changes, err = _compile(codoc_dir, root_dir, ws.store, ops, caused_by)
+    # A plan describes code not yet written, so it reports no build: an owned
+    # symbol is not refreshed under it.
+    changes, err = _compile(codoc_dir, root_dir, ws.store, ops, None)
     if err:
         return _err(err)
     if not changes:

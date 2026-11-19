@@ -30,7 +30,7 @@ Text       := { segs: Seg[], marks: Mark[] }       segs in document order, live 
 Seg        := { op, k0, chars, actor, at, plan?, dead?, dead_actor?, dead_at? }
 Mark       := { kind, attrs, start: CharRef, end: CharRef, actor, op, at }     end is inclusive
 
-Binding    := { feature: BlockId, symbol, fingerprint, types_hash }      keyed by symbol, `file::symbol_path`
+Binding    := { feature: BlockId, symbol, fingerprint, types_hash, set_by }      keyed by symbol, `file::symbol_path`
 
 Plan       := { id, actor,                  actor: who opened it
                 kind,                       edit | add | move | delete; only delete has a meaning in the applier,
@@ -250,7 +250,15 @@ mark by `op`.
 
 **Binding.** A symbol has at most one owner (I8). The symbol is the index's name for a
 chunk, `file::symbol_path`, so it says its file, and a cite names a binding by the same
-string. A dead heading owns nothing. The store also keeps `bound_once`, the set of
+string. A dead heading owns nothing. `set_by` is the actor whose op set the hashes: the
+reflect pass leaves a changed chunk alone only when `loop` set the hashes it has now,
+because then the loop has described that code already. An agent's or a person's
+attach or refresh says whose code it is, not that the prose fits it. An op that puts
+hashes back (an inverse, a snapshot's `bind.attach`) names their setter in its payload's
+`set_by`; any other takes its own actor. A client cannot name one: the inbox drops `set_by`
+and `prev_set_by` from any op it sends (`inbox.client_payload`), so its hashes are its own.
+A `bind.attach` records `prev_*` only when it refreshed hashes its feature already owned,
+never from its payload, since a verdict reads them to undo a refresh rather than an attach. The store also keeps `bound_once`, the set of
 features that ever had a binding: the loop proposes deleting a feature that had code and
 has none now.
 
@@ -379,9 +387,9 @@ Target `{fid}`.
 
 | op | wire payload | canonical payload adds | inverse |
 |---|---|---|---|
-| `bind.attach` | `symbol`, `fingerprint`, `types_hash` | `displaced`, the prior owner; or the previous hashes when `fid` already owned it | detach, then re-attach the prior owner; or refresh to the previous hashes |
+| `bind.attach` | `symbol`, `fingerprint`, `types_hash`; `set_by` when it restores in process (the inbox drops a client's) | `displaced`, the prior owner; or the previous hashes and `prev_set_by` when `fid` already owned it | detach, then re-attach the prior owner; or refresh to the previous hashes |
 | `bind.detach` | `symbol` | the hashes | `bind.attach` |
-| `bind.refresh` | `symbol`, `fingerprint`, `types_hash` | the previous hashes | `bind.refresh` to them |
+| `bind.refresh` | `symbol`, `fingerprint`, `types_hash`; `set_by` when it restores in process (the inbox drops a client's) | the previous hashes | `bind.refresh` to them |
 
 `bind.attach` needs a live heading and takes the symbol from any other owner (I8).
 `bind.detach` and `bind.refresh` need `fid` to own the symbol, and set `code_at` to the
