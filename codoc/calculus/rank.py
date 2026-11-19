@@ -71,7 +71,7 @@ def append_after(last: str = "") -> str:
 
     Distinct from ``between(last, "")`` on purpose. That halves the remaining
     space each time, so a list built by appending one node at a time (how
-    bootstrap and Loop A build one) would grow keys about six times faster than
+    bootstrap and the reflect pass build one) would grow keys about six times faster than
     necessary. With no upper bound the cheap answer is available:
     step the final digit by one.
     """
