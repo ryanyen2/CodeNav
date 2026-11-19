@@ -12,11 +12,10 @@ from codoc.serve.auth import (
     SUGGEST,
     AuthContext,
     SessionStore,
-    read_roles,
     role_for_permission,
 )
 from codoc.serve.push import Feed
-from codoc.workspace import Workspace
+from codoc.workspace import Roles, Workspace
 from codoc.workspace import inbox, log as L
 from codoc.workspace.inbox import Submission
 from tests.helpers import seed_loop
@@ -93,7 +92,7 @@ def test_auth_gate_records_roles_and_a_suggester_cannot_set_the_language(tmp_pat
     assert c.get("/api/whoami").json() == {"authenticated": True, "login": "alice", "role": SUGGEST}
     # The actor is namespaced: a GitHub login called "local" can never arrive
     # as the maintainer's own identity, here or in the roles table.
-    assert read_roles(cd) == {"human:gh:alice": SUGGEST}
+    assert Roles.load(cd).table == {"human:gh:alice": SUGGEST}
     assert json.loads((cd / "config.json").read_text())["roles"] == {"human:gh:alice": SUGGEST}
     assert c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "set-language", "tag": "ja"}).status_code == 403
     r = c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "submit", "subs": [
@@ -103,7 +102,7 @@ def test_auth_gate_records_roles_and_a_suggester_cannot_set_the_language(tmp_pat
     s = auth.store.create("bob", role_for_permission("admin"))
     from codoc.serve.auth import record_role
     record_role(cd, "bob", s.role)
-    assert read_roles(cd) == {"human:gh:alice": SUGGEST, "human:gh:bob": MAINTAINER}
+    assert Roles.load(cd).table == {"human:gh:alice": SUGGEST, "human:gh:bob": MAINTAINER}
     assert inbox.actor_for(client_name("local")) == "human:gh:local" != "human:local"
 
 

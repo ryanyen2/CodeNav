@@ -139,9 +139,3 @@ def record_role(codoc_dir: str | Path, login: str, role: str) -> None:
         return                       # a tracked file: signing in is not a change
     roles[hub_actor(login)] = role
     write_config(codoc_dir, roles=roles)
-
-
-def read_roles(codoc_dir: str | Path) -> dict[str, str]:
-    from codoc.workspace.config import read_config
-    d = read_config(codoc_dir).get("roles")
-    return {str(k): str(v) for k, v in d.items()} if isinstance(d, dict) else {}

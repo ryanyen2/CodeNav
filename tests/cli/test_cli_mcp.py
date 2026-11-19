@@ -173,7 +173,7 @@ def test_sync_applies_under_the_applier_lock(tmp_path, monkeypatch):
             held.append(True)
         return "probed"
     monkeypatch.setattr(Daemon, "process_batch", lambda self, paths, **k: probe())
-    monkeypatch.setattr(Daemon, "reflect", lambda self, files, **k: probe())
+    monkeypatch.setattr(Daemon, "reflect", lambda self, **k: probe())
     r = runner.invoke(app, ["sync", "--root", str(root)])
     assert r.exit_code == 0 and held == [True, True], (r.output, held)
 

@@ -2,7 +2,9 @@
 
 ``compute_changeset`` snapshots the ``code_chunks`` table, runs an incremental
 ``update_index``, snapshots again, keys both by ``symbol`` and compares
-``fingerprint`` to classify every chunk as added, removed or modified.
+``fingerprint`` to classify every chunk as added, removed or modified. Every
+file is compared: the update indexes every file that changed since the last
+one, so a change left out of this diff would be in no later diff either.
 Deterministic; relocations are recognised later, by the reflect pass.
 """
 from __future__ import annotations
@@ -16,7 +18,7 @@ from codoc.index.runner import update_index
 @dataclass
 class ChunkRef:
     """A chunk involved in a change. ``source`` is the new source for an added
-    or modified chunk, the old one for a removed chunk.
+    or modified chunk, and empty for a removed one.
 
     ``fingerprint`` is the chunk's content, wherever it sits; ``types_hash`` is
     its shape, whatever its names. Together they let the reflect pass
@@ -43,44 +45,34 @@ class ChangeSet:
         return {c.file for c in (self.added + self.removed + self.modified)}
 
 
-def compute_changeset(
-    root_dir: str,
-    codoc_dir: str,
-    *,
-    file_scope: set[str] | None = None,
-) -> ChangeSet:
-    """Diff the index before/after an incremental update; return the change set.
+def compute_changeset(root_dir: str, codoc_dir: str, *, all_sources: bool = False) -> ChangeSet:
+    """Diff the index before and after an incremental update.
 
-    ``file_scope`` restricts comparison to a set of repo-relative files (a watch
-    cycle reports exactly which files changed). The index update is still global
-    but cheap thanks to cocoindex per-file memoization. The scope is pushed down
-    to LanceDB (``files=``) so a scoped pass reads only the touched files' rows.
-    ``rows`` (the graph's symbol table) still spans the whole index, but
-    without source: the resolver only needs symbol identity, and the graph
-    only re-extracts edges from the touched files, whose sourced rows are
-    merged in below.
+    The snapshots leave the ``source`` column out, so the diff reads only
+    identities and fingerprints. Source is then read for the files whose
+    chunks changed: the added and modified chunks carry it, and so do those
+    files' rows in ``rows``, which is all the graph re-extracts.
+    ``all_sources`` reads it for every row instead, for a graph built whole.
     """
-    old_rows = read_all_chunks(codoc_dir, files=file_scope)
+    old = {r.symbol: r for r in read_all_chunks(codoc_dir, with_source=False)}
     update_index(root_dir, codoc_dir)
-    if file_scope is None:
-        all_new_rows = read_all_chunks(codoc_dir)
-        new_rows = all_new_rows
+    light = read_all_chunks(codoc_dir, with_source=False)
+    new = {r.symbol: r for r in light}
+    changed = {s for s in old.keys() | new.keys()
+               if s not in old or s not in new or old[s].fingerprint != new[s].fingerprint}
+    files = {(new.get(s) or old[s]).file for s in changed}
+    if all_sources:
+        rows = read_all_chunks(codoc_dir)
     else:
-        new_rows = read_all_chunks(codoc_dir, files=file_scope)
-        light = read_all_chunks(codoc_dir, with_source=False)
-        all_new_rows = [r for r in light if r.file not in file_scope] + new_rows
+        rows = [r for r in light if r.file not in files] + read_all_chunks(codoc_dir, files=files)
+    sourced = {r.symbol: r for r in rows if r.file in files}
 
-    old_by_symbol = {r.symbol: r for r in old_rows}
-    new_by_symbol = {r.symbol: r for r in new_rows}
-
-    cs = ChangeSet(rows=all_new_rows)
-    for symbol in old_by_symbol.keys() | new_by_symbol.keys():
-        old = old_by_symbol.get(symbol)
-        new = new_by_symbol.get(symbol)
-        if old is None:
-            cs.added.append(ChunkRef(symbol, new.fingerprint, new.types_hash, new.source))
-        elif new is None:
-            cs.removed.append(ChunkRef(symbol, old.fingerprint, old.types_hash, old.source))
-        elif old.fingerprint != new.fingerprint:
-            cs.modified.append(ChunkRef(symbol, new.fingerprint, new.types_hash, new.source))
+    cs = ChangeSet(rows=rows)
+    for symbol in sorted(changed):
+        if symbol not in new:
+            o = old[symbol]
+            cs.removed.append(ChunkRef(symbol, o.fingerprint, o.types_hash))
+            continue
+        n = sourced[symbol]
+        (cs.modified if symbol in old else cs.added).append(ChunkRef(symbol, n.fingerprint, n.types_hash, n.source))
     return cs

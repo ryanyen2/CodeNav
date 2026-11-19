@@ -1,8 +1,8 @@
 """Scoped/projected reads over the LanceDB chunk index.
 
 ``read_all_chunks`` must push the file filter down to LanceDB and be able to
-drop the heavy ``source`` column; ``compute_changeset`` must do at most one
-unscoped read per pass.
+drop the heavy ``source`` column; ``compute_changeset`` reads source only for
+the files that changed.
 """
 from __future__ import annotations
 
@@ -47,24 +47,32 @@ def test_missing_index_returns_empty(tmp_path):
     assert read_all_chunks(tmp_path) == []
 
 
-def test_compute_changeset_read_contract(tmp_path, monkeypatch):
-    """Scoped pass: scoped reads carry files=…, and at most ONE unscoped read
-    (the light symbol table)."""
+def test_compute_changeset_reads_source_only_for_the_files_that_changed(tmp_path, monkeypatch):
+    """Both snapshots leave the source column out; source is read for the
+    files whose chunks changed, and for every row with ``all_sources``."""
     import codoc.index.changes as diff_mod
+    from codoc.index.reader import ChunkRow
 
-    calls: list[dict] = []
+    def r(file, sym, fp):
+        return ChunkRow(id=0, file=file, symbol=f"{file}::{sym}", language="python", source=f"def {sym}(): {fp}",
+                        fingerprint=fp, types_hash="t", start_byte=0, end_byte=1)
+    before, after = [r("a.py", "foo", "1"), r("b.py", "baz", "1")], [r("a.py", "foo", "2"), r("b.py", "baz", "1")]
+    calls: list = []
 
     def fake_read(codoc_dir, *, files=None, with_source=True):
-        calls.append({"files": files, "src": with_source})
-        return []
+        calls.append((files, with_source))
+        rows = after if len(calls) > 1 else before
+        return [ChunkRow(**{**vars(x), "source": x.source if with_source else ""})
+                for x in rows if files is None or x.file in files]
 
     monkeypatch.setattr(diff_mod, "read_all_chunks", fake_read)
     monkeypatch.setattr(diff_mod, "update_index", lambda *a, **k: None)
 
-    diff_mod.compute_changeset("root", str(tmp_path), file_scope={"a.py"})
-    unscoped = [c for c in calls if c["files"] is None]
-    assert len(unscoped) == 1 and unscoped[0]["src"] is False
+    cs = diff_mod.compute_changeset("root", str(tmp_path))
+    assert calls == [(None, False), (None, False), ({"a.py"}, True)]
+    assert [(c.symbol, c.source) for c in cs.modified] == [("a.py::foo", "def foo(): 2")]
+    assert {x.symbol: x.source for x in cs.rows} == {"a.py::foo": "def foo(): 2", "b.py::baz": ""}
 
     calls.clear()
-    diff_mod.compute_changeset("root", str(tmp_path), file_scope=None)
-    assert len(calls) == 2
+    cs = diff_mod.compute_changeset("root", str(tmp_path), all_sources=True)
+    assert calls == [(None, False), (None, False), (None, True)] and all(x.source for x in cs.rows)

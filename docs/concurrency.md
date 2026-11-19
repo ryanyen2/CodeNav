@@ -24,11 +24,17 @@ One process applies ops at a time. It is called the applier.
   naming a pid another program has since been given, reads as no daemon. The file is
   never removed, since a daemon that removed it as it exited could leave one starting at
   that moment holding the lock on a file no longer at the path. A second daemon cannot
-  take the lock and refuses to start.
-- A daemon builds its store, takes the lock, then rebuilds the store once under the
-  applier lock. A daemonless writer that applied before that is in the logs it reads.
-  A writer that saw no daemon and got the applier lock after the daemon took its lock
-  checks for a daemon again under the applier lock and submits through the inbox instead.
+  take the lock and exits with status 3, having written nothing.
+- The editor host cannot take a `flock`, so it reads the pid as a hint: a daemon runs
+  while that process exists and its command line is a `codoc watch`
+  (`vscode-codoc/src/host/pidfile.ts`). The hint decides only what the status bar says
+  and whether to spawn a daemon; one spawned beside a live daemon finds the lock held and
+  exits with status 3.
+- A daemon takes the lock before it writes anything, then builds its store under the
+  applier lock. A daemonless writer applying at that moment finishes first, and its log
+  is read. A writer that saw no daemon and got the applier lock after the daemon
+  took its lock checks for a daemon again under the applier lock and submits through the
+  inbox instead.
 - Every client submission, applied directly or drained from an inbox, goes through
   `Workspace.apply_submission`: what a client may assert, how a suggester's edit becomes
   a plan, and what an amend or an ingest answers are decided there.
@@ -234,12 +240,15 @@ For each batch the daemon does, in order:
    cites every queued hand-off. A close is an epoch the daemon saw open that is open no
    longer, or a closed epoch whose `ended_at` the daemon has not reflected, which it never
    saw open: a turn can open and close while one batch runs. A close already in
-   `activity.json` when the daemon starts was reflected by the daemon before it, or
-   happened while none ran and was settled by the Stop hook (section 1). Every epoch has
+   `activity.json` when the daemon starts counts as a close: the turn may have ended
+   while no daemon ran, and the Stop hook reflects no code. A pass over a turn the daemon
+   before it reflected finds no changed code. Every epoch has
    an id, and only a stop naming it closes it: a realize pass that runs no hooks opens one
    under its own id and closes it when the pass ends.
 4. Reflect the changed code files that are not deferred: the loop's pass, which writes
-   ops as `loop` and cites the hand-offs step 1 noted.
+   ops as `loop` and cites the hand-offs step 1 noted. It covers every code file changed
+   since the index was last updated, not only those the batch saw change, so an edit
+   made while no daemon ran is reflected by the next pass.
 5. Unless an agent epoch is open, settle hand-offs (section 10).
 6. Publish the derived files.
 

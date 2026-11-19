@@ -175,7 +175,7 @@ def _bootstrap(root: str, cd: Path, *, organize: bool):
     from codoc.loops.bootstrap import BootstrapResult, bootstrap
     from codoc.workspace import Workspace
     graph = Graph()
-    rows = index_code(root, cd, graph).rows
+    rows = index_code(root, cd, graph, whole=True).rows
     ws = Workspace(cd)
     try:
         if not rows:
@@ -201,7 +201,11 @@ def watch(root: str = ROOT,
     if auto_realize:
         from codoc.claude.autorealize import auto_realizer
         after_batch = auto_realizer(root, str(cd), printer=typer.echo)
-    Daemon(root, cd, printer=typer.echo, after_batch=after_batch).run()
+    d = Daemon.start(root, cd, printer=typer.echo, after_batch=after_batch)
+    if d is None:
+        typer.echo("A codoc daemon is already watching this repo.")
+        raise typer.Exit(3)          # the editor reads 3 as standing down, not as a failure
+    d.run()
 
 
 @app.command()
@@ -244,7 +248,7 @@ def sync(root: str = ROOT):
         d = Daemon(root, cd, printer=typer.echo)
         try:
             note = d.process_batch([])
-            note2 = d.reflect(set())
+            note2 = d.reflect(whole=True)
             typer.echo(f"▸ {note}; {note2}")
             publish(cd, d.ws.store, root_dir=root)
         finally:

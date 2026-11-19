@@ -15,16 +15,16 @@ from codoc.workspace import Workspace
 from codoc.workspace import log as L
 from codoc.workspace import inbox as I
 from codoc.workspace.inbox import Submission
-from tests.helpers import handoff, seed_loop, T
+from tests.helpers import another_daemon, handoff, seed_loop, T
 
 
 def make(tmp_path, changesets: list):
     root = tmp_path / "repo"
     (root / ".codoc").mkdir(parents=True)
-    calls: list[set[str]] = []
+    calls: list[bool] = []          # one entry per reflect pass: whether it rebuilt the graph
 
-    def changeset(root_dir, codoc_dir, files):
-        calls.append(set(files))
+    def changeset(root_dir, codoc_dir, whole):
+        calls.append(whole)
         return changesets.pop(0) if changesets else ChangeSet()
 
     d = Daemon(root, changeset=changeset, propose=lambda *a, **k: [], printer=lambda *_: None)
@@ -36,7 +36,7 @@ def test_code_change_reflects_and_publishes(tmp_path):
     d, calls = make(tmp_path, [ChangeSet(modified=[ChunkRef("c.py::send", "f2", "t1")])])
     (d.root / "c.py").write_text("def send(): ...")
     note = d.process_batch([str(d.root / "c.py")])
-    assert "reflect" in note and calls == [{"c.py"}]
+    assert "reflect" in note and calls == [False]
     assert d.ws.store.bindings["c.py::send"].fingerprint == "f2"
     assert (d.codoc_dir / "tree.codoc").read_text().split("\n\n", 1)[1].startswith("# Client")
     proj = json.loads((d.codoc_dir / "projection.json").read_text())
@@ -54,7 +54,7 @@ def test_open_epoch_holds_code_until_it_closes(tmp_path):
     assert "deferring" in d.process_batch([str(d.root / "c.py")]) and calls == []
     close_epoch(d.codoc_dir, "ep-1")
     note = d.process_batch([str(act)])
-    assert "closed" in note and "reflect" in note and calls == [{"c.py"}]
+    assert "closed" in note and "reflect" in note and calls == [False]
 
 
 def test_a_daemon_started_during_an_agent_turn_reflects_the_turn_when_it_closes(tmp_path):
@@ -69,13 +69,12 @@ def test_a_daemon_started_during_an_agent_turn_reflects_the_turn_when_it_closes(
     d.process_batch([str(d.codoc_dir / "activity.json")])
     d.ws.close()
 
-    again = Daemon(d.root, changeset=lambda _r, _c, files: calls.append(set(files)) or ChangeSet(
+    again = Daemon.start(d.root, changeset=lambda _r, _c, whole: calls.append(whole) or ChangeSet(
         modified=[ChunkRef("c.py::send", "f9", "t1")]), propose=lambda *a, **k: [], printer=lambda *_: None)
-    again.start()
     assert "opened" in again.process_batch([])
     close_epoch(again.codoc_dir, "ep-1")
     assert "closed" in again.process_batch([str(again.codoc_dir / "activity.json")])
-    assert calls == [{"c.py"}] and queued(again.ws.store) == []
+    assert calls == [False] and queued(again.ws.store) == []
 
 
 def test_a_turn_that_opened_and_closed_while_a_batch_ran_cites_its_hand_off(tmp_path):
@@ -93,7 +92,7 @@ def test_a_turn_that_opened_and_closed_while_a_batch_ran_cites_its_hand_off(tmp_
     (d.root / "c.py").write_text("def send(): retry()\n")
     close_epoch(d.codoc_dir, "ep-s2")
     assert "closed" in d.process_batch([str(d.codoc_dir / "activity.json"), str(d.root / "c.py")])
-    assert calls == [{"c.py"}]
+    assert calls == [False]
     assert [o.caused_by for o in d.ws.store.ops if o.kind == K.BIND_REFRESH] == [ho.id]
     assert queued(d.ws.store) == []
     assert "closed" not in d.process_batch([str(d.codoc_dir / "activity.json")])   # one close, reflected once
@@ -138,17 +137,54 @@ def test_a_batch_with_no_paths_drains_what_queued_while_no_daemon_ran(tmp_path):
     assert "client op" not in d.process_batch([])          # drained once, from the saved offset
 
 
-def test_a_starting_daemon_reads_what_a_daemonless_writer_wrote_after_it_built_its_store(tmp_path):
-    """The daemon builds its store, then writes its pidfile. A write that
-    applied between the two is read when it starts."""
-    from codoc.daemon import client
-    d, _ = make(tmp_path, [])
-    last = list(d.ws.store.blocks["p1"].text().live_refs())[-1]
-    client.write(d.codoc_dir, client="cli", bodies=[{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
-                                                    "payload": {"after": list(last), "text": " Between."}}])
-    client.release(d.codoc_dir)
-    d.start()
-    assert d.ws.store.blocks["p1"].text().live_text().endswith(" Between.")
+def test_a_starting_daemon_waits_for_a_daemonless_writer_mid_apply_and_reads_its_write(tmp_path):
+    """A daemonless writer checked for a daemon, found none, and is applying
+    under the applier lock when a daemon takes its own lock. The daemon opens
+    its workspace under the applier lock, so it waits for the write and reads it."""
+    import threading
+    import time
+    from codoc.workspace.layout import APPLIER_LOCK, locked
+    root = tmp_path / "repo"
+    cd = root / ".codoc"
+    cd.mkdir(parents=True)
+    ws = Workspace(cd)
+    seed_loop(ws)
+    ws.close()
+    started: list = []
+    with locked(cd / APPLIER_LOCK):
+        t = threading.Thread(target=lambda: started.append(Daemon.start(root, printer=lambda *_: None)))
+        t.start()
+        time.sleep(0.3)                              # the daemon has its lock and waits for this one
+        writer = Workspace(cd)
+        writer.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                        "payload": {"after": list(writer.store.blocks["p1"].text().last_live_ref()), "text": " Between."}}],
+                      actor="human:local")
+        writer.close()
+    t.join(10)
+    assert started[0].ws.store.blocks["p1"].text().live_text().endswith(" Between.")
+    started[0].ws.close()
+
+
+def test_a_daemon_that_stands_down_writes_nothing(tmp_path):
+    """A second `codoc watch` finds the lock held and exits. It opens no
+    workspace first, so it neither trims the live daemon's ack file nor cuts
+    the log line that daemon is in the middle of writing."""
+    from codoc.workspace.inbox import ACK_KEEP
+    root = tmp_path / "repo"
+    cd = root / ".codoc"
+    cd.mkdir(parents=True)
+    ws = Workspace(cd)
+    seed_loop(ws)
+    ws.close()
+    acks = I.inbox_dir(cd) / "ide.ack.jsonl"
+    acks.parent.mkdir(parents=True, exist_ok=True)
+    acks.write_text("".join(json.dumps({"cid": f"c{i}", "op": None}) + "\n" for i in range(ACK_KEEP + 5)))
+    with next((cd / "log").glob("*.jsonl")).open("a") as fh:
+        fh.write('{"id": "half a li')                # the live daemon is mid-append
+    with another_daemon(cd):
+        before = {f: f.read_bytes() for f in cd.rglob("*") if f.is_file()}
+        assert Daemon.start(root, printer=lambda *_: None) is None
+        assert {f: f.read_bytes() for f in cd.rglob("*") if f.is_file()} == before
 
 
 def test_a_daemonless_writer_starts_a_new_session_when_head_moves(tmp_path, monkeypatch):
@@ -613,17 +649,56 @@ def test_a_daemon_started_after_a_turn_went_silent_reflects_that_turn(tmp_path):
     import time
     root = tmp_path / "repo"
     (root / ".codoc").mkdir(parents=True)
-    calls: list[set[str]] = []
+    calls: list[bool] = []
 
-    def changeset(_root, _codoc, files):
-        calls.append(set(files))
+    def changeset(_root, _codoc, whole):
+        calls.append(whole)
         return ChangeSet(modified=[ChunkRef("c.py::send", "f2", "t1")])
     write_activity(root / ".codoc", {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": ["c.py"]})
     old = time.time() - 2000
     os.utime(root / ".codoc" / "activity.json", (old, old))
     d = Daemon(root, changeset=changeset, propose=lambda *a, **k: [], printer=lambda *_: None)
     assert "recovered a dead agent session" in d.process_batch([])
-    assert read_activity(root / ".codoc")["epoch"]["open"] is False and calls == [{"c.py"}]
+    assert read_activity(root / ".codoc")["epoch"]["open"] is False and calls == [False]
+
+
+def test_a_daemon_started_after_a_turn_closed_reflects_that_turn(tmp_path):
+    """As above, with the turn ended by its Stop hook instead of being killed.
+    The hook reflects no code, so the pass over that turn is the daemon's."""
+    root = tmp_path / "repo"
+    (root / ".codoc").mkdir(parents=True)
+    calls: list[bool] = []
+
+    def changeset(_root, _codoc, whole):
+        calls.append(whole)
+        return ChangeSet(modified=[ChunkRef("c.py::send", "f2", "t1")])
+    write_activity(root / ".codoc", {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": ["c.py"]})
+    close_epoch(root / ".codoc", "ep-1")
+    d = Daemon(root, changeset=changeset, propose=lambda *a, **k: [], printer=lambda *_: None)
+    assert "agent session closed" in d.process_batch([]) and calls == [False]
+
+
+def test_a_pass_over_a_turn_the_daemon_before_reflected_writes_nothing(tmp_path):
+    """A starting daemon cannot tell a turn that closed while none ran from
+    one the daemon before it reflected, so it reflects both. For the second
+    the index has nothing new: no model call, no op, and the hand-off the
+    turn did not build stays queued."""
+    from codoc.calculus.derive import queued
+    root = tmp_path / "repo"
+    cd = root / ".codoc"
+    cd.mkdir(parents=True)
+    ws = Workspace(cd)
+    seed_loop(ws)
+    handoff(ws, "h1", actor="human:local")
+    ws.close()
+    write_activity(cd, {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": ["c.py"]})
+    close_epoch(cd, "ep-1")
+    asked: list = []
+    d = Daemon(root, changeset=lambda *a: ChangeSet(), propose=lambda *a, **k: asked.append(a) or [],
+               printer=lambda *_: None)
+    ops = len(d.ws.store.ops)
+    assert "reflect" in d.process_batch([])
+    assert asked == [] and len(d.ws.store.ops) == ops and queued(d.ws.store) == ["h1"]
 
 
 def test_a_lease_that_names_its_process_holds_while_the_process_lives(tmp_path):

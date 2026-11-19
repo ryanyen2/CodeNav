@@ -7,9 +7,9 @@ and can be deleted.
 
 Primitives: ``atomic_write`` (tmp file, then rename), ``read_json`` (a missing
 or corrupt file degrades to the caller's default), ``locked`` (an exclusive
-``flock`` for a read-modify-write), ``take_flock`` (the same lock on an open
-file, kept as long as the caller keeps the file open: the daemon's on
-``watch.pid``), and ``find_codoc_dir``.
+``flock`` for a read-modify-write), ``hold_lock`` (the same lock, kept as
+long as the caller keeps the descriptor open: the daemon's on ``watch.pid``,
+the hub's on ``serve.lock``), and ``find_codoc_dir``.
 """
 from __future__ import annotations
 
@@ -156,6 +156,22 @@ def locked(path: str | Path, timeout: float | None = None):
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
+
+
+def hold_lock(path: str | Path) -> int | None:
+    """Take an exclusive ``flock`` on *path* and write this process's pid into
+    it, for a person to read. Returns the open descriptor, which holds the
+    lock until it is closed or the process ends; None, with nothing written,
+    when another process holds it. Liveness is the lock, never the pid."""
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        take_flock(fd, path, timeout=1)
+    except TimeoutError:
+        os.close(fd)
+        return None
+    os.ftruncate(fd, 0)
+    os.write(fd, str(os.getpid()).encode())
+    return fd
 
 
 def take_flock(fd: int, path: str | Path, timeout: float | None = None) -> None:

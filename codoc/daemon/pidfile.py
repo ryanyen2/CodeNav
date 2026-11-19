@@ -18,7 +18,7 @@ import fcntl
 import os
 from pathlib import Path
 
-from codoc.workspace.layout import PIDFILE, take_flock
+from codoc.workspace.layout import PIDFILE, hold_lock
 
 
 def pid_alive(pid: int) -> bool:
@@ -33,19 +33,9 @@ def pid_alive(pid: int) -> bool:
 def hold_pidfile(codoc_dir: str | Path) -> bool:
     """Take the daemon's lock on watch.pid and write this process's pid into
     it. The lock is kept until the process exits. False, with nothing taken,
-    when another daemon holds it."""
-    path = Path(codoc_dir) / PIDFILE
-    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
-    try:
-        # A writer asking `daemon_running` holds the lock for an instant; a
-        # daemon holds it for good.
-        take_flock(fd, path, timeout=1)
-    except TimeoutError:
-        os.close(fd)
-        return False
-    os.ftruncate(fd, 0)
-    os.write(fd, str(os.getpid()).encode())
-    return True                                  # `fd` stays open: closing it would release the lock
+    when another daemon holds it. A writer asking ``daemon_running`` holds the
+    lock for an instant, which the one-second wait in ``hold_lock`` outlasts."""
+    return hold_lock(Path(codoc_dir) / PIDFILE) is not None   # the descriptor stays open: closing it would release the lock
 
 
 def daemon_running(codoc_dir: str | Path) -> bool:

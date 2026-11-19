@@ -16,7 +16,8 @@ Per debounced batch of filesystem events it does, in order:
    closes, or after ``EPOCH_STALE_SECONDS`` of silence, they and every file
    the session touched go to step 4, and that pass cites every queued hand-off;
 4. reflect the changed code files that are not deferred, citing the hand-offs
-   of step 1;
+   of step 1: every code file changed since the index was last updated, not
+   only those the batch saw change;
 5. settle the hand-offs applied binding ops now cite, unless an epoch is open
    (``realize.settle_if_idle``); a reflect pass settles too;
 6. publish the derived files.
@@ -75,10 +76,10 @@ class Daemon:
         for p in self.ws.problems:
             printer(f"▸ log problem: {p.path}:{p.line}: {p.reason}")
         self.graph = Graph.load(self.codoc_dir / GRAPH_CACHE)
-        # A close already in activity.json at start was reflected by the daemon
-        # that saw it, or settled by the Stop hook when no daemon ran
-        # (docs/concurrency.md, Processes).
-        self.state = DaemonState(ended_at=(read_activity(self.codoc_dir).get("epoch") or {}).get("ended_at"))
+        # A close already in activity.json counts as a close: the turn may have
+        # ended while no daemon ran, and a pass over one a daemon before this
+        # one reflected finds no changed code.
+        self.state = DaemonState()
         self.say = printer
         self.after_batch = after_batch       # called with the daemon after every watched batch
         self._changeset = changeset
@@ -204,17 +205,19 @@ class Daemon:
                 self.state.deferred |= code
                 notes.append(f"deferring {len(code)} file(s) for the open session")
             else:
-                notes.append(self.reflect(code, under_epoch=under_epoch, landed=landed))
+                notes.append(self.reflect(under_epoch=under_epoch, landed=landed))
         # 5. Settle what the drain landed, and a session that just closed.
         settle_if_idle(self.ws, sha=sha, now=now)
         # 6. Publish (the publisher skips the write when nothing moved).
         self.publisher.publish(self.ws.store, force=rebuilt)
         return "; ".join(notes)
 
-    def reflect(self, files: set[str], *, under_epoch: bool = False, landed: frozenset[str] = frozenset()) -> str:
+    def reflect(self, *, whole: bool = False, under_epoch: bool = False, landed: frozenset[str] = frozenset()) -> str:
+        """One reflect pass over every code file that changed since the index
+        was last updated (``index_code``; ``whole`` rebuilds the graph)."""
         from codoc.kinds.lift import lift_pass
         from codoc.loops.reflect import reflect
-        cs = index_code(self.root, self.codoc_dir, self.graph, files, changeset=self._changeset)
+        cs = index_code(self.root, self.codoc_dir, self.graph, whole=whole, changeset=self._changeset)
         res = reflect(self.ws, cs, self.graph, propose=self._propose or _propose(),
                       doc_language=workspace_doc_language(self.codoc_dir), under_epoch=under_epoch, landed=landed)
         settle_if_idle(self.ws, res, sha=head(self.root)[0])
@@ -223,32 +226,28 @@ class Daemon:
         return f"reflect: {res.summary()}" + (f" · {lifted} block(s) lifted" if lifted else "")
 
     # ── lifecycle ──────────────────────────────────────────────────────────
-    def start(self) -> bool:
-        """Become the only applier: take the daemon's lock on watch.pid, then
-        rebuild under the applier lock. False, with nothing done, when another
-        daemon holds the lock. A daemonless writer that applied after this
-        store was built and before the lock was taken wrote a log this store
-        has not read; one that takes the applier lock after this sees the
-        daemon and submits to the inbox (``client.applying``)."""
-        # Limit: the logs are replayed twice at start; build the store after
-        # the lock if start-up time on a long log matters.
-        if not hold_pidfile(self.codoc_dir):
-            return False
-        with locked(self.codoc_dir / APPLIER_LOCK):
-            self.ws.rebuild()
-        self.publisher.invalidate()
-        return True
+    @classmethod
+    def start(cls, root_dir: str | Path, codoc_dir: str | Path | None = None, **kw) -> "Daemon | None":
+        """The daemon, as the only applier: take the daemon's lock on
+        watch.pid, then open the workspace under the applier lock, so a
+        daemonless writer applying at that moment finishes first and its log
+        is read. One that takes the applier lock after this sees the daemon
+        and submits to the inbox (``client.applying``). None, with nothing
+        written, when another daemon holds the lock."""
+        cd = Path(codoc_dir or Path(root_dir) / CODOC_DIR)
+        if not hold_pidfile(cd):
+            return None
+        with locked(cd / APPLIER_LOCK):
+            return cls(root_dir, cd, **kw)
 
     def run(self, *, debounce_ms: int = DEBOUNCE_MS) -> None:
-        """Watch the root until the process is stopped. A batch runs for the
-        events ``wakes`` keeps, and on the quiet tick: once ``TICK_MS`` has
-        passed since the last batch, whatever else changed."""
+        """Watch the root until the process is stopped, on a daemon ``start``
+        returned. A batch runs for the events ``wakes`` keeps, and on the
+        quiet tick: once ``TICK_MS`` has passed since the last batch,
+        whatever else changed."""
         import atexit
         import signal
         import watchfiles
-        if not self.start():
-            self.say("A codoc daemon is already watching this repo.")
-            raise SystemExit(3)
         atexit.register(self.ws.close)
         # The hub and the editor stop the daemon with SIGTERM, whose default
         # skips atexit and would leave the session log unclosed.
@@ -270,26 +269,25 @@ class Daemon:
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-def index_code(root: str | Path, codoc_dir: str | Path, graph: Graph, files: set[str] = frozenset(), *,
-               changeset=None):
+def index_code(root: str | Path, codoc_dir: str | Path, graph: Graph, *, whole: bool = False, changeset=None):
     """Bring the chunk index up to date, update the code graph from it, and
-    cache the graph where every reader loads it. ``files`` limits the
-    comparison to what a batch saw change, and the graph re-extracts only
-    their edges; with none, every file is compared and the graph is built
-    whole (``codoc init``, ``codoc sync``). ``changeset(root, codoc_dir,
-    files)`` stands in for the index in tests. Returns the change set."""
-    cs = (changeset or _changeset)(str(root), str(codoc_dir), set(files))
-    if files:
-        graph.update(cs.rows, cs.touched_files())
-    else:
+    cache the graph where every reader loads it. The graph re-extracts the
+    edges of the files whose chunks changed; ``whole`` builds it from every
+    chunk instead (``codoc init``, ``codoc sync``). ``changeset(root,
+    codoc_dir, whole)`` stands in for the index in tests. Returns the change
+    set."""
+    cs = (changeset or _changeset)(str(root), str(codoc_dir), whole)
+    if whole:
         graph.rebuild(cs.rows)
+    else:
+        graph.update(cs.rows, cs.touched_files())
     atomic_write(Path(codoc_dir) / GRAPH_CACHE, graph.dumps())
     return cs
 
 
-def _changeset(root: str, codoc_dir: str, files: set[str]):
+def _changeset(root: str, codoc_dir: str, whole: bool):
     from codoc.index.changes import compute_changeset
-    return compute_changeset(root, codoc_dir, file_scope=files or None)
+    return compute_changeset(root, codoc_dir, all_sources=whole)
 
 
 def _propose():
