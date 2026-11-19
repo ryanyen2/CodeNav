@@ -376,7 +376,7 @@ A suggester's comment ops, all untagged:
 | op | allowed when |
 |---|---|
 | `block.add` of a `comment` block | Always. A reply is a new block. It takes the comment kind's layout (out of the flow, not exported) whatever `layout` the client sent (`inbox.client_payload`). |
-| `text.mark` of kind `comment` | Always. It is the anchor on the prose. |
+| `text.mark` of kind `comment` | The comment block its `attrs.block` names is one the actor added. It is that message's anchor on the prose, so they place their own and take off only their own: removing another person's would un-anchor their thread. |
 | Text ops and `block.set` on a comment block | The actor added that block. A text op writes only into the block it names: the applier refuses one whose characters another block holds (`bad_anchor`), so naming a comment of one's own reaches no other words. |
 | `block.set` of `status` on a comment block | The actor added the thread's first message (`derive.first_message`). |
 

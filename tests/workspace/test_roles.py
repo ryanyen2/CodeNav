@@ -462,3 +462,41 @@ def test_a_suggester_writes_through_their_own_comment_only_into_that_comment(tmp
         assert [o.conflict for o in ws.drain_inbox()] == ["bad_anchor"], (kind, payload)
     assert ws.store.state_fingerprint()["blocks"] == before
     ws.close()
+
+
+def test_a_suggester_places_and_takes_off_only_the_anchor_of_a_comment_they_added(tmp_path):
+    """A ``comment`` mark is the anchor of the message its ``attrs.block``
+    names, so it is that message's author's. Mallory anchors her own comment
+    and takes that anchor off again; taking off the owner's anchor, by its
+    placer or by its range, or placing one for the owner's comment, is
+    refused, and the owner's thread stays anchored."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed_loop(ws)
+    r = refs(ws, "p1")
+    on_p1 = {"bid": "p1", "path": "text"}
+
+    def comment(bid):
+        return {"kind": "comment", "after": "p1", "content": {
+            "thread": bid, "anchor": "p1", "anchor_text": "Retries", "scope": "code", "status": "open"}}
+
+    def anchor(bid, on=True, **extra):
+        return {"kind": "comment", "attrs": {"block": bid}, "start": list(r[0]), "end": list(r[6]), "on": on, **extra}
+
+    owners = ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "c-o"}, "payload": comment("c-o")},
+                        {"kind": K.TEXT_MARK, "target": on_p1, "payload": anchor("c-o")}], actor=H)
+    assert [o.conflict for o in owners] == [None, None]
+
+    def mallory(i, kind, target, payload):
+        I.submit(cd, "hub-mallory", [sub(f"m{i}", kind, target, payload, batch=f"m{i}")])
+        return [o.conflict for o in ws.drain_inbox()]
+
+    assert mallory(0, K.TEXT_MARK, on_p1, anchor("c-o", on=False, op=owners[1].id)) == ["authority"]
+    assert mallory(1, K.TEXT_MARK, on_p1, anchor("c-o", on=False)) == ["authority"]
+    assert mallory(2, K.TEXT_MARK, on_p1, anchor("c-o")) == ["authority"]
+    assert [m.attrs for m in ws.store.blocks["p1"].text().marks] == [{"block": "c-o"}]
+    assert mallory(3, K.BLOCK_ADD, {"bid": "c-m"}, comment("c-m")) == [None]
+    assert mallory(4, K.TEXT_MARK, on_p1, anchor("c-m")) == [None]
+    assert mallory(5, K.TEXT_MARK, on_p1, anchor("c-m", on=False)) == [None]
+    assert [m.attrs for m in ws.store.blocks["p1"].text().marks] == [{"block": "c-o"}]
+    ws.close()

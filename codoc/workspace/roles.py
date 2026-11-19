@@ -99,14 +99,18 @@ def _own_comment(store: Store, op: Op) -> bool:
     ``status`` is what the margin and ``Build it`` read, so marking a
     maintainer's request-for-work done is answering it on their behalf. The
     thread's status is its first message's (``derive.first_message``), so
-    that is the block whose author may set it."""
+    that is the block whose author may set it. The anchor mark on the prose
+    is part of the message it names (``attrs.block``), so its author places
+    it and nobody else may take it off: un-anchoring a maintainer's thread is
+    answering it too."""
     if op.kind == K.BLOCK_ADD:
         return True
     bid = str(op.target.get("bid") or "")
     if op.kind == K.TEXT_MARK and op.payload.get("kind") == COMMENT:
-        return True            # the anchor mark on the prose, which is theirs to place
+        attrs = op.payload.get("attrs")
+        bid = str(attrs.get("block") or "") if isinstance(attrs, dict) else ""
     b = store.blocks.get(bid)
-    if b is None:
+    if b is None or b.kind != COMMENT:
         return False
     if op.kind == K.BLOCK_SET and op.target.get("path") == "status":
         first = first_message(store, b)
@@ -141,8 +145,9 @@ class Roles:
     A comment is writable untagged by anyone: it hangs off words rather than
     standing among them, and there is nothing for a maintainer to accept. What
     a contributor may write there is their own: a new comment (which is what a
-    reply is) and the words of one they minted. Deleting somebody else's words,
-    or resolving a thread they did not start, is answering for them.
+    reply is), and the words and anchor mark of one they minted. Deleting
+    somebody else's words, taking off their anchor, or resolving a thread they
+    did not start, is answering for them.
     """
     table: dict[str, str] = field(default_factory=dict)
     default: str = "suggest"
