@@ -181,6 +181,23 @@ def test_a_config_that_does_not_parse_is_never_written_over(tmp_path):
     assert (cd / "config.json").read_text() == broken and sorted(p.name for p in cd.iterdir()) == ["config.json"]
 
 
+def test_a_role_a_sign_in_could_not_record_is_recorded_once_the_file_is_fixed(tmp_path):
+    """A maintainer who signs in while config.json is merge-conflicted keeps
+    the role in their session only. The next re-check records it, without
+    waiting for the role to change, so the applier does not take them for a
+    suggester (and refuse their verdicts) until the cookie expires."""
+    cd = workspace(tmp_path)
+    (cd / "config.json").write_text("<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> theirs\n")
+    auth = AuthContext(SessionStore(), resolver=FakeResolver({"alice": "admin"}), oauth=FakeOAuth(), recheck_seconds=0)
+    c = TestClient(build_app(str(cd), auth=auth), follow_redirects=False)
+    state = c.get("/auth/login").headers["location"].split("state=")[1].split("&")[0]
+    c.cookies.set(COOKIE_NAME, c.get("/auth/callback", params={"code": "good", "state": state}).cookies[COOKIE_NAME])
+    assert Roles.load(cd).role("human:gh:alice") == SUGGEST          # not recorded: the file does not parse
+    (cd / "config.json").write_text("{}\n")                           # the maintainer resolves the conflict
+    assert c.get("/api/whoami").json()["role"] == MAINTAINER          # a re-check runs (recheck_seconds=0)
+    assert Roles.load(cd).role("human:gh:alice") == MAINTAINER
+
+
 def test_a_viewer_keeps_receiving_acks_after_the_daemon_trims_the_ack_file(tmp_path):
     """`rotate_acks` rewrites the ack file to its newest lines at every daemon
     start, and both tails (this one and `provider.ts`'s `readFrom`) follow it

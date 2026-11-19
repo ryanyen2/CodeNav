@@ -25,11 +25,11 @@ from codoc.calculus import ops as K
 from codoc.calculus.derive import (
     description, ink, kind_words, live_spans, prose_blocks, queued, realized_content, removals, title, unvetted_block,
 )
-from codoc.calculus.doc import BUILTIN
+from codoc.calculus.doc import BUILTIN, Block
 from codoc.calculus.ids import LOOP, is_human
 from codoc.calculus.ops import Op, in_frontier
 from codoc.calculus.store import Store, Watermarks, file_of
-from codoc.calculus.text import BOLD, LINK
+from codoc.calculus.text import BOLD, COMMENT, LINK
 from codoc.llm.prompt import format_prompt, load_prompt
 from codoc.workspace import Workspace
 from codoc.workspace.epoch import epoch_alive
@@ -185,9 +185,10 @@ def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[
     in-flow block's ``consult``, then the directive each block's
     ``lower`` codec derives from what changed since the last realization. An
     out-of-flow block (a comment) is not prose the agent reads, only a
-    request, which its own codec words. A kind this process has no code for
-    says its Text fields' words under its name. A block an open plan wrote
-    says nothing (``unvetted_block``)."""
+    request, which its own codec words, open or resolved as its thread is
+    (``_thread_status``). A kind this process has no code for says its Text
+    fields' words under its name. A block an open plan added says nothing
+    (``unvetted_block``)."""
     reads: list[str] = []
     asks: list[str] = []
     ctx: object | None = None
@@ -200,6 +201,8 @@ def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[
                 reads.append(said)
             continue
         new = registry.plain(b, store)
+        if b.kind == COMMENT:
+            new["status"] = _thread_status(store, b)
         if b.layout.flow and (said := kind.consult(new)):
             reads.append(said)
         if kind.lower is None:
@@ -210,6 +213,20 @@ def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[
         if ask := kind.lower(old, new, ctx):
             asks.append(ask)
     return reads, asks
+
+
+def _thread_status(store: Store, b: Block):
+    """A comment thread is open or resolved as a whole, and its first message
+    says which: the comment block ``thread`` names, or, when that is not a
+    live comment, the thread's first live message in document order. The
+    editor's margin (``threadsOf``) reads the same block. A reply's own
+    ``status`` is whatever its writer sent and decides nothing, so a reply on
+    a thread the maintainer resolved is not a request the margin hides."""
+    thread = str(b.content.get("thread") or b.id)
+    first = store.blocks.get(thread)
+    if first is None or not first.live or first.kind != COMMENT:
+        first = next(x for x in store.ordered() if x.kind == COMMENT and str(x.content.get("thread") or x.id) == thread)
+    return first.content.get("status")
 
 
 def _human_changes(store: Store, fid: str) -> list[str]:
@@ -239,8 +256,15 @@ def _focus(store: Store, fid: str, w: Watermarks) -> list[str]:
 
 
 def _all_links(store: Store, fid: str) -> list[tuple[str, str]]:
+    """The links in the feature's prose: the directive's ``Consult:`` line,
+    which the agent fetches. A comment is not prose (``prose_blocks``): its
+    words reach the agent only through its kind's ``lower``, voiced as a
+    comment, so a link a contributor put in their own comment is not a page to
+    fetch. A block an open plan added is the plan's (``unvetted_block``)."""
     out = []
-    for b in store.body(fid):
+    for b in prose_blocks(store, fid):
+        if unvetted_block(store, b):
+            continue
         for f in b.layout.text:
             t = b.text(f)
             lt = t.live_text()

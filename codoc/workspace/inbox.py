@@ -24,7 +24,7 @@ from pathlib import Path
 from codoc.calculus import ops as K
 from codoc.calculus.doc import lifted_fields
 from codoc.calculus.store import Store
-from codoc.calculus.text import SUGGEST_DEL, nfc
+from codoc.calculus.text import COMMENT, SUGGEST_DEL, nfc
 from codoc.workspace.layout import CODOC_DIR, INBOX_DIR, OFFSETS, atomic_write
 
 # Locally the inbox file name is the identity: any process that writes
@@ -271,6 +271,11 @@ def client_payload(store: Store, kind: str, payload: dict, actor: str = "", targ
     - A field only the loop's lift writes (``doc.lifted_fields``: a url
       block's fetched excerpt) is removed from a ``block.add``, and a
       ``block.set`` of one is refused: a client never says what a URL served.
+    - A comment's ``block.add`` takes the comment kind's layout (out of the
+      flow, not exported), whatever ``layout`` it sent. A comment is the one
+      block a suggester writes untagged (``roles.is_comment_op``), so a layout
+      of their own would put their words into the prose, the export and the
+      directive with no verdict.
     - ``set_by`` and ``prev_set_by`` are removed from every op: the hashes a
       client sends are set by that client. Naming another actor (the loop)
       would tell the reflect pass the change had already been reviewed.
@@ -284,6 +289,8 @@ def client_payload(store: Store, kind: str, payload: dict, actor: str = "", targ
     if kind == K.BLOCK_ADD and isinstance(out.get("content"), dict):
         lifted = lifted_fields(str(out.get("kind")))
         out["content"] = {k: v for k, v in out["content"].items() if k not in lifted}
+    if kind == K.BLOCK_ADD and out.get("kind") == COMMENT:
+        out.pop("layout", None)
     if kind == K.BLOCK_SET and (b := store.blocks.get(str((target or {}).get("bid") or ""))) is not None \
             and (target or {}).get("path") in lifted_fields(b.kind):
         raise ValueError(f"{b.kind}.{(target or {})['path']} is written by the loop's lift, not by a client")

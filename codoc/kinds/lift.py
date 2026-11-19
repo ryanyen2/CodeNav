@@ -6,12 +6,15 @@ passes ``derived=True``, which is what keeps it on the trunk however much of
 the picture changed: the machine gate protects words somebody meant, and a
 field read off the code holds none. A block on a held feature (unsent ink or
 queued work) is left alone: the document wins. So is a block an open plan
-wrote (``derive.unvetted_block``): a url a suggester proposed is not fetched
-before somebody accepts it.
+added (``derive.unvetted_block``), and a field an open plan set is read as the
+owner's value (``derive.rejected_content``): a url a suggester proposed is not
+fetched before somebody accepts it.
 """
 from __future__ import annotations
 
-from codoc.calculus.derive import HELD, phase, unvetted_block
+from dataclasses import replace
+
+from codoc.calculus.derive import HELD, phase, rejected_content, unvetted_block
 from codoc.calculus.ids import LOOP
 from codoc.kinds import LiftContext, get, plain
 from codoc.kinds.write import write_block
@@ -30,7 +33,8 @@ def lift_pass(ws: Workspace, graph=None, codoc_dir: str | None = None) -> int:
         if fid and phase(store, fid) in HELD:
             continue
         bindings = [b for b in store.bindings.values() if b.feature == fid] if fid else []
-        new = kind.lift(LiftContext(store=store, block=block, feature=fid, bindings=bindings, graph=graph, codoc_dir=codoc_dir))
+        vetted = replace(block, content=rejected_content(store, block))
+        new = kind.lift(LiftContext(store=store, block=vetted, feature=fid, bindings=bindings, graph=graph, codoc_dir=codoc_dir))
         if not new:
             continue
         current = plain(block, store, mode="live")

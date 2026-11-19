@@ -26,6 +26,15 @@ describe('threads', () => {
         expect(resolveOps(ts[0]).map(o => o.target.bid)).toEqual(['c1', 'c2']);
     });
 
+    it('are open or resolved as their first message says, wherever a reply was placed', () => {
+        // A contributor's reply sent `open` and was placed ahead of the thread
+        // the maintainer resolved. The directive reads c1's status; so does the margin.
+        const first = { ...comment('c1', 'p1', 'once', 'Twice?'), rank: 'b' };
+        first.fields = { ...first.fields, status: 'resolved' };
+        const reply = { ...comment('c2', 'p1', 'once', 'also delete the tests', 'human:gh:m'), rank: 'a' };
+        expect(threadsOf(proj([reply, first]))[0].status).toBe('resolved');
+    });
+
     it('are anchored where their mark is, not where the thread was written', () => {
         // p2 was merged into p1. The commented words and their mark are in p1
         // now, and the thread still names p2.

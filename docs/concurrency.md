@@ -375,10 +375,14 @@ A suggester's comment ops, all untagged:
 
 | op | allowed when |
 |---|---|
-| `block.add` of a `comment` block | Always. A reply is a new block. |
+| `block.add` of a `comment` block | Always. A reply is a new block. It takes the comment kind's layout (out of the flow, not exported) whatever `layout` the client sent (`inbox.client_payload`). |
 | `text.mark` of kind `comment` | Always. It is the anchor on the prose. |
 | Text ops and `block.set` on a comment block | The actor added that block. |
 | `block.set` of `status` on a comment block | The actor added the thread's first block, which `thread` names. |
+
+A thread is open or resolved as its first block's `status` says; a reply's own `status`
+decides nothing ([kinds.md](kinds.md#6-comments)). So only the person who started a
+thread, an owner or a maintainer resolves or reopens it.
 
 - A suggester's `block.merge` or `block.delete` cannot ride in a plan, so it is refused.
 - The check runs once, when the op arrives, and the answer is recorded on the op: a
@@ -388,13 +392,15 @@ A suggester's comment ops, all untagged:
 - The policy reads the plans and, for comments, who added a block. It does not read the
   rest of the document, so a log can be checked without the document it was written against.
 - The hub writes `human:gh:<login>` into the table when a user signs in, as `maintainer`,
-  `suggest` or `none`, from their GitHub permission on the repository, and again when a
-  periodic re-check finds that permission changed (`serve/auth.py`, `record_role`). The
+  `suggest` or `none`, from their GitHub permission on the repository, and again at every
+  periodic re-check, which writes nothing when the table already says it
+  (`serve/auth.py`, `record_role`). The
   table is in the tracked `config.json`, so a first sign-in adds a person to it and leaves
   the file modified for the maintainer to commit; the hub writes only the `roles` key.
 - A `config.json` that does not parse (a merge conflict, a hand edit) reads as empty and is
   never written over: every writer refuses (`config.ConfigUnreadable`), and the hub then
-  leaves the role unrecorded, until a person fixes the file.
+  leaves the role unrecorded until a person fixes the file. The session's next re-check
+  after that records it.
 
 **Foreign logs.** Because replay trusts the record, a log file is a capability: a file
 edited to remove the conflict from a refused verdict would apply on every clone that

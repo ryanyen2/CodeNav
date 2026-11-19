@@ -73,7 +73,7 @@ shows ink and ground as a paragraph does. Any other field is replaced whole by
 | `pdf` | `caption` | Extracts text from a file under `.codoc/media/` when `pypdf` is installed. | | The excerpt, or the file path. |
 | `image` | `alt`, `caption` | | | The alt text, caption and file. |
 | `screenshot` | `caption` | | | The file and caption. |
-| `comment` | `body` | | While the thread is open and the body is not empty: the anchor text and the body; with `scope: both`, also a request to amend the description through `codoc_reflect`. | The anchor text and the body. |
+| `comment` | `body` | | While the thread is open (its first message says so) and the body is not empty: the anchor text and the body; with `scope: both`, also a request to amend the description through `codoc_reflect`. | The anchor text and the body. |
 
 `table` and `code` are part of the feature's description, so the agent reads them there.
 The `url` and `pdf` extractors are in the optional `media` extra.
@@ -94,7 +94,7 @@ Content written to a kind block goes through `codoc/kinds/write.py`
 | writer | how | actor | lands |
 |---|---|---|---|
 | A coding agent | `codoc_write_block(content, bid)`, or `kind` and `feature_id` to add a block at the end of the feature's body. It runs `plan_write` against a read-only replay and submits through the inbox. | `agent:claude-code` | The trunk, or the agent's plan when it passes `plan`. An ingest goes through the machine gate. |
-| The loop | `kinds.lift.lift_pass`: every live block whose kind has a `lift`, on a feature that is not held, that no open plan wrote (`unvetted_block`). Only the changed fields are written. | `loop` | The trunk. The ingest is marked `derived`, which skips the machine gate. |
+| The loop | `kinds.lift.lift_pass`: every live block whose kind has a `lift`, on a feature that is not held, that no open plan added (`unvetted_block`). A field an open plan set is read as the owner's value (`derive.rejected_content`), so a url a suggester proposed is not fetched. Only the changed fields are written. | `loop` | The trunk. The ingest is marked `derived`, which skips the machine gate. |
 | The editor | Comment cards write comment blocks directly as ops (`block.add`, `text.insert`, `text.mark(comment)`, `block.set(status)`). | the person | The trunk. |
 
 A tree edit (`add_node`, `amend`) carries prose and source blocks only. A plugin kind block
@@ -103,8 +103,9 @@ in a model's description is dropped.
 ## 5. Kinds in the directive
 
 For each block of the feature's body (`loops/realize.py`, `_kind_lines`) except one an
-open plan wrote (`derive.unvetted_block`: it added the block or set a JSON field of it,
-and a JSON field carries no plan tag for the `rejected` mode to hide):
+open plan added (`derive.unvetted_block`), with its content in the `rejected` mode
+(`kinds.plain`). A JSON field carries no plan tag, so one an open plan set reads as the
+newest value no open plan wrote, which `Block.prior` keeps (`derive.rejected_content`):
 
 - An in-flow block adds its `consult` line.
 - A block whose kind has a `lower` adds what `lower` makes of `(old, new)`. `old` is the
@@ -115,7 +116,8 @@ and a JSON field carries no plan tag for the `rejected` mode to hide):
   loop lifted from the code is already in the code.
 - A comment is out of the flow, so it speaks only through `lower`. Its `lower` does not
   compare `old` and `new`: an open thread is in every directive of its feature until it is
-  resolved.
+  resolved. No other line of the directive reads a comment: a link in one is not a
+  `Consult:` line, and its words are not `added:`.
 - An in-flow block of a kind this process has no declaration for adds `<kind>: <words>`,
   its Text fields in the `rejected` mode (`derive.kind_words`).
 
@@ -130,7 +132,16 @@ message's block id), each with `anchor` (the block the thread is on), `anchor_te
 `scope` (`code` or `both`) and `status` (`open` or `resolved`). The words it discusses
 carry a `comment` mark whose `block` attr names the first message. The mark is removed
 whole and does not grow (I2). A comment is not exported to `tree.codoc` and is left out of
-`ink`, `ground`, `phase` and drift.
+`ink`, `ground`, `phase` and drift. A client's `block.add` of a comment takes the comment
+kind's layout whatever `layout` it sends (`inbox.client_payload`): a suggester writes a
+comment untagged, and a layout of their own would put their words into the prose.
+
+A thread is open or resolved as a whole, and its first message says which: the block
+`thread` names, or, when that is not a live comment, the thread's first live message in
+document order. A reply's own `status` is whatever its writer sent and decides nothing.
+The directive (`realize._thread_status`) and the margin (`comments.ts`, `threadsOf`) read
+the same block, so a reply that says `open` on a resolved thread neither shows in the
+margin nor reaches the agent.
 
 ## 7. In the editor
 

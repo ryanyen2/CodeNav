@@ -47,21 +47,30 @@ export function anchorsOf(proj: Projection): Map<string, string> {
     return out;
 }
 
-/** Threads from the projection's comment blocks, in document order. */
+/** Threads from the projection's comment blocks, in document order. A thread
+ *  is open or resolved as a whole, and its first message says which: the block
+ *  `thread` names, else the thread's first message in document order. The
+ *  directive reads the same block (`realize._thread_status`), so a reply that
+ *  says `open` on a resolved thread is neither shown nor sent to the agent. */
 export function threadsOf(proj: Projection): Thread[] {
     const live = anchorsOf(proj);
     const out = new Map<string, Thread>();
     for (const b of proj.blocks) {
         if (b.kind !== COMMENT) continue;
         const f = b.fields as Record<string, unknown>;
-        const id = String(f.thread ?? b.id);
+        const id = String(f.thread || b.id);
+        const status = f.status === 'resolved' ? 'resolved' : 'open';
         const body = textField(b, 'body');
         const first = body?.runs[0];
         const msg: Message = { bid: b.id, actor: first?.actor ?? '', at: first?.at ?? '', body: body?.text ?? '' };
         const t = out.get(id);
-        if (t) { t.messages.push(msg); continue; }
+        if (t) {
+            t.messages.push(msg);
+            if (b.id === id) t.status = status;
+            continue;
+        }
         out.set(id, { id, anchor: live.get(id) ?? String(f.anchor ?? ''), anchorText: String(f.anchor_text ?? ''),
-                      scope: f.scope === 'both' ? 'both' : 'code', status: f.status === 'resolved' ? 'resolved' : 'open', messages: [msg] });
+                      scope: f.scope === 'both' ? 'both' : 'code', status, messages: [msg] });
     }
     return [...out.values()];
 }

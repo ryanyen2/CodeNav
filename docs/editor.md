@@ -190,7 +190,8 @@ Each painted run carries its meaning as `title` and `aria-description`. One pale
 every surface: blue is the person, gray a plan, green and red the code.
 
 **Comments** (`comments.ts`). Threads are grouped by `thread` and drawn as cards in the
-margin beside their anchor block. New thread: select words, press Comment, write.
+margin beside their anchor block, while open: a thread is open or resolved as its first
+message says, as the directive reads it ([kinds.md](kinds.md#6-comments)). New thread: select words, press Comment, write.
 A card offers Reply; Resolve, to a viewer who decides or wrote the first message; and, to a
 viewer who decides, Build it, which hands off the anchor's feature and, where the host has a
 terminal, asks it to run `codoc realize`. The open thread reaches the agent through the

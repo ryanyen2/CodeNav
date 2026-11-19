@@ -124,7 +124,7 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
         if b.added_by:
             payload["added_by"] = b.added_by       # who may write into a comment they added
         if b.added_plan:
-            payload["added_plan"] = b.added_plan   # a verdict undone after the fold makes it a proposal again
+            payload["added_plan"] = b.added_plan   # keeps Block.to_json, and so state_fingerprint, equal across a fold
         if b.prior:
             payload["prior"] = {k: [list(e) for e in v] for k, v in b.prior.items()}    # what `lower` compares against
         if b.void:

@@ -103,22 +103,41 @@ def title(store: Store, fid: str, mode: str = "live") -> str:
 
 
 def unvetted_block(store: Store, b: Block) -> bool:
-    """Whether a still-open plan wrote content of ``b`` that is not Text: the
-    plan added the block, or a ``block.set`` of it under the plan is still in
-    ``prior``. A Text field carries its plan on every character, so the read
-    modes hide an open plan's words; a JSON field (a url block's ``url``)
-    carries none. Until the verdict such a block is the plan's: it says nothing
-    in the ``rejected`` mode, the directive leaves it out, and the lift pass
-    leaves it alone, since its fetch would run on a stranger's address."""
+    """Whether a still-open plan added ``b``. Until the verdict such a block is
+    the plan's: it says nothing in the ``rejected`` mode, the directive leaves
+    it out, and the lift pass leaves it alone, since its fetch would run on a
+    stranger's address."""
+    return b.added_plan in store.open_plans
+
+
+def rejected_content(store: Store, b: Block) -> dict:
+    """``b.content`` as the ``rejected`` mode reads its JSON fields. A Text
+    field carries its plan on every character, so the read modes hide an open
+    plan's words; a JSON field (a url block's ``url``, a code block's ``lang``)
+    carries none. One an open plan's ``block.set`` wrote reads as the newest
+    value no open plan wrote, which ``prior`` keeps: the owner's. The export,
+    the directive, the kind codecs and the lift read this, so a value a
+    suggester proposed is neither shown, nor put in front of the agent, nor
+    fetched before a verdict, and the owner's block is not hidden meanwhile."""
     plans = store.open_plans
-    return b.added_plan in plans or any(e[2] in plans for sets in b.prior.values() for e in sets)
+    out = dict(b.content)
+    for k, sets in b.prior.items():
+        for _, prev, pid in reversed(sets):
+            if pid not in plans:
+                break
+            if prev is None:
+                out.pop(k, None)
+            else:
+                out[k] = prev
+    return out
 
 
 def block_spec(store: Store, b: Block, mode: str = "live") -> BlockSpec | None:
     """``b`` as Markdown says it, or None when it says nothing in this mode: an
     empty paragraph or item, an empty source, a block holding only an open
-    plan's words under ``rejected`` or one an open plan wrote
-    (``unvetted_block``), a kind left out of the export."""
+    plan's words under ``rejected`` or one an open plan added
+    (``unvetted_block``), a kind left out of the export. Under ``rejected`` its
+    JSON fields are ``rejected_content``'s."""
     if mode == "rejected" and unvetted_block(store, b):
         return None
     if b.kind == HEADING:
@@ -131,7 +150,8 @@ def block_spec(store: Store, b: Block, mode: str = "live") -> BlockSpec | None:
         return BlockSpec(b.kind, b.level, md) if md.strip() else None
     if not b.layout.export:
         return None
-    plain = {k: v for k, v in b.content.items() if k not in b.layout.text}
+    content = rejected_content(store, b) if mode == "rejected" else b.content
+    plain = {k: v for k, v in content.items() if k not in b.layout.text}
     if b.kind in SOURCE:
         source = field_text(b, "source", mode, store)
         return BlockSpec(b.kind, text=source, content=plain) if source.strip() else None
@@ -544,10 +564,11 @@ def realized_content(store: Store, b: Block, realized: dict) -> dict:
     reads content (``kinds.plain``): each Text field without what the author
     wrote or removed since ``realized``, by identity, in the ``rejected`` mode;
     each other field as it was before the author's first set since
-    (``Block.prior``). Only the author's, because ``lower`` speaks for them: a
-    diagram the loop lifted from the code is already in the code."""
+    (``Block.prior``), else as ``rejected_content`` reads it. Only the
+    author's, because ``lower`` speaks for them: a diagram the loop lifted from
+    the code is already in the code, and an open plan's value is nobody's yet."""
     out = {k: text_string(b.kind, k, _at_realized(store, v, realized), "rejected", store)
-           if k in b.layout.text and isinstance(v, Text) else v for k, v in b.content.items()}
+           if k in b.layout.text and isinstance(v, Text) else v for k, v in rejected_content(store, b).items()}
     for k, sets in b.prior.items():
         first = next((e for e in sets if not in_frontier(e[0], realized)
                       and (not e[2] or (p := store.plans.get(e[2])) is not None and p.adopted)), None)
