@@ -8,6 +8,7 @@ happened to it over time, what the document exports as.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from codoc.calculus import block_md
@@ -20,11 +21,22 @@ from codoc.calculus.ids import LOOP, OpId, is_human
 from codoc.calculus.inline_md import Span, render
 from codoc.calculus.ops import Op, in_frontier
 from codoc.calculus.store import Store
-from codoc.calculus.text import CITE, PROPOSALS, SUGGEST_DEL, SUGGEST_MARK, Mark, Seg, Text, struck_chars
+from codoc.calculus.text import CITE, COMMENT, PROPOSALS, SUGGEST_DEL, SUGGEST_MARK, Mark, Seg, Text, struck_chars
 
 # A feature with pending intent: the document wins over a machine's repair,
 # whatever its size (docs/concurrency.md, The machine gate).
 HELD = ("edited", "queued", "planned")
+_SPACE = re.compile(r"\s+")
+
+
+def one_line(s) -> str:
+    """Free text as it may stand inside one line of a directive: every run of
+    whitespace, each kind of line break included, as one space. The directive
+    is read line by line (a ``Consult:`` line is a page to fetch,
+    ``Author asked:`` is the person's request), so words that broke their line
+    would write lines of their own. Every client's text the directive quotes
+    inside a line of its own goes through here."""
+    return _SPACE.sub(" ", str(s))
 
 
 # ── text views ───────────────────────────────────────────────────────────────
@@ -43,7 +55,7 @@ def live_spans(text: Text, kinds: frozenset | None = None) -> list[Span]:
     return out
 
 
-def _in_mode(text: Text, mode: str, store: Store | None) -> Text:
+def in_mode(text: Text, mode: str, store: Store | None) -> Text:
     """``text`` as it reads in a read mode. ``live``: the field as stored, an
     open plan's words included. ``rejected``: without any open plan's words.
     ``accepted``: with every open plan taken. ``loop``: what the reflect pass
@@ -82,7 +94,7 @@ def _in_mode(text: Text, mode: str, store: Store | None) -> Text:
 
 def markdown(text: Text, mode: str = "live", store: Store | None = None) -> str:
     """An inline field as Markdown in a read mode."""
-    view = _in_mode(text, mode, store)
+    view = in_mode(text, mode, store)
     return render(view.live_text(), live_spans(view))
 
 
@@ -90,7 +102,7 @@ def text_string(kind: str, path: str, text: Text, mode: str = "live", store: Sto
     """A Text field as a string: the raw text of a source field, inline
     Markdown for any other."""
     if is_source_field(kind, path):
-        return _in_mode(text, mode, store).live_text()
+        return in_mode(text, mode, store).live_text()
     return markdown(text, mode, store)
 
 
@@ -115,15 +127,19 @@ def rejected_content(store: Store, b: Block) -> dict:
     field carries its plan on every character, so the read modes hide an open
     plan's words; a JSON field (a url block's ``url``, a code block's ``lang``)
     carries none. One an open plan's ``block.set`` wrote reads as the newest
-    value no open plan wrote, which ``prior`` keeps: the owner's. The export,
-    the directive, the kind codecs and the lift read this, so a value a
-    suggester proposed is neither shown, nor put in front of the agent, nor
-    fetched before a verdict, and the owner's block is not hidden meanwhile."""
-    plans = store.open_plans
+    value that neither an open nor a rejected plan wrote, which ``prior``
+    keeps: the owner's. A rejected plan's value can still be what a later
+    plan's set replaced (the reject found that set on the field and left it),
+    so the walk goes past it too and stops at a person's own set or an accepted
+    plan's. The export, the directive, the kind codecs and the lift read this,
+    so a value a suggester proposed is neither shown, nor put in front of the
+    agent, nor fetched before a verdict, and the owner's block is not hidden
+    meanwhile."""
     out = dict(b.content)
     for k, sets in b.prior.items():
         for _, prev, pid in reversed(sets):
-            if pid not in plans:
+            p = store.plans.get(pid) if pid else None
+            if p is None or p.status == "accepted":
                 break
             if prev is None:
                 out.pop(k, None)
@@ -167,7 +183,32 @@ def kind_words(b: Block, store: Store | None = None) -> str:
     name and the words of its Text fields in the ``rejected`` mode, or "" when
     they hold none."""
     words = [w for f in b.layout.text if (w := field_text(b, f, "rejected", store).strip())]
-    return f"{b.kind}: {'; '.join(words)}" if words else ""
+    return one_line(f"{b.kind}: {'; '.join(words)}") if words else ""
+
+
+def thread_id(b: Block) -> str:
+    """The thread a comment block is a message of: its ``thread`` when that is
+    a non-empty string, else its own id. The margin reads it the same way
+    (``comments.ts``, ``threadIdOf``); ``thread-cases.json`` pins both."""
+    t = b.content.get("thread")
+    return t if isinstance(t, str) and t else b.id
+
+
+def first_message(store: Store, b: Block) -> Block | None:
+    """The message that speaks for ``b``'s thread, whose ``status``, ``scope``
+    and ``anchor_text`` are the thread's: the block the thread id names, when
+    that is a live comment of this thread, else the thread's earliest live
+    message in document order. A reply's own fields decide nothing, wherever
+    it was placed. The margin (``threadsOf``), the directive and the policy
+    on who may resolve a thread all read this. Ordered by rank, not
+    ``store.ordered()``, so the policy can answer from a view without the
+    document's order (``validate._policy_view``)."""
+    tid = thread_id(b)
+    named = store.blocks.get(tid)
+    if named is not None and named.live and named.kind == COMMENT and thread_id(named) == tid:
+        return named
+    return min((x for x in store.blocks.values() if x.live and x.kind == COMMENT and thread_id(x) == tid),
+               key=lambda x: (x.rank, x.id), default=None)
 
 
 def description(store: Store, fid: str, mode: str = "live") -> str:
@@ -410,7 +451,8 @@ def removals(store: Store, fid: str) -> list[Claim]:
     line), but it is not ink, which the editor draws as what the person wrote.
     A removal a verdict made counts only when the verdict adopted its plan
     (``Plan.adopted``) and the words were not the plan's own; it is then the
-    removal of the person who accepted."""
+    removal of the person who accepted. A plan taking back its own words is
+    the plan getting smaller, not a removal (``_answered``)."""
     w = store.watermarks(fid)
     verdicts: dict | None = None
 
@@ -426,7 +468,7 @@ def removals(store: Store, fid: str) -> list[Claim]:
                     i += len(sg.chars)
                 elif is_human(sg.dead_actor) and (st := stage(sg.dead)):
                     verdicts = verdicts if verdicts is not None else _verdict_ops(store)
-                    if not _answered(verdicts, sg):
+                    if not _answered(store, verdicts, sg):
                         out.append(Claim(b.id, f, i, i, "human", st, sg.dead_actor, sg.chars))
     for b in removed_blocks(store, fid):
         if st := stage(b.dead):
@@ -442,10 +484,15 @@ def _verdict_ops(store: Store) -> dict:
     return {p.verdict: p for p in store.plans.values() if p.verdict}
 
 
-def _answered(verdicts: dict, sg: Seg) -> bool:
-    """Whether a verdict killed this dead segment without making the removal
-    anyone's request: its plan was not adopted, or the words were the plan's
-    own, taken back."""
+def _answered(store: Store, verdicts: dict, sg: Seg) -> bool:
+    """Whether this dead segment's removal is nobody's request: the plan that
+    minted the words took them back itself (one of its own ops killed them: a
+    contributor correcting their own proposal, docs/concurrency.md section 9),
+    or a verdict killed them and its plan was not adopted or the words were
+    that plan's own."""
+    own = store.plans.get(sg.plan) if sg.plan else None
+    if own is not None and sg.dead in own.ops:
+        return True
     p = verdicts.get(sg.dead)
     return p is not None and (sg.plan == p.id or not p.adopted)
 
@@ -586,7 +633,7 @@ def _at_realized(store: Store, text: Text, realized: dict) -> Text:
     t.segs = [s for s in t.segs if in_frontier(s.op, realized) or not _authored(store, s)]
     verdicts = _verdict_ops(store)
     for s in t.segs:
-        if s.dead and not in_frontier(s.dead, realized) and is_human(s.dead_actor) and not _answered(verdicts, s):
+        if s.dead and not in_frontier(s.dead, realized) and is_human(s.dead_actor) and not _answered(store, verdicts, s):
             s.dead = None
     t.marks = [m for m in t.marks if t.holds(m.start) and t.holds(m.end)]
     return t

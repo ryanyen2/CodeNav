@@ -390,3 +390,35 @@ def test_validate_logs_flags_a_snapshot_only_field_in_a_session_file(tmp_path):
     ws.close()
     found = validate_logs(L.list_sessions(cd), roles=Roles({}))
     assert any("plan.open carries ops" in f.reason for f in found), [str(f) for f in found]
+
+
+def test_who_may_resolve_a_thread_is_whoever_wrote_the_message_the_margin_reads(tmp_path):
+    """A thread's status is its first message's (``derive.first_message``), so
+    the person who may set it is that message's author. Block c-x is the
+    owner's, in thread c-z; mallory's c-b is the one message of thread c-x,
+    so she may resolve it. Her reply placed ahead of the owner's thread o-1
+    is not its first message, so she may not resolve that one through it."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed_loop(ws)
+
+    def comment(bid, thread, actor, after="p1"):
+        add = sub(bid, K.BLOCK_ADD, {"bid": bid}, {"kind": "comment", "after": after, "content": {
+            "thread": thread, "anchor": "p1", "anchor_text": "once", "scope": "code", "status": "open"}}, batch=bid)
+        if actor == H:
+            assert ws.submit([{"kind": add.kind, "target": add.target, "payload": add.payload}], actor=H)[0].conflict is None
+        else:
+            I.submit(cd, "hub-mallory", [add])
+            assert [o.conflict for o in ws.drain_inbox()] == [None]
+
+    def resolve(bid):
+        I.submit(cd, "hub-mallory", [sub(f"r-{bid}", K.BLOCK_SET, {"bid": bid, "path": "status"}, {"value": "resolved"})])
+        return ws.drain_inbox()[0].conflict
+
+    comment("c-x", "c-z", H)
+    comment("c-b", "c-x", "mallory", after="c-x")
+    comment("o-1", "o-1", H)
+    comment("m-1", "o-1", "mallory")             # after p1: ahead of o-1
+    assert resolve("c-b") is None
+    assert resolve("m-1") == "authority"
+    ws.close()

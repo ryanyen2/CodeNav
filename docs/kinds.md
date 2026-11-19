@@ -105,7 +105,8 @@ in a model's description is dropped.
 For each block of the feature's body (`loops/realize.py`, `_kind_lines`) except one an
 open plan added (`derive.unvetted_block`), with its content in the `rejected` mode
 (`kinds.plain`). A JSON field carries no plan tag, so one an open plan set reads as the
-newest value no open plan wrote, which `Block.prior` keeps (`derive.rejected_content`):
+newest value neither an open nor a rejected plan wrote, which `Block.prior` keeps
+(`derive.rejected_content`):
 
 - An in-flow block adds its `consult` line.
 - A block whose kind has a `lower` adds what `lower` makes of `(old, new)`. `old` is the
@@ -116,8 +117,15 @@ newest value no open plan wrote, which `Block.prior` keeps (`derive.rejected_con
   loop lifted from the code is already in the code.
 - A comment is out of the flow, so it speaks only through `lower`. Its `lower` does not
   compare `old` and `new`: an open thread is in every directive of its feature until it is
-  resolved. No other line of the directive reads a comment: a link in one is not a
-  `Consult:` line, and its words are not `added:`.
+  resolved. Each message's `status`, `scope` and `anchor_text` are its thread's (section 6).
+  No other line of the directive reads a comment: a link in one is not a `Consult:` line,
+  and its words are not `added:`.
+- A client's words that a codec or the directive quotes inside one of its lines (a
+  comment's body and `anchor_text`, a title, a link's label, a caption, a url) are
+  `derive.one_line`'d: every run of whitespace, line breaks included, is one space. The
+  directive is read line by line, so a line break in them would write a `Consult:` or an
+  `Author asked:` of their own. A comment's body is collapsed rather than kept on
+  prefixed lines, because its `Comment on` line is what voices it as a comment.
 - An in-flow block of a kind this process has no declaration for adds `<kind>: <words>`,
   its Text fields in the `rejected` mode (`derive.kind_words`).
 
@@ -136,12 +144,18 @@ whole and does not grow (I2). A comment is not exported to `tree.codoc` and is l
 kind's layout whatever `layout` it sends (`inbox.client_payload`): a suggester writes a
 comment untagged, and a layout of their own would put their words into the prose.
 
-A thread is open or resolved as a whole, and its first message says which: the block
-`thread` names, or, when that is not a live comment, the thread's first live message in
-document order. A reply's own `status` is whatever its writer sent and decides nothing.
-The directive (`realize._thread_status`) and the margin (`comments.ts`, `threadsOf`) read
-the same block, so a reply that says `open` on a resolved thread neither shows in the
-margin nor reaches the agent.
+A block's thread is its `thread` when that is a non-empty string, else its own id. A
+thread is open or resolved as a whole, and its first message says which, what it is on
+(`anchor_text`) and what it asks for (`scope`): the block the thread names, when that is a
+live comment of this thread, else the thread's earliest live message in document order. A
+reply's own `status`, `scope` and `anchor_text` are whatever its writer sent and decide
+nothing, wherever it was placed. The rule is written once per language,
+`derive.thread_id` and `derive.first_message` in Python and `threadIdOf` and `threadsOf`
+in `comments.ts`, and `vscode-codoc/src/test/fixtures/thread-cases.json` holds both to the
+same cases. The directive (`realize._kind_lines`), the margin, and the policy on who may
+resolve a thread ([concurrency.md](concurrency.md#7-roles-and-authority)) read it, so a
+reply that says `open` on a resolved thread, or `both` on a `code` one, neither shows in
+the margin nor reaches the agent.
 
 ## 7. In the editor
 

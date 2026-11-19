@@ -1,0 +1,49 @@
+[
+  {
+    "name": "a reply joins the thread its first message started",
+    "blocks": [
+      {"id": "c1", "thread": "c1", "status": "resolved", "scope": "code", "anchor_text": "once"},
+      {"id": "c2", "thread": "c1", "status": "open", "scope": "both", "anchor_text": "reply"}
+    ],
+    "threads": [
+      {"id": "c1", "status": "resolved", "scope": "code", "anchor_text": "once", "messages": ["c1", "c2"]}
+    ]
+  },
+  {
+    "name": "a reply placed ahead of the first message decides nothing",
+    "blocks": [
+      {"id": "c2", "thread": "c1", "status": "open", "scope": "both", "anchor_text": "reply"},
+      {"id": "c1", "thread": "c1", "status": "resolved", "scope": "code", "anchor_text": "once"}
+    ],
+    "threads": [
+      {"id": "c1", "status": "resolved", "scope": "code", "anchor_text": "once", "messages": ["c2", "c1"]}
+    ]
+  },
+  {
+    "name": "the block a thread names decides it only when it is in that thread",
+    "blocks": [
+      {"id": "c-w", "thread": "c-z", "status": "resolved", "scope": "code", "anchor_text": "w"},
+      {"id": "c-x", "thread": "c-z", "status": "open", "scope": "both", "anchor_text": "x"},
+      {"id": "c-b", "thread": "c-x", "status": "resolved", "scope": "code", "anchor_text": "b"}
+    ],
+    "threads": [
+      {"id": "c-z", "status": "resolved", "scope": "code", "anchor_text": "w", "messages": ["c-w", "c-x"]},
+      {"id": "c-x", "status": "resolved", "scope": "code", "anchor_text": "b", "messages": ["c-b"]}
+    ]
+  },
+  {
+    "name": "a thread that is not a non-empty string is the block's own",
+    "blocks": [
+      {"id": "c-1", "thread": "c-1", "status": "resolved", "scope": "code", "anchor_text": "one"},
+      {"id": "c-2", "thread": ["c-1"], "status": "open", "scope": "both", "anchor_text": "two"},
+      {"id": "c-3", "thread": "", "status": "open", "scope": "code", "anchor_text": "three"},
+      {"id": "c-4", "status": "resolved", "scope": "code", "anchor_text": "four"}
+    ],
+    "threads": [
+      {"id": "c-1", "status": "resolved", "scope": "code", "anchor_text": "one", "messages": ["c-1"]},
+      {"id": "c-2", "status": "open", "scope": "both", "anchor_text": "two", "messages": ["c-2"]},
+      {"id": "c-3", "status": "open", "scope": "code", "anchor_text": "three", "messages": ["c-3"]},
+      {"id": "c-4", "status": "resolved", "scope": "code", "anchor_text": "four", "messages": ["c-4"]}
+    ]
+  }
+]

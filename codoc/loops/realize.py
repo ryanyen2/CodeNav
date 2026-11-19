@@ -23,9 +23,10 @@ from pathlib import Path
 from codoc import kinds as registry
 from codoc.calculus import ops as K
 from codoc.calculus.derive import (
-    description, ink, kind_words, live_spans, prose_blocks, queued, realized_content, removals, title, unvetted_block,
+    description, first_message, in_mode, ink, kind_words, live_spans, one_line, prose_blocks, queued, realized_content,
+    removals, title, unvetted_block,
 )
-from codoc.calculus.doc import BUILTIN, Block
+from codoc.calculus.doc import BUILTIN
 from codoc.calculus.ids import LOOP, is_human
 from codoc.calculus.ops import Op, in_frontier
 from codoc.calculus.store import Store, Watermarks, file_of
@@ -139,7 +140,8 @@ def directive(store: Store, fid: str) -> str:
     """The realize prompt item for a feature: its text in the all-rejected read
     mode (an un-vetted plan never masquerades as the person's intent), what the
     person changed since the last realization, Focus and Consult lines, and
-    the person's own words from the hand-off."""
+    the person's own words from the hand-off. Words it quotes inside a line
+    of its own go through ``one_line``, so none of them starts a line."""
     b = store.blocks.get(fid)
     if b is None:
         return ""
@@ -147,13 +149,13 @@ def directive(store: Store, fid: str) -> str:
     ho = store.by_id.get(w.handoffs[-1]) if w.handoffs else None
     lines = []
     if not b.live:
-        lines.append(f"### REMOVE FEATURE {title(store, fid, 'rejected')} ⟨{fid}⟩")
+        lines.append(f"### REMOVE FEATURE {one_line(title(store, fid, 'rejected'))} ⟨{fid}⟩")
         if ho and ho.payload.get("delete_code"):
             lines.append("Delete the code this feature owned; it was removed from the tree on purpose.")
         else:
             lines.append("Stop tracking this feature's code; do not delete anything.")
     else:
-        lines.append(f"### {title(store, fid, 'rejected')} ⟨{fid}⟩")
+        lines.append(f"### {one_line(title(store, fid, 'rejected'))} ⟨{fid}⟩")
         lines.append("")
         lines.append(description(store, fid, "rejected") or "(no description)")
     changes = _human_changes(store, fid)
@@ -165,11 +167,11 @@ def directive(store: Store, fid: str) -> str:
     focus = _focus(store, fid, w)
     if focus:
         lines.append("")
-        lines.append("Focus: " + "; ".join(f'"{t}"' for t in focus))
+        lines.append("Focus: " + "; ".join(f'"{one_line(t)}"' for t in focus))
     consult = _all_links(store, fid)
     if consult:
         lines.append("")
-        lines.append("Consult: " + ", ".join(f"{t} <{u}>" for t, u in consult))
+        lines.append("Consult: " + ", ".join(f"{one_line(t)} <{one_line(u)}>" for t, u in consult))
     reads, asks = _kind_lines(store, fid, w)
     for line in reads + asks:
         lines.append("")
@@ -185,10 +187,11 @@ def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[
     in-flow block's ``consult``, then the directive each block's
     ``lower`` codec derives from what changed since the last realization. An
     out-of-flow block (a comment) is not prose the agent reads, only a
-    request, which its own codec words, open or resolved as its thread is
-    (``_thread_status``). A kind this process has no code for says its Text
-    fields' words under its name. A block an open plan added says nothing
-    (``unvetted_block``)."""
+    request, which its own codec words. Its ``status``, ``scope`` and
+    ``anchor_text`` are the thread's, read from the thread's first message
+    (``derive.first_message``), as the margin shows them. A kind this process
+    has no code for says its Text fields' words under its name. A block an
+    open plan added says nothing (``unvetted_block``)."""
     reads: list[str] = []
     asks: list[str] = []
     ctx: object | None = None
@@ -202,7 +205,8 @@ def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[
             continue
         new = registry.plain(b, store)
         if b.kind == COMMENT:
-            new["status"] = _thread_status(store, b)
+            head = registry.plain(first_message(store, b) or b, store)
+            new.update({k: head.get(k) for k in ("status", "scope", "anchor_text")})
         if b.layout.flow and (said := kind.consult(new)):
             reads.append(said)
         if kind.lower is None:
@@ -215,26 +219,12 @@ def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[
     return reads, asks
 
 
-def _thread_status(store: Store, b: Block):
-    """A comment thread is open or resolved as a whole, and its first message
-    says which: the comment block ``thread`` names, or, when that is not a
-    live comment, the thread's first live message in document order. The
-    editor's margin (``threadsOf``) reads the same block. A reply's own
-    ``status`` is whatever its writer sent and decides nothing, so a reply on
-    a thread the maintainer resolved is not a request the margin hides."""
-    thread = str(b.content.get("thread") or b.id)
-    first = store.blocks.get(thread)
-    if first is None or not first.live or first.kind != COMMENT:
-        first = next(x for x in store.ordered() if x.kind == COMMENT and str(x.content.get("thread") or x.id) == thread)
-    return first.content.get("status")
-
-
 def _human_changes(store: Store, fid: str) -> list[str]:
     """What the person handed off that the code has not answered: their sent
     ink, then their sent removals (``derive.removals``). Read from the text,
     so a fold that takes the ops away leaves the request intact."""
-    return [f"added: \"{c.text}\"" for c in ink(store, fid) if c.stage == "sent"] \
-        + [f"removed: \"{c.text}\"" for c in removals(store, fid) if c.stage == "sent"]
+    return [f"added: \"{one_line(c.text)}\"" for c in ink(store, fid) if c.stage == "sent"] \
+        + [f"removed: \"{one_line(c.text)}\"" for c in removals(store, fid) if c.stage == "sent"]
 
 
 def _focus(store: Store, fid: str, w: Watermarks) -> list[str]:
@@ -243,11 +233,14 @@ def _focus(store: Store, fid: str, w: Watermarks) -> list[str]:
 
     A mark carries its own actor and placing op, so this reads the marks, not
     the ops that placed them: a mark since turned off is not here to
-    find, and a fold that takes the ops away leaves the focus intact."""
+    find, and a fold that takes the ops away leaves the focus intact. The
+    words are read in the ``rejected`` mode, as the description is, so an open
+    plan's words typed inside a bolded phrase are not quoted as the person's
+    emphasis."""
     out: list[str] = []
     for b in prose_blocks(store, fid):
         for f in b.layout.text:
-            t = b.text(f)
+            t = in_mode(b.text(f), "rejected", store)
             for m in t.marks:
                 if m.kind == BOLD and is_human(m.actor) and m.op and not in_frontier(m.op, w.realized):
                     if words := t.mark_text(m):
@@ -260,13 +253,15 @@ def _all_links(store: Store, fid: str) -> list[tuple[str, str]]:
     which the agent fetches. A comment is not prose (``prose_blocks``): its
     words reach the agent only through its kind's ``lower``, voiced as a
     comment, so a link a contributor put in their own comment is not a page to
-    fetch. A block an open plan added is the plan's (``unvetted_block``)."""
+    fetch. A block an open plan added is the plan's (``unvetted_block``), and
+    a label reads in the ``rejected`` mode, as the description does, so an open
+    plan's words inside it are not the person's."""
     out = []
     for b in prose_blocks(store, fid):
         if unvetted_block(store, b):
             continue
         for f in b.layout.text:
-            t = b.text(f)
+            t = in_mode(b.text(f), "rejected", store)
             lt = t.live_text()
             for sp in live_spans(t):
                 if sp.kind == LINK:

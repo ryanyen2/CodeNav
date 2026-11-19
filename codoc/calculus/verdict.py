@@ -233,8 +233,11 @@ def _undo_steps(store: Store, o: Op) -> list[dict]:
     now. An insert's characters die. A delete's come back and a restore's go
     back to dead by the delete it undid, so a plan that typed, took back and
     gave back the same words is undone one op at a time. A mark record is
-    dropped. A block the plan created dies if it is now empty. A set goes back
-    to the previous value, absent included. A move is put back while it is
+    dropped. A block the plan created dies if it is now empty. A kind or level
+    set goes back to the previous value; a content set does while the field
+    still holds what it wrote (otherwise the later set stands), to the value
+    from before it and any rejected plan's set it replaced (``_set_back``),
+    absent included. A move is put back while it is
     still the op that ranked the block; otherwise the later move stands and
     this one's place is void. A binding goes back to the owner it displaced
     unless someone re-bound it since (their attach stands)."""
@@ -266,8 +269,10 @@ def _undo_steps(store: Store, o: Op) -> list[dict]:
             to = {"kind": p["prev"], "level": p["prev_level"]}
         elif path == "level":
             to = {"level": p["prev"]}
+        elif _holds(b, path, p):
+            to = _set_back(store, b, path, o)
         else:
-            to = {} if o.inverse[0]["payload"].get("unset") else {path: p["prev"]}
+            return []           # set since: that value stands, as a later move does
         step = {"do": "set", "bid": b.id, "from": _read(b, list(to) or [path]), "to": to}
         if p.get("detached"):
             step["bindings"] = p["detached"]      # a heading the plan made prose takes its code back
@@ -292,6 +297,36 @@ def _undo_steps(store: Store, o: Op) -> list[dict]:
               "set_by": p.get("prev_set_by", "")} if "prev_fingerprint" in p else p.get("displaced")
         return [{"do": "bind", "symbol": p["symbol"], "from": cur.to_json(), "to": to}]
     return []
+
+
+def _wrote(p: dict) -> tuple[bool, object]:
+    """What a content ``block.set`` wrote, as (absent, value)."""
+    return (True, None) if p.get("unset") else (False, p.get("value"))
+
+
+def _holds(b: Block, path: str, p: dict) -> bool:
+    """Whether a content field still holds what this ``block.set`` wrote."""
+    return (path not in b.content, b.content.get(path)) == _wrote(p)
+
+
+def _set_back(store: Store, b: Block, path: str, o: Op) -> dict:
+    """What undoing plan op ``o``'s content set puts back: the value it
+    replaced, unless a rejected plan's set wrote that value and was left
+    standing because this one had replaced it (``_holds``); then what that
+    set replaced, and so on back (``Block.prior``, where None is absent). Of
+    two plans P and Q that set the same field, P first, rejecting P leaves
+    Q's value, and rejecting Q then puts back the value from before P, not
+    P's. Any other set stops the walk: a person's, an open or accepted plan's,
+    and one whose op a fold archived."""
+    sets = b.prior.get(path) or []
+    i = next((j for j, e in enumerate(sets) if e[0] == o.id), 0)
+    back = (True, None) if o.inverse[0]["payload"].get("unset") else (False, o.payload.get("prev"))
+    for op_id, prev, pid in reversed(sets[:i]):
+        plan, wrote = store.plans.get(pid) if pid else None, store.by_id.get(op_id)
+        if plan is None or plan.status != "rejected" or wrote is None or _wrote(wrote.payload) != back:
+            break
+        back = (prev is None, prev)
+    return {} if back[0] else {path: back[1]}
 
 
 def _proposed_marks(store: Store, pid: str, accepted: set[str]) -> list[tuple[Block, str, Mark]]:

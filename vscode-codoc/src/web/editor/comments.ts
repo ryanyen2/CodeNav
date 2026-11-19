@@ -12,7 +12,7 @@
  */
 import type { EditorView } from '@tiptap/pm/view';
 
-import { START, textField, type OpBody, type Projection } from '../calc/projection';
+import { START, textField, type OpBody, type ProjectedBlock, type Projection } from '../calc/projection';
 
 interface Message { bid: string; actor: string; at: string; body: string }
 export interface Thread {
@@ -47,32 +47,43 @@ export function anchorsOf(proj: Projection): Map<string, string> {
     return out;
 }
 
+/** The thread a comment block is a message of: its `thread` when that is a
+ *  non-empty string, else its own id. `derive.thread_id` reads it the same way;
+ *  `test/fixtures/thread-cases.json` pins both. */
+export function threadIdOf(b: ProjectedBlock): string {
+    const t = (b.fields as Record<string, unknown>).thread;
+    return typeof t === 'string' && t ? t : b.id;
+}
+
 /** Threads from the projection's comment blocks, in document order. A thread
- *  is open or resolved as a whole, and its first message says which: the block
- *  `thread` names, else the thread's first message in document order. The
- *  directive reads the same block (`realize._thread_status`), so a reply that
- *  says `open` on a resolved thread is neither shown nor sent to the agent. */
+ *  is open or resolved as a whole, and its first message says which, and what
+ *  it is on and asks for (`anchor_text`, `scope`): the block the thread id
+ *  names, when that is in this thread, else the thread's first message in
+ *  document order. The directive and the policy on who may resolve a thread
+ *  read the same block (`derive.first_message`), so a reply that says `open`
+ *  on a resolved thread, or asks for more than its first message, is neither
+ *  shown nor sent to the agent. */
 export function threadsOf(proj: Projection): Thread[] {
     const live = anchorsOf(proj);
-    const out = new Map<string, Thread>();
+    const groups = new Map<string, ProjectedBlock[]>();
     for (const b of proj.blocks) {
         if (b.kind !== COMMENT) continue;
-        const f = b.fields as Record<string, unknown>;
-        const id = String(f.thread || b.id);
-        const status = f.status === 'resolved' ? 'resolved' : 'open';
-        const body = textField(b, 'body');
-        const first = body?.runs[0];
-        const msg: Message = { bid: b.id, actor: first?.actor ?? '', at: first?.at ?? '', body: body?.text ?? '' };
-        const t = out.get(id);
-        if (t) {
-            t.messages.push(msg);
-            if (b.id === id) t.status = status;
-            continue;
-        }
-        out.set(id, { id, anchor: live.get(id) ?? String(f.anchor ?? ''), anchorText: String(f.anchor_text ?? ''),
-                      scope: f.scope === 'both' ? 'both' : 'code', status, messages: [msg] });
+        const id = threadIdOf(b);
+        const g = groups.get(id);
+        if (g) g.push(b); else groups.set(id, [b]);
     }
-    return [...out.values()];
+    return [...groups].map(([id, blocks]) => {
+        const f = (blocks.find(b => b.id === id) ?? blocks[0]).fields as Record<string, unknown>;
+        return { id, anchor: live.get(id) ?? String(f.anchor ?? ''), anchorText: String(f.anchor_text ?? ''),
+                 scope: f.scope === 'both' ? 'both' : 'code', status: f.status === 'resolved' ? 'resolved' : 'open',
+                 messages: blocks.map(message) };
+    });
+}
+
+function message(b: ProjectedBlock): Message {
+    const body = textField(b, 'body');
+    const first = body?.runs[0];
+    return { bid: b.id, actor: first?.actor ?? '', at: first?.at ?? '', body: body?.text ?? '' };
 }
 
 /** The ops for a new thread on `anchor`'s words `[start, end]` (character refs). */

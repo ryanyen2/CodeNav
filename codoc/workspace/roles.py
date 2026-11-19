@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from codoc.calculus import ops as K
+from codoc.calculus.derive import first_message
 from codoc.calculus.ids import LOOP, MACHINE_KINDS, actor_kind
 from codoc.calculus.ops import Op
 from codoc.calculus.store import Store
@@ -96,7 +97,9 @@ def _own_comment(store: Store, op: Op) -> bool:
     they minted (the words they are still typing). Deleting another person's
     words is not, and neither is resolving a thread they did not start:
     ``status`` is what the margin and ``Build it`` read, so marking a
-    maintainer's request-for-work done is answering it on their behalf."""
+    maintainer's request-for-work done is answering it on their behalf. The
+    thread's status is its first message's (``derive.first_message``), so
+    that is the block whose author may set it."""
     if op.kind == K.BLOCK_ADD:
         return True
     bid = str(op.target.get("bid") or "")
@@ -106,7 +109,7 @@ def _own_comment(store: Store, op: Op) -> bool:
     if b is None:
         return False
     if op.kind == K.BLOCK_SET and op.target.get("path") == "status":
-        first = store.blocks.get(str(b.content.get("thread") or bid))
+        first = first_message(store, b)
         return first is not None and first.added_by == op.actor
     return b.added_by == op.actor
 

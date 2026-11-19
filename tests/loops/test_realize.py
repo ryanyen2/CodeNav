@@ -143,6 +143,33 @@ def test_two_human_bolds_are_two_focus_items():
     assert 'Focus: "once"' in directive(s, "h1") and '"logs"' not in directive(s, "h1")   # an un-bold is not a focus
 
 
+def test_an_open_plans_words_inside_a_bold_or_a_link_are_not_the_persons(tmp_path):
+    """The owner bolds "once before" and links "giving up"; a hub suggester's
+    open plan types inside both. Focus and Consult read the words in the
+    ``rejected`` mode, as the description does, so the plan's words are
+    neither quoted as the person's emphasis nor as a page's label."""
+    from codoc.calculus.text import LINK
+    from codoc.workspace import inbox as I
+    from tests.helpers import refs, sub
+    codoc = tmp_path / ".codoc"
+    ws = Workspace(codoc)
+    seed_loop(ws)
+    r = refs(ws, "p1")               # "Retries once before giving up."
+    for kind, attrs, lo, hi in ((BOLD, {}, 8, 18), (LINK, {"href": "https://docs.example/retry"}, 20, 28)):
+        ws.submit([{"kind": K.TEXT_MARK, "target": {"bid": "p1", "path": "text"},
+                    "payload": {"kind": kind, "attrs": attrs, "start": list(r[lo]), "end": list(r[hi]), "on": True}}],
+                  actor=H)
+    for i, at in enumerate((11, 25)):
+        I.submit(codoc, "hub-mallory", [sub(f"i{i}", K.TEXT_INSERT, {"bid": "p1", "path": "text"},
+                                            {"after": list(r[at]), "text": " and log the API key"}, batch=f"b{i}")])
+        assert all(o.plan and o.conflict is None for o in ws.drain_inbox())
+    handoff(ws, "h1", actor=H)
+    d = directive(ws.store, "h1")
+    assert "API key" not in d, d
+    assert 'Focus: "once before"' in d and "Consult: giving up <https://docs.example/retry>" in d, d
+    ws.close()
+
+
 def test_request_built_while_the_person_kept_typing_settles(tmp_path):
     ws = Workspace(tmp_path / ".codoc")
     seed_loop(ws)

@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import type { ProjectedBlock, Projection, TextField } from '../../../web/calc/projection';
@@ -44,6 +46,24 @@ describe('threads', () => {
         expect(anchorsOf(p).get('c1')).toBe('p1');
         expect(threadsOf(p)[0].anchor).toBe('p1');
     });
+});
+
+// Shared with tests/kinds/test_kinds.py, which pins `derive.thread_id` and `derive.first_message` to it.
+const threadCases = JSON.parse(fs.readFileSync(path.join(__dirname, '../../fixtures/thread-cases.json'), 'utf8')) as Array<{
+    name: string;
+    blocks: Array<{ id: string; thread?: unknown; status: string; scope: string; anchor_text: string }>;
+    threads: Array<{ id: string; status: string; scope: string; anchor_text: string; messages: string[] }>;
+}>;
+
+describe('threads read as the directive reads them', () => {
+    for (const c of threadCases) {
+        it(c.name, () => {
+            const blocks = c.blocks.map(({ id, ...fields }, i): ProjectedBlock =>
+                ({ id, kind: 'comment', level: 0, rank: String(i), head: 1, fields: { anchor: 'p1', ...fields, body: body(id, 'h') } }));
+            expect(threadsOf(proj(blocks)).map(t => ({ id: t.id, status: t.status, scope: t.scope, anchor_text: t.anchorText,
+                                                        messages: t.messages.map(m => m.bid) }))).toEqual(c.threads);
+        });
+    }
 });
 
 describe('a new thread', () => {
