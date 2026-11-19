@@ -237,7 +237,6 @@ def sync(root: str = ROOT):
     the session ends reflects it and cites its hand-offs."""
     from codoc.daemon.daemon import Daemon
     from codoc.daemon.pidfile import daemon_running
-    from codoc.daemon.publish import publish
     from codoc.workspace.layout import APPLIER_LOCK, locked
     cd = _require(root)
     # The pass applies across a model call, so it holds the lock every
@@ -249,13 +248,7 @@ def sync(root: str = ROOT):
             raise typer.Exit(0)
         d = Daemon(root, cd, printer=typer.echo)
         try:
-            note = d.process_batch([])
-            if d.state.epoch_open:
-                note2 = "code not reflected: an agent session is open, and the first pass after it ends reflects it"
-            else:
-                note2 = d.reflect(whole=True)
-            typer.echo(f"▸ {note}; {note2}")
-            publish(cd, d.ws.store, root_dir=root)
+            typer.echo(f"▸ {d.process_batch([], whole=True)}")      # the batch publishes
         finally:
             d.ws.close()
 

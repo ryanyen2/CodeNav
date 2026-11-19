@@ -251,8 +251,9 @@ For each batch the daemon does, in order:
    ops as `loop` and cites the hand-offs step 1 noted. It covers every code file changed
    since the index was last updated, not only those the batch saw change, so an edit
    made while no daemon ran is reflected by the next pass. The pass updates the index
-   before its model call, so it writes the change set it read to `cache/pending.json`
-   before the call and deletes the file once it has applied. A pass that was stopped
+   before its model call, so it writes the change set it read, and the hand-offs whose
+   trailers it cites (`landed`), to `cache/pending.json` before the call and deletes the
+   file once it has applied. A file this codoc cannot read counts as empty. A pass that was stopped
    (the editor's or the hub's `SIGTERM`, a kill) leaves the file. A batch that finds
    it runs the pass even when no code file changed, so the next daemon's startup batch,
    or its next tick, applies it; while an agent session is open it waits, as changed

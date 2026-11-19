@@ -30,7 +30,6 @@ wires ``batch`` to ``watchfiles``, filtered by ``wakes``.
 """
 from __future__ import annotations
 
-import json
 import sys
 import time
 from dataclasses import dataclass, field
@@ -49,7 +48,8 @@ from codoc.workspace import log as L
 from codoc.workspace.epoch import (
     EPOCH_STALE_SECONDS, close_epoch, epoch_age, epoch_touched_files, note_reflected, read_activity,
 )
-from codoc.workspace.layout import ACTIVITY, APPLIER_LOCK, CODOC_DIR, GRAPH_CACHE, PENDING, atomic_write, locked
+from codoc.workspace.layout import (ACTIVITY, APPLIER_LOCK, CODOC_DIR, GRAPH_CACHE, PENDING, atomic_write, locked,
+                                    read_json, write_json)
 
 DEBOUNCE_MS = 600
 # This long after its last batch the daemon runs one with no paths, whatever
@@ -150,8 +150,10 @@ class Daemon:
         if self.after_batch:
             self.after_batch(self)
 
-    def process_batch(self, paths: list[str], *, now: float | None = None) -> str:
-        """Run one batch; returns what it did, empty when nothing."""
+    def process_batch(self, paths: list[str], *, now: float | None = None, whole: bool = False) -> str:
+        """Run one batch; returns what it did, empty when nothing. ``whole``
+        (``codoc sync``) runs a pass even when no code file changed and rebuilds
+        the graph from every chunk, unless an agent session is open."""
         now = now if now is not None else time.time()
         code = {rel for p in paths if (rel := self.code_path(p)) is not None}
         notes: list[str] = []
@@ -210,8 +212,10 @@ class Daemon:
             if code:
                 self.state.deferred |= code
                 notes.append(f"deferring {len(code)} file(s) for the open session")
-        elif code or (self.codoc_dir / PENDING).exists():
-            notes.append(self.reflect(under_epoch=under_epoch, landed=landed))
+            if whole:
+                notes.append("code not reflected: an agent session is open, and the first pass after it ends reflects it")
+        elif code or whole or (self.codoc_dir / PENDING).exists():
+            notes.append(self.reflect(whole=whole, under_epoch=under_epoch, landed=landed))
         if under_epoch:
             note_reflected(self.codoc_dir, self.state.reflected)
         # 5. Settle what the drain landed, and a session that just closed.
@@ -227,8 +231,9 @@ class Daemon:
         from codoc.kinds.lift import lift_pass
         from codoc.loops.reflect import reflect
         pending = self.codoc_dir / PENDING
-        cs = with_pending(pending, index_code(self.root, self.codoc_dir, self.graph, whole=whole,
-                                              bindings=self.ws.store.bindings, changeset=self._changeset))
+        cs, landed = with_pending(pending, index_code(self.root, self.codoc_dir, self.graph, whole=whole,
+                                                      bindings=self.ws.store.bindings, changeset=self._changeset),
+                                  landed)
         try:
             res = reflect(self.ws, cs, self.graph, propose=self._propose or _propose(),
                           doc_language=workspace_doc_language(self.codoc_dir), under_epoch=under_epoch, landed=landed)
@@ -305,24 +310,28 @@ def index_code(root: str | Path, codoc_dir: str | Path, graph: Graph, *, whole: 
     return cs
 
 
-def with_pending(path: Path, cs):
-    """``cs`` merged with the change set a stopped pass left at ``path``, and
-    written there before the pass runs. The index advances before the model
-    call, so a pass stopped after that (``SIGTERM``, a kill) would otherwise
-    lose its change set for good; the file is on disk before the call, so it
-    survives a ``SIGKILL``, and the pass deletes it when it has applied.
+def with_pending(path: Path, cs, landed: frozenset[str] = frozenset()):
+    """``(cs, landed)`` merged with the change set and the landed hand-offs a
+    stopped pass left at ``path``, and written there before the pass runs.
+    The index advances before the model call, so a pass stopped after that
+    (``SIGTERM``, a kill) would otherwise lose its change set for good; the
+    file is on disk before the call, so it survives a ``SIGKILL``, and the
+    pass deletes it when it has applied. ``landed`` is kept because the next
+    daemon does not see HEAD move over the trailers again.
 
     Per symbol the newer entry wins, except that a chunk added since the last
     finished pass stays added when it was modified since: the pass offers the
     model only added chunks to place. Every chunk the stopped pass left is
-    ``unjudged``."""
+    ``unjudged``. A file this codoc cannot read (another shape, another
+    version's fields) counts as empty."""
     from codoc.index.changes import ChangeSet, ChunkRef
     kinds = ("added", "modified", "removed")
+    left = read_json(path, {})
     try:
-        left = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        left = {}
-    entry: dict = {d["symbol"]: (k, ChunkRef(**d)) for k in kinds for d in left.get(k, [])}
+        entry: dict = {d["symbol"]: (k, ChunkRef(**d)) for k in kinds for d in left.get(k, [])}
+        landed = landed | frozenset(left.get("landed", []))
+    except (TypeError, KeyError, AttributeError):
+        entry = {}
     unjudged = {s for s, (k, _) in entry.items() if k != "removed"}
     for k in kinds:
         for r in getattr(cs, k):
@@ -333,8 +342,8 @@ def with_pending(path: Path, cs):
         k, r = entry[s]
         getattr(out, k).append(r)
     if entry:
-        atomic_write(path, json.dumps({k: [vars(r) for r in getattr(out, k)] for k in kinds}))
-    return out
+        write_json(path, {**{k: [vars(r) for r in getattr(out, k)] for k in kinds}, "landed": sorted(landed)})
+    return out, landed
 
 
 def _changeset(root: str, codoc_dir: str, whole: bool, bindings: dict | None):

@@ -173,9 +173,8 @@ def test_sync_applies_under_the_applier_lock(tmp_path, monkeypatch):
             held.append(True)
         return "probed"
     monkeypatch.setattr(Daemon, "process_batch", lambda self, paths, **k: probe())
-    monkeypatch.setattr(Daemon, "reflect", lambda self, **k: probe())
     r = runner.invoke(app, ["sync", "--root", str(root)])
-    assert r.exit_code == 0 and held == [True, True], (r.output, held)
+    assert r.exit_code == 0 and held == [True], (r.output, held)
 
 
 def test_sync_leaves_an_open_agent_sessions_code_to_the_pass_after_it_ends(tmp_path, monkeypatch):
@@ -190,6 +189,30 @@ def test_sync_leaves_an_open_agent_sessions_code_to_the_pass_after_it_ends(tmp_p
     monkeypatch.setattr(Daemon, "reflect", lambda self, **k: seen.append(k) or "reflected")
     r = runner.invoke(app, ["sync", "--root", str(root)])
     assert r.exit_code == 0 and seen == [] and "agent session is open" in r.output, (r.output, seen)
+
+
+def test_sync_runs_one_pass_even_with_a_change_set_a_stopped_pass_left(tmp_path, monkeypatch):
+    """The batch decides whether to reflect; sync only asks it to cover the
+    whole tree, so a leftover file does not cause a second pass."""
+    from codoc.daemon.daemon import Daemon
+    root, cd = seeded(tmp_path)
+    (cd / "cache").mkdir(exist_ok=True)
+    (cd / "cache" / "pending.json").write_text(json.dumps({"added": [], "modified": [], "removed": []}))
+    seen = []
+    monkeypatch.setattr(Daemon, "reflect", lambda self, **k: seen.append(k) or "reflected")
+    r = runner.invoke(app, ["sync", "--root", str(root)])
+    assert r.exit_code == 0 and len(seen) == 1 and seen[0]["whole"] is True, (r.output, seen)
+
+
+def test_sync_publishes_once(tmp_path, monkeypatch):
+    """The batch publishes after its pass; sync adds no second write."""
+    from codoc.daemon.publish import Publisher
+    root, cd = seeded(tmp_path)
+    calls = []
+    real = Publisher.publish
+    monkeypatch.setattr(Publisher, "publish", lambda self, *a, **k: calls.append(k) or real(self, *a, **k))
+    r = runner.invoke(app, ["sync", "--root", str(root)])
+    assert r.exit_code == 0 and len(calls) == 1, (r.output, calls)
 
 def test_a_daemon_that_starts_before_the_lock_gets_a_message_not_a_traceback(tmp_path, monkeypatch):
     """The commands that apply themselves learn about a daemon under the lock."""

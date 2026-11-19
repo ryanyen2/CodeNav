@@ -79,6 +79,43 @@ def test_a_daemon_started_with_a_stopped_passs_change_set_reflects_it_with_no_co
     d.batch([])
     assert calls == [False] and asked == [["c.py::retry"]] and not pending.exists()
 
+
+@pytest.mark.parametrize("left", [
+    "[]",                                                           # JSON, not an object
+    json.dumps({"added": [{"symbol": "c.py::x", "fp": "f"}]}),      # a field another codoc version named
+    json.dumps({"added": [{"fingerprint": "f"}]}),                  # no symbol
+])
+def test_a_leftover_file_this_codoc_cannot_read_counts_as_empty(tmp_path, left):
+    """It would otherwise raise before the pass on every batch and tick, and the
+    index, already advanced, would lose each change made meanwhile."""
+    d, _ = make(tmp_path, [ChangeSet(modified=[ChunkRef("c.py::send", "f2", "t1")])])
+    pending = d.codoc_dir / "cache" / "pending.json"
+    pending.parent.mkdir(parents=True, exist_ok=True)
+    pending.write_text(left)
+    (d.root / "c.py").write_text("def send(): ...")
+    note = d.process_batch([str(d.root / "c.py")])
+    assert "reflect" in note and d.ws.store.bindings["c.py::send"].fingerprint == "f2", note
+
+
+def test_a_stopped_pass_over_a_merged_handoff_still_cites_it_when_it_added_code(tmp_path):
+    """The batch that saw HEAD move over a `Codoc-Handoff` trailer was stopped
+    during its model call. The next daemon does not see HEAD move again, so the
+    leftover file carries `landed`, and the pass that applies it cites the
+    hand-off on the code the merge added."""
+    d, _ = make(tmp_path, [ChangeSet(added=[ChunkRef("c.py::retry", "f7", "t7", "def retry(): ...")])])
+    hid = handoff(d.ws, "h1", actor="human:local").id
+    (d.root / "c.py").write_text("def send(): ...\ndef retry(): ...")
+
+    def stop(*_a, **_k):
+        raise SystemExit(0)
+    d._propose = stop
+    with pytest.raises(SystemExit):
+        d.reflect(landed=frozenset({hid}))
+    d._propose = lambda *a, **k: [{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::retry"]}]
+    d.process_batch([])                      # the next daemon's startup batch
+    binds = [(o.kind, o.payload.get("symbol"), o.caused_by) for o in d.ws.store.ops if o.kind.startswith("bind.")]
+    assert ("bind.attach", "c.py::retry", hid) in binds, binds
+
 def test_open_epoch_holds_code_until_it_closes(tmp_path):
     d, calls = make(tmp_path, [ChangeSet(modified=[ChunkRef("c.py::send", "f3", "t1")])])
     act = d.codoc_dir / "activity.json"
