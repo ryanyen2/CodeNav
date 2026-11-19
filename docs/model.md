@@ -23,8 +23,8 @@ Frontier   := { Session: seq }              a set of ops: every op of each sessi
 Rank       := base-62 fraction, as a string
 
 Doc        := Block[]                       sorted by (rank, id); live and dead
-Block      := { id, kind, rank, ranked_by, level, content, added_by, dead?, dead_actor?, dead_at?, dead_in?,
-                detached?, prior?, void? }
+Block      := { id, kind, rank, ranked_by, level, content, added_by, added_plan?, dead?, dead_actor?, dead_at?,
+                dead_in?, detached?, prior?, void? }
 content    := { field: Text | JSON }        which fields are Text is fixed by the kind
 Text       := { segs: Seg[], marks: Mark[] }       segs in document order, live and dead
 Seg        := { op, k0, chars, actor, at, plan?, dead?, dead_actor?, dead_at? }
@@ -84,6 +84,7 @@ Op         := { id, at, actor,              set by the applier; actor from the c
 | `ranked_by` | The op that last set `rank`: the `block.add` or `block.split` that made the block, a `block.move`, a move's `restore`, or a verdict's or reopen's `set` step. A rank string can be handed out again, so whether a block has been moved since is asked of this, never of the rank. |
 | `level` | Outline depth of a heading, indent depth of a list item, both 1..6. 0 for any other kind. |
 | `added_by` | The actor of the `block.add` or `block.split` that made the block. A suggester may write into a comment they added and no other ([concurrency.md](concurrency.md#7-roles-and-authority)). |
+| `added_plan` | The plan the `block.add` that made the block was tagged with. Absent for an untagged add. While that plan is open, the block is its proposal (`unvetted_block`, [Read modes](#read-modes)). |
 | `content` | A field named in `layout.text` is a `Text` edited by text ops. Any other field is a JSON value replaced whole by `block.set`. |
 | `dead` | The op that killed the block. Absent while it is live. |
 | `dead_actor`, `dead_at` | Who killed it and when. |
@@ -636,12 +637,18 @@ but it comes before the code, so the reflect pass leaves its words out.
 A decided plan changes no mode: an accepted plan's words are ordinary text, and a
 rejected plan's words are dead.
 
+A field that is not Text carries no plan tag, so no mode can hide an open plan's value in
+it. `unvetted_block(b)` holds when an open plan added `b` (`added_plan`) or set one of
+its JSON fields (an entry of `prior`). Such a block says nothing in the `rejected` mode,
+the directive leaves it out, and the lift pass leaves it alone, so a url a suggester
+proposed is not fetched and not put in front of the agent before a verdict.
+
 ### Views
 
 | view | definition |
 |---|---|
 | `markdown(field, mode)` | The live text and its marks in a read mode, as inline Markdown. Raw text for a source field. |
-| `block_spec(b, mode)` | The block as the Markdown form says it, or nothing when it says nothing in this mode: an empty block, a block holding only an open plan's words under `rejected`, a kind that is not exported. |
+| `block_spec(b, mode)` | The block as the Markdown form says it, or nothing when it says nothing in this mode: an empty block, a block holding only an open plan's words under `rejected`, an `unvetted_block` under `rejected`, a kind that is not exported. |
 | `description(f, mode)` | The prose and source blocks of `body(f)` after the heading, as block Markdown. |
 | `attribution(field)` | The live segments as offset runs `{start, end, actor, at, plan, op, k0}`. Merged where adjacent runs share actor and plan, for display; unmerged for the editor, where `(op, k0 + i)` is the identity of character `i`. |
 | `block_written_by(b)` | `human` when a person wrote any live character of the block, else the actor of the newest live segment; an open plan's words are left out. |
@@ -657,7 +664,7 @@ rejected plan's words are dead.
 | `queued()` | Queued features in document order, then queued dead headings (a removal still waiting) in id order. |
 | `in_flight()` | Queued features and every live feature an offered plan is about (its target's feature and the feature of each block its ops landed in): work under way that `edited` hides in the phase. |
 | `realized_content(b, realized)` | `b`'s content as its author last had it realized, as a kind's codec reads content: each Text field without the characters the author minted or killed outside `realized` (a person's, or an adopted plan's), in `rejected` mode; each JSON field as the first entry of `prior` outside `realized` by the author says it was. What `lower` compares against. |
-| `directive(f)` | The realize prompt item: title and `description` in `rejected` mode; `added:` from `sent` ink; `removed:` from `sent` removals; `Focus:` from a person's bold marks outside `realized`; `Consult:` from links; each kind block's `consult` and `lower(realized_content, now)`, or for an in-flow block of a kind this process has no code for, `<kind>: <words>` from its Text fields; `Author asked:` from the latest hand-off. For a dead heading: a removal item, which deletes code only when the hand-off set `delete_code`. |
+| `directive(f)` | The realize prompt item: title and `description` in `rejected` mode; `added:` from `sent` ink; `removed:` from `sent` removals; `Focus:` from a person's bold marks outside `realized`; `Consult:` from links; each kind block's `consult` and `lower(realized_content, now)` (an `unvetted_block` adds nothing), or for an in-flow block of a kind this process has no code for, `<kind>: <words>` from its Text fields; `Author asked:` from the latest hand-off. For a dead heading: a removal item, which deletes code only when the hand-off set `delete_code`. |
 | `history(f)` | Every op recorded against a block of `body(f)`, oldest first, conflicted ones included. Ops on blocks the feature no longer holds are left out. |
 | `history_window(n)` | The timeline: the applied ops among the last `n` (200 as published). Per op: `blocks`, the text of each Text field of each block it touched as it read right after the op (`{bid: {field: text}}`), its recorded inverse, the blocks it took off or put on the page, and the ranks, kinds and levels it displaced; plus what was true entering the window. Computed by un-applying the window backwards on clones of the live fields, by character identity. |
 | `dead_cites` | `cite` marks whose `symbol` no binding has. |
@@ -672,7 +679,7 @@ rejected plan's words are dead.
 | phase | holds when |
 |---|---|
 | `edited` | `ink(f)` or `removals(f)` has an `unsent` claim. Changing a block's kind, level or place is layout and does not count. |
-| `realizing` | `f` is queued and a realize pass holds the lease: `status.json` says `realizing`, and the process the lease names is alive and the file was written within the last hour, or, when it names none, within the last 300 seconds. The lease is the one input from outside the store. |
+| `realizing` | `f` is queued and a realize pass holds the lease: `status.json` says `realizing`, and the process the lease names is alive and the lease was last renewed (its `renewed` field) within the last hour, or, when it names none, within the last 300 seconds. The lease is the one input from outside the store. |
 | `queued` | `f` is queued and has at least one binding. |
 | `planned` | `f` is queued and has no binding. |
 | `proposed` | `open_plans_on(f)` is not empty: a plan offered for a verdict is waiting on `f`. |

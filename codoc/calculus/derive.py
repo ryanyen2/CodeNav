@@ -102,10 +102,25 @@ def title(store: Store, fid: str, mode: str = "live") -> str:
     return markdown(store.blocks[fid].text(), mode, store)
 
 
+def unvetted_block(store: Store, b: Block) -> bool:
+    """Whether a still-open plan wrote content of ``b`` that is not Text: the
+    plan added the block, or a ``block.set`` of it under the plan is still in
+    ``prior``. A Text field carries its plan on every character, so the read
+    modes hide an open plan's words; a JSON field (a url block's ``url``)
+    carries none. Until the verdict such a block is the plan's: it says nothing
+    in the ``rejected`` mode, the directive leaves it out, and the lift pass
+    leaves it alone, since its fetch would run on a stranger's address."""
+    plans = store.open_plans
+    return b.added_plan in plans or any(e[2] in plans for sets in b.prior.values() for e in sets)
+
+
 def block_spec(store: Store, b: Block, mode: str = "live") -> BlockSpec | None:
     """``b`` as Markdown says it, or None when it says nothing in this mode: an
     empty paragraph or item, an empty source, a block holding only an open
-    plan's words under ``rejected``, a kind left out of the export."""
+    plan's words under ``rejected`` or one an open plan wrote
+    (``unvetted_block``), a kind left out of the export."""
+    if mode == "rejected" and unvetted_block(store, b):
+        return None
     if b.kind == HEADING:
         md = markdown(b.text(), mode, store)
         if b.text().live_len() and not md.strip():

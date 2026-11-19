@@ -2,6 +2,7 @@
 import json
 import os
 import shutil
+import time
 
 import pytest
 
@@ -224,22 +225,17 @@ def test_status_names_the_language_the_daemon_writes_in(tmp_path, monkeypatch):
 def test_a_language_change_during_a_build_reaches_the_status_without_renewing_the_lease(tmp_path):
     """While a realize pass holds the lease the status is left as it is, but
     for the language, which the page must show as the daemon writes it. The
-    file keeps its old mtime, so the lease is not renewed."""
+    lease's `renewed` stays as the pass left it."""
     from codoc.daemon.publish import read_status, write_realizing
     from codoc.workspace.config import write_config
-    import time
     d, _ = make(tmp_path, [])
     handoff(d.ws, "h1", actor="human:local")                           # a queue for the pass to build
     d.process_batch([])
-    write_realizing(d.codoc_dir, pid=os.getpid(), owner="other")       # a live pass holds the lease
-    status = d.codoc_dir / "status.json"
-    lease_ns = time.time_ns() - 10_000_000_000                        # its last write, 10 s ago
-    os.utime(status, ns=(lease_ns, lease_ns))
+    renewed = write_realizing(d.codoc_dir, pid=os.getpid(), owner="other")["renewed"]   # a live pass holds the lease
     write_config(d.codoc_dir, doc_language="ja")
     d.process_batch([str(d.codoc_dir / "config.json")])
     st = read_status(d.codoc_dir)
-    assert st["doc_language"] == "ja" and st["state"] == "realizing", st
-    assert status.stat().st_mtime_ns == lease_ns
+    assert st["doc_language"] == "ja" and st["state"] == "realizing" and st["renewed"] == renewed, st
 
 
 def test_the_daemons_passes_write_in_the_workspace_language(tmp_path):
@@ -477,7 +473,7 @@ def test_projection_carries_the_realizing_lease_and_publish_skips_unchanged(tmp_
     handoff(d.ws, "h1", actor="human:local")
     d.process_batch([])
     assert json.loads((d.codoc_dir / "status.json").read_text())["state"] == "queued"
-    (d.codoc_dir / "status.json").write_text(json.dumps({"state": "realizing", "version": 2}))
+    (d.codoc_dir / "status.json").write_text(json.dumps({"state": "realizing", "version": 2, "renewed": time.time()}))
     d.process_batch([])
     proj = json.loads((d.codoc_dir / "projection.json").read_text())
     assert proj["phases"] == {"h1": "realizing"}
@@ -488,18 +484,18 @@ def test_projection_carries_the_realizing_lease_and_publish_skips_unchanged(tmp_
 def test_every_publish_reads_the_lease_and_none_renews_it(tmp_path):
     """A one-shot publish (the CLI, a daemonless writer) shows a feature another
     pass is building as `realizing`, as the daemon's does, and leaves the
-    lease's file alone, so a pass that died lets it lapse."""
+    lease's `renewed` alone, so a pass that died lets it lapse."""
     from codoc.daemon.publish import publish
     ws = Workspace(tmp_path / ".codoc")
     seed_loop(ws)
     handoff(ws, "h1", actor="human:local")
     publish(ws.codoc_dir, ws.store, root_dir=str(tmp_path))
     status = ws.codoc_dir / "status.json"
-    status.write_text(json.dumps({"state": "realizing", "version": 2}))
-    stamp = status.stat().st_mtime_ns
+    renewed = time.time()
+    status.write_text(json.dumps({"state": "realizing", "version": 2, "renewed": renewed}))
     publish(ws.codoc_dir, ws.store, root_dir=str(tmp_path))
     assert json.loads((ws.codoc_dir / "projection.json").read_text())["phases"] == {"h1": "realizing"}
-    assert status.stat().st_mtime_ns == stamp
+    assert json.loads(status.read_text())["renewed"] == renewed
     ws.close()
 
 

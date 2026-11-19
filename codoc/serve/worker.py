@@ -31,7 +31,7 @@ from codoc.index.git import BASE_TRAILER, HANDOFF_TRAILER
 from codoc.loops.realize import directive
 from codoc.serve.realize_agent import make_sandboxed_agent
 from codoc.serve.sandbox import out_of_scope_changes
-from codoc.workspace.layout import HUB_PRS, STATUS, atomic_write
+from codoc.workspace.layout import HUB_PRS, STATUS, atomic_write, read_json
 
 # A hand-off whose branch carries the agent's commit but has no pull request
 # yet: `built:<branch>:<attempts>`. The next pass resumes from the push rather
@@ -52,11 +52,9 @@ def pr_create_command(branch: str, title_text: str, body: str, *, base: str) -> 
 
 
 def read_ledger(codoc_dir: str | Path) -> dict[str, str]:
-    try:
-        d = json.loads((Path(codoc_dir) / HUB_PRS).read_text(encoding="utf-8"))
-        return {str(k): str(v) for k, v in d.items()} if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    """Hand-off → pull-request branch. A file that does not parse is moved
+    aside (``read_json``) before ``record_pr`` writes a new one over it."""
+    return {str(k): str(v) for k, v in read_json(Path(codoc_dir) / HUB_PRS, {}).items()}
 
 
 def record_pr(codoc_dir: str | Path, handoff_id: str, branch: str) -> None:

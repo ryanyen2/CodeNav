@@ -5,11 +5,13 @@ the trunk (a lift is attribution, like a binding refresh, never intent). It
 passes ``derived=True``, which is what keeps it on the trunk however much of
 the picture changed: the machine gate protects words somebody meant, and a
 field read off the code holds none. A block on a held feature (unsent ink or
-queued work) is left alone: the document wins.
+queued work) is left alone: the document wins. So is a block an open plan
+wrote (``derive.unvetted_block``): a url a suggester proposed is not fetched
+before somebody accepts it.
 """
 from __future__ import annotations
 
-from codoc.calculus.derive import HELD, phase
+from codoc.calculus.derive import HELD, phase, unvetted_block
 from codoc.calculus.ids import LOOP
 from codoc.kinds import LiftContext, get, plain
 from codoc.kinds.write import write_block
@@ -22,7 +24,7 @@ def lift_pass(ws: Workspace, graph=None, codoc_dir: str | None = None) -> int:
     changed = 0
     for block in list(store.ordered()):
         kind = get(block.kind)
-        if kind is None or kind.lift is None:
+        if kind is None or kind.lift is None or unvetted_block(store, block):
             continue
         fid = store.feature_of(block.id)
         if fid and phase(store, fid) in HELD:

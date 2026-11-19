@@ -22,6 +22,7 @@ Kind(
     lift:    (LiftContext) -> dict | None,             # code -> content
     lower:   (old, new, LowerContext) -> str | None,   # a change to the block -> a directive line
     consult: (content) -> str,         # what the realizing agent reads
+    lifted:  tuple[str, ...],          # fields only `lift` writes
 )
 ```
 
@@ -42,6 +43,9 @@ leaves it out).
   `required`. Text fields arrive as Markdown strings.
 - A codec sees content through `kinds.plain`: each Text field as a string in the
   `rejected` read mode, raw for a source field and inline Markdown otherwise.
+- `lifted` names the fields only the loop's `lift` writes: what it fetched or extracted.
+  `inbox.client_payload` drops them from a client's `block.add` and refuses a client's
+  `block.set` of one, so a url block's excerpt is always what the URL served.
 - A kind never produces ops, actors or plans.
 
 | codec | input | output | run by |
@@ -90,7 +94,7 @@ Content written to a kind block goes through `codoc/kinds/write.py`
 | writer | how | actor | lands |
 |---|---|---|---|
 | A coding agent | `codoc_write_block(content, bid)`, or `kind` and `feature_id` to add a block at the end of the feature's body. It runs `plan_write` against a read-only replay and submits through the inbox. | `agent:claude-code` | The trunk, or the agent's plan when it passes `plan`. An ingest goes through the machine gate. |
-| The loop | `kinds.lift.lift_pass`: every live block whose kind has a `lift`, on a feature that is not held. Only the changed fields are written. | `loop` | The trunk. The ingest is marked `derived`, which skips the machine gate. |
+| The loop | `kinds.lift.lift_pass`: every live block whose kind has a `lift`, on a feature that is not held, that no open plan wrote (`unvetted_block`). Only the changed fields are written. | `loop` | The trunk. The ingest is marked `derived`, which skips the machine gate. |
 | The editor | Comment cards write comment blocks directly as ops (`block.add`, `text.insert`, `text.mark(comment)`, `block.set(status)`). | the person | The trunk. |
 
 A tree edit (`add_node`, `amend`) carries prose and source blocks only. A plugin kind block
@@ -98,7 +102,9 @@ in a model's description is dropped.
 
 ## 5. Kinds in the directive
 
-For each block of the feature's body (`loops/realize.py`, `_kind_lines`):
+For each block of the feature's body (`loops/realize.py`, `_kind_lines`) except one an
+open plan wrote (`derive.unvetted_block`: it added the block or set a JSON field of it,
+and a JSON field carries no plan tag for the `rejected` mode to hide):
 
 - An in-flow block adds its `consult` line.
 - A block whose kind has a `lower` adds what `lower` makes of `(old, new)`. `old` is the

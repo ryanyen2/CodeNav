@@ -137,6 +137,50 @@ def test_the_hub_shows_the_language_the_daemon_resolved(tmp_path):
     assert status_message(cd, "human:gh:alice")["status"]["doc_language"] == "zh-Hans"
 
 
+def test_the_hub_sends_a_language_change_made_during_a_build(tmp_path, monkeypatch):
+    """The feed notices status.json by mtime and size. A language changed while
+    a pass holds the lease is written into the lease without renewing it, and
+    the file's mtime moves with the write, so a tag as long as the old one
+    (en to ja) still reaches the viewers."""
+    import os
+    from codoc.daemon.publish import read_status, write_realizing, write_status
+    from codoc.workspace.config import write_config
+    monkeypatch.delenv("CODOC_DOC_LANGUAGE", raising=False)
+    monkeypatch.delenv("CODOC_REALIZE_OWNER", raising=False)
+    cd = workspace(tmp_path)
+    (cd / "realize.md").write_text("queued\n")
+    write_config(cd, doc_language="en")
+    renewed = write_realizing(cd, pending=1, detail="building 1 of 1", owner="other", pid=os.getpid()).get("renewed")
+    write_status(cd, store=None)                    # the lease is fresh: only the language is written
+    feed = Feed(cd, "ide", replay=0)
+    assert [m["status"]["doc_language"] for m in feed.pending() if m["kind"] == "status"] == ["en"]
+    write_config(cd, doc_language="ja")
+    feed.pending()                                  # the hub polls before the daemon republishes
+    write_status(cd, store=None)
+    st = read_status(cd)
+    assert st["state"] == "realizing" and st.get("renewed") == renewed and st["doc_language"] == "ja", st
+    assert [m["status"]["doc_language"] for m in feed.pending() if m["kind"] == "status"] == ["ja"]
+
+
+def test_a_config_that_does_not_parse_is_never_written_over(tmp_path):
+    """config.json is tracked: one that does not parse (a merge conflict, a
+    trailing comma) holds settings only a person can recover. A sign-in does
+    not record a role into it, and a setting written to it is refused, so
+    doc_language, index_exclude and the other roles stay where they are."""
+    import pytest
+    from codoc.serve.auth import record_role
+    from codoc.workspace.config import ConfigUnreadable, read_config, write_config
+    cd = tmp_path / ".codoc"
+    cd.mkdir()
+    broken = '{\n  "doc_language": "ja",\n  "index_exclude": ["gen/"],\n  "roles": {"human:gh:bob": "none"},\n}\n'
+    (cd / "config.json").write_text(broken)
+    assert read_config(cd) == {}
+    record_role(cd, "alice", "suggest")
+    with pytest.raises(ConfigUnreadable):
+        write_config(cd, doc_language="en")
+    assert (cd / "config.json").read_text() == broken and sorted(p.name for p in cd.iterdir()) == ["config.json"]
+
+
 def test_a_viewer_keeps_receiving_acks_after_the_daemon_trims_the_ack_file(tmp_path):
     """`rotate_acks` rewrites the ack file to its newest lines at every daemon
     start, and both tails (this one and `provider.ts`'s `readFrom`) follow it

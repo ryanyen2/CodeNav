@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from codoc.calculus import ops as K
+from codoc.calculus.doc import lifted_fields
 from codoc.calculus.store import Store
 from codoc.calculus.text import SUGGEST_DEL, nfc
 from codoc.workspace.layout import CODOC_DIR, INBOX_DIR, OFFSETS, atomic_write
@@ -267,6 +268,9 @@ def client_payload(store: Store, kind: str, payload: dict, actor: str = "", targ
     - Snapshot-only fields are removed, from an amend's or a plan's bodies
       too; a body keeps only its kind, target and payload, since the
       submission decides the plan.
+    - A field only the loop's lift writes (``doc.lifted_fields``: a url
+      block's fetched excerpt) is removed from a ``block.add``, and a
+      ``block.set`` of one is refused: a client never says what a URL served.
     - ``set_by`` and ``prev_set_by`` are removed from every op: the hashes a
       client sends are set by that client. Naming another actor (the loop)
       would tell the reflect pass the change had already been reviewed.
@@ -277,6 +281,12 @@ def client_payload(store: Store, kind: str, payload: dict, actor: str = "", targ
       ``chars`` included. Any other mark is the sender's own, and a proposed
       deletion's ``chars`` are the ones the applier reads from its range."""
     out = {k: v for k, v in payload.items() if k not in K.SNAPSHOT_ONLY.get(kind, ())}
+    if kind == K.BLOCK_ADD and isinstance(out.get("content"), dict):
+        lifted = lifted_fields(str(out.get("kind")))
+        out["content"] = {k: v for k, v in out["content"].items() if k not in lifted}
+    if kind == K.BLOCK_SET and (b := store.blocks.get(str((target or {}).get("bid") or ""))) is not None \
+            and (target or {}).get("path") in lifted_fields(b.kind):
+        raise ValueError(f"{b.kind}.{(target or {})['path']} is written by the loop's lift, not by a client")
     out.pop("set_by", None)
     out.pop("prev_set_by", None)
     if kind in ("amend", "propose"):

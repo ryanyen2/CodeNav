@@ -392,6 +392,9 @@ A suggester's comment ops, all untagged:
   periodic re-check finds that permission changed (`serve/auth.py`, `record_role`). The
   table is in the tracked `config.json`, so a first sign-in adds a person to it and leaves
   the file modified for the maintainer to commit; the hub writes only the `roles` key.
+- A `config.json` that does not parse (a merge conflict, a hand edit) reads as empty and is
+  never written over: every writer refuses (`config.ConfigUnreadable`), and the hub then
+  leaves the role unrecorded, until a person fixes the file.
 
 **Foreign logs.** Because replay trusts the record, a log file is a capability: a file
 edited to remove the conflict from a refused verdict would apply on every clone that
@@ -799,7 +802,7 @@ store as the folded ops left it:
 
 | op | one per | carries | actor |
 |---|---|---|---|
-| `block.add` | block, live or dead | `rank`, `level`, the full Text of each Text field (segments with actors, clocks and killers; marks), other fields, `added_by`, `dead`, `dead_actor`, `dead_at`, `dead_in`, `detached`, `prior`, `bound_once`, `code_at`, `realized_at`, `ranked_by`, `void` | `import` |
+| `block.add` | block, live or dead | `rank`, `level`, the full Text of each Text field (segments with actors, clocks and killers; marks), other fields, `added_by`, `added_plan`, `dead`, `dead_actor`, `dead_at`, `dead_in`, `detached`, `prior`, `bound_once`, `code_at`, `realized_at`, `ranked_by`, `void` | `import` |
 | `bind.attach` | binding | the hashes | `import` |
 | `plan.open` | plan | `kind`, `target`, `note`, `ops`, `opened_by`, `build` | the plan's actor |
 | `plan.accept` or `plan.reject` | plan | `verdict`, the op it folded; it sets the plan's status and verdict and does nothing else | the actor who decided |

@@ -9,14 +9,15 @@
                       actor is the person at this machine, the one the editor
                       writes as; doc_language is the tag this process writes
                       prose in (``workspace_doc_language``), which the editor
-                      and the hub show
+                      and the hub show. A realizing lease adds {owner, pid,
+                      renewed}
 
 All derived, all regenerable, all written atomically. Nothing here is read
 back by the calculus. ``status.json`` keeps one input the store does not hold:
-the realizing lease. A realize pass takes it with ``write_realizing``. A lease
-that names its process holds while that process lives, for at most an hour
-after its last write; one that names none lapses ``REALIZING_LEASE_SECONDS``
-after its last write (``realizing_is_fresh``).
+the realizing lease. A realize pass takes it with ``write_realizing``, which
+stamps ``renewed``. A lease that names its process holds while that process
+lives, for at most an hour after its last renewal; one that names none lapses
+``REALIZING_LEASE_SECONDS`` after its last renewal (``realizing_is_fresh``).
 
 A ``Publisher`` memoizes the per-block views on the cache keys of
 docs/model.md (a block's own head, the structural head, the plans head), so a settle in one paragraph
@@ -44,9 +45,9 @@ from codoc.workspace.inbox import local_actor
 from codoc.workspace.layout import EXPORT, HISTORY, PROJECTION, REALIZE, STATUS, atomic_write
 
 HISTORY_WINDOW = 200
-REALIZING_LEASE_SECONDS = 300            # a lease that names no process lapses this long after its last write
+REALIZING_LEASE_SECONDS = 300            # a lease that names no process lapses this long after its last renewal
 # A lease that names its process holds while that process lives, up to this
-# long after its last write: a pass that died long ago may have left a pid
+# long after its last renewal: a pass that died long ago may have left a pid
 # another process now has. A live pass renews it with every progress report.
 REALIZING_PID_LEASE_SECONDS = 3600
 # A realize pass names itself in status.json (``owner``) and in the environment
@@ -159,9 +160,10 @@ def realizing_is_fresh(codoc_dir: str | Path, now: float | None = None) -> bool:
     """Whether another realize pass holds the lease: ``status.json`` says
     ``realizing``, a queue is still there, and the holder is alive. A lease
     that names the process holding it (``pid``) is alive while that process
-    is, within ``REALIZING_PID_LEASE_SECONDS`` of its last write; one that
-    names none lapses ``REALIZING_LEASE_SECONDS`` after its last write. A lease this process's own pass took (``REALIZE_OWNER_ENV`` names
-    its owner) does not count."""
+    is, within ``REALIZING_PID_LEASE_SECONDS`` of its last renewal
+    (``renewed``); one that names none lapses ``REALIZING_LEASE_SECONDS``
+    after it. A lease with no ``renewed`` has lapsed. A lease this process's
+    own pass took (``REALIZE_OWNER_ENV`` names its owner) does not count."""
     path = Path(codoc_dir) / STATUS
     try:
         d = json.loads(path.read_text(encoding="utf-8"))
@@ -169,7 +171,8 @@ def realizing_is_fresh(codoc_dir: str | Path, now: float | None = None) -> bool:
             return False
         if d.get("owner") and os.environ.get(REALIZE_OWNER_ENV) == d["owner"]:
             return False
-        age = (now or time.time()) - path.stat().st_mtime
+        renewed = d.get("renewed")
+        age = (now or time.time()) - (renewed if isinstance(renewed, (int, float)) else 0)
         if isinstance(d.get("pid"), int):
             return pid_alive(d["pid"]) and age < REALIZING_PID_LEASE_SECONDS
         return age < REALIZING_LEASE_SECONDS
@@ -179,13 +182,13 @@ def realizing_is_fresh(codoc_dir: str | Path, now: float | None = None) -> bool:
 
 def write_realizing(codoc_dir: str | Path, *, pending: int | None = None, detail: str | None = None,
                     owner: str | None = None, pid: int | None = None) -> dict:
-    """Take or renew the realizing lease: set ``state: realizing`` in
-    ``status.json`` and leave the fields not named as they are. ``pid`` names
-    the process doing the work, which keeps the lease while it lives; without
-    one the write is what renews the lease, since its clock is the file's
-    mtime."""
+    """Take or renew the realizing lease: set ``state: realizing`` and
+    ``renewed`` (now) in ``status.json`` and leave the fields not named as they
+    are. ``pid`` names the process doing the work, which keeps the lease while
+    it lives; without one, renewing is what keeps it."""
     d = read_status(codoc_dir)
     d["state"] = "realizing"
+    d["renewed"] = time.time()
     for key, value in (("pending", pending), ("detail", detail), ("owner", owner), ("pid", pid)):
         if value is not None:
             d[key] = value
@@ -220,20 +223,17 @@ def store_state(store: Store, phases: dict[str, str]) -> tuple[str, int, str]:
 def write_status(codoc_dir: str | Path, store: Store, *, phases: dict[str, str] | None = None,
                  detail: str = "") -> dict:
     """Derive the workspace state and write it. A fresh realizing lease is
-    left as it is: rewriting the file would renew a lease this call only
-    checked, and a pass that died would hold it for as long as anything
-    published. Only a changed language is written into it, with the file's
-    old mtime put back, so the page shows the language the daemon writes in
-    during a build without renewing the lease."""
+    left as it is, so the page shows the build until the pass ends. Only a
+    changed language is written into it, so the page shows the language the
+    daemon writes in during a build. ``renewed`` is never touched here, so a
+    pass that died lets the lease lapse however often anything publishes."""
     path = Path(codoc_dir) / STATUS
     if realizing_is_fresh(codoc_dir):
         d = read_status(codoc_dir)
         lang = workspace_doc_language(codoc_dir).code
         if d.get("doc_language") != lang:
-            st = path.stat()
-            atomic_write(path, json.dumps({**d, "doc_language": lang}))
-            os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
             d["doc_language"] = lang
+            atomic_write(path, json.dumps(d))
         return d
     phases = phases if phases is not None else {h.id: phase(store, h.id) for h in store.headings()}
     state, pending, said = store_state(store, phases)

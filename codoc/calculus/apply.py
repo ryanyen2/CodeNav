@@ -429,6 +429,7 @@ def _h_block_add(store: Store, op: Op, touched: set[str]):
     rank = _pinned_rank(op.payload.get("rank")) or store.rank_after(anchor)
     block = Block(bid, kind, rank, level, content, layout=layout, ranked_by=op.payload.get("ranked_by") or op.id,
                   added_by=op.payload.get("added_by") or op.actor,
+                  added_plan=op.payload.get("added_plan") or op.plan or "",
                   void={str(k): list(v) for k, v in _mapping(op.payload, "void").items()},
                   prior={str(k): [list(e) for e in v] for k, v in _mapping(op.payload, "prior").items()})
     if op.payload.get("dead"):               # a snapshot restoring a block with its killer

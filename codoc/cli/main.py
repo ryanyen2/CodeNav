@@ -387,13 +387,17 @@ def history(feature: str, root: str = ROOT, limit: int = typer.Option(15, "--lim
 def lang(tag: str = typer.Argument("", help="BCP-47 tag to set; omit to show."), root: str = ROOT):
     """Show or set the language the tree is authored in (.codoc/config.json, tracked)."""
     from codoc.doclang import is_language_tag, resolve, workspace_doc_language
-    from codoc.workspace.config import write_config
+    from codoc.workspace.config import ConfigUnreadable, write_config
     cd = _require(root)
     if tag:
         if not is_language_tag(tag):
             typer.echo(f"✗ {tag!r} is not a BCP 47 language tag", err=True)
             raise typer.Exit(2)
-        write_config(cd, doc_language=resolve(tag).code)
+        try:
+            write_config(cd, doc_language=resolve(tag).code)
+        except ConfigUnreadable as e:
+            typer.echo(f"✗ {e}", err=True)
+            raise typer.Exit(1)
         typer.echo(f"✓ authoring language: {resolve(tag).name}. Existing prose is unchanged; "
                    "run `codoc translate` to convert it.")
     else:

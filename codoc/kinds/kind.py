@@ -45,6 +45,8 @@ class Kind:
     lift: Callable[[LiftContext], dict | None] | None = None
     lower: Callable[[dict, dict, LowerContext], str | None] | None = None
     consult: Callable[[dict], str] = lambda c: ""
+    # Fields only ``lift`` writes (what it fetched or extracted): no client sends one.
+    lifted: tuple[str, ...] = ()
 
     def validate(self, content: dict, *, partial: bool = False) -> str | None:
         """Why ``content`` does not fit the schema, or None. Text fields are
@@ -78,7 +80,7 @@ def register(kind: Kind) -> Kind:
     if is_one_line(kind.name):
         raise ValueError(f"{kind.name} is a prose kind of the calculus")
     _REGISTRY[kind.name] = kind
-    register_kind(kind.name, kind.layout)
+    register_kind(kind.name, kind.layout, frozenset(kind.lifted))
     return kind
 
 

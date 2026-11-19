@@ -298,3 +298,17 @@ def test_a_grep_pattern_is_a_regex_and_a_glob_pattern_is_a_path():
     assert policy("Glob", {"pattern": "/Users/*/.config/gh/*"})[0] is False
     assert policy("Glob", {"pattern": "../../etc/*"})[0] is False
     assert policy("Glob", {"pattern": "src/../../../etc/*"})[0] is False
+
+
+def test_a_ledger_that_does_not_parse_is_kept_before_a_new_one_is_written(tmp_path):
+    """The ledger says which hand-offs already have pull requests. One that
+    does not parse is moved aside, not written over, so what it held can be
+    recovered by hand."""
+    from codoc.serve.worker import record_pr
+    cd = tmp_path / ".codoc"
+    (cd / "cache").mkdir(parents=True)
+    (cd / "cache" / "hub-prs.json").write_text('{"d-1": "codoc/realize-d-1",}')
+    record_pr(cd, "d-2", "codoc/realize-d-2")
+    kept = [p for p in (cd / "cache").iterdir() if p.name.startswith("hub-prs.json.corrupt-")]
+    assert [p.read_text() for p in kept] == ['{"d-1": "codoc/realize-d-1",}']
+    assert read_ledger(cd) == {"d-2": "codoc/realize-d-2"}

@@ -152,7 +152,7 @@ URL = Kind(
     name="url", layout=Layout(("caption",)),
     schema={"url": {"type": "string", "required": True}, "status": {"type": "string"}, "fetched": {"type": "string"},
             "title": {"type": "string"}, "excerpt": {"type": "string"}, "attempted_at": {"type": "number"}},
-    lift=url_lift, consult=url_consult,
+    lift=url_lift, consult=url_consult, lifted=("status", "fetched", "title", "excerpt", "attempted_at"),
 )
 
 
@@ -192,7 +192,7 @@ PDF = Kind(
     name="pdf", layout=Layout(("caption",)),
     schema={"ref": {"type": "string", "required": True}, "status": {"type": "string"}, "extracted": {"type": "string"},
             "pages": {"type": "number"}, "excerpt": {"type": "string"}, "attempted_at": {"type": "number"}},
-    lift=pdf_lift,
+    lift=pdf_lift, lifted=("status", "extracted", "pages", "excerpt", "attempted_at"),
     consult=lambda c: (f"Consult this reference document ({c.get('ref')}):\n{c['excerpt']}" if c.get("excerpt")
                        else f"Consult this reference document: {c.get('ref', '')}"),
 )

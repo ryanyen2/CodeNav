@@ -17,6 +17,7 @@ push access), never the visitor's. The browser holds only an opaque cookie.
 """
 from __future__ import annotations
 
+import logging
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -131,11 +132,18 @@ def record_role(codoc_dir: str | Path, login: str, role: str) -> None:
     This adds the person to the role table, or changes their entry, and so
     edits a tracked file: signing in for the first time, and a re-check that
     finds a changed role, leave ``config.json`` modified for the maintainer to
-    commit. It writes the ``roles`` key and nothing else."""
-    from codoc.workspace.config import read_config, write_config
+    commit. It writes the ``roles`` key and nothing else.
+
+    A ``config.json`` that does not parse is left for the maintainer to fix
+    and the role is not recorded: the session still carries it, and writing
+    over the file would lose every other setting in it."""
+    from codoc.workspace.config import ConfigUnreadable, read_config, write_config
     from codoc.workspace.inbox import hub_actor
     roles = dict(read_config(codoc_dir).get("roles") or {})
     if roles.get(hub_actor(login)) == role:
         return                       # a tracked file: signing in is not a change
     roles[hub_actor(login)] = role
-    write_config(codoc_dir, roles=roles)
+    try:
+        write_config(codoc_dir, roles=roles)
+    except ConfigUnreadable as e:
+        logging.getLogger(__name__).warning("%s's role (%s) is not recorded: %s", login, role, e)

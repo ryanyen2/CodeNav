@@ -9,9 +9,9 @@ is live, so a plan accepted with nobody at the keyboard still lands code
 
 Both go through :func:`start_realize`. Two engines: the Claude Agent SDK
 runner (:mod:`codoc.claude.sdk_realize`, chosen by ``auto`` when it is
-installed: it prints one line per action and records the files it touches in
-``activity.json``) and ``claude -p "/codoc:realize"``, which this module runs
-as ``python -m codoc.claude.autorealize <root> <permission mode>``
+installed: it prints one line per action and keeps the agent epoch open in
+``activity.json`` while it works) and ``claude -p "/codoc:realize"``, which
+this module runs as ``python -m codoc.claude.autorealize <root> <permission mode>``
 (:func:`run_cli`). Either way the agent uses the MCP server and commands the
 repository already has installed, and the pass ends with one line saying how
 it ended, how long it took and what it cost (:func:`summary`).

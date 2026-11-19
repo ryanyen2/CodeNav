@@ -23,7 +23,7 @@ from pathlib import Path
 from codoc import kinds as registry
 from codoc.calculus import ops as K
 from codoc.calculus.derive import (
-    description, ink, kind_words, live_spans, prose_blocks, queued, realized_content, removals, title,
+    description, ink, kind_words, live_spans, prose_blocks, queued, realized_content, removals, title, unvetted_block,
 )
 from codoc.calculus.doc import BUILTIN
 from codoc.calculus.ids import LOOP, is_human
@@ -186,11 +186,14 @@ def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[
     ``lower`` codec derives from what changed since the last realization. An
     out-of-flow block (a comment) is not prose the agent reads, only a
     request, which its own codec words. A kind this process has no code for
-    says its Text fields' words under its name."""
+    says its Text fields' words under its name. A block an open plan wrote
+    says nothing (``unvetted_block``)."""
     reads: list[str] = []
     asks: list[str] = []
     ctx: object | None = None
     for b in store.body(fid):
+        if unvetted_block(store, b):
+            continue
         kind = registry.get(b.kind)
         if kind is None:
             if b.kind not in BUILTIN and b.layout.flow and (said := kind_words(b, store)):

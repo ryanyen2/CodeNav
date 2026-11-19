@@ -1,7 +1,7 @@
 """Blocks and the heading fold.
 
     Block := { id, kind, rank, ranked_by, level, content, layout, added_by,
-               dead?, dead_actor?, dead_at?, dead_in?, detached?, prior?, void? }
+               added_plan?, dead?, dead_actor?, dead_at?, dead_in?, detached?, prior?, void? }
 
 Kinds, by what their content is:
 
@@ -82,6 +82,7 @@ BUILTIN: dict[str, Layout] = {
     **{k: Layout(("source",)) for k in SOURCE},
 }
 _REGISTERED: dict[str, Layout] = {}
+_LIFTED: dict[str, frozenset[str]] = {}
 
 
 def layout_entry(kind: str, layout: Layout) -> dict:
@@ -95,11 +96,20 @@ def registered_layouts() -> dict[str, Layout]:
     return dict(_REGISTERED)
 
 
-def register_kind(kind: str, layout: Layout) -> None:
-    """Declare the layout a writer gives a new block of a plugin kind. A
-    builtin kind's layout is fixed and is not changed."""
+def register_kind(kind: str, layout: Layout, lifted: frozenset[str] = frozenset()) -> None:
+    """Declare the layout a writer gives a new block of a plugin kind, and the
+    fields only its ``lift`` writes. A builtin kind's layout is fixed and is
+    not changed."""
     if kind not in BUILTIN:
         _REGISTERED[kind] = layout
+        _LIFTED[kind] = lifted
+
+
+def lifted_fields(kind: str) -> frozenset[str]:
+    """The fields of ``kind`` that only the loop's lift writes: what it fetched
+    or extracted. No client may send one (``inbox.client_payload``), so a url
+    block's excerpt is always what the URL served."""
+    return _LIFTED.get(kind, frozenset())
 
 
 def layout_of(kind: str) -> Layout:
@@ -135,6 +145,10 @@ class Block:
     # The actor of the `block.add` or `block.split` that made it: a suggester
     # may write into a comment they added and no other.
     added_by: str = ""
+    # The plan the `block.add` that made it was tagged with, "" for an untagged
+    # add. While that plan is open the block is its proposal
+    # (`derive.unvetted_block`).
+    added_plan: str = ""
     dead: OpId | None = None
     # A dead heading owns no code, so its bindings leave the store when it
     # dies. They are kept here as `[{fid, feature, symbol, fingerprint, types_hash}]`:
@@ -200,6 +214,8 @@ class Block:
              "content": content, **layout_entry(self.kind, self.layout)}
         if self.added_by:
             d["added_by"] = self.added_by
+        if self.added_plan:
+            d["added_plan"] = self.added_plan
         if self.prior:
             d["prior"] = {k: [list(e) for e in v] for k, v in self.prior.items()}
         if self.void:
