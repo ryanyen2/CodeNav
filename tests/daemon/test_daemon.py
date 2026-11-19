@@ -554,11 +554,15 @@ def test_a_daemon_started_after_a_turn_went_silent_reflects_that_turn(tmp_path):
 def test_a_lease_that_names_its_process_holds_while_the_process_lives(tmp_path):
     """A `claude -p` pass can spend longer than the lease's window on one
     hand-off without writing anything. Its lease names its process, so it
-    holds for as long as that process runs, and lapses when it exits."""
+    holds while that process runs, and lapses when it exits. A lease an hour
+    past its last write lapses even when its pid is alive: the pass died long
+    ago, and another process has its pid."""
     import subprocess
     import sys
     import time
-    from codoc.daemon.publish import REALIZING_LEASE_SECONDS, realizing_is_fresh, write_realizing
+    from codoc.daemon.publish import (
+        REALIZING_LEASE_SECONDS, REALIZING_PID_LEASE_SECONDS, realizing_is_fresh, write_realizing,
+    )
     cd = tmp_path / ".codoc"
     cd.mkdir()
     (cd / "realize.md").write_text("### ⟨d:s:1⟩ Retry\n")
@@ -567,6 +571,7 @@ def test_a_lease_that_names_its_process_holds_while_the_process_lives(tmp_path):
         write_realizing(cd, detail="building", owner="o1", pid=child.pid)
         later = time.time() + REALIZING_LEASE_SECONDS + 60
         assert realizing_is_fresh(cd, now=later)
+        assert not realizing_is_fresh(cd, now=time.time() + REALIZING_PID_LEASE_SECONDS + 60)
     finally:
         child.kill()
         child.wait()

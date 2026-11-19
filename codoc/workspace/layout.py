@@ -60,15 +60,9 @@ GITIGNORE = ("# codoc writes this file. The log, the config and the media blocks
 
 
 def write_gitignore(codoc_dir: str | Path) -> None:
-    """Write ``.codoc/.gitignore`` when it says anything else. Codoc owns the
-    file: ``codoc init`` and every daemon start write it."""
-    path = Path(codoc_dir) / ".gitignore"
-    try:
-        if path.read_text(encoding="utf-8") == GITIGNORE:
-            return
-    except OSError:
-        pass
-    atomic_write(path, GITIGNORE)
+    """Write ``.codoc/.gitignore``, once, at ``codoc init``. Once it is
+    committed it is the repository's: a person may change what it keeps out."""
+    atomic_write(Path(codoc_dir) / ".gitignore", GITIGNORE)
 
 
 def find_codoc_dir(cwd: str) -> str | None:

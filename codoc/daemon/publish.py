@@ -11,8 +11,9 @@
 All derived, all regenerable, all written atomically. Nothing here is read
 back by the calculus. ``status.json`` keeps one input the store does not hold:
 the realizing lease. A realize pass takes it with ``write_realizing``. A lease
-that names its process holds while that process lives; one that names none
-lapses ``REALIZING_LEASE_SECONDS`` after its last write (``realizing_is_fresh``).
+that names its process holds while that process lives, for at most an hour
+after its last write; one that names none lapses ``REALIZING_LEASE_SECONDS``
+after its last write (``realizing_is_fresh``).
 
 A ``Publisher`` memoizes the per-block views on the cache keys of
 docs/model.md (a block's own head, the structural head, the plans head), so a settle in one paragraph
@@ -40,7 +41,11 @@ from codoc.workspace.inbox import local_actor
 from codoc.workspace.layout import EXPORT, HISTORY, PROJECTION, REALIZE, STATUS, atomic_write
 
 HISTORY_WINDOW = 200
-REALIZING_LEASE_SECONDS = 300
+REALIZING_LEASE_SECONDS = 300            # a lease that names no process lapses this long after its last write
+# A lease that names its process holds while that process lives, up to this
+# long after its last write: a pass that died long ago may have left a pid
+# another process now has. A live pass renews it with every progress report.
+REALIZING_PID_LEASE_SECONDS = 3600
 # A realize pass names itself in status.json (``owner``) and in the environment
 # of the agent it starts, so that agent does not read the lease of the pass it
 # belongs to as another pass's and stand down.
@@ -149,8 +154,8 @@ def realizing_is_fresh(codoc_dir: str | Path, now: float | None = None) -> bool:
     """Whether another realize pass holds the lease: ``status.json`` says
     ``realizing``, a queue is still there, and the holder is alive. A lease
     that names the process holding it (``pid``) is alive while that process
-    is; one that names none lapses ``REALIZING_LEASE_SECONDS`` after its last
-    write. A lease this process's own pass took (``REALIZE_OWNER_ENV`` names
+    is, within ``REALIZING_PID_LEASE_SECONDS`` of its last write; one that
+    names none lapses ``REALIZING_LEASE_SECONDS`` after its last write. A lease this process's own pass took (``REALIZE_OWNER_ENV`` names
     its owner) does not count."""
     path = Path(codoc_dir) / STATUS
     try:
@@ -159,9 +164,10 @@ def realizing_is_fresh(codoc_dir: str | Path, now: float | None = None) -> bool:
             return False
         if d.get("owner") and os.environ.get(REALIZE_OWNER_ENV) == d["owner"]:
             return False
+        age = (now or time.time()) - path.stat().st_mtime
         if isinstance(d.get("pid"), int):
-            return pid_alive(d["pid"])
-        return (now or time.time()) - path.stat().st_mtime < REALIZING_LEASE_SECONDS
+            return pid_alive(d["pid"]) and age < REALIZING_PID_LEASE_SECONDS
+        return age < REALIZING_LEASE_SECONDS
     except (OSError, json.JSONDecodeError):
         return False
 

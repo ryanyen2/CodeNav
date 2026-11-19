@@ -259,10 +259,10 @@ ROWS = [row("net/client.py", "net/client.py::Client"), row("net/client.py", "net
         row("store/db.py", "store/db.py::open"), row("store/db.py", "store/db.py::_helper")]
 
 
-def index_holds(monkeypatch, *symbols):
-    """The code index, as the MCP tools read it, holds ``symbols`` and nothing else."""
-    from codoc.mcp import tools
-    monkeypatch.setattr(tools, "indexed", lambda _cd, files: {
+def code_holds(monkeypatch, *symbols):
+    """The code on disk, as the MCP tools read it, holds ``symbols`` and nothing else."""
+    from codoc.index import app
+    monkeypatch.setattr(app, "code_on_disk", lambda _root, files: {
         s: (f"h-{s}", "t") for s in symbols if s.split("::")[0] in files})
 
 

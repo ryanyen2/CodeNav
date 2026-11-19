@@ -129,6 +129,46 @@ async def _coco_lifespan(
     yield
 
 
+def file_chunks(file_str: str, source: str) -> list[tuple]:
+    """The chunks the index keeps for one file's source, each with its
+    ``tree_walk`` hashes. The symbol is a row's key: its id is
+    ``generate_id(symbol)``, and the change set and the bindings are keyed by
+    it. A class can define a name twice (a property's getter and setter, a
+    redefinition), and a second row with the same id is a "target state already
+    declared" error that drops the whole file, so the first chunk per symbol is
+    kept."""
+    adapter = get_adapter(detect_language(file_str))
+    seen: set[str] = set()
+    out = []
+    for c in adapter.extract_chunks(file_str, source):
+        if c.symbol not in seen:
+            seen.add(c.symbol)
+            out.append((c, tree_walk(c.source, adapter)))
+    return out
+
+
+def code_on_disk(sourcedir: str | pathlib.Path, files: set[str]) -> dict[str, tuple[str, str]]:
+    """``(fingerprint, types_hash)`` of every chunk ``files`` hold on disk now,
+    as the index would hash them: what a binding may cite before the index has
+    caught up with an edit. A file the index does not read holds none."""
+    root = pathlib.Path(sourcedir).resolve()
+    matcher = source_matcher(root)
+    out: dict[str, tuple[str, str]] = {}
+    for rel in files:
+        path = (root / rel).resolve()
+        if (not path.is_relative_to(root) or detect_language(rel) is None
+                or not matcher.is_file_included(pathlib.PurePosixPath(rel))):
+            continue
+        try:
+            if path.stat().st_size > _MAX_FILE_BYTES:
+                continue
+            source = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        out.update({c.symbol: (w.fingerprint, w.types_hash) for c, w in file_chunks(rel, source)})
+    return out
+
+
 @coco.fn(memo=True)
 async def _process_file(
     file: FileLike,
@@ -148,19 +188,7 @@ async def _process_file(
     except OSError:
         return
     source = await file.read_text()
-    adapter = get_adapter(lang)
-    chunks = adapter.extract_chunks(file_str, source)
-    # The symbol is the row's key: its id is generate_id(symbol), and the change
-    # set and the bindings are keyed by it. A class can define a name twice (a
-    # property's getter and setter, a redefinition), and a second row with the
-    # same id is a "target state already declared" error that drops the whole
-    # file, so the first chunk per symbol is kept.
-    seen: set[str] = set()
-    for c in chunks:
-        if c.symbol in seen:
-            continue
-        seen.add(c.symbol)
-        walk_result = tree_walk(c.source, adapter)
+    for c, walk_result in file_chunks(file_str, source):
         target.declare_row(
             row=CodeChunk(
                 id=await generate_id(c.symbol), file=file_str, symbol=c.symbol, language=lang, source=c.source,

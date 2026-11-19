@@ -17,7 +17,7 @@ from codoc.mcp import tools
 from codoc.workspace import Workspace
 from codoc.workspace import inbox as I
 from codoc.workspace.layout import REALIZE
-from tests.helpers import H, handoff, index_holds, seed
+from tests.helpers import H, handoff, code_holds, seed
 
 
 @pytest.fixture(autouse=True)
@@ -83,7 +83,7 @@ def test_a_turn_with_no_daemon_settles_what_it_cited_when_it_ends(tmp_path, monk
     ho = handoff(ws, "h1", actor=H)
     publish(cd, ws.store, root_dir=str(tmp_path))
     ws.close()
-    index_holds(monkeypatch, "c.py::retry")
+    code_holds(monkeypatch, "c.py::retry")
     hook.handle_user_prompt({"session_id": "s"}, str(cd))
     try:
         r = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::retry"]}],

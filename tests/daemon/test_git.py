@@ -249,21 +249,17 @@ def test_git_pull_with_unsaved_doc_edits_when_a_teammate_pushed_docs(tmp_path, g
     assert T(b.ws.store, "p1") in (SEED + " Alice. Bob.", SEED + " Bob. Alice.")
 
 
-def test_a_workspace_set_up_to_track_the_export_is_told_how_to_stop(repo):
-    """A `.codoc/.gitignore` an older codoc wrote still tracks `tree.codoc`.
-    The daemon's start writes the current one, and since git already tracks
-    the file, says how to untrack it rather than running git itself."""
+def test_a_daemon_start_leaves_the_committed_gitignore_alone(repo):
+    """`codoc init` writes `.codoc/.gitignore` once. A daemon start does not
+    write it again, so one from an earlier commit, or one a person changed
+    (here, to keep the logs out of git), is not left modified."""
     root, git = repo
     gitignore = root / ".codoc" / ".gitignore"
-    gitignore.write_text(gitignore.read_text().replace("!config.json\n", "!config.json\n!tree.codoc\n"))
-    (root / ".codoc" / "tree.codoc").write_text("# Client\n")
+    gitignore.write_text(gitignore.read_text().replace("!log/\n!log/**\n", ""))
     git("add", "-A")
-    git("commit", "-qm", "an older codoc")
-    said: list[str] = []
-    d = Daemon(root, changeset=lambda *a: ChangeSet(), propose=lambda *a, **k: [], printer=said.append)
+    git("commit", "-qm", "keep the logs local")
+    d = Daemon(root, changeset=lambda *a: ChangeSet(), propose=lambda *a, **k: [], printer=lambda *_: None)
     d.start()
     d.ws.close()
-    assert "!tree.codoc" not in gitignore.read_text()
-    assert any("git rm --cached .codoc/tree.codoc" in line for line in said)
-    assert git("ls-files", ".codoc/tree.codoc").stdout.strip() == ".codoc/tree.codoc"
+    assert git("status", "--porcelain", "--", ".codoc/.gitignore").stdout == ""
 

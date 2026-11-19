@@ -35,7 +35,7 @@ from pathlib import Path, PurePosixPath
 from codoc.daemon.pidfile import clear_pidfile, daemon_running, write_pidfile
 from codoc.daemon.publish import Publisher
 from codoc.doclang import workspace_doc_language
-from codoc.index.git import handoffs_landed, head, is_tracked
+from codoc.index.git import handoffs_landed, head
 from codoc.index.graph import Graph
 from codoc.index.lang import detect_language
 from codoc.loops.realize import settle_if_idle
@@ -43,9 +43,7 @@ from codoc.workspace import Roles, Workspace
 from codoc.workspace import inbox as I
 from codoc.workspace import log as L
 from codoc.workspace.epoch import EPOCH_STALE_SECONDS, close_epoch, epoch_age, epoch_touched_files, read_activity
-from codoc.workspace.layout import (
-    ACTIVITY, APPLIER_LOCK, CODOC_DIR, EXPORT, GRAPH_CACHE, atomic_write, locked, write_gitignore,
-)
+from codoc.workspace.layout import ACTIVITY, APPLIER_LOCK, CODOC_DIR, GRAPH_CACHE, atomic_write, locked
 
 DEBOUNCE_MS = 600
 
@@ -223,13 +221,6 @@ class Daemon:
         # Limit: the logs are replayed twice at start; build the store after
         # the pidfile if start-up time on a long log matters.
         write_pidfile(self.codoc_dir)
-        # Codoc owns `.codoc/.gitignore`, so a workspace an older codoc set up
-        # takes the current one. Untracking a file git already tracks is the
-        # person's commit to make.
-        write_gitignore(self.codoc_dir)
-        if is_tracked(self.root, self.codoc_dir / EXPORT):
-            self.say(f"▸ {CODOC_DIR}/{EXPORT} is still tracked by git; "
-                     f"`git rm --cached {CODOC_DIR}/{EXPORT}` untracks it")
         with locked(self.codoc_dir / APPLIER_LOCK):
             self.ws.rebuild()
         self.publisher.invalidate()

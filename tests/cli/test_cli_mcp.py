@@ -10,7 +10,7 @@ from codoc.index.graph import Graph
 from codoc.loops.bootstrap import bootstrap
 from codoc.mcp import tools
 from codoc.workspace import Workspace
-from tests.helpers import ROWS, fake_file, fake_org, index_holds
+from tests.helpers import ROWS, fake_file, fake_org, code_holds
 
 runner = CliRunner()
 
@@ -62,7 +62,7 @@ def test_status_handoff_history_and_verdicts_via_cli(tmp_path):
 
 def test_reflect_attaches_and_repairs_and_closes_the_queue(tmp_path, monkeypatch):
     root, cd = seeded(tmp_path)
-    index_holds(monkeypatch, "net/client.py::Client.retry")
+    code_holds(monkeypatch, "net/client.py::Client.retry")
     st = client.read(cd).store
     client_id = next(h.id for h in st.headings() if "HTTP client" in tools.title(st, h.id))
     runner.invoke(app, ["handoff", client_id, "--root", str(root)])
@@ -259,21 +259,36 @@ def test_lang_takes_a_tag_and_writes_it_normalized(tmp_path):
     assert r.exit_code == 0 and json.loads((cd / "config.json").read_text())["doc_language"] == "zh-Hans"
 
 
-def test_the_cli_finds_the_workspace_from_a_subdirectory(tmp_path, monkeypatch):
-    """As the hooks and the MCP server do; `codoc init` there finds the
-    workspace above instead of making a second one."""
+def test_without_root_the_cli_finds_the_workspace_from_a_subdirectory(tmp_path, monkeypatch):
+    """As the hooks and the MCP server do. An explicit --root is taken as given."""
     root, cd = seeded(tmp_path)
     sub = root / "src" / "pkg"
     sub.mkdir(parents=True)
     monkeypatch.chdir(sub)
     r = runner.invoke(app, ["status"])
     assert r.exit_code == 0 and "4 features" in r.output, r.output
-    assert runner.invoke(app, ["status", "--root", str(sub)]).exit_code == 0
-    r = runner.invoke(app, ["init"])
-    assert r.exit_code == 1 and "already exists" in r.output and not (sub / ".codoc").exists()
+    r = runner.invoke(app, ["status", "--root", str(sub)])
+    assert r.exit_code == 1 and "No codoc workspace at" in r.output
     monkeypatch.chdir(tmp_path)
-    r = runner.invoke(app, ["status"])
-    assert r.exit_code == 1 and "No codoc workspace in" in r.output
+    assert runner.invoke(app, ["status"]).exit_code == 1
+
+
+def test_init_makes_its_workspace_where_it_is_told_and_leaves_the_enclosing_one_alone(tmp_path, monkeypatch):
+    """A package in a monorepo may hold its own workspace: `codoc init`, with
+    or without --root and with --force, never walks up to the parent's."""
+    from codoc.cli import main
+    root, cd = seeded(tmp_path)
+    logs = sorted(p.name for p in (cd / "log").iterdir())
+    monkeypatch.setattr(main, "_bootstrap", lambda *a, **k: type("R", (), {"summary": lambda self: "built"})())
+    pkg, lib = root / "pkg", root / "lib"
+    pkg.mkdir()
+    lib.mkdir()
+    r = runner.invoke(app, ["init", "--force", "--no-hooks", "--root", str(pkg)])
+    assert r.exit_code == 0 and f"Note: {cd.resolve()} is a workspace too" in r.output, r.output
+    monkeypatch.chdir(lib)
+    assert runner.invoke(app, ["init", "--no-hooks"]).exit_code == 0
+    assert (pkg / ".codoc").is_dir() and (lib / ".codoc").is_dir()
+    assert sorted(p.name for p in (cd / "log").iterdir()) == logs and not (cd / "log.old").exists()
 
 
 def test_history_says_when_what_and_for_which_handoff(tmp_path, monkeypatch):
@@ -281,7 +296,7 @@ def test_history_says_when_what_and_for_which_handoff(tmp_path, monkeypatch):
     the hand-off an op answers; and who wrote each run of words, as words."""
     import re
     root, cd = seeded(tmp_path)
-    index_holds(monkeypatch, "net/client.py::Client.retry")
+    code_holds(monkeypatch, "net/client.py::Client.retry")
     runner.invoke(app, ["handoff", "HTTP client", "--root", str(root), "--asked", "retry thrice"])
     st = client.read(cd).store
     fid = next(h.id for h in st.headings() if tools.title(st, h.id) == "HTTP client")
@@ -343,3 +358,52 @@ def test_a_realize_pass_ends_with_its_time_and_cost(tmp_path, monkeypatch):
     monitor = RealizeMonitor(str(tmp_path), str(tmp_path / ".codoc"), printer=said.append, tty=False)
     monitor.handle_message(type("ResultMessage", (), {"is_error": False, "result": "", "total_cost_usd": 0.42})())
     assert monitor.summary().endswith(" · $0.42")
+
+
+def test_auto_realize_starts_a_pass_once_per_handoff_and_backs_off_after_a_failure(tmp_path, monkeypatch):
+    """The lease names the pass's pid and lapses when it exits, and the pass's
+    own Stop hook wakes the daemon. A pass that ended with its hand-off still
+    queued is not started again for it; one that failed is retried after a
+    back-off that doubles."""
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+    from codoc.claude import autorealize as A
+    from codoc.claude import sdk_realize
+    cd = tmp_path / ".codoc"
+    cd.mkdir()
+    queue = cd / "realize.md"
+    queue.write_text("### ⟨d:s:1⟩ Retry\n")
+    exits, started, now = [], [], [0.0]
+    real = subprocess.Popen
+
+    def fake_pass(argv, **kw):                   # a real process, so the lease names a pid that exits
+        started.append(real([sys.executable, "-c", f"raise SystemExit({exits.pop(0)})"]))
+        return started[-1]
+    monkeypatch.setattr(A.subprocess, "Popen", fake_pass)
+    monkeypatch.setattr(A, "find_claude", lambda: "/usr/bin/true")
+    monkeypatch.setattr(sdk_realize, "sdk_available", lambda: False)
+    run = A.auto_realizer(str(tmp_path), str(cd), clock=lambda: now[0])
+    daemon = SimpleNamespace(state=SimpleNamespace(epoch_open=False))
+
+    def batch():
+        run(daemon)
+        for proc in started:
+            proc.wait()
+    exits[:] = [0, 1, 1, 0]
+    batch()                                      # s:1 queued: a pass starts and finishes
+    batch()                                      # s:1 still queued: not started again
+    assert len(started) == 1
+    queue.write_text("### ⟨d:s:1⟩ Retry\n\n### ⟨d:s:2⟩ Back-off\n")
+    batch()                                      # s:2 is new: a pass starts, and fails
+    batch()
+    assert len(started) == 2                     # within the back-off
+    now[0] = A.FAILED_BACKOFF_S
+    batch()                                      # retried; fails again, seen at the next batch
+    batch()
+    now[0] += A.FAILED_BACKOFF_S
+    batch()
+    assert len(started) == 3                     # the back-off doubled
+    now[0] += A.FAILED_BACKOFF_S
+    batch()
+    assert len(started) == 4

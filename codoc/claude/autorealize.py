@@ -3,8 +3,9 @@
 A hand-off waits in ``.codoc/realize.md`` until an agent builds it. A person's
 own Claude Code session does that with ``/codoc:realize``. ``codoc realize``
 starts a pass in the foreground, and with ``--auto-realize`` the daemon starts
-one whenever work is queued and no session is live, so a plan accepted with
-nobody at the keyboard still lands code.
+one when a hand-off is queued that no pass has been started for and no session
+is live, so a plan accepted with nobody at the keyboard still lands code
+(:func:`auto_realizer`).
 
 Both go through :func:`start_realize`. Two engines: the Claude Agent SDK
 runner (:mod:`codoc.claude.sdk_realize`, chosen by ``auto`` when it is
@@ -24,11 +25,13 @@ import subprocess
 import sys
 import time
 import uuid
-from pathlib import Path
-
+from codoc.claude.hook import queued_ids
 from codoc.workspace.epoch import epoch_alive
 from codoc.daemon.publish import REALIZE_OWNER_ENV, realizing_is_fresh, write_realizing
-from codoc.workspace.layout import REALIZE
+
+# After a failed pass the next waits this long, doubled for each failure in a
+# row, up to an hour.
+FAILED_BACKOFF_S = 60.0
 
 
 class EngineMissing(RuntimeError):
@@ -99,36 +102,46 @@ def run_cli(root_dir: str, permission_mode: str, *, printer=print) -> int:
     return 0 if ok else 1
 
 
-def should_spawn(codoc_dir: str, *, in_flight: bool) -> bool:
-    """Whether to start an unattended realize pass right now.
+def auto_realizer(root_dir: str, codoc_dir: str, *, clock=time.monotonic):
+    """A callable for ``Daemon(after_batch=…)``. After each batch it starts a
+    pass when ``realize.md`` holds a hand-off no finished pass was started for,
+    the pass this started last has ended, no other pass holds a fresh
+    realizing lease and no agent session is live.
 
-    Only when ``realize.md`` holds queued work, the pass this caller started
-    has finished, no other pass holds a fresh ``realizing`` lease (a crashed
-    pass's lease lapses on its own), and no agent session is live to do the
-    work instead."""
-    if in_flight:
-        return False
-    if not (Path(codoc_dir) / REALIZE).exists():
-        return False
-    if realizing_is_fresh(codoc_dir):
-        return False
-    return not epoch_alive(codoc_dir)
-
-
-def auto_realizer(root_dir: str, codoc_dir: str):
-    """A callable for ``Daemon(after_batch=…)``: after each batch, start a pass
-    if one should run and the last one this started has finished."""
+    A pass costs a model session. One that ends with work still queued (a
+    hand-off the agent could not satisfy, a build that moved no bound symbol)
+    is not started again for the same hand-offs: running it again would change
+    nothing, and its own Stop hook wakes the daemon the moment it ends. A pass
+    that failed (a nonzero exit, such as no login or a rate limit) leaves its
+    hand-offs to be tried again, after :data:`FAILED_BACKOFF_S`, doubled for
+    each failure in a row."""
     proc: subprocess.Popen | None = None
+    tried: set[str] = set()           # hand-offs a pass that finished was started with
+    started: list[str] = []
+    failures, wait_until = 0, 0.0
 
     def run(daemon) -> None:
-        nonlocal proc
-        in_flight = proc is not None and proc.poll() is None
-        if daemon.state.epoch_open or not should_spawn(codoc_dir, in_flight=in_flight):
+        nonlocal proc, started, failures, wait_until
+        if proc is not None:
+            if proc.poll() is None:
+                return
+            if proc.returncode == 0:
+                tried.update(started)
+                failures = 0
+            else:
+                failures += 1
+                wait_until = clock() + min(FAILED_BACKOFF_S * 2 ** (failures - 1), 3600.0)
+            proc = None
+        if daemon.state.epoch_open or clock() < wait_until or realizing_is_fresh(codoc_dir) or epoch_alive(codoc_dir):
+            return
+        queue = queued_ids(codoc_dir)
+        if not set(queue) - tried:
             return
         try:
             proc = start_realize(root_dir, codoc_dir, detail="building: codoc watch --auto-realize")
         except EngineMissing:
-            proc = None
+            return
+        started = queue
 
     return run
 

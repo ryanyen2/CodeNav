@@ -140,12 +140,15 @@ class Compiler:
     ``hashes`` maps a symbol to ``(fingerprint, types_hash)`` for the
     chunks the caller knows; a binding outside it is attached without hashes.
     ``bindable``, when given, is the set of symbols an edit may bind;
-    anything else is dropped (a model may only place the code it was shown)."""
+    anything else is dropped (a model may only place the code it was shown).
+    ``cites`` is the hand-off the edits report building, when they do."""
 
-    def __init__(self, store: Store, *, hashes: dict | None = None, bindable: set | None = None) -> None:
+    def __init__(self, store: Store, *, hashes: dict | None = None, bindable: set | None = None,
+                 cites: str | None = None) -> None:
         self.store = store
         self.hashes = hashes or {}
         self.bindable = bindable
+        self.cites = cites
         self.minted: dict[str, str] = {}                 # temporary id -> heading id
 
     # ── entry ──────────────────────────────────────────────────────────────
@@ -165,10 +168,14 @@ class Compiler:
         binds = self._binds(raw.get("bindings"))
         if not binds:
             return Change("attach", fid, refused="no bindable symbol")
-        # A symbol the feature already owns is left alone: attaching it again
-        # would rewrite its hashes, and a `caused_by` on it would report work.
-        binds = [s for s in binds if getattr(self.store.bindings.get(s), "feature", None) != fid]
-        return Change("attach", fid, bodies=[self._bind(fid, s) for s in binds], bound=binds)
+        # A symbol the feature already owns is refreshed when it reports a
+        # hand-off whose build changed that code, and otherwise left alone: a
+        # binding op citing a hand-off is the evidence that settles it, and a
+        # re-attach of code nobody changed is no evidence.
+        owned = [s for s in binds if getattr(self.store.bindings.get(s), "feature", None) == fid]
+        bodies = [self._bind(fid, s) for s in binds if s not in owned]
+        bodies += [self._bind(fid, s, K.BIND_REFRESH) for s in owned if self.cites and self._built(s)]
+        return Change("attach", fid, bodies=bodies, bound=[s for s in binds if s not in owned])
 
     def _detach(self, raw: dict) -> Change:
         """Only symbols the feature owns now; anything else is not this
@@ -272,10 +279,22 @@ class Compiler:
                 out.append(key)
         return out
 
-    def _bind(self, fid: str, sym: str) -> dict:
+    def _bind(self, fid: str, sym: str, kind: str = K.BIND_ATTACH) -> dict:
         fingerprint, types_hash = self.hashes.get(sym, ("", ""))
-        return {"kind": K.BIND_ATTACH, "target": {"fid": fid},
+        return {"kind": kind, "target": {"fid": fid},
                 "payload": {"symbol": sym, "fingerprint": fingerprint, "types_hash": types_hash}}
+
+    def _built(self, sym: str) -> bool:
+        """Whether the code under an owned ``sym`` changed since the hand-off
+        ``cites``: its hashes now differ from the binding's, or a binding op
+        on it has applied since the hand-off (a reflect pass, the daemon's or
+        this agent's, already took the change)."""
+        b = self.store.bindings[sym]
+        if self.hashes.get(sym, (b.fingerprint, b.types_hash)) != (b.fingerprint, b.types_hash):
+            return True
+        since = self.store.position.get(self.cites, len(self.store.ops))
+        return any(o.kind.startswith("bind.") and o.payload.get("symbol") == sym and o.conflict is None
+                   for o in self.store.ops[since:])
 
     def _rewrite(self, change: Change, block, spec: BlockSpec) -> str | None:
         """Make ``block`` read as ``spec``. A prose block may change marker

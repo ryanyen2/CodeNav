@@ -78,9 +78,9 @@ def codoc_history(feature_id: str, limit: int = 20, ops: bool = False) -> dict:
 def codoc_reflect(ops: list[dict], rationale: str = "", caused_by: str | None = None) -> dict:
     """Reflect what you did to the code into the tree. Each op is one of:
     `{"kind": "attach"|"detach", "feature_id", "bindings": ["file.py::symbol", …]}`
-    (lands at once; a binding must name code the index already holds, so code you
-    wrote this turn is refused here and bound by the pass that runs when your
-    turn ends, and a symbol the feature already owns is skipped); `{"kind": "amend", "feature_id", "title"?, "blocks": [{"id", "text"}
+    (lands at once; a binding must name code the files define now, new code
+    included; a symbol the feature already owns is refreshed when you changed
+    its code, and skipped when you did not); `{"kind": "amend", "feature_id", "title"?, "blocks": [{"id", "text"}
     | {"id", "delete": true} | {"text"}]}`, where `text` is one block as Markdown
     (a paragraph, a `- ` item, a `1. ` step, a table) and a block you do not list is
     unchanged (lands on the trunk when it only rewords a little and nobody has

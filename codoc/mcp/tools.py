@@ -7,13 +7,14 @@ receiving side stamps ``actor=agent:<CODOC_AGENT>``, never the agent. A
 binding op that cites a hand-off in ``caused_by`` settles it when it lands.
 
 Two writes take tree edits (``loops.edits``). Every edit is compiled against
-the current tree and the code index before anything is written; if one is
+the current tree and the code on disk before anything is written; if one is
 refused, nothing is written and the error names it. A symbol an ``attach`` or
-``add_node`` binds must be a chunk the index holds. The daemon does not index
-a file while an agent's turn holds it, so code written during the turn is
-indexed, and bound, by the pass that runs when the turn ends. An ``attach`` of
-a symbol the feature already owns writes nothing: it would only rewrite the
-binding's hashes, and its ``caused_by`` would report work that did not happen.
+``add_node`` binds must be a chunk the files hold now, hashed as the index
+hashes it (``index.app.code_on_disk``), so code written during the turn binds
+before any pass has indexed it. An ``attach`` of a symbol the feature already
+owns writes a ``bind.refresh`` when it cites a hand-off whose build changed
+that code, and nothing otherwise: a re-attach of unchanged code would report
+work that did not happen (docs/concurrency.md, Hand-off and realization).
 
 | tool | edit | lands |
 |---|---|---|
@@ -156,33 +157,22 @@ def _find(nodes, fid):
 
 # ── writes ───────────────────────────────────────────────────────────────────
 
-def indexed(codoc_dir: str, files: set[str]) -> dict[str, tuple[str, str]]:
-    """``(fingerprint, types_hash)`` of every chunk the code index holds in
-    ``files``; empty when there is no index to read."""
-    if not files:
-        return {}
-    from codoc.index.reader import read_all_chunks
-    try:
-        rows = read_all_chunks(codoc_dir, files=files, with_source=False)
-    except Exception:  # noqa: BLE001 (no index yet: nothing is bindable)
-        return {}
-    return {r.symbol: (r.fingerprint, r.types_hash) for r in rows}
-
-
-def _compile(codoc_dir: str, store, ops: list[dict]) -> tuple[list[Change], str | None]:
+def _compile(codoc_dir: str, root_dir: str | None, store, ops: list[dict],
+             cites: str | None) -> tuple[list[Change], str | None]:
     """Every edit compiled in order, or the first refusal as an error (see the
-    module docstring for what a binding may name)."""
+    module docstring for what a binding may name). ``cites`` is the hand-off
+    the edits report."""
+    from codoc.index.app import code_on_disk
     binds = {i: [s for b in raw.get("bindings") or [] if (s := symbol(b))]
              for i, raw in enumerate(ops or []) if isinstance(raw, dict) and raw.get("kind") in ("attach", "add_node")}
-    hashes = indexed(codoc_dir, {s.split("::")[0] for named in binds.values() for s in named})
-    compiler = Compiler(store, hashes=hashes, bindable=set(hashes))
+    hashes = code_on_disk(root_dir or Path(codoc_dir).parent, {s.split("::")[0] for named in binds.values() for s in named})
+    compiler = Compiler(store, hashes=hashes, bindable=set(hashes), cites=cites)
     changes = []
     for i, raw in enumerate(ops or []):
         missing = [s for s in binds.get(i, []) if s not in hashes]
         if missing:
-            return [], (f"ops[{i}] ({raw['kind']}): not in the code index: {', '.join(missing)}. Code written "
-                        "during this turn is indexed when the turn ends, and the pass that runs then binds it; "
-                        "bind only symbols that existed before the turn.")
+            return [], (f"ops[{i}] ({raw['kind']}): the code does not define {', '.join(missing)}. "
+                        "Bind only symbols the files hold now, in files the index reads.")
         change = compiler.compile(raw)
         if change.refused:
             return [], f"ops[{i}] ({change.kind}): {change.refused}"
@@ -213,7 +203,7 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "", caused_by: 
     """What the agent did to the code, as tree edits (see the module table)."""
     caused_by = _handoff(caused_by)
     ws, _ = _open(codoc_dir)
-    changes, err = _compile(codoc_dir, ws.store, ops)
+    changes, err = _compile(codoc_dir, root_dir, ws.store, ops, caused_by)
     if err:
         return _err(err)
     minted = {c.target for c in changes if c.kind == "add_node"}
@@ -243,7 +233,7 @@ def propose(codoc_dir: str, *, ops: list[dict], note: str = "", caused_by: str |
     """A plan of tree edits, drawn in place for the person to accept or reject."""
     caused_by = _handoff(caused_by)
     ws, _ = _open(codoc_dir)
-    changes, err = _compile(codoc_dir, ws.store, ops)
+    changes, err = _compile(codoc_dir, root_dir, ws.store, ops, caused_by)
     if err:
         return _err(err)
     if not changes:

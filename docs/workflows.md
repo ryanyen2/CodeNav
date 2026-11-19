@@ -66,11 +66,18 @@ pass caused by a hand edit cites nothing.
    command in `.claude/settings.local.json`, for example
    `{"permissions": {"allow": ["Bash(pytest:*)"]}}`. The agent says when it could not
    run them. At the end `codoc realize` prints the run's cost and time.
+   `codoc watch --auto-realize` starts a pass only for a hand-off no finished pass was
+   started for: a pass that ended with its hand-off still queued (one the agent could not
+   satisfy, or a build that moved no bound symbol) is not run again for it. After a pass
+   that failed (no login, a rate limit) it waits a minute before the next, doubling with
+   each failure in a row, up to an hour.
 5. The build cites the hand-off in binding ops, in any of three ways. The agent's
-   `codoc_reflect` attaches symbols the code index already holds, with `caused_by` the
-   hand-off's `d:` id; any agent that runs the MCP server can do this. A symbol the index
-   does not hold is refused, and one the feature already owns writes nothing, so an
-   attach is evidence only of code that exists. Claude Code's hooks also keep the agent
+   `codoc_reflect` attaches the symbols it wrote or changed, with `caused_by` the
+   hand-off's `d:` id; any agent that runs the MCP server can do this, with or without
+   a daemon. The attach is read off the code on disk: a symbol the files do not define
+   is refused, a symbol the feature owns is refreshed only when the build changed its
+   code, so an attach is evidence only of code the build left there
+   ([concurrency.md](concurrency.md#10-hand-off-and-realization)). Claude Code's hooks also keep the agent
    epoch open in `.codoc/activity.json` while a turn runs, and the daemon reflects the
    deferred files with `caused_by` when the epoch closes. A commit whose `Codoc-Handoff`
    trailer names the hand-off and whose `Codoc-Base` trailer names a branch (the hub's

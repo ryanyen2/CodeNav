@@ -220,8 +220,9 @@ in order:
    turn knows it. While a coding agent's session is open, changed code files are
    deferred. When it closes, or after 900 seconds of silence (the daemon then closes it,
    whether or not it saw it open), the deferred files and every file the session touched
-   go to step 4, and that pass cites every queued hand-off. An epoch with no id (a
-   realize pass opened it where no session had started) is closed by any session's stop.
+   go to step 4, and that pass cites every queued hand-off. Every epoch has an id, and
+   only a stop naming it closes it: a realize pass that runs no hooks opens one under its
+   own id and closes it when the pass ends.
 4. Reflect the changed code files that are not deferred: the loop's pass, which writes
    ops as `loop` and cites the hand-offs step 1 noted.
 5. Unless an agent epoch is open, settle hand-offs (section 10).
@@ -632,6 +633,20 @@ removed. The paragraph reads `Retries once.`
   target). The daemon
   checks at the end of every batch and after every reflect pass; a daemonless writer
   checks after it applies.
+- An agent's report is evidence only of code the files hold. Its `attach` is compiled
+  against the code on disk, hashed as the index hashes it, not against the index, so
+  code the turn wrote binds before any pass has indexed it, with or without a daemon,
+  for any agent:
+  - a symbol the files do not define is refused, and nothing of the call is written;
+  - a symbol the feature does not own is attached (`bind.attach`);
+  - a symbol the feature owns is refreshed (`bind.refresh`) when its code changed since
+    the hand-off: its hashes on disk differ from the binding's, or a binding op on it
+    has applied since the hand-off (a reflect pass took the change before the agent
+    reported it). Otherwise nothing is written: a re-attach of unchanged code is no
+    evidence.
+  The attach reads the disk and never writes the index, so the daemon's reflect pass
+  still sees the change, and whichever lands first, the other cannot make the agent's
+  report a no-op.
 - Nothing settles while an agent epoch is open (`activity.json`): the build is in
   progress, so the feature stays queued and the agent's amends land as plans. The batch
   that sees the epoch close runs the same check, so a Claude Code turn settles at its end;

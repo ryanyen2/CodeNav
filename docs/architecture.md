@@ -59,7 +59,7 @@ A package imports only packages to its left in this order: `calculus`, `index`,
 | `publish.py` | The derived files and the realizing lease in `status.json`. |
 | `pidfile.py` | `watch.pid`. |
 | **`claude/`** | Section 2. |
-| **`cli/main.py`** | The `codoc` command. It finds `.codoc` in the current directory or the nearest one above it, as the hooks and the MCP server do (`--root` names where to start). |
+| **`cli/main.py`** | The `codoc` command. Without `--root` it finds `.codoc` in the current directory or the nearest one above it, as the hooks and the MCP server do; an explicit `--root` is taken as given. `codoc init` makes its workspace at `--root` (the current directory by default) and never walks up: a package in a monorepo may hold its own. |
 | **`mcp/`** | `server.py` (FastMCP over stdio, `codoc-mcp`), `tools.py`. |
 | **`serve/`** | Section 3. |
 
@@ -115,7 +115,11 @@ cloning.
 end of each batch and after each reflect pass, a daemonless writer after it applies, or
 the process the Stop hook starts when no daemon runs) writes `feature.realized` for each
 queued feature once an applied binding op cites its latest hand-off in `caused_by`
-(`loops/realize.py`, `settle`), whichever feature the op binds. It does not matter who
+(`loops/realize.py`, `settle`), whichever feature the op binds. An agent's `attach` is
+compiled against the code on disk (`index/app.py`, `code_on_disk`): a new symbol is
+attached, one the feature owns is refreshed when the build changed its code, and a
+symbol the files do not define is refused
+([concurrency.md](concurrency.md#10-hand-off-and-realization)). It does not matter who
 wrote the op: an agent's `codoc_reflect`, the pass after a Claude Code epoch closes, or
 the pass over a commit whose `Codoc-Handoff` trailer names the hand-off, read when
 `HEAD` moves over it while on the branch its `Codoc-Base` trailer names. While an epoch
@@ -128,7 +132,7 @@ Code written by hand settles with `codoc done`.
 |---|---|
 | `codoc_context` | Read: with `files`, the features bound in them, one hop along the code graph, their parents and children; with `feature_id`, that feature, the features under it and the features owning a symbol one call, import or inheritance away from their code, in either direction. |
 | `codoc_tree`, `codoc_status`, `codoc_history` | Read: the tree and its open plans; the queue of hand-offs, phases and the number of open plans; one feature's changes, one row per batch with a summary (its ops with `ops`), and attribution. |
-| `codoc_reflect` | Tree edits. `attach`, `detach` and a rewording `amend` land on the trunk (an `amend` through the machine gate); anything else becomes one plan. An `attach` or `add_node` binds only symbols the code index holds, with their hashes, and refuses any other; code written during the turn is indexed and bound by the pass when the turn ends. An `attach` of a symbol the feature already owns writes nothing. |
+| `codoc_reflect` | Tree edits. `attach`, `detach` and a rewording `amend` land on the trunk (an `amend` through the machine gate); anything else becomes one plan. An `attach` or `add_node` binds only symbols the files on disk define, hashed as the index hashes them (`index.app.code_on_disk`), so code written during the turn binds at once, and refuses any other. An `attach` of a symbol the feature already owns writes a `bind.refresh` citing the hand-off when that code changed since the hand-off, and nothing otherwise. |
 | `codoc_propose` | Tree edits as one plan. |
 | `codoc_write_block` | Content for a kind block ([kinds.md](kinds.md#4-how-content-becomes-ops)). |
 | `codoc_realize_progress` | Renews the realizing lease with "building n of m", as the MCP server's own lease (`CODOC_REALIZE_OWNER`), so the agent's status does not read it as another pass. |
@@ -144,7 +148,9 @@ realizing lease with the child's pid, which keeps the lease while the child live
 the child its owner in `CODOC_REALIZE_OWNER`. The cli engine's child is `python -m
 codoc.claude.autorealize`, which runs `claude -p --output-format json` and prints the
 agent's last message. Either engine ends with one line: how the pass ended, its time and
-its cost. `--auto-realize` starts a pass when work is queued and no session is live.
+its cost. `--auto-realize` (`auto_realizer`) starts a pass when no session is live and the
+queue holds a hand-off no finished pass was started for, and backs off after a pass that
+failed (`FAILED_BACKOFF_S`, doubled per failure in a row, at most an hour).
 
 **Commands.** `/codoc:realize` builds the queue (`state` decides what it does, from
 `codoc_status`); `/codoc:plan <task>` proposes the change with `codoc_propose` and stops;

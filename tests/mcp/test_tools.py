@@ -13,7 +13,7 @@ from codoc.daemon import client, reads
 from codoc.daemon.publish import publish
 from codoc.mcp import tools
 from codoc.workspace import Workspace
-from tests.helpers import H, T, handoff, index_holds, refs, seed
+from tests.helpers import H, T, handoff, code_holds, refs, seed
 
 
 def workspace(tmp_path):
@@ -239,7 +239,7 @@ def test_codoc_agent_names_the_actor_and_its_citing_attach_settles_the_handoff(t
     cd, ws = workspace(tmp_path)
     ho = handoff(ws, "h1", actor=H)
     ws.close()
-    index_holds(monkeypatch, "c.py::retry")
+    code_holds(monkeypatch, "c.py::retry")
     monkeypatch.setenv("CODOC_AGENT", "cursor")
     try:
         r = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::retry"]}],
@@ -260,7 +260,7 @@ def test_the_queues_d_id_settles_the_handoff(tmp_path, monkeypatch):
     cd, ws = workspace(tmp_path)
     ho = handoff(ws, "h1", actor=H)
     ws.close()
-    index_holds(monkeypatch, "c.py::retry")
+    code_holds(monkeypatch, "c.py::retry")
     try:
         r = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::retry"]}],
                           caused_by=f"d:{ho.id}", root_dir=str(tmp_path))
@@ -277,7 +277,7 @@ def test_only_a_call_whose_ops_landed_cites_its_handoff(tmp_path, monkeypatch):
     cd, ws = workspace(tmp_path)
     ho = handoff(ws, "h1", actor=H)
     ws.close()
-    index_holds(monkeypatch, "c.py::retry", "c.py::x")
+    code_holds(monkeypatch, "c.py::retry", "c.py::x")
     write_activity(str(cd), {"epoch": {"id": "ep", "open": True}, "cited": []})
     cite, root = f"d:{ho.id}", str(tmp_path)
     try:
@@ -305,7 +305,7 @@ def test_status_lists_an_item_reported_this_turn_as_settling_when_the_turn_ends(
     ho = handoff(ws, "h1", actor=H)
     publish(cd, ws.store, root_dir=str(tmp_path))
     ws.close()
-    index_holds(monkeypatch, "c.py::retry")
+    code_holds(monkeypatch, "c.py::retry")
     write_activity(str(cd), {"epoch": {"id": "ep", "open": True}, "cited": []})
     item = {"feature_id": "h1", "title": "Client", "handoff": f"d:{ho.id}"}
     try:
@@ -321,38 +321,69 @@ def test_status_lists_an_item_reported_this_turn_as_settling_when_the_turn_ends(
         client.release(cd)
 
 
-def test_an_attach_binds_only_indexed_code_and_settles_nothing_else(tmp_path, monkeypatch):
-    """A binding op citing a hand-off settles it, so an attach is evidence only
-    of code the index holds. A symbol it does not hold (code this turn wrote,
-    or a file the index excludes) is refused, and naming a symbol the feature
-    already owns writes nothing at all."""
+def test_an_attach_settles_a_handoff_only_on_code_the_build_changed(tmp_path, monkeypatch):
+    """With no daemon and no epoch (Cursor, Codex), the agent's attach is the
+    only evidence a hand-off was built. It is read off the code on disk: a
+    symbol the files do not define is refused, a re-attach of code nobody
+    changed writes nothing, and a re-attach of code the build changed writes a
+    `bind.refresh` that settles the hand-off, even when a reflect pass took the
+    change first."""
+    from codoc.calculus import ops as K
     from codoc.calculus.derive import queued
+    from codoc.index.app import code_on_disk
+    monkeypatch.setenv("CODOC_AGENT", "cursor")
+    cd, ws = workspace(tmp_path)
+    (tmp_path / "c.py").write_text("def send():\n    return 1\n")
+    ws.submit([{"kind": K.BIND_REFRESH, "target": {"fid": "h1"},
+                "payload": dict(zip(("fingerprint", "types_hash"), code_on_disk(tmp_path, {"c.py"})["c.py::send"]),
+                                symbol="c.py::send")}], actor="loop")
+    ho = handoff(ws, "h1", actor=H)
+    ws.close()
+    cite, root = f"d:{ho.id}", str(tmp_path)
+
+    def attach(*symbols):
+        try:
+            return tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": list(symbols)}],
+                                 caused_by=cite, root_dir=root)
+        finally:
+            client.release(cd)
+    r = attach("c.py::send", "nope/ghost.py::does_not_exist")
+    assert not r["ok"] and "does not define nope/ghost.py::does_not_exist" in r["error"], r
+    assert attach("c.py::send")["applied"] == []                   # the code is as it was
+    assert queued(Workspace(cd, readonly=True).store) == ["h1"]
+
+    (tmp_path / "c.py").write_text("def send():\n    return 2\n")  # the build
+    w = Workspace(cd)                                              # a reflect pass takes it first
+    w.submit([{"kind": K.BIND_REFRESH, "target": {"fid": "h1"},
+               "payload": dict(zip(("fingerprint", "types_hash"), code_on_disk(tmp_path, {"c.py"})["c.py::send"]),
+                               symbol="c.py::send")}], actor="loop")
+    w.close()
+    r = attach("c.py::send")
+    assert [a["conflict"] for a in r["applied"]] == [None], r
+    st = Workspace(cd, readonly=True).store
+    assert queued(st) == [] and [o.kind for o in st.ops if o.caused_by == ho.id][0] == K.BIND_REFRESH
+
+
+def test_new_code_a_daemonless_turn_wrote_binds_and_settles_when_the_turn_ends(tmp_path):
+    """No daemon, so no pass indexes what the turn wrote: the attach reads the
+    new function off the disk, and the process the Stop hook starts settles."""
+    from codoc.calculus.derive import queued
+    from codoc.workspace.epoch import close_epoch, write_activity
     cd, ws = workspace(tmp_path)
     ho = handoff(ws, "h1", actor=H)
-    before = ws.store.bindings["c.py::send"]
     ws.close()
-    index_holds(monkeypatch, "c.py::send", "c.py::retry")
-    cite, root = f"d:{ho.id}", str(tmp_path)
+    (tmp_path / "c.py").write_text("def send():\n    return 1\n\n\ndef retry_twice():\n    return send()\n")
+    write_activity(cd, {"version": 1, "epoch": {"id": "ep-s", "open": True}, "touched": ["c.py"], "cited": []})
     try:
-        r = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1",
-                                         "bindings": ["c.py::retry", "nope/ghost.py::does_not_exist"]}],
-                          caused_by=cite, root_dir=root)
-        assert not r["ok"] and "not in the code index: nope/ghost.py::does_not_exist" in r["error"], r
-        r = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::send"]}],
-                          caused_by=cite, root_dir=root)
-        assert r["ok"] and r["applied"] == [], r
+        r = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::retry_twice"]}],
+                          caused_by=f"d:{ho.id}", root_dir=str(tmp_path))
     finally:
         client.release(cd)
-    st = Workspace(cd, readonly=True).store
-    assert queued(st) == ["h1"] and "c.py::retry" not in st.bindings
-    assert st.bindings["c.py::send"] == before
-    try:
-        assert tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::retry"]}],
-                             caused_by=cite, root_dir=root)["ok"]
-    finally:
-        client.release(cd)
-    st = Workspace(cd, readonly=True).store
-    assert st.bindings["c.py::retry"].fingerprint == "h-c.py::retry" and queued(st) == []
+    assert r["ok"], r
+    close_epoch(cd, "ep-s")
+    client.settle_closed_epoch(cd)
+    client.release(cd)
+    assert queued(Workspace(cd, readonly=True).store) == []
 
 
 def test_context_for_a_feature_is_its_range_and_the_features_one_call_away(tmp_path):

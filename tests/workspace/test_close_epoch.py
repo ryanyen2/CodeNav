@@ -93,13 +93,15 @@ def test_empty_expected_id_matches_any_open_epoch(tmp_path):
     assert json.loads(activity_path(codoc_dir).read_text())["epoch"]["open"] is False
 
 
-def test_an_epoch_with_no_id_is_closed_by_any_session(tmp_path):
-    """A realize pass reopens the epoch with no session id when no session
-    started one. The stop hook of the turn that follows names its session and
-    still closes it, or the open epoch would hold back settling until it went
-    stale."""
+def test_every_epoch_a_turn_opens_has_an_id_its_stop_can_name(tmp_path):
+    """A turn's first rising edge with no epoch on disk opens one with an id,
+    so a stop that names its session closes it, and a stop of another session
+    does not. A realize pass that runs no hooks opens its own, under its own
+    id, and closes it when it ends."""
+    from codoc.workspace.epoch import read_activity, reopen_epoch
     codoc_dir = tmp_path / ".codoc"
     codoc_dir.mkdir()
-    _write(codoc_dir, open=True, epoch_id="")
-    assert close_epoch(codoc_dir, "ep-abc") is True
-
+    reopen_epoch(codoc_dir, "realize-1")
+    assert read_activity(codoc_dir)["epoch"]["id"] == "ep-realize-1"
+    assert close_epoch(codoc_dir, "ep-abc") is False
+    assert close_epoch(codoc_dir, "ep-realize-1") is True

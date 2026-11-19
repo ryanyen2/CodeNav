@@ -653,7 +653,7 @@ rejected plan's words are dead.
 | phase | holds when |
 |---|---|
 | `edited` | `ink(f)` or `removals(f)` has an `unsent` claim. Changing a block's kind, level or place is layout and does not count. |
-| `realizing` | `f` is queued and a realize pass holds the lease: `status.json` says `realizing`, and the process the lease names is alive, or, when it names none, the file was written within the last 300 seconds. The lease is the one input from outside the store. |
+| `realizing` | `f` is queued and a realize pass holds the lease: `status.json` says `realizing`, and the process the lease names is alive and the file was written within the last hour, or, when it names none, within the last 300 seconds. The lease is the one input from outside the store. |
 | `queued` | `f` is queued and has at least one binding. |
 | `planned` | `f` is queued and has no binding. |
 | `proposed` | `open_plans_on(f)` is not empty: a plan offered for a verdict is waiting on `f`. |

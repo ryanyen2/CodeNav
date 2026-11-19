@@ -30,16 +30,18 @@ from codoc.workspace.layout import CODOC_DIR, LOG_DIR, REALIZE, find_codoc_dir, 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help=__doc__)
 
 
-def _find_root(root: str) -> str:
-    """The directory that holds ``.codoc``: ``root`` or its nearest ancestor
-    that has one, found as the hooks and the MCP server find it. ``root``
-    itself when none has."""
-    cd = find_codoc_dir(root)
-    return str(Path(cd).parent) if cd else root
+def _find_root(root: str | None) -> str:
+    """``--root`` as given. Without one, the current directory or its nearest
+    ancestor that holds ``.codoc``, found as the hooks and the MCP server find
+    it; the current directory when none does."""
+    if root is not None:
+        return root
+    cd = find_codoc_dir(".")
+    return str(Path(cd).parent) if cd else "."
 
 
-ROOT = typer.Option(".", "--root", callback=_find_root,
-                    help="Repository root; default: the nearest directory up from here that holds .codoc.")
+ROOT = typer.Option(None, "--root", callback=_find_root, show_default=False,
+                    help="Repository root. Default: the current directory or the nearest one above it that holds .codoc.")
 
 
 def _codoc(root: str) -> Path:
@@ -52,8 +54,8 @@ def _require(root: str) -> Path:
     # appears with the first op, and a repository with no indexable file is
     # bootstrapped without writing one.
     if not cd.is_dir():
-        typer.echo(f"No codoc workspace in {Path(root).resolve()} or any directory above it. "
-                   "Run `codoc init` in the repository root first.", err=True)
+        typer.echo(f"No codoc workspace at {cd.resolve()}. Without --root, codoc looks in the current directory "
+                   "and every directory above it. Run `codoc init` in the repository root first.", err=True)
         raise typer.Exit(1)
     return cd
 
@@ -105,14 +107,20 @@ def _main(version: bool = typer.Option(False, "--version", is_eager=True, callba
 
 
 @app.command()
-def init(root: str = ROOT,
+def init(root: str = typer.Option(".", "--root", help="Where to create the workspace, taken as given."),
          force: bool = typer.Option(False, "--force", help="Rebuild even if a workspace exists (the old log is kept as log.old)."),
          hooks: bool = typer.Option(True, "--hooks/--no-hooks", help="Install the Claude Code hooks and MCP server."),
          doc_language: str = typer.Option("", "--doc-language", "--lang", help="Language to author the tree in (BCP-47)."),
          no_organize: bool = typer.Option(False, "--no-organize", help="Skip the theme-grouping pass.")):
-    """Index the repo, build the first tree from the code, publish tree.codoc."""
+    """Index the repo, build the first tree from the code, publish tree.codoc.
+
+    The workspace goes in ``--root`` (the current directory by default), never
+    in a directory above it: a package in a monorepo may hold its own."""
     from codoc.daemon.pidfile import daemon_running
     cd = _codoc(root)
+    enclosing = find_codoc_dir(str(Path(root).resolve().parent))
+    if enclosing:
+        typer.echo(f"Note: {enclosing} is a workspace too; this one, in {Path(root).resolve()}, is separate from it.")
     populated = (cd / LOG_DIR).is_dir() and any((cd / LOG_DIR).glob("*.jsonl"))
     if populated and daemon_running(cd):
         typer.echo("A codoc daemon is watching this repo. Stop it before `codoc init`.", err=True)

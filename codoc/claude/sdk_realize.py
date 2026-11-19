@@ -18,13 +18,14 @@ everything event-side is duck-typed, so tests need no SDK installed.
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
 from typing import Any, Callable
 
 from codoc.claude import autorealize
-from codoc.workspace.epoch import reopen_epoch, repo_relative, touch_epoch
+from codoc.workspace.epoch import close_epoch, reopen_epoch, repo_relative, touch_epoch
 from codoc.daemon.publish import renew_realizing
 from codoc.workspace.layout import CODOC_DIR, REALIZE
 
@@ -76,6 +77,9 @@ class RealizeMonitor:
         self.cost: float | None = None
         self._started = time.monotonic()
         self._last_heartbeat = 0.0  # monotonic ts of the last lease renewal
+        # The epoch this pass opens when no hook has opened one: its own, so
+        # only this pass closes it (``close``), and no other session's stop.
+        self.session = f"realize-{os.getpid()}"
 
     # -- helpers ---------------------------------------------------------
 
@@ -103,7 +107,7 @@ class RealizeMonitor:
         """Record the touch as the interactive pre-tool hook does: a streamed
         tool-use block arrives when the tool is requested, before it writes."""
         try:
-            reopen_epoch(self.codoc_dir, None)
+            reopen_epoch(self.codoc_dir, self.session)
             touch_epoch(self.codoc_dir, rel)
         except Exception:  # noqa: BLE001 (signals never break the run)
             pass
@@ -201,6 +205,7 @@ async def _run(root_dir: str, codoc_dir: str, *, permission_mode: str,
         # A synchronous raise from query() (invalid options, auth failure) lands
         # here; mark failed, never propagate.
         monitor.errored = True
+    close_epoch(codoc_dir, f"ep-{monitor.session}")    # the pass's own epoch, when no hook opened one
     printer(monitor.summary())
     return 1 if monitor.errored else 0
 

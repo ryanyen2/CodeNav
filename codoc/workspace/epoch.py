@@ -115,21 +115,22 @@ def open_epoch(codoc_dir: str | Path, session_id: str | None) -> None:
 
 def reopen_epoch(codoc_dir: str | Path, session_id: str | None) -> None:
     """A turn starts (the person's prompt, or a tool call before it writes):
-    reopen this session's closed epoch with nothing touched or cited. A closed
-    epoch of another session, one that missed its start, is replaced by a new
-    one. An open epoch, this session's or a concurrent one's, is left alone."""
+    reopen this session's closed epoch with nothing touched or cited. A
+    caller that names no session reopens whatever closed epoch is there. A
+    closed epoch of another session, one that missed its start, or none at
+    all, is replaced by a new one, so every epoch has an id. An open epoch,
+    this session's or a concurrent one's, is left alone."""
     with _lock(codoc_dir):
         data = read_activity(codoc_dir)
         ep = data.get("epoch") or {}
         if ep.get("open"):
             return
         mine = f"ep-{session_id}" if session_id else ""
-        if ep.get("id") and mine and ep["id"] != mine:
-            data = _fresh(session_id)
-        else:
-            data["epoch"] = {**ep, "id": ep.get("id") or mine, "open": True, "ended_at": None,
-                             "started_at": ep.get("started_at") or _now_iso()}
+        if ep.get("id") and ep["id"] == (mine or ep["id"]):
+            data["epoch"] = {**ep, "open": True, "ended_at": None, "started_at": ep.get("started_at") or _now_iso()}
             data["touched"], data["cited"] = [], []
+        else:
+            data = _fresh(session_id)
         write_json(activity_path(codoc_dir), data)
 
 
@@ -172,8 +173,7 @@ def close_epoch(codoc_dir: str | Path, expected_id: str, *,
 
     * ``expected_id``: the epoch the caller means. If the file names another,
       a newer session has taken the single epoch slot and nothing changes. An
-      empty ``expected_id`` matches whatever epoch is open, and so does an
-      epoch with no id (a realize pass opened it where no session had started).
+      empty ``expected_id`` matches whatever epoch is open.
     * ``stale_after``: when given, the epoch closes only if the file has not
       been written for that long, checked under the lock, so a write that
       landed after the caller's own check keeps the epoch alive.
@@ -186,7 +186,7 @@ def close_epoch(codoc_dir: str | Path, expected_id: str, *,
         with _lock(codoc_dir):
             data = read_activity(codoc_dir)
             ep = data.get("epoch") or {}
-            if expected_id and ep.get("id") and ep["id"] != expected_id:
+            if expected_id and ep.get("id") != expected_id:
                 return False
             if stale_after is not None and epoch_age(codoc_dir, now) <= stale_after:
                 return False
