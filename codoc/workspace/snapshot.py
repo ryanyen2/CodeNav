@@ -7,10 +7,10 @@ live or dead (a dead one carries the op that killed it, so an undo from a
 branch forked before the fold still finds it), with its full Text (segments,
 actors, clocks, marks) as ``texts``; one ``bind.attach`` per binding; one
 ``plan.open`` per plan with its status restored by a verdict; one
-``feature.handoff`` (with the words the person asked for) and one
-``feature.realized`` per watermark. None carries an inverse, and replay
-gives a record without one none: they re-express state and are nobody's
-gesture, so no undo picks the fold's batch.
+``feature.handoff`` per watermark, which sets both frontiers on the block
+whatever its kind is now and carries the words the person asked for. None
+carries an inverse, and replay gives a record without one none: they
+re-express state and are nobody's gesture, so no undo picks the fold's batch.
 
 **The fold stops at the first op of open work.** A verdict on an open plan
 undoes the plan's own ops by identity, so those ops stay in the log. The fold
@@ -170,26 +170,18 @@ def snapshot_ops(store: Store, session: str, clock: Clock) -> list[dict]:
         emit(K.PLAN_ACCEPT if p.status == "accepted" else K.PLAN_REJECT, {"pid": p.id}, {"verdict": p.verdict},
              actor=p.decided_by or IMPORT)
     for fid, w in store.watermarks_by_fid.items():
-        if fid not in store.blocks:
+        if fid not in store.blocks or not (w.handoff or w.realized):
             continue
-        if w.handoff:
-            asked = store.by_id.get(w.handoffs[-1]) if w.handoffs else None
-            payload = {"covers": w.handoff}
-            for k in ("asked", "delete_code"):
-                if asked is not None and asked.payload.get(k):
-                    payload[k] = asked.payload[k]
-            emit(K.FEATURE_HANDOFF, {"fid": fid}, payload,
-                 actor=asked.actor if asked is not None else IMPORT)
-        if w.realized:
-            # A realization settles a request, so there has to be one to settle
-            # or `nothing_queued` refuses it, and a person may undo a hand-off
-            # that was already realized, which leaves exactly that pair.
-            if not w.handoff:
-                emit(K.FEATURE_HANDOFF, {"fid": fid}, {"covers": w.realized})
-            emit(K.FEATURE_REALIZED, {"fid": fid}, {"covers": w.realized})
-            if not w.handoff:
-                # …and then take the stand-in request back, as the person did.
-                emit(K.FEATURE_HANDOFF, {"fid": fid}, {"restore": {}, "undoes": ""})
+        # One op restores both frontiers on the block whatever its kind now
+        # (`realized` makes it the fold's form). It comes after the bindings:
+        # it is the latest hand-off, and a settle reads evidence from the ops
+        # after that one, which must not include the attaches above.
+        asked = store.by_id.get(w.handoffs[-1]) if w.handoff and w.handoffs else None
+        payload = {"covers": w.handoff, "realized": w.realized}
+        for k in ("asked", "delete_code"):
+            if asked is not None and asked.payload.get(k):
+                payload[k] = asked.payload[k]
+        emit(K.FEATURE_HANDOFF, {"fid": fid}, payload, actor=asked.actor if asked is not None else IMPORT)
     return out
 
 

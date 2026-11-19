@@ -72,8 +72,9 @@ STRUCTURAL = frozenset({BLOCK_ADD, BLOCK_SPLIT, BLOCK_MERGE, BLOCK_MOVE, BLOCK_D
 
 # Payload fields only a snapshot writes: a plan's archived ops, text with its
 # original authors, who added a block, its death, its detached bindings, the
-# values the author's unrealized sets replaced, its watermarks and the move that
-# ranked it. The
+# values the author's unrealized sets replaced, its watermark clocks and the move
+# that ranked it; a hand-off's `realized`, which makes it the restore of a whole
+# watermark. The
 # applier honours them so a fold can rebuild state; from any other writer they
 # would let one actor claim another's words or ops.
 SNAPSHOT_ONLY = {
@@ -82,6 +83,7 @@ SNAPSHOT_ONLY = {
     PLAN_OPEN: ("ops", "opened_by"),
     PLAN_ACCEPT: ("verdict",),
     PLAN_REJECT: ("verdict",),
+    FEATURE_HANDOFF: ("realized",),
 }
 
 

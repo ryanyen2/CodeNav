@@ -867,6 +867,8 @@ def _frontier(v) -> dict:
 def _h_feature_handoff(store: Store, op: Op, touched: set[str]):
     fid = op.target["fid"]
     b = store.blocks.get(fid)
+    if "realized" in op.payload and b is not None:
+        return _restore_watermark(store, op, touched)
     if b is None or b.kind != HEADING:
         raise Conflict("no_feature", fid)
     w = store.watermarks(fid)
@@ -891,6 +893,24 @@ def _h_feature_handoff(store: Store, op: Op, touched: set[str]):
     canonical = {"covers": covers, "asked": op.payload.get("asked", ""),
                  "delete_code": bool(op.payload.get("delete_code", False))}
     return canonical, [body(K.FEATURE_HANDOFF, {"fid": fid}, {"restore": prev, "undoes": op.id})]
+
+
+def _restore_watermark(store: Store, op: Op, touched: set[str]):
+    """A fold's hand-off (``realized`` is a field only a snapshot writes):
+    the block's watermark as the fold found it. Both frontiers are set as
+    given, and the op becomes the latest hand-off when ``covers`` is not
+    empty, carrying that hand-off's words. A watermark belongs to the block
+    and stays on it through a kind change, so the block may be of any kind,
+    live or dead. The clocks are the ``block.add``'s to restore."""
+    fid = op.target["fid"]
+    covers, realized = _frontier(op.payload.get("covers") or {}), _frontier(op.payload["realized"])
+    w = store.watermarks(fid)
+    w.handoff, w.realized = covers, realized
+    if covers:
+        w.handoffs.append(op.id)
+    touched.add(fid)
+    return {"covers": covers, "realized": realized, "asked": op.payload.get("asked", ""),
+            "delete_code": bool(op.payload.get("delete_code", False))}, []
 
 
 def _h_feature_realized(store: Store, op: Op, touched: set[str]):

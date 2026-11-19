@@ -427,6 +427,11 @@ the symbol: a realization settles on these.
   one case in which a watermark shrinks (I9). The restore's inverse is a new hand-off
   covering the frontier it took back, with the undone one's `asked` and `delete_code`, so a
   redo asks the same under its own op id.
+- A watermark belongs to its block, so it stays when a heading is made prose and counts
+  again when the block is made a heading again. A snapshot restores it with a
+  `feature.handoff` that also carries `realized` (`ops.SNAPSHOT_ONLY`): that op needs the
+  block to exist, of any kind, live or dead, and sets `handoff` to `covers` and `realized`
+  to `realized` ([concurrency.md](concurrency.md#12-snapshots)).
 - `feature.realized` conflicts `nothing_queued` when the feature is not queued. It sets
   `realized` to `union(realized, covers)`; `covers` defaults to `handoff`.
 

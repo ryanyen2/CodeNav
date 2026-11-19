@@ -272,6 +272,43 @@ def test_emptied_is_the_same_state_before_and_after_a_fold(tmp_path):
     assert _emptied(ws.store) == ["h1"], _emptied(ws.store)
 
 
+def test_a_hand_off_waits_through_a_fold_while_its_heading_is_prose(tmp_path):
+    """A watermark stays on its block through a kind change. `h2` is handed
+    off and made prose; the tree is folded; `h2` is made a heading again and
+    is queued with the words the person asked, as on a clone that did not
+    fold. `h1` was realized and its code moved since, so it is drifted on
+    both: the fold keeps when the realization settled."""
+    import shutil
+    a = tmp_path / "a" / ".codoc"
+    ws = Workspace(a); seed(ws)
+    ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {}}], actor=H)
+    ws.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": "h1"}, "payload": {}}], actor="loop")
+    ws.submit([{"kind": K.BIND_REFRESH, "target": {"fid": "h1"},
+                "payload": {"symbol": "c.py::send", "fingerprint": "f2", "types_hash": "t1"}}], actor="loop")
+    # First in the document, so as prose it is in no feature's body.
+    ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "h2"}, "payload": {"kind": HEADING, "level": 1, "after": START}},
+               {"kind": K.TEXT_INSERT, "target": {"bid": "h2", "path": "text"}, "payload": {"after": START, "text": "Retry"}}],
+              actor=H)
+    ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h2"}, "payload": {"asked": "retry twice"}}], actor=H)
+    ws.submit([{"kind": K.BLOCK_SET, "target": {"bid": "h2", "path": "kind"}, "payload": {"value": PARAGRAPH}}], actor=H)
+    ws.close()
+    b = tmp_path / "b" / ".codoc"
+    b.parent.mkdir()
+    shutil.copytree(a, b)
+    fold(b)
+    live, folded = Workspace(a), Workspace(b)
+    assert not L.list_sessions(b), "the tree did not fold whole"
+    assert folded.store.state_fingerprint() == live.store.state_fingerprint()
+    assert phase(live.store, "h1") == phase(folded.store, "h1") == "drifted"
+    for w in (live, folded):
+        w.submit([{"kind": K.BLOCK_SET, "target": {"bid": "h2", "path": "kind"},
+                   "payload": {"value": HEADING, "level": 1}}], actor=H)
+    assert queued(live.store) == queued(folded.store) == ["h2"]
+    assert directive(folded.store, "h2") == directive(live.store, "h2")
+    assert "Author asked: retry twice" in directive(folded.store, "h2")
+    live.close(); folded.close()
+
+
 def _folded(cd) -> tuple[int, int]:
     """(ops still in the log, ops the snapshot folded)."""
     return (sum(len(L.read_session(p).ops) for p in L.list_sessions(cd)),

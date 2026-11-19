@@ -166,14 +166,32 @@ def canonical_file(sourcedir: str | pathlib.Path, file: str) -> str | None:
     ``..`` folded lexically; the root is the nearest ancestor that is the
     repository, however it was reached (a symlinked parent directory, macOS
     ``/var`` for ``/private/var``). The part below it is kept as written, so a
-    linked file keeps its link's name, as the walk names it. None when no
-    ancestor is the repository."""
+    linked file keeps its link's name, as the walk names it.
+
+    When no ancestor is the repository (a link from outside into a
+    subdirectory, ``/tmp/src -> repo/src``), the path is named by its real
+    path below the root, if the walk keys the file by that name: a real path
+    through no excluded directory. None otherwise."""
     root = os.path.realpath(sourcedir)
     path = pathlib.PurePath(os.path.normpath(os.path.join(root, file)))
     for base in path.parents:
         if os.path.realpath(base) == root:
             return path.relative_to(base).as_posix()
-    return None
+    try:
+        rel = pathlib.PurePath(os.path.realpath(path)).relative_to(root).as_posix()
+    except ValueError:
+        return None
+    return rel if _walked(pathlib.Path(root), source_matcher(pathlib.Path(root)), rel) else None
+
+
+def _walked(root: pathlib.Path, matcher: _SymlinkAwareMatcher, rel: str) -> bool:
+    """Whether the index's walk (``localfs.walk_dir`` with ``matcher``) keys a
+    file as ``rel``: a file of a language codoc reads, reached through no
+    excluded or symlinked directory. A linked file is keyed under its link's
+    name."""
+    dirs = pathlib.PurePosixPath(rel).parents[:-1]
+    return (detect_language(rel) is not None and matcher.is_file_included(pathlib.PurePosixPath(rel))
+            and all(matcher.is_dir_included(d) for d in dirs) and (root / rel).is_file())
 
 
 def code_on_disk(sourcedir: str | pathlib.Path, files: set[str]) -> dict[str, tuple[str, str]]:
@@ -187,12 +205,7 @@ def code_on_disk(sourcedir: str | pathlib.Path, files: set[str]) -> dict[str, tu
     out: dict[str, tuple[str, str]] = {}
     for rel in files:
         path = root / rel
-        # As the walk decides (`localfs.walk_dir` with this matcher): a file it
-        # reaches through no excluded or symlinked directory, a linked file
-        # included under its link's name.
-        dirs = pathlib.PurePosixPath(rel).parents[:-1]
-        if (detect_language(rel) is None or not matcher.is_file_included(pathlib.PurePosixPath(rel))
-                or not all(matcher.is_dir_included(d) for d in dirs) or not path.is_file()):
+        if not _walked(root, matcher, rel):
             continue
         try:
             if path.stat().st_size > _MAX_FILE_BYTES:

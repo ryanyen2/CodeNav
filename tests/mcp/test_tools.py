@@ -503,6 +503,35 @@ def test_a_binding_may_reach_the_repository_by_another_path(tmp_path):
     assert canonical_file(real, "../elsewhere/c.py") is None
 
 
+def test_a_binding_may_name_a_file_through_an_outside_link_into_a_subdirectory(tmp_path):
+    """`outside/src -> repo/src`: no ancestor of the path is the repository, so
+    the file is named by its real path below it, the key the index's walk gives
+    it. A link into a directory the walk leaves out (`vendor/`) names no key,
+    and is refused as outside the repository."""
+    import os
+    repo = tmp_path.resolve() / "repo"
+    (tmp_path / "outside").mkdir()
+    for d in ("src", "vendor"):
+        (repo / d).mkdir(parents=True)
+        (repo / d / "c.py").write_text("def retry():\n    return 1\n")
+        os.symlink(repo / d, tmp_path / "outside" / d)
+    cd = repo / ".codoc"
+    ws = Workspace(cd)
+    seed(ws, bind=False)
+    ws.close()
+
+    def attach(sym):
+        try:
+            return tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": [sym]}],
+                                 root_dir=str(repo))
+        finally:
+            client.release(cd)
+    assert attach(f"{tmp_path}/outside/src/c.py::retry")["ok"]
+    r = attach(f"{tmp_path}/outside/vendor/c.py::retry")
+    assert not r["ok"] and "outside the repository" in r["error"], r
+    assert sorted(Workspace(cd, readonly=True).store.bindings) == ["src/c.py::retry"]
+
+
 def test_a_plan_reports_no_build_so_it_refreshes_nothing(tmp_path):
     """`codoc_propose` describes code not yet written: an owned symbol whose
     code changed is not refreshed under its plan, which would conflict
