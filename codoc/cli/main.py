@@ -232,7 +232,9 @@ def status(root: str = ROOT):
 
 @app.command()
 def sync(root: str = ROOT):
-    """One pass: drain client edits, reflect every changed file, publish."""
+    """One pass: drain client edits, reflect every changed file, publish. While
+    an agent session is open the code is not reflected: the first pass after
+    the session ends reflects it and cites its hand-offs."""
     from codoc.daemon.daemon import Daemon
     from codoc.daemon.pidfile import daemon_running
     from codoc.daemon.publish import publish
@@ -248,7 +250,10 @@ def sync(root: str = ROOT):
         d = Daemon(root, cd, printer=typer.echo)
         try:
             note = d.process_batch([])
-            note2 = d.reflect(whole=True)
+            if d.state.epoch_open:
+                note2 = "code not reflected: an agent session is open, and the first pass after it ends reflects it"
+            else:
+                note2 = d.reflect(whole=True)
             typer.echo(f"▸ {note}; {note2}")
             publish(cd, d.ws.store, root_dir=root)
         finally:

@@ -29,8 +29,6 @@ class SymbolRef:
 
 @runtime_checkable
 class LanguageAdapter(Protocol):
-    language: str           # e.g. "python", "typescript"
-
     def extract_chunks(self, file: str, source: str) -> list[Chunk]:
         """Every function, class and method in ``source`` as a chunk, plus one
         ``__module__`` chunk for the module-level statements."""

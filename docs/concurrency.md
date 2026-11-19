@@ -250,7 +250,17 @@ For each batch the daemon does, in order:
 4. Reflect the changed code files that are not deferred: the loop's pass, which writes
    ops as `loop` and cites the hand-offs step 1 noted. It covers every code file changed
    since the index was last updated, not only those the batch saw change, so an edit
-   made while no daemon ran is reflected by the next pass.
+   made while no daemon ran is reflected by the next pass. The pass updates the index
+   before its model call, so it writes the change set it read to `cache/pending.json`
+   before the call and deletes the file once it has applied. A pass that was stopped
+   (the editor's or the hub's `SIGTERM`, a kill) leaves the file, and the next pass
+   merges it into its own change set: per chunk the newer change wins, except that a
+   chunk added since the last finished pass stays added. The stopped pass may have
+   refreshed bindings before its model call, so the model judges every bound chunk the
+   file names. A pass that raises an error deletes the file, so a change set that
+   breaks the pass is reported once, not on every pass after it. Limit: a pass stopped
+   while the index is being updated, before the file is written, loses what that
+   update indexed.
 5. Unless an agent epoch is open, settle hand-offs (section 10).
 6. Publish the derived files.
 

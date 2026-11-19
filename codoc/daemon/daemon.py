@@ -19,7 +19,8 @@ Per debounced batch of filesystem events it does, in order:
    a daemon that starts later does not reflect it again;
 4. reflect the changed code files that are not deferred, citing the hand-offs
    of step 1: every code file changed since the index was last updated, not
-   only those the batch saw change;
+   only those the batch saw change, and the change set a stopped pass left
+   (``with_pending``);
 5. settle the hand-offs applied binding ops now cite, unless an epoch is open
    (``realize.settle_if_idle``); a reflect pass settles too;
 6. publish the derived files.
@@ -29,6 +30,7 @@ wires ``batch`` to ``watchfiles``, filtered by ``wakes``.
 """
 from __future__ import annotations
 
+import json
 import sys
 import time
 from dataclasses import dataclass, field
@@ -47,7 +49,7 @@ from codoc.workspace import log as L
 from codoc.workspace.epoch import (
     EPOCH_STALE_SECONDS, close_epoch, epoch_age, epoch_touched_files, note_reflected, read_activity,
 )
-from codoc.workspace.layout import ACTIVITY, APPLIER_LOCK, CODOC_DIR, GRAPH_CACHE, atomic_write, locked
+from codoc.workspace.layout import ACTIVITY, APPLIER_LOCK, CODOC_DIR, GRAPH_CACHE, PENDING, atomic_write, locked
 
 DEBOUNCE_MS = 600
 # This long after its last batch the daemon runs one with no paths, whatever
@@ -219,13 +221,22 @@ class Daemon:
 
     def reflect(self, *, whole: bool = False, under_epoch: bool = False, landed: frozenset[str] = frozenset()) -> str:
         """One reflect pass over every code file that changed since the index
-        was last updated (``index_code``; ``whole`` rebuilds the graph)."""
+        was last updated (``index_code``; ``whole`` rebuilds the graph), and
+        over what a pass that was stopped left (``with_pending``)."""
         from codoc.kinds.lift import lift_pass
         from codoc.loops.reflect import reflect
-        cs = index_code(self.root, self.codoc_dir, self.graph, whole=whole, bindings=self.ws.store.bindings,
-                        changeset=self._changeset)
-        res = reflect(self.ws, cs, self.graph, propose=self._propose or _propose(),
-                      doc_language=workspace_doc_language(self.codoc_dir), under_epoch=under_epoch, landed=landed)
+        pending = self.codoc_dir / PENDING
+        cs = with_pending(pending, index_code(self.root, self.codoc_dir, self.graph, whole=whole,
+                                              bindings=self.ws.store.bindings, changeset=self._changeset))
+        try:
+            res = reflect(self.ws, cs, self.graph, propose=self._propose or _propose(),
+                          doc_language=workspace_doc_language(self.codoc_dir), under_epoch=under_epoch, landed=landed)
+        except Exception:
+            # An error is reported (`batch`), not retried: a change set that
+            # breaks the pass would break every pass after it.
+            pending.unlink(missing_ok=True)
+            raise
+        pending.unlink(missing_ok=True)
         settle_if_idle(self.ws, res, sha=head(self.root)[0])
         # Kind blocks that derive from code (a diagram) follow the bindings.
         lifted = lift_pass(self.ws, self.graph, str(self.codoc_dir))
@@ -291,6 +302,38 @@ def index_code(root: str | Path, codoc_dir: str | Path, graph: Graph, *, whole: 
         graph.update(cs.rows, cs.touched_files())
     atomic_write(Path(codoc_dir) / GRAPH_CACHE, graph.dumps())
     return cs
+
+
+def with_pending(path: Path, cs):
+    """``cs`` merged with the change set a stopped pass left at ``path``, and
+    written there before the pass runs. The index advances before the model
+    call, so a pass stopped after that (``SIGTERM``, a kill) would otherwise
+    lose its change set for good; the file is on disk before the call, so it
+    survives a ``SIGKILL``, and the pass deletes it when it has applied.
+
+    Per symbol the newer entry wins, except that a chunk added since the last
+    finished pass stays added when it was modified since: the pass offers the
+    model only added chunks to place. Every chunk the stopped pass left is
+    ``unjudged``."""
+    from codoc.index.changes import ChangeSet, ChunkRef
+    kinds = ("added", "modified", "removed")
+    try:
+        left = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        left = {}
+    entry: dict = {d["symbol"]: (k, ChunkRef(**d)) for k in kinds for d in left.get(k, [])}
+    unjudged = {s for s, (k, _) in entry.items() if k != "removed"}
+    for k in kinds:
+        for r in getattr(cs, k):
+            added_before = entry.get(r.symbol, ("",))[0] == "added"
+            entry[r.symbol] = ("added" if added_before and k == "modified" else k, r)
+    out = ChangeSet(rows=cs.rows, baseline=cs.baseline, unjudged=unjudged)
+    for s in sorted(entry):
+        k, r = entry[s]
+        getattr(out, k).append(r)
+    if entry:
+        atomic_write(path, json.dumps({k: [vars(r) for r in getattr(out, k)] for k in kinds}))
+    return out
 
 
 def _changeset(root: str, codoc_dir: str, whole: bool, bindings: dict | None):

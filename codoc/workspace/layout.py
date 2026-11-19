@@ -46,6 +46,7 @@ HISTORY = "history.json"          # the timeline window
 STATUS = "status.json"            # workspace state and the realizing lease
 REALIZE = "realize.md"            # the queued directives, as the realizing agent reads them
 GRAPH_CACHE = "cache/graph.json"  # the code graph
+PENDING = "cache/pending.json"    # the change set of a reflect pass that has not finished
 
 # Other local state.
 HUB_PRS = "cache/hub-prs.json"    # hand-off → pull-request branch, kept by the hub

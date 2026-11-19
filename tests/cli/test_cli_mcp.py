@@ -178,6 +178,19 @@ def test_sync_applies_under_the_applier_lock(tmp_path, monkeypatch):
     assert r.exit_code == 0 and held == [True, True], (r.output, held)
 
 
+def test_sync_leaves_an_open_agent_sessions_code_to_the_pass_after_it_ends(tmp_path, monkeypatch):
+    """Reflecting during an agent's session would land its half-written code
+    uncited and use up the diff the close cites (concurrency.md section 4,
+    step 3). Sync still drains and publishes, and says why it skipped."""
+    from codoc.daemon.daemon import Daemon
+    from codoc.workspace.epoch import open_epoch
+    root, cd = seeded(tmp_path)
+    open_epoch(cd, "ep-1")
+    seen = []
+    monkeypatch.setattr(Daemon, "reflect", lambda self, **k: seen.append(k) or "reflected")
+    r = runner.invoke(app, ["sync", "--root", str(root)])
+    assert r.exit_code == 0 and seen == [] and "agent session is open" in r.output, (r.output, seen)
+
 def test_a_daemon_that_starts_before_the_lock_gets_a_message_not_a_traceback(tmp_path, monkeypatch):
     """The commands that apply themselves learn about a daemon under the lock."""
     root, cd = seeded(tmp_path)

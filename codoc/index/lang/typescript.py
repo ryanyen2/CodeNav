@@ -6,8 +6,6 @@ import tree_sitter as ts
 
 from codoc.index.lang.base import Chunk, SymbolRef, parser
 
-LANGUAGE_NAME = "typescript"
-
 # ---------------------------------------------------------------------------
 # Extraction helpers
 # ---------------------------------------------------------------------------
@@ -219,7 +217,6 @@ class TypeScriptAdapter:
     """TypeScript, parsed with the ``typescript`` grammar, or with ``tsx`` for a
     ``.tsx`` file: the TypeScript grammar reads JSX as a run of syntax errors,
     which can swallow every declaration after it."""
-    language = LANGUAGE_NAME
 
     def __init__(self, grammar: str = "typescript") -> None:
         self.grammar = grammar
@@ -323,9 +320,11 @@ class TypeScriptAdapter:
                 return
 
             elif node.type in {"jsx_opening_element", "jsx_self_closing_element"}:
-                # <Counter start={1} /> calls the component Counter.
+                # <Counter start={1} /> calls the component Counter. A plain
+                # lowercase name (<main>, <form>) is an HTML element, not a
+                # reference, and would resolve to any project symbol of that name.
                 tag = node.child_by_field_name("name")
-                if tag is not None:
+                if tag is not None and not (tag.type == "identifier" and tag.text[:1].islower()):
                     refs.append(SymbolRef(
                         qualified_name=tag.text.decode("utf-8", errors="replace"),
                         ref_kind="call",

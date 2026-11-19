@@ -36,19 +36,26 @@ before and after it is brought up to date, compared over every file. Two cases d
   is added, since nothing tells code written since the last pass from code a person
   detached. The graph is built whole. Code that arrived unbound while there was no index
   (a commit by someone not running codoc) is therefore not placed.
-- A file that does not parse. An autosave in the middle of typing a call can make the
-  parser fold the function after it into a syntax error. A chunk lost that way would be
-  detached, and the pass that sees it again cannot tell it is the same code. So when a
-  file's parse has errors and has lost a chunk whose name is still in the file, the index
-  keeps the chunks it had for that file until a parse hides none (`index/app.py`). A
-  deleted definition takes its name with it and is removed. Limit: a definition deleted
-  while its name is still in the file (a call left behind) stays indexed until the name
-  goes or the file parses. The bundled TypeScript grammar reads some newer syntax as
-  errors (`accessor`, `using`, `in`/`out` variance annotations, `export type *`, import
-  attributes), so a file that uses it never parses. A `.tsx` file is parsed with the TSX
-  grammar, since the TypeScript one reads JSX as errors.
+- A file that does not parse. An autosave in the middle of typing can make the parser
+  fold the function after it into a syntax error, or nest it in the function before. A
+  chunk lost that way would be detached, and the pass that sees it again cannot tell it
+  is the same code. So when a file's parse has errors and has lost a chunk whose name
+  the parse still declares (in a declaration that is not a chunk, or in the text of an
+  ERROR node), the index holds the file (`index/app.py`): it keeps the chunks it had for
+  it and indexes no change to it at all, so no pass sees any edit to that file while it
+  is held. The file is released by the first index update whose parse of it hides no
+  chunk, as when it parses again, and that pass sees every change made while it was
+  held. A name left in a call or a comment outside an ERROR node hides nothing, so a
+  deleted definition is removed even then. Limit: a definition deleted while another
+  declaration in the file has its name, or an ERROR node's text holds it, keeps the file
+  held until that goes or the file parses. The bundled TypeScript grammar reads some
+  newer syntax as errors (`accessor`, `using`, `in`/`out` variance annotations,
+  `export type *`, import attributes), so a file that uses it never parses. A `.tsx`
+  file is parsed with the TSX grammar, since the TypeScript one reads JSX as errors.
 
-`codoc sync` runs one pass without a daemon. A pass, in `codoc/loops/reflect.py`:
+`codoc sync` runs one pass without a daemon. While an agent session is open it applies
+submissions and publishes, and leaves the code to the first pass after the session ends,
+which cites its hand-offs. A pass, in `codoc/loops/reflect.py`:
 
 | step | ops, all by `loop` | lands |
 |---|---|---|

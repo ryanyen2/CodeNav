@@ -6,8 +6,6 @@ import tree_sitter as ts
 
 from codoc.index.lang.base import Chunk, SymbolRef, parser
 
-LANGUAGE_NAME = "python"
-
 # ---------------------------------------------------------------------------
 # Extraction helpers
 # ---------------------------------------------------------------------------
@@ -172,8 +170,6 @@ def _extract_chunks_recursive(
 # ---------------------------------------------------------------------------
 
 class PythonAdapter:
-    language = LANGUAGE_NAME
-
     # ------------------------------------------------------------------
     # Protocol implementation
     # ------------------------------------------------------------------

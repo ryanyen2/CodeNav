@@ -14,8 +14,8 @@ by the same rules: ``canonical_file`` names it as the walk names it,
 every changed file), and ``code_on_disk`` hashes its chunks as the app does
 (``file_chunks``).
 
-A file whose parse has errors and has lost a definition that is still in the
-file keeps the chunks the index had for it (``_hidden_by_a_syntax_error``).
+A file whose parse has errors and has lost a definition that the parse still
+declares keeps the chunks the index had for it (``_hidden_by_a_syntax_error``).
 """
 from __future__ import annotations
 
@@ -246,16 +246,31 @@ def code_on_disk(sourcedir: str | pathlib.Path, files: set[str]) -> dict[str, tu
 def _hidden_by_a_syntax_error(file_str: str, raw: bytes, found: set[str]) -> list[ChunkRow]:
     """The chunks the index holds for ``file_str`` when a syntax error hid one
     of them, else none. One is hidden when the parse has errors and lost it
-    (``found`` is what it kept) while its name is still in the file: an
-    autosave of a half-typed call swallows the function after it. Removed, the
-    chunk would be detached, and the pass that sees it again cannot tell it is
-    the same code. A definition that was deleted takes its name with it."""
-    source = _decode(raw)
-    if not get_adapter(detect_language(file_str)).parse(source).root_node.has_error:
+    (``found`` is what it kept) while the parse still declares its name: a
+    declaration the adapter did not take as a chunk (a half-typed ``if (x {``
+    nests the next TypeScript function in the one before it), or the text of
+    an ERROR node (a half-typed Python call swallows the ``def`` after it).
+    Removed, the chunk would be detached, and the pass that sees it again
+    cannot tell it is the same code. A name left only in a call or a comment
+    does not count: the definition was deleted."""
+    tree = get_adapter(detect_language(file_str)).parse(_decode(raw))
+    if not tree.root_node.has_error:
         return []
     held = read_all_chunks(_codoc_dir, files={file_str})
     lost = {r.symbol.split("::", 1)[1].rsplit(".", 1)[-1] for r in held if r.symbol not in found}
-    hidden = any(re.search(rf"(?<![\w$]){re.escape(name)}(?![\w$])", source) for name in lost)
+    if not lost:
+        return []
+    declared, errors = set(), []
+    nodes = [tree.root_node]
+    while nodes:
+        n = nodes.pop()
+        nodes.extend(n.children)
+        if n.type == "ERROR":
+            errors.append(n.text.decode("utf-8", "replace"))
+        elif n.type.endswith(("_definition", "_declaration", "_declarator")) and n.child_by_field_name("name"):
+            declared.add(n.child_by_field_name("name").text.decode("utf-8", "replace"))
+    hidden = any(name in declared or any(re.search(rf"(?<![\w$]){re.escape(name)}(?![\w$])", t) for t in errors)
+                 for name in lost)
     return held if hidden else []
 
 

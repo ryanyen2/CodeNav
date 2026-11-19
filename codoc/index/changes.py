@@ -43,6 +43,9 @@ class ChangeSet:
     modified: list[ChunkRef] = field(default_factory=list)
     rows: list[ChunkRow] = field(default_factory=list)  # post-update index snapshot
     baseline: bool = False                              # no index before: compared with the bindings
+    # Symbols from a pass that was stopped (the daemon's `pending.json`): it
+    # may have refreshed their bindings before the model judged them.
+    unjudged: set[str] = field(default_factory=set)
 
     def touched_files(self) -> set[str]:
         return {c.file for c in (self.added + self.removed + self.modified)}
@@ -61,12 +64,12 @@ def compute_changeset(root_dir: str, codoc_dir: str, *, all_sources: bool = Fals
     With no chunk table before the update (a fresh clone, since the index is
     not tracked, or an index an older codoc wrote), there is nothing to diff,
     and the change set is a baseline. The code is compared with ``bindings``
-    (symbol to anything with a ``fingerprint``): a bound chunk whose
-    fingerprint differs is modified, a bound symbol the code no longer defines
-    is removed, and nothing is added: with no index there is no telling code
-    written since the last pass from code a person detached, and offering
-    every unbound chunk to the model would undo each detach. Every row
-    carries its source, for a graph built whole.
+    (symbol to ``Binding``): a bound chunk whose fingerprint differs is
+    modified, a bound symbol the code no longer defines is removed, and nothing
+    is added: with no index there is no telling code written since the last
+    pass from code a person detached, and offering every unbound chunk to the
+    model would undo each detach. Every row carries its source, for a graph
+    built whole.
     """
     baseline = not has_current_table(codoc_dir)
     old = dict(bindings or {}) if baseline else {r.symbol: r for r in read_all_chunks(codoc_dir, with_source=False)}

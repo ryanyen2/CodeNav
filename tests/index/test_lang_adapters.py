@@ -122,7 +122,8 @@ def test_typescript_private_methods_are_chunks() -> None:
 def test_a_tsx_file_is_parsed_as_tsx_so_jsx_hides_no_component() -> None:
     """The TypeScript grammar reads JSX as syntax errors, which swallowed App
     after the arrow component before it. The TSX grammar parses the file
-    cleanly, and a JSX element is a call to its component."""
+    cleanly, and a JSX element is a call to its component; an HTML element
+    (`<div>`) is not."""
     src = ("export const Label = ({ text }: { text: string }) => <span>{text}</span>;\n\n"
            "export default function App() {\n  return <div><Label text=\"hi\" /><ui.Panel /></div>;\n}\n")
     adapter = get_adapter(detect_language("c.tsx"))
@@ -130,4 +131,4 @@ def test_a_tsx_file_is_parsed_as_tsx_so_jsx_hides_no_component() -> None:
     chunks = {c.symbol: c for c in adapter.extract_chunks("c.tsx", src)}
     assert {"c.tsx::Label", "c.tsx::App"} <= set(chunks)
     refs = adapter.references_in_chunk(chunks["c.tsx::App"].source, "c.tsx")
-    assert [(r.qualified_name, r.ref_kind) for r in refs] == [("div", "call"), ("Label", "call"), ("ui.Panel", "call")]
+    assert [(r.qualified_name, r.ref_kind) for r in refs] == [("Label", "call"), ("ui.Panel", "call")]

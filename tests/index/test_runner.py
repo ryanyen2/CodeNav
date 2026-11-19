@@ -104,6 +104,48 @@ def test_a_fresh_clone_judges_only_bound_code_whose_hashes_moved(tmp_path):
 
 
 
+
+# Run in a child: index a.py, bind alpha, add gamma, and stop the daemon's
+# pass in its model call with argv[2].
+_STOPPED = """
+import os, signal
+from codoc.calculus import ops as K
+from codoc.calculus.doc import HEADING
+from codoc.calculus.ids import START
+from codoc.daemon.daemon import Daemon
+from codoc.index.changes import compute_changeset
+from codoc.workspace import Workspace
+fp = {r.symbol: (r.fingerprint, r.types_hash) for r in compute_changeset(root, root + "/.codoc").rows}["a.py::alpha"]
+ws = Workspace(root + "/.codoc")
+ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "hA"}, "payload": {"kind": HEADING, "level": 1, "after": START}},
+           {"kind": K.TEXT_INSERT, "target": {"bid": "hA", "path": "text"}, "payload": {"after": START, "text": "A"}},
+           {"kind": K.BIND_ATTACH, "target": {"fid": "hA"},
+            "payload": {"symbol": "a.py::alpha", "fingerprint": fp[0], "types_hash": fp[1]}}], actor="loop")
+ws.close()
+open(root + "/a.py", "a").write("\\n\\ndef gamma():\\n    return 3\\n")
+Daemon(root, propose=lambda *a, **k: exec(sys.argv[2]), printer=print).batch([root + "/a.py"])
+"""
+
+
+@pytest.mark.parametrize("stop", ["raise SystemExit(0)", "os.kill(os.getpid(), signal.SIGKILL)"])
+def test_code_a_stopped_pass_indexed_is_offered_by_the_next_pass(tmp_path, stop):
+    """The index advances before the model call, so a daemon stopped during
+    the call (the editor's SIGTERM exits through SystemExit; a kill) would
+    lose gamma for good. The change set it left in pending.json is merged
+    into the next pass, which offers gamma."""
+    (tmp_path / "a.py").write_text("def alpha():\n    return 1\n")
+    env = {k: v for k, v in os.environ.items() if k != "LANCEDB_LOG"} | {"PYTHONPATH": str(ROOT)}
+    subprocess.run([sys.executable, "-c", "import sys; root = sys.argv[1]; " + _STOPPED, str(tmp_path), stop],
+                   env=env, timeout=120)
+    assert (tmp_path / ".codoc" / "cache" / "pending.json").exists()
+    proc = _in_a_process(
+        "from codoc.daemon.daemon import Daemon; asked = []; "
+        "d = Daemon(root, propose=lambda c, *a, **k: asked.append([x['symbol'] for x in c['added']]) or [], "
+        "           printer=lambda *_: None); "
+        "d.process_batch([root + '/a.py']); d.ws.close(); print(asked)", tmp_path)
+    assert proc.stdout.strip().splitlines()[-1] == "[['a.py::gamma']]"
+    assert not (tmp_path / ".codoc" / "cache" / "pending.json").exists()
+
 # Run in a child: index `first` (argv[2]), bind alpha to hA and beta to hB,
 # then save each of the rest in turn through a daemon's batch. Prints the
 # binding ops of each batch, then the symbols hB is bound to at the end.
@@ -171,3 +213,16 @@ def test_a_definition_deleted_from_a_file_that_never_parses_is_removed(tmp_path)
     head = "class Box {\n  accessor size = 1;\n}\n\nfunction alpha() {\n  return 1;\n}\n"
     deleted, beta = _saves(tmp_path, "m.ts", head + "\nfunction beta(x) {\n  return x;\n}\n", head)
     assert deleted == [["bind.detach", "m.ts::beta"]] and beta == []
+
+
+@pytest.mark.parametrize("left", ["function alpha() {\n  return beta(1);\n}\n",
+                                  "function alpha() {\n  return 1;\n}\n// beta was here\n"])
+def test_a_name_left_in_a_call_or_a_comment_does_not_hold_a_file_that_never_parses(tmp_path, left):
+    """Only a declaration or an ERROR node's text can hide a chunk. A deleted
+    function whose name stays in a call or a comment is removed, and the
+    file's later saves are indexed."""
+    head = "class Box {\n  accessor size = 1;\n}\n\n"
+    deleted, later, beta = _saves(tmp_path, "m.ts", head + left + "\nfunction beta(x) {\n  return x;\n}\n",
+                                  head + left, head + "function alpha() {\n  return 2;\n}\n")
+    assert deleted == [["bind.detach", "m.ts::beta"]] and beta == []
+    assert later == [["bind.refresh", "m.ts::alpha"]]

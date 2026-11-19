@@ -45,6 +45,25 @@ def test_code_change_reflects_and_publishes(tmp_path):
     assert status["state"] == "synced"
 
 
+
+def test_a_pass_stopped_before_its_model_call_has_its_refreshed_code_judged_next(tmp_path):
+    """The stopped pass refreshed send's binding before its model call, which
+    reads as the loop having described the new code. The next pass judges it
+    anyway, from the change set the stopped one left, and deletes that."""
+    d, _ = make(tmp_path, [ChangeSet(modified=[ChunkRef("c.py::send", "f2", "t1")]), ChangeSet()])
+    (d.root / "c.py").write_text("def send(): ...")
+
+    def stop(*_a, **_k):
+        raise SystemExit(0)          # what the SIGTERM handler raises
+    d._propose = stop
+    with pytest.raises(SystemExit):
+        d.batch([str(d.root / "c.py")])
+    assert d.ws.store.bindings["c.py::send"].fingerprint == "f2"
+    asked = []
+    d._propose = lambda changes, *a, **k: asked.append([m["symbol"] for m in changes["modified"]]) or []
+    d.process_batch([str(d.root / "c.py")])
+    assert asked == [["c.py::send"]] and not (d.codoc_dir / "cache" / "pending.json").exists()
+
 def test_open_epoch_holds_code_until_it_closes(tmp_path):
     d, calls = make(tmp_path, [ChangeSet(modified=[ChunkRef("c.py::send", "f3", "t1")])])
     act = d.codoc_dir / "activity.json"
