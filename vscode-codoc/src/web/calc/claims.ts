@@ -116,29 +116,14 @@ export function authorPaints(b: ProjectedBlock, f: TextField): Paint[] {
     });
 }
 
-/** Display runs for History: adjacent runs by the same actor merge, then snap
- *  to word boundaries so a one-character fix does not split a word visually. */
+/** Display runs for History: the field's runs, with adjacent runs by the same
+ *  actor merged. Each character stays with the actor who wrote it. */
 export function displayRuns(f: TextField): Array<{ start: number; end: number; actor: string }> {
-    const chars = Array.from(f.text);
     const merged: Array<{ start: number; end: number; actor: string }> = [];
     for (const r of f.runs) {
         const last = merged[merged.length - 1];
         if (last && last.actor === r.actor && last.end === r.start) last.end = r.end;
         else merged.push({ start: r.start, end: r.end, actor: r.actor });
-    }
-    const isWord = (i: number) => i >= 0 && i < chars.length && /[\p{L}\p{N}]/u.test(chars[i]);
-    for (let i = 0; i + 1 < merged.length; i++) {
-        const a = merged[i], b = merged[i + 1];
-        // A boundary inside a word moves to the word's edge; the word goes to the
-        // side that holds more of it, the earlier side on a tie.
-        if (isWord(a.end - 1) && isWord(b.start)) {
-            let ws = b.start, we = b.start;
-            while (isWord(ws - 1)) ws--;
-            while (isWord(we)) we++;
-            const cut = (b.start - ws) >= (we - b.start) ? we : ws;
-            a.end = cut;
-            b.start = cut;
-        }
     }
     return merged.filter(r => r.end > r.start);
 }

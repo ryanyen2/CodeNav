@@ -60,6 +60,17 @@ describe('text at a position', () => {
     });
     it('word diff for display', () => {
         expect(wordDiff('a b c', 'a x c')).toEqual([['eq', 'a '], ['del', 'b'], ['ins', 'x'], ['eq', ' c']]);
+        expect(wordDiff('Retries twice, then gives up.', 'Retries three times, then gives up.'))
+            .toEqual([['eq', 'Retries '], ['del', 'twice'], ['ins', 'three times'], ['eq', ', then gives up.']]);
+    });
+    it('word diff splits a script written without spaces into words', () => {
+        const d = wordDiff('重试两次后放弃。', '重试三次后放弃。');
+        const of = (k: string) => d.filter(p => p[0] === k).map(p => p[1]).join('');
+        // Where the segmenter puts the word edge (两次 or 两) is the platform's call.
+        expect(of('eq')).toContain('重试');
+        expect(of('eq')).toContain('后放弃。');
+        expect(['两', '两次']).toContain(of('del'));
+        expect(['三', '三次']).toContain(of('ins'));
     });
 });
 

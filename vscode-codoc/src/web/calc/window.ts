@@ -120,9 +120,15 @@ export function textAt(w: HistoryWindow, bid: string, path: string, pos: number,
     return w.before[bid]?.[path] ?? live;
 }
 
+/** Word segmentation that knows every script: a language written without
+ *  spaces (Chinese, Japanese, Thai) still splits into words, and spaces and
+ *  punctuation are pieces of their own. */
+const WORDS = new Intl.Segmenter(undefined, { granularity: 'word' });
+const words = (s: string): string[] => Array.from(WORDS.segment(s), w => w.segment);
+
 /** A display-only word diff between two texts: [kind, text] pieces. */
 export function wordDiff(a: string, b: string): Array<['eq' | 'del' | 'ins', string]> {
-    const A = a.split(/(\s+)/).filter(Boolean), B = b.split(/(\s+)/).filter(Boolean);
+    const A = words(a), B = words(b);
     const n = A.length, m = B.length;
     const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
     for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
