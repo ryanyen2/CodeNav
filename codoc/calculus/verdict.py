@@ -150,7 +150,7 @@ def _step(store: Store, me: Op, s: dict, touched: set[str], undo_of: str | None)
         if now == was:
             return []
         touched.add(b.id)
-        out = {k: v for k, v in s.items() if k not in ("detached", "attached")}
+        out = {k: v for k, v in s.items() if k not in ("detached", "attached", "held")}
         out.update({"from": was, "to": now} if fwd else {"from": now, "to": was})
         if "kind" in keys:
             # A feature leaves or comes back as `block.set` has it. Undoing a
@@ -158,8 +158,20 @@ def _step(store: Store, me: Op, s: dict, touched: set[str], undo_of: str | None)
             # reopen, the ones this step recorded as `detached`. What each was
             # bound with comes from the block.
             named = s.get("bindings") if fwd else s.get("detached")
+            kept = [dict(e) for e in b.detached if e.get("set")]
             detached, attached = store.refeature(b, was["kind"], [e["symbol"] for e in named or []])
             out.update({k: v for k, v in (("detached", detached), ("attached", attached)) if v})
+            gone = {e["symbol"] for e in detached}
+            if fwd and (held := [e for e in kept if e["symbol"] in gone]):
+                out["held"] = held          # the entries the block kept for those symbols, which leaving replaced
+            if not fwd and s.get("detached"):
+                # The entries the step's leaving wrote go, and the ones it
+                # replaced come back where they were: the block keeps what it
+                # kept before the verdict, not what taking the code back leaves.
+                prior = {e["symbol"]: dict(e) for e in s.get("held") or []}
+                ours = {e["symbol"] for e in s["detached"]}
+                b.detached = [prior.get(d["symbol"], d) if d.get("set") else d for d in b.detached
+                              if not (d.get("set") and d["symbol"] in ours - prior.keys())]
         return [out]
     if do == "void":
         b, move = store.blocks[s["bid"]], str(s["op"])

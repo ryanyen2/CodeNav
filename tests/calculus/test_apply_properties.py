@@ -456,38 +456,39 @@ def test_conflict_never_moves_the_state_fuzz():
     assert replay(s).state_fingerprint() == s.state_fingerprint()
 
 
-def test_a_verdict_then_its_reopen_is_the_document_before_it_fuzzed():
+@pytest.mark.parametrize("seed", range(16))
+def test_a_verdict_then_its_reopen_is_the_document_before_it_fuzzed(seed):
     """Undoing a verdict straight after it gives back the exact state before
     it, tombstones included, and redoing it gives a reader what the verdict
     did. The plans insert, take back and give back their own words and change
     kinds, levels and fields: the cases whose order a record by category lost.
     Headings made prose and back with code bound between are the case where a
-    feature leaves and comes back."""
-    for seed in range(6):
-        rng = random.Random(seed)
-        m, s = Mint(), Store()
-        heading(m, s, "h1", "Root")
-        paragraph(m, s, "p1", "seed text here", after="h1")
-        checked = 0
-        for step in range(200):
-            if not s.ordered():
-                break
-            op = _fold_soup_op(rng, m, s, step) if seed % 2 else random_op(rng, m, s, step, plans=True, undos=True)
-            before = copy.deepcopy(s.state_fingerprint()) if op.kind in K.TURNS else None
-            done = apply(s, op)
-            if before is None or done.conflict is not None:
-                continue
-            probe, undo = replay(s), Mint("u", "human:a")
-            (back,) = invert(probe, undo, done)
-            assert back.conflict is None, (seed, step, back.conflict)
-            if done.kind != K.PLAN_REOPEN:
-                # A redo kills as itself, so only a verdict's reopen restores the tombstones too.
-                assert probe.state_fingerprint() == before, (seed, step, done.kind)
-            (again,) = invert(probe, undo, back)
-            assert again.conflict is None and live_view(probe) == live_view(s), (seed, step, done.kind)
-            checked += 1
-        assert checked > 5, seed
-        assert replay(s).state_fingerprint() == s.state_fingerprint()
+    feature leaves and comes back, and what the block kept of its code then is
+    state the reopen gives back too (seeds 7, 11 and 15 caught that)."""
+    rng = random.Random(seed)
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Root")
+    paragraph(m, s, "p1", "seed text here", after="h1")
+    checked = 0
+    for step in range(200):
+        if not s.ordered():
+            break
+        op = _fold_soup_op(rng, m, s, step) if seed % 2 else random_op(rng, m, s, step, plans=True, undos=True)
+        before = copy.deepcopy(s.state_fingerprint()) if op.kind in K.TURNS else None
+        done = apply(s, op)
+        if before is None or done.conflict is not None:
+            continue
+        probe, undo = replay(s), Mint("u", "human:a")
+        (back,) = invert(probe, undo, done)
+        assert back.conflict is None, (seed, step, back.conflict)
+        if done.kind != K.PLAN_REOPEN:
+            # A redo kills as itself, so only a verdict's reopen restores the tombstones too.
+            assert probe.state_fingerprint() == before, (seed, step, done.kind)
+        (again,) = invert(probe, undo, back)
+        assert again.conflict is None and live_view(probe) == live_view(s), (seed, step, done.kind)
+        checked += 1
+    assert checked > 5, seed
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
 
 
 @pytest.mark.parametrize("seed", [13, 15, 21, 29, 38])
