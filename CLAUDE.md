@@ -104,4 +104,10 @@ runs the extension's vitest suite and skips when `vscode-codoc/node_modules` is 
 `tests/` mirrors the packages; shared builders are in `tests/helpers.py`, and no test module
 imports another. `tests/calculus/test_apply_properties.py` pins the calculus:
 verdicts resolve by identity under split, move and merge; a conflict never moves the state;
-un-applying a suffix equals replaying the prefix. Keep it green before anything else.
+a verdict's reopen gives back the exact state before it; rejecting every plan that set a
+field, a kind or a heading's code, in any order, gives back what was there before them when
+nobody else changed it; a fold goes on as the unfolded store; and un-applying a suffix (its
+recorded inverses, newest first) reads as replaying the prefix: the same live blocks in
+order with their kinds, levels, live text and JSON fields, each mark kind over the same
+live characters, and the same bindings. Dead characters, and how a mark is cut into pieces,
+may differ there. Keep it green before anything else.

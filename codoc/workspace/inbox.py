@@ -284,8 +284,18 @@ def client_payload(store: Store, kind: str, payload: dict, actor: str = "", targ
       of that mark kind on that field: an undo of their removal of a mark
       someone else placed (``_recorded_restore``). The recorded body is used,
       ``chars`` included. Any other mark is the sender's own, and a proposed
-      deletion's ``chars`` are the ones the applier reads from its range."""
+      deletion's ``chars`` are the ones the applier reads from its range.
+    - A ``text.delete`` that names the delete it kills as (``by``,
+      ``by_actor``, ``by_at``) is honoured only as the recorded inverse of one
+      of the sender's own ``text.restore`` ops, their undo of a restore. Any
+      other delete is the sender's own, so no words die in another's name."""
     out = {k: v for k, v in payload.items() if k not in K.SNAPSHOT_ONLY.get(kind, ())}
+    killer = ("by", "by_actor", "by_at")
+    if kind == K.TEXT_DELETE and any(k in out for k in killer) and not any(
+            o.kind == K.TEXT_RESTORE and o.actor == actor and not o.conflict and o.inverse
+            and o.inverse[0]["payload"] == {k: out.get(k) for k in ("segments", *killer)} for o in reversed(store.ops)):
+        for k in killer:
+            out.pop(k, None)
     if kind == K.BLOCK_ADD and isinstance(out.get("content"), dict):
         lifted = lifted_fields(str(out.get("kind")))
         out["content"] = {k: v for k, v in out["content"].items() if k not in lifted}

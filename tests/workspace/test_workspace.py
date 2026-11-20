@@ -522,6 +522,34 @@ def test_undoing_the_removal_of_a_widened_mark_gives_it_back_to_its_placer(tmp_p
     ws.close()
 
 
+def test_undoing_a_restore_kills_as_the_delete_so_its_undo_still_gives_the_words_back(tmp_path):
+    """A person deletes words, undoes the delete, and undoes that undo: the
+    words die again as the delete killed them, so undoing the delete once more
+    gives them back. Sent by anyone else, the same delete kills as its sender."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    r = refs(ws, "p1")
+    dele = ws.submit([{"kind": K.TEXT_DELETE, "target": {"bid": "p1", "path": "text"},
+                       "payload": {"from": list(r[0]), "to": list(r[7])}}], actor=H)[0]
+
+    def undo(cid, op, actor=H):
+        (b,) = op.inverse
+        return ws.apply_submissions([("ide", actor, Submission(cid=cid, kind=b["kind"], target=b["target"],
+                                                               payload=b["payload"]))])[0]
+    undo("u1", dele)
+    restore = ws.store.ops[-1]
+    assert T(ws.store, "p1") == "Retries once." and restore.kind == K.TEXT_RESTORE
+    undo("u2", restore)
+    assert T(ws.store, "p1") == "once." and {g.dead for g in ws.store.blocks["p1"].text().segs if not g.live} == {dele.id}
+    undo("u3", dele)
+    assert T(ws.store, "p1") == "Retries once."
+    undo("u4", restore, actor="human:b")
+    forged = ws.store.ops[-1]
+    assert forged.kind == K.TEXT_DELETE and "by" not in forged.payload
+    assert {g.dead for g in ws.store.blocks["p1"].text().segs if not g.live} == {forged.id}
+    ws.close()
+
+
 def test_a_proposal_is_decided_whole_by_the_applier(tmp_path):
     """The agent may never see the ack (a busy daemon). Whatever it sees, a
     proposal that lands nothing leaves no plan; one that lands is one plan."""

@@ -1,6 +1,7 @@
 """Properties of the applier: verdicts and undo resolve by identity under
 concurrent structure; a conflict never moves the state; un-applying a suffix
-equals replaying the prefix."""
+reads as replaying the prefix (``test_unapply_suffix_equals_prefix_replay``
+says exactly what is compared)."""
 import copy
 import random
 
@@ -395,11 +396,17 @@ def soup(seed: int, steps: int, plans: bool = False) -> Store:
     return s
 
 
-@pytest.mark.parametrize("seed,plans", [(3, False), (3, True), (8, True), (13, True)])
+@pytest.mark.parametrize("plans", [False, True])
+@pytest.mark.parametrize("seed", range(25))
 def test_unapply_suffix_equals_prefix_replay(seed, plans):
+    """Applying the recorded inverses of the last ops, newest first, gives what
+    a reader sees after replaying the ops before them (``live_view``) and the
+    same bindings. Not the same store: undo kills what the suffix minted rather
+    than un-minting it, and a mark may come back as touching pieces with dead
+    characters between them."""
     s = soup(seed, 220, plans)
     if plans:
-        assert sum(o.kind in (K.PLAN_ACCEPT, K.PLAN_REJECT) and o.conflict is None for o in s.ops) > 3
+        assert any(o.kind in (K.PLAN_ACCEPT, K.PLAN_REJECT) and o.conflict is None for o in s.ops)
     log = [Op.from_json(copy.deepcopy(o.to_json())) for o in s.ops]
     for k in (len(log) // 4, len(log) // 2, len(log) - 3):
         probe = replay(s)
@@ -413,21 +420,25 @@ def test_unapply_suffix_equals_prefix_replay(seed, plans):
         prefix = Store()
         for o in log[:k]:
             apply(prefix, Op.from_json(copy.deepcopy(o.to_json())))
-        # Undo kills what the suffix minted rather than un-minting it, so the
-        # tombstones differ; what must agree is everything a reader can see.
-        assert live_view(probe) == live_view(prefix), k
-        assert probe.state_fingerprint()["bindings"] == prefix.state_fingerprint()["bindings"], k
+        assert live_view(probe) == live_view(prefix), (seed, plans, k)
+        assert probe.state_fingerprint()["bindings"] == prefix.state_fingerprint()["bindings"], (seed, plans, k)
 
 
 def live_view(store: Store):
+    """What a reader sees: each live block's id, kind, level, live text and
+    JSON fields, in order, and for each mark kind and attrs the live
+    characters it covers. How a mark is cut into pieces is left out: two
+    touching pieces render as ``**a****b**``, which parses back to one mark."""
     from codoc.calculus.derive import live_spans
     out = []
     for b in store.ordered():
         t = b.text()
-        spans = sorted((sp.kind, tuple(sorted(sp.attrs.items())), sp.start, sp.end) for sp in live_spans(t)
-                       if sp.kind != SUGGEST_DEL)
+        covered: dict = {}
+        for sp in live_spans(t):
+            if sp.kind != SUGGEST_DEL:
+                covered.setdefault((sp.kind, tuple(sorted(sp.attrs.items()))), set()).update(range(sp.start, sp.end))
         fields = {k: v for k, v in b.content.items() if k not in b.layout.text}
-        out.append((b.id, b.kind, b.level, t.live_text(), spans, fields))
+        out.append((b.id, b.kind, b.level, t.live_text(), sorted((k, sorted(v)) for k, v in covered.items()), fields))
     return out
 
 

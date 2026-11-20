@@ -280,8 +280,10 @@ def _undo_steps(store: Store, o: Op, undone: list[Op]) -> list[dict]:
     if o.kind == K.TEXT_INSERT:
         return [{"do": "kill", "bid": p["bid"], "path": p["path"], "segments": [[o.id, 0, len(p["text"])]]}]
     if o.kind == K.TEXT_DELETE:
+        # A delete that put back another delete's kill (a restore's undo) killed as that delete.
+        by = (p["by"], p.get("by_actor", ""), p.get("by_at", "")) if p.get("by") else (o.id, o.actor, o.at)
         return [{"do": "revive", "bid": p["bid"], "path": p["path"], "segments": p["segments"],
-                 "by": o.id, "actor": o.actor, "at": o.at}]
+                 "by": by[0], "actor": by[1], "at": by[2]}]
     if o.kind == K.TEXT_RESTORE:
         undone = store.by_id.get(str(p.get("by") or ""))
         return [{"do": "kill", "bid": p["bid"], "path": p["path"], "segments": p["segments"], "by": p.get("by"),

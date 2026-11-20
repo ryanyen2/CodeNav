@@ -434,9 +434,11 @@ class Text:
 
     # ── marks ──────────────────────────────────────────────────────────────
     def set_mark(self, kind: str, attrs: dict, start: CharRef, end: CharRef, on: bool,
-                 *, actor: str = "", op: OpId = "", at: str = "") -> tuple[list[Mark], list[Mark]]:
+                 *, actor: str = "", op: OpId = "", at: str = "", adjoin: bool = True) -> tuple[list[Mark], list[Mark]]:
         """Toggle a mark over an inclusive identity range. Returns
-        ``(removed, added)``, which is exactly the inverse."""
+        ``(removed, added)``, which is exactly the inverse. A mark turned on
+        merges with one of its kind it overlaps and, unless ``adjoin`` is
+        false, with one it touches (no live character between them)."""
         self.locate(start)
         self.locate(end)
         if self._before(end, start):
@@ -467,7 +469,7 @@ class Text:
             keep_actor, keep_op = actor, op
             merged = False
             for m in list(self.marks):
-                if m.same(new) and (self._overlaps(m, new) or self._adjacent(m, new)):
+                if m.same(new) and (self._overlaps(m, new) or adjoin and self._adjacent(m, new)):
                     self.marks.remove(m)
                     if not merged:
                         keep_actor, keep_op, merged = m.actor, m.op, True

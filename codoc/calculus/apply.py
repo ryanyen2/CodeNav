@@ -230,13 +230,20 @@ def _h_text_delete(store: Store, op: Op, touched: set[str]):
             if b0 is None:
                 raise Conflict("no_block", bid)
             work = [(b0, path)]
+        # The undo of a restore kills the characters again as the delete it
+        # undid (`by`, with its actor and clock), so that delete's own undo
+        # still finds them dead by it and gives them back.
+        killer = (str(op.payload["by"]), op.payload.get("by_actor", ""), op.payload.get("by_at", "")) \
+            if op.payload.get("by") else (op.id, op.actor, op.at)
         killed: list[list] = []
         for block, p in work:
-            killed.extend([list(k) for k in block.text(p).kill(segs, by=op.id, by_actor=op.actor, by_at=op.at)])
+            killed.extend([list(k) for k in block.text(p).kill(segs, by=killer[0], by_actor=killer[1], by_at=killer[2])])
             touched.add(block.id)
         bid, path = work[0][0].id, work[0][1]
         canonical = {"segments": killed, "bid": bid, "path": path}
-        return canonical, [body(K.TEXT_RESTORE, {"bid": bid, "path": path}, {"segments": killed, "by": op.id})]
+        if op.payload.get("by"):
+            canonical.update(by=killer[0], by_actor=killer[1], by_at=killer[2])
+        return canonical, [body(K.TEXT_RESTORE, {"bid": bid, "path": path}, {"segments": killed, "by": killer[0]})]
     start, end = _char(op.payload["from"]), _char(op.payload["to"])
     block, p = _holder(store, op, start)
     if not block.live:
@@ -285,14 +292,19 @@ def _h_text_restore(store: Store, op: Op, touched: set[str]):
     segs = [(str(o), int(k), int(n)) for o, k, n in op.payload["segments"]]
     work = _segment_holders(store, op, segs, live_only=False)
     _only_own_plan(store, op, work, segs)
+    # Who killed them and when, read off the characters before they live
+    # again: the undo kills them as that delete did (`_h_text_delete`).
+    killer = next(((g.dead_actor, g.dead_at) for b, p in work for g in b.text(p).segs if by and g.dead == by), ("", ""))
     revived: list[list] = []
     for block, p in work:
         revived.extend([list(k) for k in block.text(p).revive(segs, by=by)])
         touched.add(block.id)
     canonical = {"segments": revived, "bid": bid, "path": path}
+    undo = {"segments": revived}
     if by:
         canonical["by"] = by
-    return canonical, [body(K.TEXT_DELETE, {"bid": bid, "path": path}, {"segments": revived})]
+        undo.update(by=by, by_actor=killer[0], by_at=killer[1])
+    return canonical, [body(K.TEXT_DELETE, {"bid": bid, "path": path}, undo)]
 
 
 def _h_text_mark(store: Store, op: Op, touched: set[str]):
@@ -346,7 +358,11 @@ def _h_text_mark(store: Store, op: Op, touched: set[str]):
         canonical = {"kind": kind, "attrs": attrs, "start": ref_to_json(start), "end": ref_to_json(end), "on": on,
                      "bid": block.id, "path": p, "proposed": record.to_json(), "removed": [], "added": []}
         return canonical, _mark_inverse(block.id, p, [], [record])
-    removed, added = text.set_mark(kind, attrs, start, end, on, actor=actor, op=placer, at=at)
+    # A mark an inverse puts back (it names its placer) does not merge with one
+    # it only touches: they were two marks, and between them may be characters
+    # deleted since, which would come back marked when their delete is undone.
+    removed, added = text.set_mark(kind, attrs, start, end, on, actor=actor, op=placer, at=at,
+                                   adjoin=not op.payload.get("op"))
     store.index_text(block.id, p, text)
     touched.add(block.id)
     canonical = {"kind": kind, "attrs": attrs, "start": ref_to_json(start), "end": ref_to_json(end), "on": on,

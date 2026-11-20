@@ -302,8 +302,8 @@ Target `{bid, path}`; `path` defaults to `text`.
 | op | wire payload | canonical payload adds | inverse |
 |---|---|---|---|
 | `text.insert` | `after: CharRef \| START`, `text` | `text` in NFC; `bid`, `path` of the field that holds the anchor | `text.delete {segments: [[op, 0, len]]}` |
-| `text.delete` | `from`, `to`, or `segments` | `segments` it killed; `bid`, `path` | `text.restore {segments, by: this op}` |
-| `text.restore` | `segments`, `by?` | `segments` it revived | `text.delete {segments}` |
+| `text.delete` | `from`, `to`, or `segments`; with `segments`, `by`, `by_actor`, `by_at` when it kills as another delete (a restore's undo; the inbox honours a client's only as that) | `segments` it killed; `bid`, `path`; `by`, `by_actor`, `by_at` when given | `text.restore {segments, by: this op, or the delete it killed as}` |
+| `text.restore` | `segments`, `by?` | `segments` it revived | `text.delete {segments}`, and with `by` that delete's `by`, `by_actor`, `by_at`, so it kills as the delete it undid |
 | `text.mark` | `kind`, `attrs`, `start`, `end`, `on` (default true) | `removed` and `added`, the marks it displaced and placed; or `proposed`, the `suggest_mark` record | off for each added mark, on for each removed mark with its original `actor`, `op`, `at`; for a plan toggle, the record turned off |
 
 - A character is found by identity, in the field that holds it, preferring a live block.
@@ -321,7 +321,12 @@ Target `{bid, path}`; `path` defaults to `text`.
 - `text.delete` with `segments` kills exactly those characters wherever they are now, and
   nothing typed between them since.
 - `text.restore` revives the named characters with their identity. With `by`, only those
-  that op killed.
+  that op killed. Its undo kills them as that op did, so undoing a delete after undoing a
+  later restore of the same characters gives them back.
+- `text.mark` turning a mark on merges it with marks of its kind and attrs it overlaps or
+  touches (no live character between). An inverse putting a removed mark back (it names
+  its `op`) merges only with one it overlaps: two marks with deleted characters between
+  them stay two, so the characters do not come back marked when their delete is undone.
 - Under a plan, `text.delete` may name only characters that plan minted, and
   `text.restore` may undo only a delete tagged with the same plan.
 
