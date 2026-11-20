@@ -697,3 +697,48 @@ def test_rejecting_a_plan_that_set_the_url_twice_keeps_an_open_plans_url_out(tmp
     d = directive(ws.store, "h1")
     assert "x.example" not in d and _OWNERS in d, d
     ws.close()
+
+
+def _realized_then_second_plan(tmp_path, monkeypatch):
+    """A suggester's open plan P sets the owner's url; the owner's feature is
+    realized (`codoc done`), which covers P's position; then a second
+    contributor's plan Q sets the same field."""
+    from codoc.kinds import fetch_guard
+    from codoc.workspace import inbox as I
+    fetched: list = []
+    monkeypatch.setattr(fetch_guard, "safe_get", lambda url, **kw: fetched.append(url) or None)
+    codoc = tmp_path / ".codoc"
+    ws = Workspace(codoc)
+    seed_loop(ws)
+    bid = kind_block(ws, "url", {"url": _OWNERS}, after="p1")
+
+    def plan(login, pid, url):
+        I.submit(codoc, f"hub-{login}", [
+            I.Submission(cid=f"o{pid}", kind=K.PLAN_OPEN, target={"pid": pid}, payload={"kind": "edit", "target": bid},
+                         batch=pid),
+            I.Submission(cid=f"s{pid}", kind=K.BLOCK_SET, target={"bid": bid, "path": "url"}, payload={"value": url},
+                         batch=pid, plan=pid)])
+        assert [o.conflict for o in ws.drain_inbox()] == [None, None]
+    plan("mallory", "P", "https://attacker.example/one")
+    handoff(ws, "h1", actor="human:local")
+    assert ws.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": "h1"}, "payload": {}}],
+                     actor="human:local")[0].conflict is None
+    plan("trent", "Q", "https://x.example/two")
+    return codoc, ws, bid, fetched
+
+
+def test_a_realization_does_not_make_an_open_plans_url_the_owners(tmp_path, monkeypatch):
+    from codoc.calculus.derive import rejected_content
+    codoc, ws, bid, fetched = _realized_then_second_plan(tmp_path, monkeypatch)
+    assert rejected_content(ws.store, ws.store.blocks[bid])["url"] == _OWNERS
+    lift_pass(ws, None, str(codoc))
+    assert "https://attacker.example/one" not in fetched, fetched
+    assert "https://attacker.example/one" not in export_markdown(ws.store)
+
+
+def test_rejecting_both_plans_after_a_realization_puts_the_owners_url_back(tmp_path, monkeypatch):
+    codoc, ws, bid, _ = _realized_then_second_plan(tmp_path, monkeypatch)
+    for pid in ("P", "Q"):
+        assert ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": pid}, "payload": {}}],
+                         actor="human:local")[0].conflict is None
+    assert ws.store.blocks[bid].content["url"] == _OWNERS

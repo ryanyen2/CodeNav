@@ -549,11 +549,17 @@ def _h_block_set(store: Store, op: Op, touched: set[str]):
         canonical["prev"] = prev
         if is_human(op.actor) or op.plan:
             # The author's set, kept with what it replaced until a realization
-            # covers it (`Block.prior`). A machine's untagged set (a lift) is
-            # code already written and asks nothing.
+            # covers it (`Block.prior`). A plan's set stays until the plan is
+            # accepted: a realization covering its position does not make an
+            # open or rejected plan's value the owner's, and `without_plans`
+            # walks past it. A machine's untagged set (a lift) is code already
+            # written and asks nothing.
             w = store.watermarks_by_fid.get(store.feature_of(bid) or "")
-            b.prior[path] = [e for e in b.prior.get(path, []) if not (w and in_frontier(e[0], w.realized))] \
-                + [[op.id, prev, op.plan or ""]]
+
+            def settled(e) -> bool:
+                return bool(w and in_frontier(e[0], w.realized)) and (
+                    not e[2] or getattr(store.plans.get(e[2]), "status", "") == "accepted")
+            b.prior[path] = [e for e in b.prior.get(path, []) if not settled(e)] + [[op.id, prev, op.plan or ""]]
         inverse = [body(K.BLOCK_SET, {"bid": bid, "path": path}, {"unset": True} if absent else {"value": prev})]
     touched.add(bid)
     return canonical, inverse
