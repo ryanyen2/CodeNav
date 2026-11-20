@@ -789,3 +789,31 @@ def test_a_contributor_cannot_dress_an_attach_as_a_loop_refresh(tmp_path):
     assert not {"set_by", "prev_fingerprint", "prev_set_by"} & set(attach.payload)
     ws.close()
 
+
+
+def test_an_old_undo_of_a_restore_kills_nothing_in_another_persons_name(tmp_path):
+    """Alice restores Bob's delete and undoes that; Bob then takes his own
+    delete back. Alice resending her old undo is her own delete now: the
+    words do not die as Bob's."""
+    from codoc.workspace.inbox import Submission as Sub
+    from tests.helpers import H, T, refs, seed
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws)
+    r = refs(ws, "p1")
+
+    def send(cid, b, actor):
+        return ws.apply_submissions([("ide", actor, Sub(cid=cid, kind=b["kind"], target=b["target"],
+                                                        payload=b["payload"]))])[0]
+    d = ws.submit([{"kind": K.TEXT_DELETE, "target": {"bid": "p1", "path": "text"},
+                    "payload": {"from": list(r[0]), "to": list(r[7])}}], actor="human:b")[0]
+    send("a1", d.inverse[0], H)
+    stale = ws.store.ops[-1].inverse[0]
+    send("a2", stale, H)
+    assert T(ws.store, "p1") == "once."
+    send("b1", d.inverse[0], "human:b")
+    assert T(ws.store, "p1") == "Retries once."
+    send("a3", stale, H)
+    forged = ws.store.ops[-1]
+    dead = {(g.dead, g.dead_actor) for g in ws.store.blocks["p1"].text().segs if not g.live}
+    assert dead == {(forged.id, H)}, dead
+    ws.close()

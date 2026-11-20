@@ -287,13 +287,13 @@ def client_payload(store: Store, kind: str, payload: dict, actor: str = "", targ
       deletion's ``chars`` are the ones the applier reads from its range.
     - A ``text.delete`` that names the delete it kills as (``by``,
       ``by_actor``, ``by_at``) is honoured only as the recorded inverse of one
-      of the sender's own ``text.restore`` ops, their undo of a restore. Any
-      other delete is the sender's own, so no words die in another's name."""
+      of the sender's own ``text.restore`` ops, their undo of a restore, and
+      only while no restore since brought any of those characters back
+      (``_undoes_own_latest_restore``). Any other delete is the sender's own,
+      so no words die in another's name."""
     out = {k: v for k, v in payload.items() if k not in K.SNAPSHOT_ONLY.get(kind, ())}
     killer = ("by", "by_actor", "by_at")
-    if kind == K.TEXT_DELETE and any(k in out for k in killer) and not any(
-            o.kind == K.TEXT_RESTORE and o.actor == actor and not o.conflict and o.inverse
-            and o.inverse[0]["payload"] == {k: out.get(k) for k in ("segments", *killer)} for o in reversed(store.ops)):
+    if kind == K.TEXT_DELETE and any(k in out for k in killer) and not _undoes_own_latest_restore(store, actor, out):
         for k in killer:
             out.pop(k, None)
     if kind == K.BLOCK_ADD and isinstance(out.get("content"), dict):
@@ -322,6 +322,29 @@ def client_payload(store: Store, kind: str, payload: dict, actor: str = "", targ
         out["attrs"] = {k: v for k, v in (out.get("attrs") or {}).items() if k != "chars"}
     return out
 
+
+
+def _undoes_own_latest_restore(store: Store, actor: str, out: dict) -> bool:
+    """Whether ``out`` is the recorded inverse of one of ``actor``'s own
+    ``text.restore`` ops, and no restore since revived any of its characters.
+    After another restore brought them back (the deleter undoing their own
+    delete), replaying the older inverse would kill those words in the
+    deleter's name."""
+    want = {k: out.get(k) for k in ("segments", "by", "by_actor", "by_at")}
+    later: list = []
+    for o in reversed(store.ops):
+        if o.kind != K.TEXT_RESTORE or o.conflict:
+            continue
+        if o.actor == actor and o.inverse and o.inverse[0]["payload"] == want:
+            return not any(_overlap(want["segments"] or [], s) for s in later)
+        later.append(o.payload.get("segments") or [])
+    return False
+
+
+def _overlap(a: list, b: list) -> bool:
+    """Whether two ``segments`` lists (``[op, k0, length]`` each) share a character."""
+    return any(str(oa) == str(ob) and int(ka) < int(kb) + int(nb) and int(kb) < int(ka) + int(na)
+               for oa, ka, na in a for ob, kb, nb in b)
 
 def _recorded_restore(store: Store, actor: str, target: dict, payload: dict) -> dict | None:
     """The ``text.mark`` payload that ``payload`` repeats (``chars`` aside)
