@@ -53,10 +53,10 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
         };
         const postStatus = async () => {
             const st = await readJson<Record<string, unknown>>(path.join(codocDir, 'status.json'));
-            const cfg = await readJson<{ doc_language?: string }>(path.join(codocDir, 'config.json'));
-            // `status.json` carries `actor`: the person the daemon stamps on the `ide` inbox.
-            // `terminal`: this host can run `codoc realize` where the person sees it.
-            if (st) post({ kind: 'status', status: { ...st, doc_language: cfg?.doc_language ?? 'en', terminal: true } });
+            // `status.json` carries `actor`, the person the daemon stamps on the `ide` inbox, and
+            // `doc_language`, the language the daemon writes in. `terminal`: this host can run
+            // `codoc realize` where the person sees it.
+            if (st) post({ kind: 'status', status: { ...st, terminal: true } });
         };
 
         // Acks: tail the ack file from its current end.
@@ -72,11 +72,11 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
             if (acks.length) post({ kind: 'acks', acks });
         };
 
-        const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(codocDir), `{projection.json,status.json,config.json,inbox/${CLIENT}.ack.jsonl}`));
+        const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(codocDir), `{projection.json,status.json,inbox/${CLIENT}.ack.jsonl}`));
         const onChange = (uri: vscode.Uri) => {
             const name = path.basename(uri.fsPath);
             if (name === 'projection.json') void postProjection();
-            else if (name === 'status.json' || name === 'config.json') void postStatus();
+            else if (name === 'status.json') void postStatus();
             else if (name.endsWith('.ack.jsonl')) void drainAcks();
         };
         const subs = [watcher, watcher.onDidChange(onChange), watcher.onDidCreate(onChange)];
@@ -104,7 +104,7 @@ export class CodocEditorProvider implements vscode.CustomTextEditorProvider {
                 }
                 case 'set-language':
                     // The CLI checks and normalizes the tag, as the hub does; the
-                    // config.json watcher posts the new status.
+                    // daemon wakes on config.json and republishes status.json with it.
                     if (msg.tag) await this.setLanguage(root, msg.tag)
                         .catch(err => post({ kind: 'notice', text: `The language was not set: ${(err as Error).message}` }));
                     return;

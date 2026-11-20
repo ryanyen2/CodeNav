@@ -8,8 +8,8 @@ is still a position an insert, a split or a comment can name.
 
 Every mutation is by character identity, never by offset, and a character
 identity is held by exactly one Text at a time (a merge moves segments, it
-does not copy them). Offsets exist only at the edges: ``ref_at`` /
-``offset_of`` translate for the editor and for ``ingest``.
+does not copy them). Offsets exist only at the edge: ``ref_at`` names the
+live character at an offset, for ``ingest``.
 
 Two ways to name characters, and they are not interchangeable:
 
@@ -206,13 +206,6 @@ class Text:
                 return s.ref(offset - seen)
             seen += len(s.chars)
         raise IndexError(offset)
-
-    def offset_of(self, ref: CharRef) -> int | None:
-        """Live offset of a character, or None when it is dead."""
-        i, off = self.locate(ref)
-        if not self.segs[i].live:
-            return None
-        return sum(len(s.chars) for s in self.segs[:i] if s.live) + off
 
     def first_ref(self) -> CharRef | None:
         return self.segs[0].first if self.segs else None
@@ -441,9 +434,11 @@ class Text:
 
     # ── marks ──────────────────────────────────────────────────────────────
     def set_mark(self, kind: str, attrs: dict, start: CharRef, end: CharRef, on: bool,
-                 *, actor: str = "", op: OpId = "", at: str = "") -> tuple[list[Mark], list[Mark]]:
+                 *, actor: str = "", op: OpId = "", at: str = "", adjoin: bool = True) -> tuple[list[Mark], list[Mark]]:
         """Toggle a mark over an inclusive identity range. Returns
-        ``(removed, added)``, which is exactly the inverse."""
+        ``(removed, added)``, which is exactly the inverse. A mark turned on
+        merges with one of its kind it overlaps and, unless ``adjoin`` is
+        false, with one it touches (no live character between them)."""
         self.locate(start)
         self.locate(end)
         if self._before(end, start):
@@ -474,7 +469,7 @@ class Text:
             keep_actor, keep_op = actor, op
             merged = False
             for m in list(self.marks):
-                if m.same(new) and (self._overlaps(m, new) or self._adjacent(m, new)):
+                if m.same(new) and (self._overlaps(m, new) or adjoin and self._adjacent(m, new)):
                     self.marks.remove(m)
                     if not merged:
                         keep_actor, keep_op, merged = m.actor, m.op, True

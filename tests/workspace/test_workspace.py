@@ -15,7 +15,7 @@ from codoc.calculus.text import BOLD, LINK, SUGGEST_DEL
 from codoc.daemon.daemon import Daemon
 from codoc.index.changes import ChangeSet
 from codoc.loops.realize import directive
-from codoc.workspace import Workspace
+from codoc.workspace import Roles, Workspace
 from codoc.workspace import log as L
 from codoc.workspace import inbox as I
 from codoc.workspace.clock import Clock, fmt
@@ -182,6 +182,28 @@ def test_provisional_anchors_chain_a_typing_batch(tmp_path):
     done = ws.drain_inbox({"ide": "human:local"})
     assert [o.conflict for o in done] == [None, None, None]
     assert ws.store.blocks["p1"].text().live_text() == "Retries once. "
+
+
+def test_a_batch_id_another_actor_used_is_not_honoured(tmp_path):
+    """A suggester who read the maintainer's batch id from history.json and
+    names it gets a fresh batch: an undo of the maintainer's batch sends the
+    inverses of the maintainer's ops only. The maintainer goes on in it."""
+    from codoc.calculus.window import history_window
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed(ws)
+    at_end = {"after": list(refs(ws, "p1")[-1])}
+    I.submit(cd, "ide", [Submission(cid="m1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                                    payload={**at_end, "text": " Hi"}, batch="b-mine")])
+    [mine] = ws.drain_inbox()
+    I.submit(cd, "hub-eve", [Submission(cid="e1", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                                        payload={**at_end, "text": " x"}, batch="b-mine")])
+    assert [o.conflict for o in ws.drain_inbox()] == [None]
+    I.submit(cd, "ide", [Submission(cid="m2", kind=K.TEXT_INSERT, target={"bid": "p1", "path": "text"},
+                                    payload={**at_end, "text": "!"}, batch="b-mine")])
+    assert ws.drain_inbox()[0].batch == "b-mine"
+    assert {e["actor"] for e in history_window(ws.store)["ops"] if e["batch"] == "b-mine"} == {mine.actor}
+    ws.close()
 
 
 def test_restored_mark_keeps_its_placer_through_rebuild(tmp_path):
@@ -500,6 +522,34 @@ def test_undoing_the_removal_of_a_widened_mark_gives_it_back_to_its_placer(tmp_p
     ws.close()
 
 
+def test_undoing_a_restore_kills_as_the_delete_so_its_undo_still_gives_the_words_back(tmp_path):
+    """A person deletes words, undoes the delete, and undoes that undo: the
+    words die again as the delete killed them, so undoing the delete once more
+    gives them back. Sent by anyone else, the same delete kills as its sender."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd); seed(ws)
+    r = refs(ws, "p1")
+    dele = ws.submit([{"kind": K.TEXT_DELETE, "target": {"bid": "p1", "path": "text"},
+                       "payload": {"from": list(r[0]), "to": list(r[7])}}], actor=H)[0]
+
+    def undo(cid, op, actor=H):
+        (b,) = op.inverse
+        return ws.apply_submissions([("ide", actor, Submission(cid=cid, kind=b["kind"], target=b["target"],
+                                                               payload=b["payload"]))])[0]
+    undo("u1", dele)
+    restore = ws.store.ops[-1]
+    assert T(ws.store, "p1") == "Retries once." and restore.kind == K.TEXT_RESTORE
+    undo("u2", restore)
+    assert T(ws.store, "p1") == "once." and {g.dead for g in ws.store.blocks["p1"].text().segs if not g.live} == {dele.id}
+    undo("u3", dele)
+    assert T(ws.store, "p1") == "Retries once."
+    undo("u4", restore, actor="human:b")
+    forged = ws.store.ops[-1]
+    assert forged.kind == K.TEXT_DELETE and "by" not in forged.payload
+    assert {g.dead for g in ws.store.blocks["p1"].text().segs if not g.live} == {forged.id}
+    ws.close()
+
+
 def test_a_proposal_is_decided_whole_by_the_applier(tmp_path):
     """The agent may never see the ack (a busy daemon). Whatever it sees, a
     proposal that lands nothing leaves no plan; one that lands is one plan."""
@@ -718,21 +768,52 @@ def test_undoing_a_kind_change_takes_the_bindings_back_as_the_block_kept_them(tm
 
 
 def test_a_contributor_cannot_dress_an_attach_as_a_loop_refresh(tmp_path):
-    """A hub contributor's attach claims the loop set the hashes and carries a
-    refresh's `prev_*`. It records the contributor as the setter, and rejecting
-    the plan it rode in takes the binding off rather than "restoring" the
-    hashes the payload named."""
+    """A hub client's attach claims the loop set the hashes and carries a
+    refresh's `prev_*`. A contributor's is refused outright: bindings are not
+    theirs to write. A maintainer's is recorded as set by the maintainer, with
+    none of the refresh fields it named."""
     cd = tmp_path / ".codoc"
     ws = Workspace(cd)
+    write_roles(cd, {"human:gh:bob": "maintainer"})
+    ws.roles = Roles.load(cd); ws.store.policy = ws.roles.policy
     seed_loop(ws)
-    I.submit(cd, "hub-alice", [Submission(cid="a1", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload={
-        "symbol": "c.py::retry", "fingerprint": "f9", "types_hash": "t9", "set_by": "loop",
-        "prev_fingerprint": "f9", "prev_types_hash": "t9", "prev_set_by": "loop"})])
-    (attach,) = [o for o in ws.drain_inbox() if o.kind == K.BIND_ATTACH]
-    assert attach.conflict is None and attach.plan
-    assert ws.store.bindings["c.py::retry"].set_by == "human:gh:alice"
-    assert not {"set_by", "prev_fingerprint", "prev_set_by"} & set(attach.payload)
-    ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": attach.plan}, "payload": {}}], actor=H)
+    dressed = {"symbol": "c.py::retry", "fingerprint": "f9", "types_hash": "t9", "set_by": "loop",
+               "prev_fingerprint": "f9", "prev_types_hash": "t9", "prev_set_by": "loop"}
+    I.submit(cd, "hub-alice", [Submission(cid="a1", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload=dressed)])
+    assert [o.conflict for o in ws.drain_inbox() if o.kind == K.BIND_ATTACH] == ["authority"]
     assert "c.py::retry" not in ws.store.bindings
+    I.submit(cd, "hub-bob", [Submission(cid="b1", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload=dressed)])
+    (attach,) = [o for o in ws.drain_inbox() if o.kind == K.BIND_ATTACH]
+    assert attach.conflict is None
+    assert ws.store.bindings["c.py::retry"].set_by == "human:gh:bob"
+    assert not {"set_by", "prev_fingerprint", "prev_set_by"} & set(attach.payload)
     ws.close()
 
+
+
+def test_an_old_undo_of_a_restore_kills_nothing_in_another_persons_name(tmp_path):
+    """Alice restores Bob's delete and undoes that; Bob then takes his own
+    delete back. Alice resending her old undo is her own delete now: the
+    words do not die as Bob's."""
+    from codoc.workspace.inbox import Submission as Sub
+    from tests.helpers import H, T, refs, seed
+    ws = Workspace(tmp_path / ".codoc")
+    seed(ws)
+    r = refs(ws, "p1")
+
+    def send(cid, b, actor):
+        return ws.apply_submissions([("ide", actor, Sub(cid=cid, kind=b["kind"], target=b["target"],
+                                                        payload=b["payload"]))])[0]
+    d = ws.submit([{"kind": K.TEXT_DELETE, "target": {"bid": "p1", "path": "text"},
+                    "payload": {"from": list(r[0]), "to": list(r[7])}}], actor="human:b")[0]
+    send("a1", d.inverse[0], H)
+    stale = ws.store.ops[-1].inverse[0]
+    send("a2", stale, H)
+    assert T(ws.store, "p1") == "once."
+    send("b1", d.inverse[0], "human:b")
+    assert T(ws.store, "p1") == "Retries once."
+    send("a3", stale, H)
+    forged = ws.store.ops[-1]
+    dead = {(g.dead, g.dead_actor) for g in ws.store.blocks["p1"].text().segs if not g.live}
+    assert dead == {(forged.id, H)}, dead
+    ws.close()

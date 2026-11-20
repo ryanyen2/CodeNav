@@ -175,7 +175,7 @@ def _bootstrap(root: str, cd: Path, *, organize: bool):
     from codoc.loops.bootstrap import BootstrapResult, bootstrap
     from codoc.workspace import Workspace
     graph = Graph()
-    rows = index_code(root, cd, graph).rows
+    rows = index_code(root, cd, graph, whole=True).rows
     ws = Workspace(cd)
     try:
         if not rows:
@@ -201,7 +201,11 @@ def watch(root: str = ROOT,
     if auto_realize:
         from codoc.claude.autorealize import auto_realizer
         after_batch = auto_realizer(root, str(cd), printer=typer.echo)
-    Daemon(root, cd, printer=typer.echo, after_batch=after_batch).run()
+    d = Daemon.start(root, cd, printer=typer.echo, after_batch=after_batch)
+    if d is None:
+        typer.echo("A codoc daemon is already watching this repo.")
+        raise typer.Exit(3)          # the editor reads 3 as standing down, not as a failure
+    d.run()
 
 
 @app.command()
@@ -228,10 +232,11 @@ def status(root: str = ROOT):
 
 @app.command()
 def sync(root: str = ROOT):
-    """One pass: drain client edits, reflect every changed file, publish."""
+    """One pass: drain client edits, reflect every changed file, publish. While
+    an agent session is open the code is not reflected: the first pass after
+    the session ends reflects it and cites its hand-offs."""
     from codoc.daemon.daemon import Daemon
     from codoc.daemon.pidfile import daemon_running
-    from codoc.daemon.publish import publish
     from codoc.workspace.layout import APPLIER_LOCK, locked
     cd = _require(root)
     # The pass applies across a model call, so it holds the lock every
@@ -243,10 +248,7 @@ def sync(root: str = ROOT):
             raise typer.Exit(0)
         d = Daemon(root, cd, printer=typer.echo)
         try:
-            note = d.process_batch([])
-            note2 = d.reflect(set())
-            typer.echo(f"▸ {note}; {note2}")
-            publish(cd, d.ws.store, root_dir=root)
+            typer.echo(f"▸ {d.process_batch([], whole=True)}")      # the batch publishes
         finally:
             d.ws.close()
 
@@ -350,8 +352,10 @@ def reject(plan: str, root: str = ROOT):
 def history(feature: str, root: str = ROOT, limit: int = typer.Option(15, "--limit", help="How many changes to show."),
             ops: bool = typer.Option(False, "--ops", help="List each change's ops under it.")):
     """One feature's changes, newest last: when, who, what, under which plan,
-    for which hand-off; then who wrote each run of its words. A change is one
-    batch: a gesture, an ingest or a plan."""
+    for which hand-off; then who wrote each run of its words. A change is what
+    a reader means by one (a gesture, a reflect pass, an amend, a plan's
+    opening, a verdict): one row per change, as ``reads.read_history`` groups
+    the log."""
     from datetime import datetime
     from codoc.daemon import client, reads
     from codoc.workspace.clock import parse
@@ -366,7 +370,7 @@ def history(feature: str, root: str = ROOT, limit: int = typer.Option(15, "--lim
     def when(at: str) -> str:
         return datetime.fromtimestamp(parse(at)[0] / 1000).strftime("%Y-%m-%d %H:%M:%S")
     typer.echo(f"{h['title']}  ⟨{fid}⟩")
-    for row in h["batches"]:
+    for row in h["changes"]:
         plan = f"plan {row['plan']}: " if row.get("plan") else ""
         cause = f"  for hand-off d:{row['caused_by']}" if row.get("caused_by") else ""
         typer.echo(f"  {when(row['at'])}  {row['actor']:<20} {plan}{row['summary']}{cause}")
@@ -383,13 +387,17 @@ def history(feature: str, root: str = ROOT, limit: int = typer.Option(15, "--lim
 def lang(tag: str = typer.Argument("", help="BCP-47 tag to set; omit to show."), root: str = ROOT):
     """Show or set the language the tree is authored in (.codoc/config.json, tracked)."""
     from codoc.doclang import is_language_tag, resolve, workspace_doc_language
-    from codoc.workspace.config import write_config
+    from codoc.workspace.config import ConfigUnreadable, write_config
     cd = _require(root)
     if tag:
         if not is_language_tag(tag):
             typer.echo(f"✗ {tag!r} is not a BCP 47 language tag", err=True)
             raise typer.Exit(2)
-        write_config(cd, doc_language=resolve(tag).code)
+        try:
+            write_config(cd, doc_language=resolve(tag).code)
+        except ConfigUnreadable as e:
+            typer.echo(f"✗ {e}", err=True)
+            raise typer.Exit(1)
         typer.echo(f"✓ authoring language: {resolve(tag).name}. Existing prose is unchanged; "
                    "run `codoc translate` to convert it.")
     else:

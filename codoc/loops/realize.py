@@ -4,7 +4,8 @@ A person's edits are already ops on the trunk, and their hand-off
 (``feature.handoff``) is written by the surface they used: the editor,
 ``codoc handoff``, an accept. Nothing here infers either.
 
-- ``directive``: the realize prompt item for one feature.
+- ``directive``: the realize prompt item for one feature, read from
+  ``rejected_view``: the document with every open plan rejected.
 - ``write_queue``: render every queued directive into ``realize.md``, the
   prompt the realizing session or ``codoc realize`` reads. Regenerable; the
   log is the truth.
@@ -22,26 +23,66 @@ from pathlib import Path
 
 from codoc import kinds as registry
 from codoc.calculus import ops as K
+from codoc.calculus.apply import apply
 from codoc.calculus.derive import (
-    description, ink, kind_words, live_spans, prose_blocks, queued, realized_content, removals, title,
+    description, first_message, in_mode, ink, kind_words, live_spans, one_line, prose_blocks, queued, realized_content,
+    removals, title,
 )
 from codoc.calculus.doc import BUILTIN
-from codoc.calculus.ids import LOOP, is_human
+from codoc.calculus.ids import IMPORT, LOOP, is_human
 from codoc.calculus.ops import Op, in_frontier
 from codoc.calculus.store import Store, Watermarks, file_of
-from codoc.calculus.text import BOLD, LINK
+from codoc.calculus.text import BOLD, COMMENT, LINK
 from codoc.llm.prompt import format_prompt, load_prompt
-from codoc.workspace import Workspace
+from codoc.workspace import Roles, Workspace
 from codoc.workspace.epoch import epoch_alive
 from codoc.workspace.layout import REALIZE, atomic_write
+from codoc.workspace.roles import OWNER
 
 
-def render_queue(store: Store, root_dir: str = ".", doc_language=None) -> str:
+def rejected_view(store: Store) -> Store:
+    """The store as it would read with every open plan rejected: what the
+    directive, the queue and the hub's scope read a feature from. The
+    ``rejected`` read mode hides an open plan's words and JSON sets, but not a
+    move, a kind or level change or a split, so a contributor's open plan
+    could drop the owner's sentences out of a handed-off feature, or carry
+    another feature's comment into it, before any verdict. Here each open plan
+    is rejected by the applier's own ``plan.reject`` on a fork (the calculus is
+    pure), so every op it carries is taken back by the one undo a verdict
+    uses. Then every block one of them added dies (``unvetted_block``: an open
+    plan's block says nothing), though a reject keeps one that holds another's
+    words, since it would keep what the plan gave it at add (a url, a ref, a
+    heading that cuts the feature short). A heading the owner handed off stays:
+    it is their request, which a dead heading would turn into a removal. With
+    no open plan holding an op, the store itself."""
+    plans = [p.id for p in store.open_plans.values() if p.ops]
+    if not plans:
+        return store
+    at = store.ops[-1].at
+
+    def reject_all(view: Store) -> None:
+        for n, pid in enumerate(reversed(plans)):
+            # `import`: not a person, so no reader takes the reject's kills for anyone's removal.
+            apply(view, Op(id=f"view:{n}", at=at, actor=IMPORT, batch="", kind=K.PLAN_REJECT, target={"pid": pid}))
+        asked = {fid for fid, w in view.watermarks_by_fid.items() if w.queued}
+        for bid in [b.id for b in view.blocks.values() if b.live and b.added_plan in plans and b.id not in asked]:
+            view.blocks[bid].kill(f"view:{len(plans)}", IMPORT, at)
+
+    # ponytail: a fork, so the cost is the blocks the open plans reach and a few
+    # dict copies the size of the tree, not the log; computed again per call
+    # (render_queue, pending), memoize on (store.id, store.pos) if that shows.
+    return store.fork(reject_all)
+
+
+def render_queue(store: Store, root_dir: str = ".", doc_language=None, roles: Roles | None = None) -> str:
+    if not any(w.queued for w in store.watermarks_by_fid.values()):
+        return ""                               # nothing to render: skip the view's copy
+    store = rejected_view(store)
     items = []
     for fid in queued(store):
         w = store.watermarks(fid)
         latest_handoff = w.handoffs[-1] if w.handoffs else ""
-        body = directive(store, fid)
+        body = directive(store, fid, roles)
         items.append(body.replace("### ", f"### ⟨d:{latest_handoff}⟩ ", 1) if latest_handoff else body)
     if not items:
         return ""
@@ -51,7 +92,7 @@ def render_queue(store: Store, root_dir: str = ".", doc_language=None) -> str:
 
 def write_queue(codoc_dir: str | Path, store: Store, root_dir: str = ".", doc_language=None) -> Path | None:
     path = Path(codoc_dir) / REALIZE
-    text = render_queue(store, root_dir, doc_language)
+    text = render_queue(store, root_dir, doc_language, Roles.load(codoc_dir))
     if not text:
         if path.exists():
             path.unlink()
@@ -135,11 +176,17 @@ def _phantom_done(store: Store, fid: str, latest_handoff: str, removed: set[str]
 
 # ── the directive ────────────────────────────────────────────────────────────
 
-def directive(store: Store, fid: str) -> str:
-    """The realize prompt item for a feature: its text in the all-rejected read
-    mode (an un-vetted plan never masquerades as the person's intent), what the
-    person changed since the last realization, Focus and Consult lines, and
-    the person's own words from the hand-off."""
+def directive(store: Store, fid: str, roles: Roles | None = None) -> str:
+    """The realize prompt item for a feature, read from ``rejected_view`` (an
+    un-vetted plan never masquerades as the person's intent, by its words or
+    by where it put blocks): its text, what the person changed since the last
+    realization, Focus and Consult lines, and the person's own words from the
+    hand-off. Words it quotes inside a line
+    of its own go through ``one_line``, so none of them starts a line.
+    ``roles`` is the workspace's role table, which voices each comment by its
+    author (``_kind_lines``); without it, the defaults (a hub sign-in is a
+    contributor)."""
+    store = rejected_view(store)
     b = store.blocks.get(fid)
     if b is None:
         return ""
@@ -147,13 +194,13 @@ def directive(store: Store, fid: str) -> str:
     ho = store.by_id.get(w.handoffs[-1]) if w.handoffs else None
     lines = []
     if not b.live:
-        lines.append(f"### REMOVE FEATURE {title(store, fid, 'rejected')} ⟨{fid}⟩")
+        lines.append(f"### REMOVE FEATURE {one_line(title(store, fid, 'rejected'))} ⟨{fid}⟩")
         if ho and ho.payload.get("delete_code"):
             lines.append("Delete the code this feature owned; it was removed from the tree on purpose.")
         else:
             lines.append("Stop tracking this feature's code; do not delete anything.")
     else:
-        lines.append(f"### {title(store, fid, 'rejected')} ⟨{fid}⟩")
+        lines.append(f"### {one_line(title(store, fid, 'rejected'))} ⟨{fid}⟩")
         lines.append("")
         lines.append(description(store, fid, "rejected") or "(no description)")
     changes = _human_changes(store, fid)
@@ -165,12 +212,12 @@ def directive(store: Store, fid: str) -> str:
     focus = _focus(store, fid, w)
     if focus:
         lines.append("")
-        lines.append("Focus: " + "; ".join(f'"{t}"' for t in focus))
+        lines.append("Focus: " + "; ".join(f'"{one_line(t)}"' for t in focus))
     consult = _all_links(store, fid)
     if consult:
         lines.append("")
-        lines.append("Consult: " + ", ".join(f"{t} <{u}>" for t, u in consult))
-    reads, asks = _kind_lines(store, fid, w)
+        lines.append("Consult: " + ", ".join(f"{one_line(t)} <{one_line(u)}>" for t, u in consult))
+    reads, asks = _kind_lines(store, fid, w, roles or Roles())
     for line in reads + asks:
         lines.append("")
         lines.append(line)
@@ -180,13 +227,24 @@ def directive(store: Store, fid: str) -> str:
     return "\n".join(lines)
 
 
-def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[str]]:
+# The roles whose comment is the person's own note; anyone else's is a contributor's.
+_OWN_VOICE = (OWNER, "maintainer", "machine")
+
+
+def _kind_lines(store: Store, fid: str, w: Watermarks, roles: Roles) -> tuple[list[str], list[str]]:
     """What this feature's kind blocks put in front of the agent: every
     in-flow block's ``consult``, then the directive each block's
     ``lower`` codec derives from what changed since the last realization. An
     out-of-flow block (a comment) is not prose the agent reads, only a
-    request, which its own codec words. A kind this process has no code for
-    says its Text fields' words under its name."""
+    request, which its own codec words. Its ``status``, ``scope`` and
+    ``anchor_text`` are the thread's, read from the thread's first message
+    (``derive.first_message``), as the margin shows them. Each message is
+    voiced by its own author: one an owner, a maintainer or a machine added is
+    the person's note, and anyone else's (a hub contributor's) is marked as a
+    contributor's suggestion (``contributor``), so a reply in an owner's
+    thread is not read as the owner's. A kind this process
+    has no code for says its Text fields' words under its name. ``store`` is
+    ``rejected_view``'s, which holds no block an open plan added."""
     reads: list[str] = []
     asks: list[str] = []
     ctx: object | None = None
@@ -197,6 +255,10 @@ def _kind_lines(store: Store, fid: str, w: Watermarks) -> tuple[list[str], list[
                 reads.append(said)
             continue
         new = registry.plain(b, store)
+        if b.kind == COMMENT:
+            head = registry.plain(first_message(store, b) or b, store)
+            new.update({k: head.get(k) for k in ("status", "scope", "anchor_text")})
+            new["contributor"] = "" if roles.role(b.added_by) in _OWN_VOICE else b.added_by
         if b.layout.flow and (said := kind.consult(new)):
             reads.append(said)
         if kind.lower is None:
@@ -213,8 +275,8 @@ def _human_changes(store: Store, fid: str) -> list[str]:
     """What the person handed off that the code has not answered: their sent
     ink, then their sent removals (``derive.removals``). Read from the text,
     so a fold that takes the ops away leaves the request intact."""
-    return [f"added: \"{c.text}\"" for c in ink(store, fid) if c.stage == "sent"] \
-        + [f"removed: \"{c.text}\"" for c in removals(store, fid) if c.stage == "sent"]
+    return [f"added: \"{one_line(c.text)}\"" for c in ink(store, fid) if c.stage == "sent"] \
+        + [f"removed: \"{one_line(c.text)}\"" for c in removals(store, fid) if c.stage == "sent"]
 
 
 def _focus(store: Store, fid: str, w: Watermarks) -> list[str]:
@@ -223,11 +285,14 @@ def _focus(store: Store, fid: str, w: Watermarks) -> list[str]:
 
     A mark carries its own actor and placing op, so this reads the marks, not
     the ops that placed them: a mark since turned off is not here to
-    find, and a fold that takes the ops away leaves the focus intact."""
+    find, and a fold that takes the ops away leaves the focus intact. The
+    words are read in the ``rejected`` mode, as the description is, so an open
+    plan's words typed inside a bolded phrase are not quoted as the person's
+    emphasis."""
     out: list[str] = []
     for b in prose_blocks(store, fid):
         for f in b.layout.text:
-            t = b.text(f)
+            t = in_mode(b.text(f), "rejected", store)
             for m in t.marks:
                 if m.kind == BOLD and is_human(m.actor) and m.op and not in_frontier(m.op, w.realized):
                     if words := t.mark_text(m):
@@ -236,10 +301,17 @@ def _focus(store: Store, fid: str, w: Watermarks) -> list[str]:
 
 
 def _all_links(store: Store, fid: str) -> list[tuple[str, str]]:
+    """The links in the feature's prose: the directive's ``Consult:`` line,
+    which the agent fetches. A comment is not prose (``prose_blocks``): its
+    words reach the agent only through its kind's ``lower``, voiced as a
+    comment, so a link a contributor put in their own comment is not a page to
+    fetch. ``store`` is ``rejected_view``'s, which holds no block an open plan
+    added, and a label reads in the ``rejected`` mode, as the description does,
+    so an open plan's words inside it are not the person's."""
     out = []
-    for b in store.body(fid):
+    for b in prose_blocks(store, fid):
         for f in b.layout.text:
-            t = b.text(f)
+            t = in_mode(b.text(f), "rejected", store)
             lt = t.live_text()
             for sp in live_spans(t):
                 if sp.kind == LINK:

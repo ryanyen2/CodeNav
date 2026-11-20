@@ -565,3 +565,29 @@ def test_code_at_moves_exactly_when_a_bind_op_changed_code_the_feature_had():
     assert clock() == moved.at and not K.moved_code(review.kind, review.payload)
     gone = apply(s, m.op(K.BIND_DETACH, {"fid": "h1"}, {"symbol": "c.py::send"}))
     assert clock() == gone.at
+
+
+def test_a_text_op_writes_only_into_the_block_it_names_or_one_a_split_moved_its_characters_to():
+    """A text op acts on the block holding its characters. Naming the heading
+    or prose block a split moved them out of is a stale read, and the op
+    follows them; naming any other block is refused (``bad_anchor``), in
+    either direction, and changes nothing."""
+    m, s = Mint(), Store()
+    heading(m, s, "h1", "Top")
+    a = paragraph(m, s, "p1", "alpha beta", after="h1")
+    assert apply(s, m.op(K.BLOCK_ADD, {"bid": "c1"}, {"kind": "code", "after": "p1", "content": {}})).conflict is None
+    src = apply(s, m.op(K.TEXT_INSERT, {"bid": "c1", "path": "source"}, {"after": START, "text": "x = 1"}))
+    assert apply(s, m.op(K.BLOCK_SPLIT, {"bid": "p1", "path": "text"}, {"at": [a.id, 5], "new": "p2"})).conflict is None
+    beta = [a.id, 7]                                     # in p2 now
+    stale = {"bid": "p1", "path": "text"}
+    assert apply(s, m.op(K.TEXT_INSERT, stale, {"after": beta, "text": "!"})).payload["bid"] == "p2"
+    assert apply_mark(m, s, "p1", a, 6, 7).payload["bid"] == "p2"
+    assert apply(s, m.op(K.TEXT_DELETE, stale, {"from": [a.id, 8], "to": [a.id, 9]})).payload["bid"] == "p2"
+    fp = s.state_fingerprint()
+    for target, anchor in (({"bid": "c1", "path": "source"}, beta), (stale, [src.id, 0])):
+        assert apply(s, m.op(K.TEXT_INSERT, target, {"after": anchor, "text": "!"})).conflict == "bad_anchor"
+        assert apply(s, m.op(K.TEXT_DELETE, target, {"from": anchor, "to": anchor})).conflict == "bad_anchor"
+        assert apply(s, m.op(K.TEXT_DELETE, target, {"segments": [[anchor[0], anchor[1], 1]]})).conflict == "bad_anchor"
+        assert apply(s, m.op(K.TEXT_MARK, target, {"kind": BOLD, "attrs": {}, "start": anchor, "end": anchor})).conflict \
+            == "bad_anchor"
+    assert s.state_fingerprint() == fp

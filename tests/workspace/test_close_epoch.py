@@ -17,7 +17,6 @@ def _write(codoc_dir, *, open: bool, epoch_id: str) -> None:
     data = {
         "version": 1,
         "epoch": {"id": epoch_id, "open": open, "started_at": "2026-07-11T00:00:00+00:00", "ended_at": None},
-        "touched": ["src/a.py"],
     }
     activity_path(codoc_dir).write_text(json.dumps(data))
 
@@ -32,8 +31,6 @@ def test_closes_matching_stale_epoch(tmp_path):
     healed = json.loads(activity_path(codoc_dir).read_text())
     assert healed["epoch"]["open"] is False
     assert healed["epoch"]["ended_at"]  # stamped
-    # `touched` is preserved so the caller can still fold those files into the reflect pass.
-    assert "src/a.py" in healed["touched"]
 
 
 def test_refuses_when_a_newer_session_took_the_slot(tmp_path):

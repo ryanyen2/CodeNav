@@ -28,10 +28,11 @@ from pathlib import Path
 from codoc.calculus.derive import queued, title
 from codoc.daemon import client
 from codoc.index.git import BASE_TRAILER, HANDOFF_TRAILER
-from codoc.loops.realize import directive
+from codoc.loops.realize import directive, rejected_view
 from codoc.serve.realize_agent import make_sandboxed_agent
 from codoc.serve.sandbox import out_of_scope_changes
-from codoc.workspace.layout import HUB_PRS, STATUS, atomic_write
+from codoc.workspace import Roles
+from codoc.workspace.layout import HUB_PRS, STATUS, atomic_write, read_json
 
 # A hand-off whose branch carries the agent's commit but has no pull request
 # yet: `built:<branch>:<attempts>`. The next pass resumes from the push rather
@@ -52,11 +53,9 @@ def pr_create_command(branch: str, title_text: str, body: str, *, base: str) -> 
 
 
 def read_ledger(codoc_dir: str | Path) -> dict[str, str]:
-    try:
-        d = json.loads((Path(codoc_dir) / HUB_PRS).read_text(encoding="utf-8"))
-        return {str(k): str(v) for k, v in d.items()} if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    """Hand-off → pull-request branch. A file that does not parse is moved
+    aside (``read_json``) before ``record_pr`` writes a new one over it."""
+    return {str(k): str(v) for k, v in read_json(Path(codoc_dir) / HUB_PRS, {}).items()}
 
 
 def record_pr(codoc_dir: str | Path, handoff_id: str, branch: str) -> None:
@@ -79,8 +78,16 @@ def pending(codoc_dir: str | Path, store, done: dict[str, str] | None = None) ->
     """The hand-offs this hub may build. A feature with no bindings is not one:
     there is no set of files to confine the agent to, and a contributor's
     accepted proposal must never be a licence to write anywhere. Those stay in
-    the queue for the maintainer, who builds them with a person present."""
+    the queue for the maintainer, who builds them with a person present. The
+    queue, the title, the directive and the scope are all read from
+    ``rejected_view``: an open plan's binding, kind change or move is the
+    plan's until a verdict, so it neither puts a file in the scope nor takes
+    one out."""
     done = read_ledger(codoc_dir) if done is None else done
+    if not any(w.queued for w in store.watermarks_by_fid.values()):
+        return []                               # nothing queued: skip the view's copy
+    store = rejected_view(store)
+    roles = Roles.load(codoc_dir)
     out = []
     for fid in queued(store):
         w = store.watermarks(fid)
@@ -89,7 +96,7 @@ def pending(codoc_dir: str | Path, store, done: dict[str, str] | None = None) ->
         answer = done.get(hid, "")
         if not hid or (answer and not answer.startswith(BUILT)) or not scope:
             continue
-        out.append(Request(fid, hid, title(store, fid, "rejected") or fid, directive(store, fid), scope))
+        out.append(Request(fid, hid, title(store, fid, "rejected") or fid, directive(store, fid, roles), scope))
     return out
 
 

@@ -4,6 +4,7 @@ Replay honours the answer a log records, which makes the file a capability:
 this is what reads a pull request's session logs before they are merged.
 """
 import json
+import shutil
 
 from codoc.calculus import ops as K
 from codoc.workspace import Roles, Workspace
@@ -263,6 +264,39 @@ def test_the_door_accepts_a_contributors_own_words_delete_and_their_own_comment(
     ws.close()
     roles = Roles(table={"human:gh:alice": "suggest", H: "owner"}, default="suggest")
     assert validate_logs([session], roles=roles, store=Workspace(cd, readonly=True).store) == []
+
+
+def test_the_door_reads_a_comment_the_checked_files_add_as_its_authors(tmp_path):
+    """A contributor's clone: the comment blocks their session adds are not in
+    the store it is checked against, so the view builds them from their
+    ``block.add``, with who added each and where it ranks. Bob's body and his
+    resolve of the thread he started pass, although Al's later reply has the
+    id that sorts first."""
+    cd = tmp_path / "a" / ".codoc"
+    ws = Workspace(cd)
+    seed(ws)
+    ws.close()
+    bob, al = "human:bob@x.org", "human:al@x.org"
+    write_roles(cd, {bob: "suggest", al: "suggest"})
+    cd2 = tmp_path / "b" / ".codoc"
+    shutil.copytree(cd, cd2)
+    before = set(L.list_sessions(cd2))
+    ws2 = Workspace(cd2)
+
+    def message(bid, after, actor, text):
+        return ws2.submit([
+            {"kind": K.BLOCK_ADD, "target": {"bid": bid}, "payload": {"kind": "comment", "after": after, "content": {
+                "thread": "t-z", "anchor": "p1", "anchor_text": "Retries", "scope": "code", "status": "open"}}},
+            {"kind": K.TEXT_INSERT, "target": {"bid": bid, "path": "body"}, "payload": {"after": "START", "text": text}},
+        ], actor=actor)
+
+    ops = message("c-b", "p1", bob, "why?") + message("c-a", "c-b", al, "agreed")
+    ops += ws2.submit([{"kind": K.BLOCK_SET, "target": {"bid": "c-b", "path": "status"}, "payload": {"value": "resolved"}}],
+                      actor=bob)
+    assert [o.conflict for o in ops] == [None] * 5
+    ws2.close()
+    (new,) = [p for p in L.list_sessions(cd2) if p not in before]
+    assert validate_logs([new], roles=Roles.load(cd), store=Workspace(cd, readonly=True).store) == []
 
 
 def _git_workspace(tmp_path):

@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import type { ProjectedBlock, Projection, TextField } from '../../../web/calc/projection';
@@ -26,6 +28,15 @@ describe('threads', () => {
         expect(resolveOps(ts[0]).map(o => o.target.bid)).toEqual(['c1', 'c2']);
     });
 
+    it('are open or resolved as their first message says, wherever a reply was placed', () => {
+        // A contributor's reply sent `open` and was placed ahead of the thread
+        // the maintainer resolved. The directive reads c1's status; so does the margin.
+        const first = { ...comment('c1', 'p1', 'once', 'Twice?'), rank: 'b' };
+        first.fields = { ...first.fields, status: 'resolved' };
+        const reply = { ...comment('c2', 'p1', 'once', 'also delete the tests', 'human:gh:m'), rank: 'a' };
+        expect(threadsOf(proj([reply, first]))[0].status).toBe('resolved');
+    });
+
     it('are anchored where their mark is, not where the thread was written', () => {
         // p2 was merged into p1. The commented words and their mark are in p1
         // now, and the thread still names p2.
@@ -35,6 +46,24 @@ describe('threads', () => {
         expect(anchorsOf(p).get('c1')).toBe('p1');
         expect(threadsOf(p)[0].anchor).toBe('p1');
     });
+});
+
+// Shared with tests/kinds/test_kinds.py, which pins `derive.thread_id` and `derive.first_message` to it.
+const threadCases = JSON.parse(fs.readFileSync(path.join(__dirname, '../../fixtures/thread-cases.json'), 'utf8')) as Array<{
+    name: string;
+    blocks: Array<{ id: string; thread?: unknown; status: string; scope: string; anchor_text: string }>;
+    threads: Array<{ id: string; status: string; scope: string; anchor_text: string; first: string; messages: string[] }>;
+}>;
+
+describe('threads read as the directive reads them', () => {
+    for (const c of threadCases) {
+        it(c.name, () => {
+            const blocks = c.blocks.map(({ id, ...fields }, i): ProjectedBlock =>
+                ({ id, kind: 'comment', level: 0, rank: String(i), head: 1, fields: { anchor: 'p1', ...fields, body: body(id, 'h') } }));
+            expect(threadsOf(proj(blocks)).map(t => ({ id: t.id, status: t.status, scope: t.scope, anchor_text: t.anchorText,
+                                                        first: t.first, messages: t.messages.map(m => m.bid) }))).toEqual(c.threads);
+        });
+    }
 });
 
 describe('a new thread', () => {

@@ -121,7 +121,9 @@ not undone, newest op first, as batch `u-<batch>`; ⇧⌘Z and ⌘Y undo that ba
 (`u-u-<batch>`) (`calc/window.ts`, `nextUndo`). It waits while any submission is unacked. A
 batch is this page's when the page submitted it, not when its actor is the viewer's: a
 teammate's batch merged through git and the person's own `codoc accept` in a terminal are
-never offered. The page keeps its batch ids in the webview's state (`setState`; on the hub, the tab's
+never offered. Within such a batch only the viewer's own ops are undone, so another actor's
+op naming the batch is never sent back as the viewer's (the drain also gives such an op a
+fresh batch, docs/concurrency.md section 4). The page keeps its batch ids in the webview's state (`setState`; on the hub, the tab's
 `sessionStorage`), so a reload still undoes them; an editor opened fresh has nothing to undo.
 
 **The viewer.** `status.actor` is the person the page writes as: `human:<git config
@@ -183,14 +185,15 @@ projections the decorations move with the person's typing.
 | `plan-cut` | `removed` plan claims: the characters accepting the plan kills. | Struck gray. |
 | `plan-mark`, `plan-unmark` | `marked`, `unmarked` claims. | A dashed gray underline. |
 | `code-added`, `code-removed` | `code` claims (`ground`), where no ink overlaps. Removed words are a widget at their place. | Green, red. |
-| `author-*` | In History mode, merged runs per actor kind. | One colour per kind. |
+| `author-*` | In History mode, each field's runs, adjacent runs by one actor merged. | One colour per actor kind. |
 | Phase marker | `phases`, at each heading that is not `synced`. | A glyph with an `aria-label`. An `edited` feature whose `editors` do not include the viewer is a ring titled with who edited it. The tree row's glyph is the same. |
 
 Each painted run carries its meaning as `title` and `aria-description`. One palette on
 every surface: blue is the person, gray a plan, green and red the code.
 
 **Comments** (`comments.ts`). Threads are grouped by `thread` and drawn as cards in the
-margin beside their anchor block. New thread: select words, press Comment, write.
+margin beside their anchor block, while open: a thread is open or resolved as its first
+message says, as the directive reads it ([kinds.md](kinds.md#6-comments)). New thread: select words, press Comment, write.
 A card offers Reply; Resolve, to a viewer who decides or wrote the first message; and, to a
 viewer who decides, Build it, which hands off the anchor's feature and, where the host has a
 terminal, asks it to run `codoc realize`. The open thread reaches the agent through the

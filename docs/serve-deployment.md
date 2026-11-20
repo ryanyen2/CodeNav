@@ -66,7 +66,8 @@ implemented by an agent under an enforced sandbox:
   `CODOC_CONSULT_ALLOWLIST`, empty by default);
 - edits confined to the feature's bound files (a feature with no bindings is
   not built here at all: there would be nothing to confine the agent to, so it
-  waits for the maintainer), never `.github/`, `.claude/`, `.codoc/`,
+  waits for the maintainer). A binding an open plan made does not count until a
+  verdict, and a contributor may not bind code at all. Never `.github/`, `.claude/`, `.codoc/`,
   `.mcp.json` or a manifest or lockfile;
 - secrets unreadable, and every GitHub token scrubbed from the agent's
   environment, so only the orchestrator can authenticate;

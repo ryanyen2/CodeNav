@@ -16,7 +16,6 @@ import secrets
 
 OpId = str
 BlockId = str
-PlanId = str
 CharRef = tuple[OpId, int]
 
 START = "START"   # anchor: before the first character / before the first block

@@ -6,8 +6,6 @@ import tree_sitter as ts
 
 from codoc.index.lang.base import Chunk, SymbolRef, parser
 
-LANGUAGE_NAME = "typescript"
-
 # ---------------------------------------------------------------------------
 # Extraction helpers
 # ---------------------------------------------------------------------------
@@ -216,7 +214,12 @@ def _extract_chunks_recursive(
 # ---------------------------------------------------------------------------
 
 class TypeScriptAdapter:
-    language = LANGUAGE_NAME
+    """TypeScript, parsed with the ``typescript`` grammar, or with ``tsx`` for a
+    ``.tsx`` file: the TypeScript grammar reads JSX as a run of syntax errors,
+    which can swallow every declaration after it."""
+
+    def __init__(self, grammar: str = "typescript") -> None:
+        self.grammar = grammar
 
     def extract_chunks(self, file: str, source: str) -> list[Chunk]:
         source_bytes = source.encode("utf-8")
@@ -316,6 +319,19 @@ class TypeScriptAdapter:
                     walk(child)
                 return
 
+            elif node.type in {"jsx_opening_element", "jsx_self_closing_element"}:
+                # <Counter start={1} /> calls the component Counter. A plain
+                # lowercase name (<main>, <form>) is an HTML element, not a
+                # reference, and would resolve to any project symbol of that name.
+                tag = node.child_by_field_name("name")
+                if tag is not None and not (tag.type == "identifier" and tag.text[:1].islower()):
+                    refs.append(SymbolRef(
+                        qualified_name=tag.text.decode("utf-8", errors="replace"),
+                        ref_kind="call",
+                        start_byte=tag.start_byte,
+                        end_byte=tag.end_byte,
+                    ))
+
             elif node.type == "new_expression":
                 # new ClassName(...)
                 callee = next(
@@ -395,4 +411,4 @@ class TypeScriptAdapter:
         return refs
 
     def parse(self, source: str):
-        return parser("typescript").parse(source.encode("utf-8"))
+        return parser(self.grammar).parse(source.encode("utf-8"))

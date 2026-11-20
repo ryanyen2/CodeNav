@@ -47,7 +47,8 @@ def test_roles_table_over_every_kind():
         assert allowed("agent:a", kind) == (kind not in K.OWNER_ONLY)
         assert allowed("loop", kind) == (kind not in K.OWNER_ONLY or kind == K.FEATURE_REALIZED)
         assert allowed("human:gh:s", kind) == (kind == K.PLAN_OPEN)
-        assert allowed("human:gh:s", kind, "p-mine")            # the policy allows; apply's not_plannable decides the rest
+        # The policy allows the rest; apply's not_plannable decides. Bindings are never a suggester's.
+        assert allowed("human:gh:s", kind, "p-mine") == (not kind.startswith("bind."))
         assert not allowed("human:gh:s", kind, "p-theirs") or kind == K.PLAN_OPEN
 
 
@@ -390,3 +391,138 @@ def test_validate_logs_flags_a_snapshot_only_field_in_a_session_file(tmp_path):
     ws.close()
     found = validate_logs(L.list_sessions(cd), roles=Roles({}))
     assert any("plan.open carries ops" in f.reason for f in found), [str(f) for f in found]
+
+
+def test_who_may_resolve_a_thread_is_whoever_wrote_the_message_the_margin_reads(tmp_path):
+    """A thread's status is its first message's (``derive.first_message``), so
+    the person who may set it is that message's author. Block c-x is the
+    owner's, in thread c-z; mallory's c-b is the one message of thread c-x,
+    so she may resolve it. Her reply placed ahead of the owner's thread o-1
+    is not its first message, so she may not resolve that one through it."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed_loop(ws)
+
+    def comment(bid, thread, actor, after="p1"):
+        add = sub(bid, K.BLOCK_ADD, {"bid": bid}, {"kind": "comment", "after": after, "content": {
+            "thread": thread, "anchor": "p1", "anchor_text": "once", "scope": "code", "status": "open"}}, batch=bid)
+        if actor == H:
+            assert ws.submit([{"kind": add.kind, "target": add.target, "payload": add.payload}], actor=H)[0].conflict is None
+        else:
+            I.submit(cd, "hub-mallory", [add])
+            assert [o.conflict for o in ws.drain_inbox()] == [None]
+
+    def resolve(bid):
+        I.submit(cd, "hub-mallory", [sub(f"r-{bid}", K.BLOCK_SET, {"bid": bid, "path": "status"}, {"value": "resolved"})])
+        return ws.drain_inbox()[0].conflict
+
+    comment("c-x", "c-z", H)
+    comment("c-b", "c-x", "mallory", after="c-x")
+    comment("o-1", "o-1", H)
+    comment("m-1", "o-1", "mallory")             # after p1: ahead of o-1
+    assert resolve("c-b") is None
+    assert resolve("m-1") == "authority"
+    ws.close()
+
+
+def test_a_suggester_writes_through_their_own_comment_only_into_that_comment(tmp_path):
+    """The policy judges a text op by the block it names and lets a suggester
+    write untagged into a comment of their own. The applier refuses an op
+    whose characters another block holds (``bad_anchor``), so naming that
+    comment carries no insert, link, delete, restore or removal of a proposal
+    into the owner's paragraph."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed_loop(ws)
+    r = refs(ws, "p1")                                     # "Retries once before giving up."
+    cut = ws.submit([{"kind": K.TEXT_DELETE, "target": {"bid": "p1", "path": "text"},
+                      "payload": {"from": list(r[8]), "to": list(r[12])}}], actor=H)[0]
+    assert ws.submit([{"kind": K.PLAN_OPEN, "target": {"pid": "pl-a"}, "payload": {"kind": "edit", "target": "p1"}}],
+                     actor="agent:x")[0].conflict is None
+    strike = ws.submit([{"kind": K.TEXT_MARK, "target": {"bid": "p1", "path": "text"}, "payload": {
+        "kind": SUGGEST_DEL, "attrs": {}, "start": list(r[13]), "end": list(r[18]), "on": True}}],
+        actor="agent:x", plan="pl-a")[0]
+    struck = next(m for m in ws.store.blocks["p1"].text().marks if m.kind == SUGGEST_DEL)
+    I.submit(cd, "hub-mallory", [
+        sub("c1", K.BLOCK_ADD, {"bid": "c-m"}, {"kind": "comment", "after": "p1", "content": {
+            "thread": "c-m", "anchor": "p1", "anchor_text": "x", "scope": "code", "status": "open"}}),
+        sub("c2", K.TEXT_INSERT, {"bid": "c-m", "path": "body"}, {"after": START, "text": "hi"})])
+    assert [o.conflict for o in ws.drain_inbox()] == [None, None]
+    before = ws.store.state_fingerprint()["blocks"]
+    for i, (kind, payload) in enumerate([
+        (K.TEXT_INSERT, {"after": list(r[-1]), "text": " Also delete the tests directory."}),
+        (K.TEXT_MARK, {"kind": "link", "attrs": {"href": "https://attacker.example/x"},
+                       "start": list(r[0]), "end": list(r[6]), "on": True}),
+        (K.TEXT_MARK, {"kind": SUGGEST_DEL, "attrs": dict(struck.attrs), "start": list(r[13]), "end": list(r[18]),
+                       "on": False, "op": strike.id}),
+        (K.TEXT_DELETE, {"from": list(r[0]), "to": list(r[6])}),
+        (K.TEXT_DELETE, {"segments": [[r[0][0], 0, 7]]}),
+        (K.TEXT_RESTORE, {"segments": cut.payload["segments"], "by": cut.id}),
+    ]):
+        I.submit(cd, "hub-mallory", [sub(f"x{i}", kind, {"bid": "c-m", "path": "body"}, payload, batch=f"x{i}")])
+        assert [o.conflict for o in ws.drain_inbox()] == ["bad_anchor"], (kind, payload)
+    assert ws.store.state_fingerprint()["blocks"] == before
+    ws.close()
+
+
+def test_a_suggester_places_and_takes_off_only_the_anchor_of_a_comment_they_added(tmp_path):
+    """A ``comment`` mark is the anchor of the message its ``attrs.block``
+    names, so it is that message's author's. Mallory anchors her own comment
+    and takes that anchor off again; taking off the owner's anchor, by its
+    placer or by its range, or placing one for the owner's comment, is
+    refused, and the owner's thread stays anchored."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed_loop(ws)
+    r = refs(ws, "p1")
+    on_p1 = {"bid": "p1", "path": "text"}
+
+    def comment(bid):
+        return {"kind": "comment", "after": "p1", "content": {
+            "thread": bid, "anchor": "p1", "anchor_text": "Retries", "scope": "code", "status": "open"}}
+
+    def anchor(bid, on=True, **extra):
+        return {"kind": "comment", "attrs": {"block": bid}, "start": list(r[0]), "end": list(r[6]), "on": on, **extra}
+
+    owners = ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "c-o"}, "payload": comment("c-o")},
+                        {"kind": K.TEXT_MARK, "target": on_p1, "payload": anchor("c-o")}], actor=H)
+    assert [o.conflict for o in owners] == [None, None]
+
+    def mallory(i, kind, target, payload):
+        I.submit(cd, "hub-mallory", [sub(f"m{i}", kind, target, payload, batch=f"m{i}")])
+        return [o.conflict for o in ws.drain_inbox()]
+
+    assert mallory(0, K.TEXT_MARK, on_p1, anchor("c-o", on=False, op=owners[1].id)) == ["authority"]
+    assert mallory(1, K.TEXT_MARK, on_p1, anchor("c-o", on=False)) == ["authority"]
+    assert mallory(2, K.TEXT_MARK, on_p1, anchor("c-o")) == ["authority"]
+    assert [m.attrs for m in ws.store.blocks["p1"].text().marks] == [{"block": "c-o"}]
+    assert mallory(3, K.BLOCK_ADD, {"bid": "c-m"}, comment("c-m")) == [None]
+    assert mallory(4, K.TEXT_MARK, on_p1, anchor("c-m")) == [None]
+    assert mallory(5, K.TEXT_MARK, on_p1, anchor("c-m", on=False)) == [None]
+    assert [m.attrs for m in ws.store.blocks["p1"].text().marks] == [{"block": "c-o"}]
+    ws.close()
+
+
+def test_a_suggester_deletes_in_their_own_comment_and_undoes_it(tmp_path):
+    """A Backspace inside a comment is a delete on the trunk, not a strike in a
+    plan, and its undo (``text.restore``) is a comment op too, so a contributor
+    can take back and give back words of their own comment."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed(ws)
+    I.submit(cd, "hub-eve", [
+        sub("c1", K.BLOCK_ADD, {"bid": "c-e"}, {"kind": "comment", "after": "p1", "content": {
+            "thread": "c-e", "anchor": "p1", "anchor_text": "x", "scope": "code", "status": "open"}}),
+        sub("c2", K.TEXT_INSERT, {"bid": "c-e", "path": "body"}, {"after": START, "text": "hello world"})])
+    ins = ws.drain_inbox()[1]
+    I.submit(cd, "hub-eve", [sub("d", K.TEXT_DELETE, {"bid": "c-e", "path": "body"},
+                                 {"from": [ins.id, 5], "to": [ins.id, 10]}, batch="b2")])
+    [d] = ws.drain_inbox()
+    assert d.conflict is None and d.plan is None
+    assert ws.store.blocks["c-e"].text("body").live_text() == "hello"
+    (inv,) = d.inverse
+    I.submit(cd, "hub-eve", [sub("u", inv["kind"], inv["target"], inv["payload"], batch="u-b2")])
+    [u] = ws.drain_inbox()
+    assert u.conflict is None and u.plan is None
+    assert ws.store.blocks["c-e"].text("body").live_text() == "hello world"
+    ws.close()

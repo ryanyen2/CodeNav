@@ -510,8 +510,11 @@ class Workspace:
         words the contributor's own open plan put there, which are theirs to
         take back. A ``segments`` delete names its characters exactly, and the
         mark records exactly those (``chars``), so a word another actor typed
-        between them is not struck."""
-        if s.kind != K.TEXT_DELETE or s.plan or self.roles.role(actor) != SUGGEST:
+        between them is not struck. A delete inside a comment is not one: the
+        comment is written on the trunk, and the policy decides whose words
+        it may take."""
+        if s.kind != K.TEXT_DELETE or s.plan or self.roles.role(actor) != SUGGEST \
+                or is_comment_op(self.store, s.kind, s.target, s.payload):
             return s
         if own_plan_words(self.store, actor, deleted_ops(self.store, s.target, s.payload)):
             return s        # their own plan's words: a real delete, not a strike of a strike
@@ -604,6 +607,12 @@ class Workspace:
         return got
 
     def _apply_one(self, actor: str, s: I.Submission, acked: dict[str, str]) -> "Applied":
+        first = self.store.batch_first.get(s.batch) if s.batch else None
+        if first is not None and self.store.ops[first].actor != actor:
+            # Another actor's batch: an undo of it sends the inverse of every op
+            # in it as the undoer, so a batch id read from history.json must not
+            # put this actor's op there.
+            s = replace(s, batch="")
         batch = s.batch or new_batch_id()
         if s.caused_by and actor_kind(actor) not in MACHINE_KINDS:
             # `caused_by` says "this op is what that hand-off produced" and the

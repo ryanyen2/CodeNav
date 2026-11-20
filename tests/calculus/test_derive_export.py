@@ -219,6 +219,53 @@ def test_a_suggesters_strike_the_owner_accepted_is_the_owners_request(tmp_path):
     ws.close()
 
 
+def _suggester_types_then_takes_back(ws, cd, text, back):
+    """A hub suggester types ``text`` at the end of p1, which lands as their
+    plan, then deletes characters ``back`` (k0, n) of it: their own proposed
+    words, so the delete rides in the same plan. Returns the plan."""
+    from codoc.workspace import inbox as I
+    from tests.helpers import refs, sub
+    I.submit(cd, "hub-mallory", [sub("i", K.TEXT_INSERT, {"bid": "p1", "path": "text"},
+                                     {"after": list(refs(ws, "p1")[-1]), "text": text})])
+    ins = ws.drain_inbox()[0]
+    assert ins.conflict is None and ins.plan
+    I.submit(cd, "hub-mallory", [sub("d", K.TEXT_DELETE, {"bid": "p1", "path": "text"},
+                                     {"segments": [[ins.id, *back]]}, batch="b2")])
+    (gone,) = ws.drain_inbox()
+    assert gone.conflict is None and gone.plan == ins.plan
+    return ins.plan
+
+
+def test_a_suggester_taking_back_their_own_proposed_words_removes_nothing(tmp_path):
+    """Deleting a word your own open plan put there is the plan getting
+    smaller (docs/concurrency.md section 9), not a person's removal: the
+    owner's feature has no editor and is not `edited`, which would hold it
+    from the loop, turn machine writes into plans and keep ⌘S from handing it
+    off."""
+    from codoc.calculus.derive import editors, removals
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed_loop(ws)
+    _suggester_types_then_takes_back(ws, cd, " Maybe", (0, 6))
+    assert removals(ws.store, "h1") == [] and editors(ws.store, "h1") == []
+    assert phase(ws.store, "h1") == "proposed"          # the plan stands, empty, for a verdict
+    ws.close()
+
+
+def test_a_suggesters_own_correction_is_no_removal_once_accepted(tmp_path):
+    """Accepted, the plan's taken-back words are still the plan's own: the
+    directive has no `removed:` line for them, only the words it adds."""
+    cd = tmp_path / ".codoc"
+    ws = Workspace(cd)
+    seed_loop(ws)
+    pid = _suggester_types_then_takes_back(ws, cd, " Maybe, or drop the retry loop", (6, 24))
+    ws.submit([{"kind": K.PLAN_ACCEPT, "target": {"pid": pid}, "payload": {}}], actor="human:local")
+    ws.submit([{"kind": K.FEATURE_HANDOFF, "target": {"fid": "h1"}, "payload": {}}], actor="human:local")
+    d = directive(ws.store, "h1")
+    assert "removed:" not in d and "Retries once before giving up. Maybe" in d, d
+    ws.close()
+
+
 def test_ink_keeps_unsent_words_apart_from_sent_neighbours():
     m, s = Mint(), Store()
     heading(m, s, "h1", "Client", actor="loop")

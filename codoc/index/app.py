@@ -1,12 +1,21 @@
-"""The cocoindex app that indexes a source tree into code chunks.
+"""What codoc reads as code: the cocoindex app that indexes a source tree,
+and the one reader of code on disk that a hand-off's evidence is read by.
 
-Walks a source directory, extracts AST chunks with the ``codoc.index.lang``
-adapters, hashes each one (``tree_walk``), and writes the rows to the LanceDB
-table in ``.codoc/lancedb``. A re-run re-processes only files whose content
-changed, and a killed run resumes: cocoindex keeps per-file memo state in
+The app (:func:`make_app`, run by :mod:`codoc.index.runner`) walks a source
+directory, extracts AST chunks with the ``codoc.index.lang`` adapters, hashes
+each one (``tree_walk``), and writes the rows to the LanceDB table in
+``.codoc/lancedb``. A re-run re-processes only files whose content changed,
+and a killed run resumes: cocoindex keeps per-file memo state in
 ``.codoc/cocoindex.db``.
 
-Entry point: :func:`make_app`, called by :mod:`codoc.index.runner`.
+The reader answers for a file before the index has caught up with an edit,
+by the same rules: ``canonical_file`` names it as the walk names it,
+``why_not_indexed`` says whether the walk reads it (the daemon asks this of
+every changed file), and ``code_on_disk`` hashes its chunks as the app does
+(``file_chunks``).
+
+A file whose parse has errors and has lost a definition that the parse still
+declares keeps the chunks the index had for it (``_hidden_by_a_syntax_error``).
 """
 from __future__ import annotations
 
@@ -14,6 +23,7 @@ import codecs
 import json
 import os
 import pathlib
+import re
 from typing import AsyncIterator
 
 import cocoindex as coco
@@ -22,7 +32,7 @@ from cocoindex.resources.file import FileLike, PatternFilePathMatcher
 from cocoindex.resources.id import generate_id
 
 from codoc.index.lang import EXTENSIONS, detect_language, get_adapter
-from codoc.index.reader import _lance_path
+from codoc.index.reader import ChunkRow, _lance_path, read_all_chunks
 from codoc.index.schema import LANCE_DB, LANCE_TABLE_NAME, CodeChunk
 from codoc.index.tree_walk import walk as tree_walk
 
@@ -67,6 +77,8 @@ DEFAULT_INDEX_EXCLUDE = ["test/", "tests/", "__tests__/", "*.test.*", "*.spec.*"
 # vendored single-file libs are not authored intent, and parsing a 10 MB file
 # stalls the pass and bloats the index.
 _MAX_FILE_BYTES = 1_500_000
+
+_EXCLUDED_BY_CONFIG = "index_exclude in .codoc/config.json, or the root .gitignore, covers it"
 
 
 def _configured_excludes(sourcedir: pathlib.Path) -> list[str]:
@@ -137,19 +149,23 @@ _BOMS = ((codecs.BOM_UTF32_LE, "utf-32-le"), (codecs.BOM_UTF32_BE, "utf-32-be"),
          (codecs.BOM_UTF16_LE, "utf-16-le"), (codecs.BOM_UTF16_BE, "utf-16-be"), (codecs.BOM_UTF8, "utf-8-sig"))
 
 
+def _decode(raw: bytes) -> str:
+    """A file's bytes as text: by their byte-order mark, else as UTF-8, with
+    undecodable bytes replaced and line endings kept as they are."""
+    encoding = next((enc for bom, enc in _BOMS if raw.startswith(bom)), "utf-8")
+    return raw.decode(encoding, "replace")
+
+
 def file_chunks(file_str: str, raw: bytes) -> list[tuple]:
     """The chunks the index keeps for one file's bytes, each with its
     ``tree_walk`` hashes: the one way codoc reads a source file, for the index
-    and for an agent's evidence alike. The bytes are decoded by their
-    byte-order mark, else as UTF-8, with undecodable bytes replaced and line
-    endings kept as they are. The symbol is a row's key: its id is
-    ``generate_id(symbol)``, and the change set and the bindings are keyed by
-    it. A class can define a name twice (a property's getter and setter, a
-    redefinition), and a second row with the same id is a "target state already
-    declared" error that drops the whole file, so the first chunk per symbol is
-    kept."""
-    encoding = next((enc for bom, enc in _BOMS if raw.startswith(bom)), "utf-8")
-    source = raw.decode(encoding, "replace")
+    and for an agent's evidence alike, decoded by ``_decode``. The symbol is a
+    row's key: its id is ``generate_id(symbol)``, and the change set and the
+    bindings are keyed by it. A class can define a name twice (a property's
+    getter and setter, a redefinition), and a second row with the same id is a
+    "target state already declared" error that drops the whole file, so the
+    first chunk per symbol is kept."""
+    source = _decode(raw)
     adapter = get_adapter(detect_language(file_str))
     seen: set[str] = set()
     out = []
@@ -181,40 +197,81 @@ def canonical_file(sourcedir: str | pathlib.Path, file: str) -> str | None:
         rel = pathlib.PurePath(os.path.realpath(path)).relative_to(root).as_posix()
     except ValueError:
         return None
-    return rel if _walked(pathlib.Path(root), source_matcher(pathlib.Path(root)), rel) else None
+    return rel if why_not_indexed(root, rel) is None else None
 
 
-def _walked(root: pathlib.Path, matcher: _SymlinkAwareMatcher, rel: str) -> bool:
-    """Whether the index's walk (``localfs.walk_dir`` with ``matcher``) keys a
-    file as ``rel``: a file of a language codoc reads, reached through no
-    excluded or symlinked directory. A linked file is keyed under its link's
-    name."""
-    dirs = pathlib.PurePosixPath(rel).parents[:-1]
-    return (detect_language(rel) is not None and matcher.is_file_included(pathlib.PurePosixPath(rel))
-            and all(matcher.is_dir_included(d) for d in dirs) and (root / rel).is_file())
+def why_not_indexed(sourcedir: str | pathlib.Path, rel: str, matcher: _SourceMatcher | None = None) -> str | None:
+    """Why the index does not read the repo-relative POSIX file ``rel``, as a
+    clause that follows its name; None when it reads it. The walk asks the
+    same of every directory and file it meets (``_SourceMatcher``); this asks
+    it of one path, and adds what a walk has by construction: each part of
+    the path is spelled as its directory lists it, so on a case-insensitive
+    filesystem ``SRC/rate.py`` is not ``src/rate.py``. A path nothing is at
+    is judged by its name, so a file the index read counts after it is
+    removed. ``matcher`` is ``source_matcher(sourcedir)``, for a caller that
+    asks about many files."""
+    root = pathlib.Path(sourcedir)
+    matcher = matcher or source_matcher(root)
+    path = pathlib.PurePosixPath(rel)
+    here = root
+    for depth, name in enumerate(path.parts, 1):
+        if os.path.lexists(here / name) and name not in os.listdir(here):
+            return "is not spelled as its directory lists it (a path names a file case for case)"
+        here = here / name
+        if depth < len(path.parts) and (why := matcher.dir_refusal(pathlib.PurePosixPath(*path.parts[:depth]))):
+            return why
+    return matcher.file_refusal(path)
 
 
 def code_on_disk(sourcedir: str | pathlib.Path, files: set[str]) -> dict[str, tuple[str, str]]:
     """``(fingerprint, types_hash)`` of every chunk ``files`` hold on disk now,
     read and hashed as the index reads and hashes them (``file_chunks``): what
     a binding may cite before the index has caught up with an edit. ``files``
-    are canonical (``canonical_file``); a file the index does not read holds
-    none."""
+    are canonical (``canonical_file``); a file the index does not read
+    (``why_not_indexed``) holds none."""
     root = pathlib.Path(sourcedir).resolve()
     matcher = source_matcher(root)
     out: dict[str, tuple[str, str]] = {}
     for rel in files:
-        path = root / rel
-        if not _walked(root, matcher, rel):
+        if why_not_indexed(root, rel, matcher) is not None:
             continue
         try:
-            if path.stat().st_size > _MAX_FILE_BYTES:
-                continue
-            raw = path.read_bytes()
+            raw = (root / rel).read_bytes()
         except OSError:
             continue
         out.update({c.symbol: (w.fingerprint, w.types_hash) for c, w in file_chunks(rel, raw)})
     return out
+
+
+def _hidden_by_a_syntax_error(file_str: str, raw: bytes, found: set[str]) -> list[ChunkRow]:
+    """The chunks the index holds for ``file_str`` when a syntax error hid one
+    of them, else none. One is hidden when the parse has errors and lost it
+    (``found`` is what it kept) while the parse still declares its name: a
+    declaration the adapter did not take as a chunk (a half-typed ``if (x {``
+    nests the next TypeScript function in the one before it), or the text of
+    an ERROR node (a half-typed Python call swallows the ``def`` after it).
+    Removed, the chunk would be detached, and the pass that sees it again
+    cannot tell it is the same code. A name left only in a call or a comment
+    does not count: the definition was deleted."""
+    tree = get_adapter(detect_language(file_str)).parse(_decode(raw))
+    if not tree.root_node.has_error:
+        return []
+    held = read_all_chunks(_codoc_dir, files={file_str})
+    lost = {r.symbol.split("::", 1)[1].rsplit(".", 1)[-1] for r in held if r.symbol not in found}
+    if not lost:
+        return []
+    declared, errors = set(), []
+    nodes = [tree.root_node]
+    while nodes:
+        n = nodes.pop()
+        nodes.extend(n.children)
+        if n.type == "ERROR":
+            errors.append(n.text.decode("utf-8", "replace"))
+        elif n.type.endswith(("_definition", "_declaration", "_declarator")) and n.child_by_field_name("name"):
+            declared.add(n.child_by_field_name("name").text.decode("utf-8", "replace"))
+    hidden = any(name in declared or any(re.search(rf"(?<![\w$]){re.escape(name)}(?![\w$])", t) for t in errors)
+                 for name in lost)
+    return held if hidden else []
 
 
 @coco.fn(memo=True)
@@ -223,19 +280,17 @@ async def _process_file(
     sourcedir: pathlib.Path,
     target: lancedb.TableTarget,
 ) -> None:
-    file_abs = pathlib.Path(file.file_path.path)
-    file_str = _repo_relative(file_abs, sourcedir)
+    # The walk yields only files the index reads (`_SourceMatcher`).
+    file_str = _repo_relative(pathlib.Path(file.file_path.path), sourcedir)
     lang = detect_language(file_str)
-    if lang is None:
+    raw = await file.read()
+    chunks = file_chunks(file_str, raw)
+    held = _hidden_by_a_syntax_error(file_str, raw, {c.symbol for c, _ in chunks})
+    if held:
+        for r in held:
+            target.declare_row(row=CodeChunk(**vars(r)))
         return
-    # Skip oversize files (minified bundles, generated blobs) before reading them into
-    # memory. They are not authored intent and would stall the loop / bloat the index.
-    try:
-        if file_abs.stat().st_size > _MAX_FILE_BYTES:
-            return
-    except OSError:
-        return
-    for c, walk_result in file_chunks(file_str, await file.read()):
+    for c, walk_result in chunks:
         target.declare_row(
             row=CodeChunk(
                 id=await generate_id(c.symbol), file=file_str, symbol=c.symbol, language=lang, source=c.source,
@@ -245,8 +300,11 @@ async def _process_file(
         )
 
 
-class _SymlinkAwareMatcher(PatternFilePathMatcher):
-    """The pattern matcher, refusing every symlinked directory.
+class _SourceMatcher(PatternFilePathMatcher):
+    """Which files the index reads, as the walk asks it: a directory is
+    entered when it is not symlinked and the patterns keep it; a file is read
+    when it is of a language codoc parses, the patterns keep it, and it is at
+    most ``_MAX_FILE_BYTES``. Each refusal says why, for ``why_not_indexed``.
 
     A directory symlink to itself or an ancestor (a monorepo package link,
     ``docs/latest -> .``) would make the recursive walk descend without bound,
@@ -257,16 +315,38 @@ class _SymlinkAwareMatcher(PatternFilePathMatcher):
         super().__init__(included_patterns=included_patterns, excluded_patterns=excluded_patterns)
         self._sourcedir = pathlib.Path(sourcedir).resolve()
 
-    def is_dir_included(self, path) -> bool:  # noqa: ANN001 (matches base signature)
+    def dir_refusal(self, path: pathlib.PurePath) -> str | None:
+        """Why the walk does not enter the directory ``path``, as a clause
+        following the name of a file under it; None when it does."""
         try:
-            # `path` is repo-relative (or absolute); joining an absolute right-hand
-            # side yields it, so this resolves correctly either way.
-            abs_path = (self._sourcedir / pathlib.Path(str(path)))
-            if abs_path.is_symlink():
-                return False
+            linked = (self._sourcedir / path).is_symlink()
         except OSError:
-            return False
-        return super().is_dir_included(path)
+            return f"is under {path}/, a directory the index cannot read"
+        if linked:
+            return f"is under {path}/, a symlinked directory the index does not enter; name it by its real directory"
+        if not super().is_dir_included(path):
+            return f"is under {path}/, a directory codoc does not index ({_EXCLUDED_BY_CONFIG})"
+        return None
+
+    def file_refusal(self, path: pathlib.PurePath) -> str | None:
+        """Why the walk does not read the file ``path``, as a clause following
+        its name; None when it does. A path nothing is at is judged by its name."""
+        if detect_language(str(path)) is None:
+            return "is not in a language codoc indexes"
+        if not super().is_file_included(path):
+            return f"is a file codoc does not index ({_EXCLUDED_BY_CONFIG})"
+        try:
+            if (self._sourcedir / path).stat().st_size > _MAX_FILE_BYTES:
+                return f"is over {_MAX_FILE_BYTES:,} bytes, larger than codoc indexes"
+        except OSError:
+            pass
+        return None
+
+    def is_dir_included(self, path) -> bool:  # noqa: ANN001 (matches base signature)
+        return self.dir_refusal(path) is None
+
+    def is_file_included(self, path) -> bool:  # noqa: ANN001 (matches base signature)
+        return self.file_refusal(path) is None
 
 
 @coco.fn
@@ -280,11 +360,10 @@ async def app_main(sourcedir: pathlib.Path) -> None:
     await coco.mount_each(_process_file, files.items(), sourcedir, target)
 
 
-def source_matcher(sourcedir: pathlib.Path) -> _SymlinkAwareMatcher:
+def source_matcher(sourcedir: pathlib.Path) -> _SourceMatcher:
     """The files the index walks: the adapters' extensions, minus the built-in
-    excludes, the root ``.gitignore`` and ``index_exclude``. The daemon asks it
-    too."""
-    return _SymlinkAwareMatcher(
+    excludes, the root ``.gitignore`` and ``index_exclude``."""
+    return _SourceMatcher(
         sourcedir,
         included_patterns=_INCLUDED_PATTERNS,
         excluded_patterns=_EXCLUDED_PATTERNS + _configured_excludes(pathlib.Path(sourcedir)),

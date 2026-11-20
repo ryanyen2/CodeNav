@@ -18,6 +18,7 @@ import re
 import time
 from pathlib import Path
 
+from codoc.calculus.derive import one_line
 from codoc.calculus.doc import Layout
 from codoc.kinds.kind import Kind, LiftContext, LowerContext, register
 from codoc.workspace.layout import CODOC_DIR, MEDIA_DIR
@@ -144,15 +145,16 @@ def _article(raw: bytes) -> tuple[str, str]:
 
 def url_consult(c: dict) -> str:
     if c.get("status") == "ok" and c.get("excerpt"):
-        return f"Consult this reference ({c.get('url')}, \"{c.get('title') or c.get('url')}\"):\n{c['excerpt']}"
-    return f"Consult: {c.get('url', '')}"
+        url = one_line(c.get("url") or "")
+        return f"Consult this reference ({url}, \"{one_line(c.get('title') or '') or url}\"):\n{c['excerpt']}"
+    return f"Consult: {one_line(c.get('url') or '')}"
 
 
 URL = Kind(
     name="url", layout=Layout(("caption",)),
     schema={"url": {"type": "string", "required": True}, "status": {"type": "string"}, "fetched": {"type": "string"},
             "title": {"type": "string"}, "excerpt": {"type": "string"}, "attempted_at": {"type": "number"}},
-    lift=url_lift, consult=url_consult,
+    lift=url_lift, consult=url_consult, lifted=("status", "fetched", "title", "excerpt", "attempted_at"),
 )
 
 
@@ -192,9 +194,9 @@ PDF = Kind(
     name="pdf", layout=Layout(("caption",)),
     schema={"ref": {"type": "string", "required": True}, "status": {"type": "string"}, "extracted": {"type": "string"},
             "pages": {"type": "number"}, "excerpt": {"type": "string"}, "attempted_at": {"type": "number"}},
-    lift=pdf_lift,
-    consult=lambda c: (f"Consult this reference document ({c.get('ref')}):\n{c['excerpt']}" if c.get("excerpt")
-                       else f"Consult this reference document: {c.get('ref', '')}"),
+    lift=pdf_lift, lifted=("status", "extracted", "pages", "excerpt", "attempted_at"),
+    consult=lambda c: (f"Consult this reference document ({one_line(c.get('ref') or '')}):\n{c['excerpt']}"
+                       if c.get("excerpt") else f"Consult this reference document: {one_line(c.get('ref') or '')}"),
 )
 
 # ── image / screenshot: pixels the agent is told about ──────────────────────
@@ -202,28 +204,46 @@ PDF = Kind(
 IMAGE = Kind(
     name="image", layout=Layout(("alt", "caption")),
     schema={"asset": {"type": "string", "required": True}, "source": {"type": "string", "enum": ["screenshot", "upload", "agent"]}},
-    consult=lambda c: f"Image {c.get('alt') or ''}. " + (f"Caption: {c['caption']}. " if c.get("caption") else "") + f"File: {c.get('asset', '')}",
+    consult=lambda c: one_line(f"Image {c.get('alt') or ''}. " + (f"Caption: {c['caption']}. " if c.get("caption") else "")
+                               + f"File: {c.get('asset', '')}"),
 )
 
 SCREENSHOT = Kind(
     name="screenshot", layout=Layout(("caption",)),
     schema={"asset": {"type": "string", "required": True}},
-    consult=lambda c: f"Consult this screenshot of the problem before implementing: {c.get('asset', '')}"
-    + (f" ({c['caption']})" if c.get("caption") else ""),
+    consult=lambda c: one_line(f"Consult this screenshot of the problem before implementing: {c.get('asset', '')}"
+                               + (f" ({c['caption']})" if c.get("caption") else "")),
 )
 
 # ── comment: one message of a thread, anchored by a comment mark ────────────
 
+def _comment_line(c: dict) -> str:
+    """A comment as one directive line. Its words are a client's, so they are
+    ``one_line``'d, the body as well as ``anchor_text``: collapsed rather than
+    kept on lines of their own under a prefix, because the ``Comment on`` line
+    is what voices them as a comment, and a model that meets a line of their
+    words on its own may read it as the directive's (a ``Consult:`` or an
+    ``Author asked:``) whatever marks it. A comment is a sentence or two, so
+    its line breaks cost little. A contributor's (``contributor``, set by
+    ``realize._kind_lines`` from the role table) is voiced as theirs, which
+    realize.txt reads as a suggestion, never as the person's note."""
+    said = f"on \"{one_line(c.get('anchor_text') or '')}\": {one_line((c.get('body') or '').strip())}"
+    by = c.get("contributor")
+    return f"Contributor {one_line(str(by))} commented {said}" if by else f"Comment {said}"
+
+
 def comment_lower(old: dict, new: dict, ctx: LowerContext) -> str | None:
     """An open thread is a request. ``scope=code`` asks for the implementation
     only; ``both`` also asks for the description to follow, which the agent
-    does through the tree, not by editing prose behind the person's back."""
+    does through the tree, not by editing prose behind the person's back.
+    ``status``, ``scope`` and ``anchor_text`` are the thread's (its first
+    message's, ``realize._kind_lines``), so a reply cannot ask for more than
+    the margin shows."""
     if new.get("status") == "resolved":
         return None
-    body = (new.get("body") or "").strip()
-    if not body:
+    if not (new.get("body") or "").strip():
         return None
-    line = f"Comment on \"{new.get('anchor_text', '')}\": {body}"
+    line = _comment_line(new)
     if new.get("scope") == "both":
         line += "\nWhen the code lands, amend this feature's description to match, through codoc_reflect."
     return line
@@ -235,7 +255,6 @@ COMMENT = Kind(
             "anchor_text": {"type": "string"}, "scope": {"type": "string", "enum": ["code", "both"]},
             "status": {"type": "string", "enum": ["open", "resolved"]}},
     lower=comment_lower,
-    consult=lambda c: f"Comment on \"{c.get('anchor_text', '')}\": {c.get('body', '')}",
 )
 
 ALL = (TABLE, CODE, DIAGRAM, URL, PDF, IMAGE, SCREENSHOT, COMMENT)

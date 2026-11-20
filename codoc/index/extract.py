@@ -15,14 +15,14 @@ internal=0 keeps the edge for display but traversal follows internal=1 only.
 """
 from __future__ import annotations
 
-from codoc.index.lang import detect_language, get_adapter
+from codoc.index.lang import EXTENSIONS, detect_language, get_adapter
 from codoc.index.reader import ChunkRow
 
 
 def _file_to_module(file: str) -> str:
     """"requests/models.py" → "requests.models" """
     m = file.replace("\\", "/")
-    for ext in (".py", ".ts", ".tsx", ".mts", ".cts"):
+    for ext in EXTENSIONS:
         if m.endswith(ext):
             m = m[: -len(ext)]
             break

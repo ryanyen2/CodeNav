@@ -106,8 +106,9 @@ export class Undo {
 
     /** A history window arrived. Returns the undo's submissions, a notice that
      *  there is nothing to undo, or null when no undo was asked for or something
-     *  this page sent is still unanswered (its ack asks for a window again). */
-    onHistory(w: HistoryWindow): Submission[] | string | null {
+     *  this page sent is still unanswered (its ack asks for a window again).
+     *  `viewer` is the page's actor (`status.actor`): only their ops are undone. */
+    onHistory(w: HistoryWindow, viewer: string): Submission[] | string | null {
         if (!this.asked) return null;
         for (const e of w.ops) this.inFlight.delete(e.batch);
         if (this.inFlight.size) return null;
@@ -118,7 +119,7 @@ export class Undo {
                 && (touchedBy(e).some(x => r.blocks.has(x)) || (r.conflict === 'not_adjacent' && REORDER.has(e.kind))));
             if (!FINAL.has(r.conflict) && changed) this.refused.delete(b);
         }
-        const next = nextUndo(w, this.sent, redo, new Set(this.refused.keys()));
+        const next = nextUndo(w, this.sent, viewer, redo, new Set(this.refused.keys()));
         if (!next) return redo ? 'nothing to redo' : 'nothing to undo';
         const subs = next.ops.map(op => ({ cid: newCid(), batch: next.batch, ...op }));
         // What the person did in the original batch, by its op kinds, for the notice if the daemon refuses.

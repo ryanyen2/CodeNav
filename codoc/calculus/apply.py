@@ -22,6 +22,7 @@ Conflict strings are stable identifiers, not prose; the UI maps them.
 from __future__ import annotations
 
 from dataclasses import replace
+from itertools import dropwhile
 
 from codoc.calculus import ops as K
 from codoc.calculus import rank as R
@@ -160,7 +161,7 @@ def _h_text_insert(store: Store, op: Op, touched: set[str]):
     elif after == END:
         raise Conflict("bad_anchor", "insert after END; use the last character")
     else:
-        block, path = store.locate_char(after, (bid, path))  # type: ignore[arg-type]
+        block, path = _holder(store, op, after)  # type: ignore[arg-type]
         if not block.live:
             raise Conflict("dead_block", block.id)
         text = block.text(path)
@@ -173,15 +174,37 @@ def _h_text_insert(store: Store, op: Op, touched: set[str]):
     return canonical, [body(K.TEXT_DELETE, {"bid": block.id, "path": path}, {"segments": [[seg.op, seg.k0, seg.len]]})]
 
 
-def _segment_holders(store: Store, segs: list[tuple[str, int, int]], hint: tuple[str, str],
-                     live_only: bool) -> list[tuple[Block, str]]:
+def _holder(store: Store, op: Op, ref: CharRef) -> tuple[Block, str]:
+    """The field holding character ``ref``, as ``store.locate_char`` finds it
+    from the op's target (``_named``)."""
+    block, path = store.locate_char(ref, (op.target["bid"], op.target.get("path", "text")))
+    _named(store, op, block)
+    return block, path
+
+
+def _named(store: Store, op: Op, block: Block) -> None:
+    """A text op writes into the block that holds its characters, and the
+    policy judged it by the block it names (``roles.Roles.policy``), so the
+    two must be one block: a suggester's op on their own comment must not
+    reach the paragraph its anchor is in. The one exception is a split or a
+    merge since the client read. Those move characters between headings and
+    prose blocks only, so between two of those the name is a hint and the op
+    follows the characters. Any other kind's characters, a comment's among
+    them, never move."""
+    bid = op.target["bid"]
+    named = store.blocks.get(bid)
+    if block.id != bid and not (named is not None and is_one_line(named.kind) and is_one_line(block.kind)):
+        raise Conflict("bad_anchor", f"{block.id} holds it, not {bid}")
+
+
+def _segment_holders(store: Store, op: Op, segs: list[tuple[str, int, int]], live_only: bool) -> list[tuple[Block, str]]:
     """The holders of the named characters: both ends of every segment are
     located by identity (a segment split across two blocks has two holders).
     Other blocks holding other characters of the same op are not touched."""
     work: list[tuple[Block, str]] = []
     for o, k, n in segs:
         for ref in ((o, k), (o, k + n - 1)):
-            h = store.locate_char(ref, hint)
+            h = _holder(store, op, ref)
             if live_only and not h[0].live:
                 raise Conflict("dead_block", h[0].id)
             if h not in work:
@@ -198,7 +221,7 @@ def _h_text_delete(store: Store, op: Op, touched: set[str]):
     bid, path = op.target["bid"], op.target.get("path", "text")
     if "segments" in op.payload:
         segs = [(str(o), int(k), int(n)) for o, k, n in op.payload["segments"]]
-        work = _segment_holders(store, segs, (bid, path), live_only=True)
+        work = _segment_holders(store, op, segs, live_only=True)
         _only_own_plan(store, op, work, segs)
         if not work:
             # Nothing named is held anywhere (a replayed no-op): the block the
@@ -207,15 +230,22 @@ def _h_text_delete(store: Store, op: Op, touched: set[str]):
             if b0 is None:
                 raise Conflict("no_block", bid)
             work = [(b0, path)]
+        # The undo of a restore kills the characters again as the delete it
+        # undid (`by`, with its actor and clock), so that delete's own undo
+        # still finds them dead by it and gives them back.
+        killer = (str(op.payload["by"]), op.payload.get("by_actor", ""), op.payload.get("by_at", "")) \
+            if op.payload.get("by") else (op.id, op.actor, op.at)
         killed: list[list] = []
         for block, p in work:
-            killed.extend([list(k) for k in block.text(p).kill(segs, by=op.id, by_actor=op.actor, by_at=op.at)])
+            killed.extend([list(k) for k in block.text(p).kill(segs, by=killer[0], by_actor=killer[1], by_at=killer[2])])
             touched.add(block.id)
         bid, path = work[0][0].id, work[0][1]
         canonical = {"segments": killed, "bid": bid, "path": path}
-        return canonical, [body(K.TEXT_RESTORE, {"bid": bid, "path": path}, {"segments": killed, "by": op.id})]
+        if op.payload.get("by"):
+            canonical.update(by=killer[0], by_actor=killer[1], by_at=killer[2])
+        return canonical, [body(K.TEXT_RESTORE, {"bid": bid, "path": path}, {"segments": killed, "by": killer[0]})]
     start, end = _char(op.payload["from"]), _char(op.payload["to"])
-    block, p = store.locate_char(start, (bid, path))
+    block, p = _holder(store, op, start)
     if not block.live:
         raise Conflict("dead_block", block.id)
     text = block.text(p)
@@ -260,27 +290,31 @@ def _h_text_restore(store: Store, op: Op, touched: set[str]):
     bid, path = op.target["bid"], op.target.get("path", "text")
     by = op.payload.get("by")
     segs = [(str(o), int(k), int(n)) for o, k, n in op.payload["segments"]]
-    work = _segment_holders(store, segs, (bid, path), live_only=False)
+    work = _segment_holders(store, op, segs, live_only=False)
     _only_own_plan(store, op, work, segs)
+    # Who killed them and when, read off the characters before they live
+    # again: the undo kills them as that delete did (`_h_text_delete`).
+    killer = next(((g.dead_actor, g.dead_at) for b, p in work for g in b.text(p).segs if by and g.dead == by), ("", ""))
     revived: list[list] = []
     for block, p in work:
         revived.extend([list(k) for k in block.text(p).revive(segs, by=by)])
         touched.add(block.id)
     canonical = {"segments": revived, "bid": bid, "path": path}
+    undo = {"segments": revived}
     if by:
         canonical["by"] = by
-    return canonical, [body(K.TEXT_DELETE, {"bid": bid, "path": path}, {"segments": revived})]
+        undo.update(by=by, by_actor=killer[0], by_at=killer[1])
+    return canonical, [body(K.TEXT_DELETE, {"bid": bid, "path": path}, undo)]
 
 
 def _h_text_mark(store: Store, op: Op, touched: set[str]):
-    bid, path = op.target["bid"], op.target.get("path", "text")
     kind = op.payload["kind"]
     attrs = dict(op.payload.get("attrs") or {})
     start, end = _char(op.payload["start"]), _char(op.payload["end"])
     on = bool(op.payload.get("on", True))
     if not on and kind in WHOLE and op.payload.get("op"):
         return _whole_mark_off(store, op, kind, attrs, touched)
-    block, p = store.locate_char(start, (bid, path))
+    block, p = _holder(store, op, start)
     if not block.live:
         raise Conflict("dead_block", block.id)
     text = block.text(p)
@@ -324,7 +358,11 @@ def _h_text_mark(store: Store, op: Op, touched: set[str]):
         canonical = {"kind": kind, "attrs": attrs, "start": ref_to_json(start), "end": ref_to_json(end), "on": on,
                      "bid": block.id, "path": p, "proposed": record.to_json(), "removed": [], "added": []}
         return canonical, _mark_inverse(block.id, p, [], [record])
-    removed, added = text.set_mark(kind, attrs, start, end, on, actor=actor, op=placer, at=at)
+    # A mark an inverse puts back (it names its placer) does not merge with one
+    # it only touches: they were two marks, and between them may be characters
+    # deleted since, which would come back marked when their delete is undone.
+    removed, added = text.set_mark(kind, attrs, start, end, on, actor=actor, op=placer, at=at,
+                                   adjoin=not op.payload.get("op"))
     store.index_text(block.id, p, text)
     touched.add(block.id)
     canonical = {"kind": kind, "attrs": attrs, "start": ref_to_json(start), "end": ref_to_json(end), "on": on,
@@ -363,6 +401,8 @@ def _whole_mark_off(store: Store, op: Op, kind: str, attrs: dict, touched: set[s
     gone = [(b, f, m) for b, f, m in store.placed_by(placer) if m.kind == kind and m.attrs == attrs]
     if not gone:
         raise MarkError(f"no {kind} mark placed by {placer}")
+    for b, _, _ in gone:
+        _named(store, op, b)
     for b, f, m in gone:
         b.text(f).marks.remove(m)
         touched.add(b.id)
@@ -429,6 +469,7 @@ def _h_block_add(store: Store, op: Op, touched: set[str]):
     rank = _pinned_rank(op.payload.get("rank")) or store.rank_after(anchor)
     block = Block(bid, kind, rank, level, content, layout=layout, ranked_by=op.payload.get("ranked_by") or op.id,
                   added_by=op.payload.get("added_by") or op.actor,
+                  added_plan=op.payload.get("added_plan") or op.plan or "",
                   void={str(k): list(v) for k, v in _mapping(op.payload, "void").items()},
                   prior={str(k): [list(e) for e in v] for k, v in _mapping(op.payload, "prior").items()})
     if op.payload.get("dead"):               # a snapshot restoring a block with its killer
@@ -524,12 +565,17 @@ def _h_block_set(store: Store, op: Op, touched: set[str]):
             b.content[path] = value
         canonical["prev"] = prev
         if is_human(op.actor) or op.plan:
-            # The author's set, kept with what it replaced until a realization
-            # covers it (`Block.prior`). A machine's untagged set (a lift) is
-            # code already written and asks nothing.
+            # The author's set, kept with what it replaced (`Block.prior`). A
+            # realization settles a person's sets, and only the oldest run of
+            # settled ones is dropped. A plan's set is never dropped, since a
+            # verdict can be reopened and an accepted plan's value can become a
+            # proposal again; nor is a person's set after it, where
+            # `without_plans` must stop rather than walk on to the plan's. A
+            # machine's untagged set (a lift) is code already written and asks
+            # nothing.
             w = store.watermarks_by_fid.get(store.feature_of(bid) or "")
-            b.prior[path] = [e for e in b.prior.get(path, []) if not (w and in_frontier(e[0], w.realized))] \
-                + [[op.id, prev, op.plan or ""]]
+            settled = lambda e: not e[2] and bool(w and in_frontier(e[0], w.realized))   # noqa: E731
+            b.prior[path] = [*dropwhile(settled, b.prior.get(path, [])), [op.id, prev, op.plan or ""]]
         inverse = [body(K.BLOCK_SET, {"bid": bid, "path": path}, {"unset": True} if absent else {"value": prev})]
     touched.add(bid)
     return canonical, inverse
@@ -749,14 +795,20 @@ def _h_bind_attach(store: Store, op: Op, touched: set[str]):
     key = p["symbol"]
     fp, th, by = p.get("fingerprint", ""), p.get("types_hash", ""), _set_by(op)
     prior = store.bindings.get(key)
+    kept = store.kept(fid, key)
     # After the payload is read, not before: a malformed attach conflicts, and
     # a feature that never had code must not be remembered as one that lost it
     # (`reflect._emptied` proposes deleting exactly those).
     store.bound_once.add(fid)
     touched.add(fid)
     # The canonical says what the attach did, never what the payload claimed:
-    # a verdict reads `prev_*` to undo a refresh rather than an attach.
-    sent = {k: v for k, v in p.items() if k not in ("displaced", "prev_fingerprint", "prev_types_hash", "prev_set_by")}
+    # a verdict reads `prev_*` to undo a refresh rather than an attach, and
+    # `kept`, what the block kept for the symbol from an earlier kind change,
+    # to give the block that back if a kind change since took this binding off.
+    sent = {k: v for k, v in p.items()
+            if k not in ("displaced", "prev_fingerprint", "prev_types_hash", "prev_set_by", "kept")}
+    if kept:
+        sent["kept"] = kept
     if prior and prior.feature == fid:
         store.bindings[key] = replace(prior, fingerprint=fp, types_hash=th, set_by=by)
         canonical = {**sent, "displaced": None, "prev_fingerprint": prior.fingerprint,

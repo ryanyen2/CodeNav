@@ -201,27 +201,13 @@ def _compile(codoc_dir: str, root_dir: str | None, store, ops: list[dict],
 
 
 def _unbindable(root, sym: str) -> str:
-    """Why ``sym`` cannot be bound. Its file is on disk but the index's walk
-    leaves it out, through a directory it does not enter (a symlinked one, or
-    one the excludes cover) or the file's own exclude; or no file defines it.
-    The walk is ``index.app.source_matcher``, asked as ``code_on_disk`` asks it."""
-    from pathlib import PurePosixPath
-    from codoc.index.app import source_matcher
-    from codoc.index.lang import detect_language
+    """Why ``sym`` cannot be bound: why the index does not read its file
+    (``index.app.why_not_indexed``, the rule ``code_on_disk`` reads by), or,
+    when it does, that the file does not define it."""
+    from codoc.index.app import why_not_indexed
     file = sym.split("::")[0]
-    if (Path(root) / file).is_file() and detect_language(file) is not None:
-        base = Path(root).resolve()
-        matcher, rel = source_matcher(base), PurePosixPath(file)
-        for d in reversed(rel.parents[:-1]):            # the outermost directory first
-            if (base / d).is_symlink():
-                return (f"{sym} is under {d}/, a symlinked directory the index does not enter, so it cannot "
-                        "be bound; bind it by the path of the real directory")
-            if not matcher.is_dir_included(d):
-                return (f"{sym} is under {d}/, a directory codoc does not index (index_exclude in "
-                        ".codoc/config.json, or the root .gitignore, covers it), so it cannot be bound")
-        if not matcher.is_file_included(rel):
-            return (f"{sym} is in a file codoc does not index (index_exclude in .codoc/config.json, or the root "
-                    ".gitignore, covers it), so it cannot be bound")
+    if why := why_not_indexed(Path(root).resolve(), file):
+        return f"{sym} cannot be bound: {file} {why}"
     return f"the code does not define {sym}; bind only symbols the files hold now"
 
 

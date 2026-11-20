@@ -8,6 +8,7 @@ happened to it over time, what the document exports as.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from codoc.calculus import block_md
@@ -18,13 +19,24 @@ from codoc.calculus.doc import (
 )
 from codoc.calculus.ids import LOOP, OpId, is_human
 from codoc.calculus.inline_md import Span, render
-from codoc.calculus.ops import Op, in_frontier
+from codoc.calculus.ops import BLOCK_SET, Op, in_frontier
 from codoc.calculus.store import Store
-from codoc.calculus.text import CITE, PROPOSALS, SUGGEST_DEL, SUGGEST_MARK, Mark, Seg, Text, struck_chars
+from codoc.calculus.text import CITE, COMMENT, PROPOSALS, SUGGEST_DEL, SUGGEST_MARK, Mark, Seg, Text, struck_chars
 
 # A feature with pending intent: the document wins over a machine's repair,
 # whatever its size (docs/concurrency.md, The machine gate).
 HELD = ("edited", "queued", "planned")
+_SPACE = re.compile(r"\s+")
+
+
+def one_line(s) -> str:
+    """Free text as it may stand inside one line of a directive: every run of
+    whitespace, each kind of line break included, as one space. The directive
+    is read line by line (a ``Consult:`` line is a page to fetch,
+    ``Author asked:`` is the person's request), so words that broke their line
+    would write lines of their own. Every client's text the directive quotes
+    inside a line of its own goes through here."""
+    return _SPACE.sub(" ", str(s))
 
 
 # ── text views ───────────────────────────────────────────────────────────────
@@ -43,7 +55,7 @@ def live_spans(text: Text, kinds: frozenset | None = None) -> list[Span]:
     return out
 
 
-def _in_mode(text: Text, mode: str, store: Store | None) -> Text:
+def in_mode(text: Text, mode: str, store: Store | None) -> Text:
     """``text`` as it reads in a read mode. ``live``: the field as stored, an
     open plan's words included. ``rejected``: without any open plan's words.
     ``accepted``: with every open plan taken. ``loop``: what the reflect pass
@@ -82,7 +94,7 @@ def _in_mode(text: Text, mode: str, store: Store | None) -> Text:
 
 def markdown(text: Text, mode: str = "live", store: Store | None = None) -> str:
     """An inline field as Markdown in a read mode."""
-    view = _in_mode(text, mode, store)
+    view = in_mode(text, mode, store)
     return render(view.live_text(), live_spans(view))
 
 
@@ -90,7 +102,7 @@ def text_string(kind: str, path: str, text: Text, mode: str = "live", store: Sto
     """A Text field as a string: the raw text of a source field, inline
     Markdown for any other."""
     if is_source_field(kind, path):
-        return _in_mode(text, mode, store).live_text()
+        return in_mode(text, mode, store).live_text()
     return markdown(text, mode, store)
 
 
@@ -102,10 +114,123 @@ def title(store: Store, fid: str, mode: str = "live") -> str:
     return markdown(store.blocks[fid].text(), mode, store)
 
 
+def unvetted_block(store: Store, b: Block) -> bool:
+    """Whether a still-open plan added ``b``. Until the verdict such a block is
+    the plan's: it says nothing in the ``rejected`` mode, the directive leaves
+    it out, and the lift pass leaves it alone, since its fetch would run on a
+    stranger's address."""
+    return b.added_plan in store.open_plans
+
+
+def set_value(payload: dict) -> tuple[bool, object]:
+    """What a content ``block.set`` wrote, as (absent, value)."""
+    return (True, None) if payload.get("unset") else (False, payload.get("value"))
+
+
+_SHAPE = ("kind", "level")      # the block's own attributes a `block.set` writes; any other path is a content field
+
+
+def _field(b: Block, path: str) -> tuple[bool, object]:
+    """Field ``path`` of ``b`` as it is, as (absent, value)."""
+    return (False, getattr(b, path)) if path in _SHAPE else (path not in b.content, b.content.get(path))
+
+
+def _wrote(op: Op, path: str) -> tuple[bool, object]:
+    """What ``block.set`` ``op`` wrote to ``path``, as (absent, value). A kind
+    set writes the level too."""
+    if path == "level" and op.target.get("path") == "kind":
+        return False, op.payload.get("level")
+    return (False, op.payload.get("value")) if path in _SHAPE else set_value(op.payload)
+
+
+def _replaced(op: Op, path: str):
+    return op.payload.get("prev_level" if path == "level" and op.target.get("path") == "kind" else "prev")
+
+
+def _sets_on(op: Op, b: Block, path: str) -> bool:
+    """Whether ``op`` is a ``block.set`` on ``path`` of ``b``: a kind set is
+    one on the level too, since it writes both."""
+    return op.kind == BLOCK_SET and op.target.get("bid") == b.id \
+        and op.target.get("path") in (path, "kind" if path == "level" else path)
+
+
+def _sets(store: Store, b: Block, path: str) -> list:
+    """The sets on ``path`` of ``b``, oldest first, as [op, the value it
+    replaced, plan]. A content field keeps them in ``Block.prior``; ``kind``
+    and ``level`` are read from the block's own ops."""
+    if path not in _SHAPE:
+        return b.prior.get(path) or []
+    return [[o.id, _replaced(o, path), o.plan or ""] for o in store.ops_on([b.id])
+            if o.conflict is None and _sets_on(o, b, path)]
+
+
+def without_plans(store: Store, b: Block, path: str, past: tuple[str, ...],
+                  undoing: list[Op] | tuple = ()) -> tuple[bool, object, list[Op]]:
+    """Field ``path`` of ``b`` with plans' sets taken out, as (absent, value,
+    took): the one rule for the value from before the plans (docs/model.md,
+    Read modes), for a content field and for ``kind`` and ``level`` alike.
+    ``took`` is every set the walk took out, newest first; the value is the
+    one the last of them replaced, or the field as it is when it is empty.
+    ``Block.prior`` keeps each content set with the value it replaced; a kind
+    or level set carries it in its payload. The walk goes from the newest set
+    back, starting from the field as it is. A set whose plan's status is in
+    ``past``, or that is one of ``undoing`` (the ops a verdict is taking back,
+    whatever their plan's status), is taken out: when it wrote the value in
+    hand, the value it replaced is the one in hand now; otherwise a verdict
+    already took it back (its own reject, or the reject of a plan that set the
+    field twice), and it is passed. Anything else ends the walk: a person's
+    set, an accepted plan's, one whose plan's status ``past`` leaves out, and a
+    set whose op a fold archived. So a value someone set since stands. A value
+    a lift wrote since matches no set, so it stays."""
+    taking = {o.id: o for o in undoing if _sets_on(o, b, path)}
+    now, took = _field(b, path), []
+    for op_id, prev, pid in reversed(_sets(store, b, path)):
+        plan = store.plans.get(pid) if pid else None
+        if op_id not in taking and (plan is None or plan.status not in past):
+            break
+        was = (prev is None, prev)
+        if was == now:
+            continue
+        op = taking.get(op_id) or store.by_id.get(op_id)
+        if op is None:
+            break
+        if _wrote(op, path) != now:
+            continue        # a verdict already took this set back
+        now = was
+        took.append(op)
+    return now[0], now[1], took
+
+
+def rejected_content(store: Store, b: Block) -> dict:
+    """``b.content`` as the ``rejected`` mode reads its JSON fields. A Text
+    field carries its plan on every character, so the read modes hide an open
+    plan's words; a JSON field (a url block's ``url``, a code block's ``lang``)
+    carries none. While an open plan has a set on the field it reads as
+    ``without_plans`` takes every open and rejected plan's set out of it: the
+    owner's value. With none open it is the field as it is, which every reject
+    has already put back. The export, the directive, the kind codecs and the
+    lift read this, so a value a suggester proposed is neither shown, nor put in
+    front of the agent, nor fetched before a verdict, and the owner's block is
+    not hidden meanwhile."""
+    out = dict(b.content)
+    for k, sets in b.prior.items():
+        if any(e[2] in store.open_plans for e in sets):
+            absent, value, _ = without_plans(store, b, k, ("open", "rejected"))
+            if absent:
+                out.pop(k, None)
+            else:
+                out[k] = value
+    return out
+
+
 def block_spec(store: Store, b: Block, mode: str = "live") -> BlockSpec | None:
     """``b`` as Markdown says it, or None when it says nothing in this mode: an
     empty paragraph or item, an empty source, a block holding only an open
-    plan's words under ``rejected``, a kind left out of the export."""
+    plan's words under ``rejected`` or one an open plan added
+    (``unvetted_block``), a kind left out of the export. Under ``rejected`` its
+    JSON fields are ``rejected_content``'s."""
+    if mode == "rejected" and unvetted_block(store, b):
+        return None
     if b.kind == HEADING:
         md = markdown(b.text(), mode, store)
         if b.text().live_len() and not md.strip():
@@ -116,7 +241,8 @@ def block_spec(store: Store, b: Block, mode: str = "live") -> BlockSpec | None:
         return BlockSpec(b.kind, b.level, md) if md.strip() else None
     if not b.layout.export:
         return None
-    plain = {k: v for k, v in b.content.items() if k not in b.layout.text}
+    content = rejected_content(store, b) if mode == "rejected" else b.content
+    plain = {k: v for k, v in content.items() if k not in b.layout.text}
     if b.kind in SOURCE:
         source = field_text(b, "source", mode, store)
         return BlockSpec(b.kind, text=source, content=plain) if source.strip() else None
@@ -132,7 +258,32 @@ def kind_words(b: Block, store: Store | None = None) -> str:
     name and the words of its Text fields in the ``rejected`` mode, or "" when
     they hold none."""
     words = [w for f in b.layout.text if (w := field_text(b, f, "rejected", store).strip())]
-    return f"{b.kind}: {'; '.join(words)}" if words else ""
+    return one_line(f"{b.kind}: {'; '.join(words)}") if words else ""
+
+
+def thread_id(b: Block) -> str:
+    """The thread a comment block is a message of: its ``thread`` when that is
+    a non-empty string, else its own id. The margin reads it the same way
+    (``comments.ts``, ``threadIdOf``); ``thread-cases.json`` pins both."""
+    t = b.content.get("thread")
+    return t if isinstance(t, str) and t else b.id
+
+
+def first_message(store: Store, b: Block) -> Block | None:
+    """The message that speaks for ``b``'s thread, whose ``status``, ``scope``
+    and ``anchor_text`` are the thread's: the block the thread id names, when
+    that is a live comment of this thread, else the thread's earliest live
+    message in document order. A reply's own fields decide nothing, wherever
+    it was placed. The margin (``threadsOf``), the directive and the policy
+    on who may resolve a thread all read this. Ordered by rank, not
+    ``store.ordered()``, so the policy can answer from a view without the
+    document's order (``validate._policy_view``)."""
+    tid = thread_id(b)
+    named = store.blocks.get(tid)
+    if named is not None and named.live and named.kind == COMMENT and thread_id(named) == tid:
+        return named
+    return min((x for x in store.blocks.values() if x.live and x.kind == COMMENT and thread_id(x) == tid),
+               key=lambda x: (x.rank, x.id), default=None)
 
 
 def description(store: Store, fid: str, mode: str = "live") -> str:
@@ -375,7 +526,8 @@ def removals(store: Store, fid: str) -> list[Claim]:
     line), but it is not ink, which the editor draws as what the person wrote.
     A removal a verdict made counts only when the verdict adopted its plan
     (``Plan.adopted``) and the words were not the plan's own; it is then the
-    removal of the person who accepted."""
+    removal of the person who accepted. A plan taking back its own words is
+    the plan getting smaller, not a removal (``_answered``)."""
     w = store.watermarks(fid)
     verdicts: dict | None = None
 
@@ -391,7 +543,7 @@ def removals(store: Store, fid: str) -> list[Claim]:
                     i += len(sg.chars)
                 elif is_human(sg.dead_actor) and (st := stage(sg.dead)):
                     verdicts = verdicts if verdicts is not None else _verdict_ops(store)
-                    if not _answered(verdicts, sg):
+                    if not _answered(store, verdicts, sg):
                         out.append(Claim(b.id, f, i, i, "human", st, sg.dead_actor, sg.chars))
     for b in removed_blocks(store, fid):
         if st := stage(b.dead):
@@ -407,10 +559,15 @@ def _verdict_ops(store: Store) -> dict:
     return {p.verdict: p for p in store.plans.values() if p.verdict}
 
 
-def _answered(verdicts: dict, sg: Seg) -> bool:
-    """Whether a verdict killed this dead segment without making the removal
-    anyone's request: its plan was not adopted, or the words were the plan's
-    own, taken back."""
+def _answered(store: Store, verdicts: dict, sg: Seg) -> bool:
+    """Whether this dead segment's removal is nobody's request: the plan that
+    minted the words took them back itself (one of its own ops killed them: a
+    contributor correcting their own proposal, docs/concurrency.md section 9),
+    or a verdict killed them and its plan was not adopted or the words were
+    that plan's own."""
+    own = store.plans.get(sg.plan) if sg.plan else None
+    if own is not None and sg.dead in own.ops:
+        return True
     p = verdicts.get(sg.dead)
     return p is not None and (sg.plan == p.id or not p.adopted)
 
@@ -529,10 +686,11 @@ def realized_content(store: Store, b: Block, realized: dict) -> dict:
     reads content (``kinds.plain``): each Text field without what the author
     wrote or removed since ``realized``, by identity, in the ``rejected`` mode;
     each other field as it was before the author's first set since
-    (``Block.prior``). Only the author's, because ``lower`` speaks for them: a
-    diagram the loop lifted from the code is already in the code."""
+    (``Block.prior``), else as ``rejected_content`` reads it. Only the
+    author's, because ``lower`` speaks for them: a diagram the loop lifted from
+    the code is already in the code, and an open plan's value is nobody's yet."""
     out = {k: text_string(b.kind, k, _at_realized(store, v, realized), "rejected", store)
-           if k in b.layout.text and isinstance(v, Text) else v for k, v in b.content.items()}
+           if k in b.layout.text and isinstance(v, Text) else v for k, v in rejected_content(store, b).items()}
     for k, sets in b.prior.items():
         first = next((e for e in sets if not in_frontier(e[0], realized)
                       and (not e[2] or (p := store.plans.get(e[2])) is not None and p.adopted)), None)
@@ -550,7 +708,7 @@ def _at_realized(store: Store, text: Text, realized: dict) -> Text:
     t.segs = [s for s in t.segs if in_frontier(s.op, realized) or not _authored(store, s)]
     verdicts = _verdict_ops(store)
     for s in t.segs:
-        if s.dead and not in_frontier(s.dead, realized) and is_human(s.dead_actor) and not _answered(verdicts, s):
+        if s.dead and not in_frontier(s.dead, realized) and is_human(s.dead_actor) and not _answered(store, verdicts, s):
             s.dead = None
     t.marks = [m for m in t.marks if t.holds(m.start) and t.holds(m.end)]
     return t

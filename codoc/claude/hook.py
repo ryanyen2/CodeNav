@@ -8,9 +8,9 @@ It does two things:
 
 1. Keeps the agent epoch in ``.codoc/activity.json`` (``workspace.epoch``): open
    while a turn runs, so the daemon defers its reflect pass until the turn
-   ends, with the files the turn touched, which that pass reflects. With no
-   daemon, the close starts a detached process that settles what the turn
-   built.
+   ends; that pass reads what changed from the index, so a file the turn
+   changed through a shell counts too. With no daemon, the close starts a
+   detached process that settles what the turn built.
 2. Tells the session when hand-offs are queued in ``.codoc/realize.md``, at
    each user prompt and mid-turn when the queue grows, and, when a turn ends
    having reported some queued items but not all, asks it once to report or
@@ -79,13 +79,14 @@ def handle_pre_tool(payload: dict[str, Any], codoc_dir: str) -> None:
     """A tool call is also a rising edge, and the pre-tool hook fires before
     the tool writes, so the daemon sees the epoch open no later than the
     change it must defer. Each turn after the first starts with the epoch the
-    last turn's stop closed. Then the file the call names is touched."""
+    last turn's stop closed. Then a call that names a file in the repository
+    renews the epoch's lease."""
     epoch.reopen_epoch(codoc_dir, payload.get("session_id"))
     _touch(payload, codoc_dir)
 
 
 def handle_post_tool(payload: dict[str, Any], codoc_dir: str) -> None:
-    """Touch the file again (renewing the epoch's lease), and tell the
+    """Renew the epoch's lease again, and tell the
     working session when the realize queue grew: the person may accept edits
     while the agent works, and the next prompt is too late to learn of them."""
     _touch(payload, codoc_dir)
@@ -135,16 +136,15 @@ def handle_session_end(payload: dict[str, Any], codoc_dir: str) -> None:
 
 def _touch(payload: dict[str, Any], codoc_dir: str) -> None:
     file_path = (payload.get("tool_input") or {}).get("file_path")
-    rel = epoch.repo_relative(file_path, codoc_dir) if file_path else None
-    if rel is not None:
-        epoch.touch_epoch(codoc_dir, rel)
+    if file_path and epoch.repo_relative(file_path, codoc_dir) is not None:
+        epoch.touch_epoch(codoc_dir)
 
 
 def _close(payload: dict[str, Any], codoc_dir: str) -> None:
-    """Close this session's epoch, keeping ``touched`` for the daemon's pass.
-    Only the session that opened the epoch closes it: the session end can fire
-    long after the last turn, when a newer session owns the file. A close
-    skipped here is harmless, since the daemon closes an epoch that goes silent.
+    """Close this session's epoch. Only the session that opened the epoch
+    closes it: the session end can fire long after the last turn, when a newer
+    session owns the file. A close skipped here is harmless, since the daemon
+    closes an epoch that goes silent.
 
     With no daemon, nothing applies after the close, and every MCP write of the
     turn landed while the epoch was open, so nothing settled. When something

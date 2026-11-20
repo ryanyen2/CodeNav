@@ -2,6 +2,7 @@
 import json
 import os
 import shutil
+import time
 
 import pytest
 
@@ -9,22 +10,22 @@ from codoc.calculus import ops as K
 from codoc.calculus.doc import PARAGRAPH
 from codoc.calculus.ids import START
 from codoc.daemon.daemon import Daemon
-from codoc.workspace.epoch import read_activity, write_activity
+from codoc.workspace.epoch import close_epoch, read_activity, write_activity
 from codoc.index.changes import ChangeSet, ChunkRef
 from codoc.workspace import Workspace
 from codoc.workspace import log as L
 from codoc.workspace import inbox as I
 from codoc.workspace.inbox import Submission
-from tests.helpers import handoff, seed_loop, T
+from tests.helpers import another_daemon, handoff, seed_loop, T
 
 
 def make(tmp_path, changesets: list):
     root = tmp_path / "repo"
     (root / ".codoc").mkdir(parents=True)
-    calls: list[set[str]] = []
+    calls: list[bool] = []          # one entry per reflect pass: whether it rebuilt the graph
 
-    def changeset(root_dir, codoc_dir, files):
-        calls.append(set(files))
+    def changeset(root_dir, codoc_dir, whole, bindings):
+        calls.append(whole)
         return changesets.pop(0) if changesets else ChangeSet()
 
     d = Daemon(root, changeset=changeset, propose=lambda *a, **k: [], printer=lambda *_: None)
@@ -36,7 +37,7 @@ def test_code_change_reflects_and_publishes(tmp_path):
     d, calls = make(tmp_path, [ChangeSet(modified=[ChunkRef("c.py::send", "f2", "t1")])])
     (d.root / "c.py").write_text("def send(): ...")
     note = d.process_batch([str(d.root / "c.py")])
-    assert "reflect" in note and calls == [{"c.py"}]
+    assert "reflect" in note and calls == [False]
     assert d.ws.store.bindings["c.py::send"].fingerprint == "f2"
     assert (d.codoc_dir / "tree.codoc").read_text().split("\n\n", 1)[1].startswith("# Client")
     proj = json.loads((d.codoc_dir / "projection.json").read_text())
@@ -45,41 +46,196 @@ def test_code_change_reflects_and_publishes(tmp_path):
     assert status["state"] == "synced"
 
 
+
+def test_a_pass_stopped_before_its_model_call_has_its_refreshed_code_judged_next(tmp_path):
+    """The stopped pass refreshed send's binding before its model call, which
+    reads as the loop having described the new code. The next pass judges it
+    anyway, from the change set the stopped one left, and deletes that."""
+    d, _ = make(tmp_path, [ChangeSet(modified=[ChunkRef("c.py::send", "f2", "t1")]), ChangeSet()])
+    (d.root / "c.py").write_text("def send(): ...")
+
+    def stop(*_a, **_k):
+        raise SystemExit(0)          # what the SIGTERM handler raises
+    d._propose = stop
+    with pytest.raises(SystemExit):
+        d.batch([str(d.root / "c.py")])
+    assert d.ws.store.bindings["c.py::send"].fingerprint == "f2"
+    asked = []
+    d._propose = lambda changes, *a, **k: asked.append([m["symbol"] for m in changes["modified"]]) or []
+    d.process_batch([str(d.root / "c.py")])
+    assert asked == [["c.py::send"]] and not (d.codoc_dir / "cache" / "pending.json").exists()
+
+
+def test_a_daemon_started_with_a_stopped_passs_change_set_reflects_it_with_no_code_change(tmp_path):
+    """The window reloaded mid-pass in a quiet repository: no code file
+    changes again, so the startup batch itself runs the pass over what the
+    stopped one left, and deletes the file."""
+    d, calls = make(tmp_path, [])
+    pending = d.codoc_dir / "cache" / "pending.json"
+    pending.parent.mkdir(parents=True, exist_ok=True)
+    pending.write_text(json.dumps({"added": [{"symbol": "c.py::retry", "fingerprint": "f7", "types_hash": "t7",
+                                              "source": "def retry(): ..."}], "modified": [], "removed": []}))
+    asked = []
+    d._propose = lambda changes, *a, **k: asked.append([x["symbol"] for x in changes["added"]]) or []
+    d.batch([])
+    assert calls == [False] and asked == [["c.py::retry"]] and not pending.exists()
+
+
+@pytest.mark.parametrize("left", [
+    "[]",                                                           # JSON, not an object
+    json.dumps({"added": [{"symbol": "c.py::x", "fp": "f"}]}),      # a field another codoc version named
+    json.dumps({"added": [{"fingerprint": "f"}]}),                  # no symbol
+])
+def test_a_leftover_file_this_codoc_cannot_read_counts_as_empty(tmp_path, left):
+    """It would otherwise raise before the pass on every batch and tick, and the
+    index, already advanced, would lose each change made meanwhile."""
+    d, _ = make(tmp_path, [ChangeSet(modified=[ChunkRef("c.py::send", "f2", "t1")])])
+    pending = d.codoc_dir / "cache" / "pending.json"
+    pending.parent.mkdir(parents=True, exist_ok=True)
+    pending.write_text(left)
+    (d.root / "c.py").write_text("def send(): ...")
+    note = d.process_batch([str(d.root / "c.py")])
+    assert "reflect" in note and d.ws.store.bindings["c.py::send"].fingerprint == "f2", note
+
+
+def test_a_stopped_pass_over_a_merged_handoff_still_cites_it_when_it_added_code(tmp_path):
+    """The batch that saw HEAD move over a `Codoc-Handoff` trailer was stopped
+    during its model call. The next daemon does not see HEAD move again, so the
+    leftover file carries `landed`, and the pass that applies it cites the
+    hand-off on the code the merge added."""
+    d, _ = make(tmp_path, [ChangeSet(added=[ChunkRef("c.py::retry", "f7", "t7", "def retry(): ...")])])
+    hid = handoff(d.ws, "h1", actor="human:local").id
+    (d.root / "c.py").write_text("def send(): ...\ndef retry(): ...")
+
+    def stop(*_a, **_k):
+        raise SystemExit(0)
+    d._propose = stop
+    with pytest.raises(SystemExit):
+        d.reflect(landed=frozenset({hid}))
+    d._propose = lambda *a, **k: [{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::retry"]}]
+    d.process_batch([])                      # the next daemon's startup batch
+    binds = [(o.kind, o.payload.get("symbol"), o.caused_by) for o in d.ws.store.ops if o.kind.startswith("bind.")]
+    assert ("bind.attach", "c.py::retry", hid) in binds, binds
+
 def test_open_epoch_holds_code_until_it_closes(tmp_path):
     d, calls = make(tmp_path, [ChangeSet(modified=[ChunkRef("c.py::send", "f3", "t1")])])
     act = d.codoc_dir / "activity.json"
-    write_activity(d.codoc_dir, {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": ["c.py"]})
+    write_activity(d.codoc_dir, {"version": 1, "epoch": {"id": "ep-1", "open": True}})
     assert "opened" in d.process_batch([str(act)])
     (d.root / "c.py").write_text("x")
     assert "deferring" in d.process_batch([str(d.root / "c.py")]) and calls == []
-    data = read_activity(d.codoc_dir)
-    data["epoch"]["open"] = False
-    write_activity(d.codoc_dir, data)
+    close_epoch(d.codoc_dir, "ep-1")
     note = d.process_batch([str(act)])
-    assert "closed" in note and "reflect" in note and calls == [{"c.py"}]
+    assert "closed" in note and "reflect" in note and calls == [False]
 
 
 def test_a_daemon_started_during_an_agent_turn_reflects_the_turn_when_it_closes(tmp_path):
     """The window reloads (the extension stops its daemon and starts a new
     one) while a coding agent is mid-turn. The new daemon reads the open epoch
-    at its first batch, so the stop hook's close runs the pass over every file
-    the turn touched, and the hand-off it built settles."""
+    at its first batch, so the stop hook's close runs the pass over every code
+    file changed since the index was last updated, and the hand-off it built settles."""
     from codoc.calculus.derive import queued
     d, calls = make(tmp_path, [])
     handoff(d.ws, "h1", actor="human:local")
-    write_activity(d.codoc_dir, {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": ["c.py"]})
+    write_activity(d.codoc_dir, {"version": 1, "epoch": {"id": "ep-1", "open": True}})
     d.process_batch([str(d.codoc_dir / "activity.json")])
     d.ws.close()
 
-    again = Daemon(d.root, changeset=lambda _r, _c, files: calls.append(set(files)) or ChangeSet(
+    again = Daemon.start(d.root, changeset=lambda _r, _c, whole, _b: calls.append(whole) or ChangeSet(
         modified=[ChunkRef("c.py::send", "f9", "t1")]), propose=lambda *a, **k: [], printer=lambda *_: None)
-    again.start()
     assert "opened" in again.process_batch([])
-    data = read_activity(again.codoc_dir)
-    data["epoch"]["open"] = False
-    write_activity(again.codoc_dir, data)
+    close_epoch(again.codoc_dir, "ep-1")
     assert "closed" in again.process_batch([str(again.codoc_dir / "activity.json")])
-    assert calls == [{"c.py"}] and queued(again.ws.store) == []
+    assert calls == [False] and queued(again.ws.store) == []
+
+
+def test_a_turn_that_opened_and_closed_while_a_batch_ran_cites_its_hand_off(tmp_path):
+    """A batch can take tens of seconds (a reflect pass waits on the model),
+    and a whole turn can open, edit and close inside it. The daemon never saw
+    the epoch open; the close is still a close, so the pass over the turn's
+    files cites the queued hand-off and it settles."""
+    from codoc.calculus.derive import queued
+    from codoc.workspace.epoch import open_epoch, touch_epoch
+    d, calls = make(tmp_path, [ChangeSet(modified=[ChunkRef("c.py::send", "f9", "t1")])])
+    ho = handoff(d.ws, "h1", actor="human:local")
+    d.process_batch([])
+    open_epoch(d.codoc_dir, "s2")
+    touch_epoch(d.codoc_dir)
+    (d.root / "c.py").write_text("def send(): retry()\n")
+    close_epoch(d.codoc_dir, "ep-s2")
+    assert "closed" in d.process_batch([str(d.codoc_dir / "activity.json"), str(d.root / "c.py")])
+    assert calls == [False]
+    assert [o.caused_by for o in d.ws.store.ops if o.kind == K.BIND_REFRESH] == [ho.id]
+    assert queued(d.ws.store) == []
+    assert "closed" not in d.process_batch([str(d.codoc_dir / "activity.json")])   # one close, reflected once
+
+
+def test_a_daemon_started_after_a_shell_only_turn_closed_reflects_that_turn(tmp_path):
+    """The turn changed code only through a shell, so the hooks named no
+    file, and it closed while no daemon ran. The next daemon's startup batch
+    runs the pass anyway, which reads what changed from the index and cites
+    the queued hand-off (concurrency.md, The daemon's batch, step 3)."""
+    root = tmp_path / "repo"
+    cd = root / ".codoc"
+    cd.mkdir(parents=True)
+    ws = Workspace(cd)
+    seed_loop(ws)
+    ho = handoff(ws, "h1", actor="human:local")
+    ws.close()
+    write_activity(cd, {"version": 1, "epoch": {"id": "ep-1", "open": True}})
+    (root / "c.py").write_text("def send(): retry()\n")
+    close_epoch(cd, "ep-1")
+    d = Daemon(root, changeset=lambda *a: ChangeSet(modified=[ChunkRef("c.py::send", "f9", "t1")]),
+               propose=lambda *a, **k: [], printer=lambda *_: None)
+    assert "reflect" in d.process_batch([])
+    assert [o.caused_by for o in d.ws.store.ops if o.kind == K.BIND_REFRESH] == [ho.id]
+
+
+def test_the_batch_a_close_record_wakes_does_nothing(tmp_path):
+    """The batch that reflects a close records it in activity.json, a file
+    that wakes the daemon, so one more batch starts; it runs no pass and says
+    nothing (concurrency.md, The daemon's batch)."""
+    d, calls = make(tmp_path, [])
+    act = d.codoc_dir / "activity.json"
+    write_activity(d.codoc_dir, {"version": 1, "epoch": {"id": "ep-1", "open": True}})
+    close_epoch(d.codoc_dir, "ep-1")
+    assert "closed" in d.process_batch([str(act)])
+    assert read_activity(d.codoc_dir)["reflected"] and d.wakes(None, str(act))
+    assert d.process_batch([str(act)]) == "" and calls == [False]
+
+
+def test_status_names_the_language_the_daemon_writes_in(tmp_path, monkeypatch):
+    """The editor and the hub show the language from status.json, so it is
+    the daemon's: a tag in config.json as `resolve` normalizes it, and the
+    environment's override. A change to config.json wakes the daemon and
+    republishes the status though no op moved."""
+    from codoc.daemon.publish import read_status
+    from codoc.workspace.config import write_config
+    d, _ = make(tmp_path, [])
+    d.process_batch([])
+    write_config(d.codoc_dir, doc_language="zh")
+    assert d.wakes(None, str(d.codoc_dir / "config.json"))
+    d.process_batch([str(d.codoc_dir / "config.json")])
+    assert read_status(d.codoc_dir)["doc_language"] == "zh-Hans"
+    monkeypatch.setenv("CODOC_DOC_LANGUAGE", "ja")
+    d.process_batch([])
+    assert read_status(d.codoc_dir)["doc_language"] == "ja"
+
+
+def test_a_language_change_during_a_build_reaches_the_status_without_renewing_the_lease(tmp_path):
+    """While a realize pass holds the lease the status is left as it is, but
+    for the language, which the page must show as the daemon writes it. The
+    lease's `renewed` stays as the pass left it."""
+    from codoc.daemon.publish import read_status, write_realizing
+    from codoc.workspace.config import write_config
+    d, _ = make(tmp_path, [])
+    handoff(d.ws, "h1", actor="human:local")                           # a queue for the pass to build
+    d.process_batch([])
+    renewed = write_realizing(d.codoc_dir, pid=os.getpid(), owner="other")["renewed"]   # a live pass holds the lease
+    write_config(d.codoc_dir, doc_language="ja")
+    d.process_batch([str(d.codoc_dir / "config.json")])
+    st = read_status(d.codoc_dir)
+    assert st["doc_language"] == "ja" and st["state"] == "realizing" and st["renewed"] == renewed, st
 
 
 def test_the_daemons_passes_write_in_the_workspace_language(tmp_path):
@@ -121,17 +277,54 @@ def test_a_batch_with_no_paths_drains_what_queued_while_no_daemon_ran(tmp_path):
     assert "client op" not in d.process_batch([])          # drained once, from the saved offset
 
 
-def test_a_starting_daemon_reads_what_a_daemonless_writer_wrote_after_it_built_its_store(tmp_path):
-    """The daemon builds its store, then writes its pidfile. A write that
-    applied between the two is read when it starts."""
-    from codoc.daemon import client
-    d, _ = make(tmp_path, [])
-    last = list(d.ws.store.blocks["p1"].text().live_refs())[-1]
-    client.write(d.codoc_dir, client="cli", bodies=[{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
-                                                    "payload": {"after": list(last), "text": " Between."}}])
-    client.release(d.codoc_dir)
-    d.start()
-    assert d.ws.store.blocks["p1"].text().live_text().endswith(" Between.")
+def test_a_starting_daemon_waits_for_a_daemonless_writer_mid_apply_and_reads_its_write(tmp_path):
+    """A daemonless writer checked for a daemon, found none, and is applying
+    under the applier lock when a daemon takes its own lock. The daemon opens
+    its workspace under the applier lock, so it waits for the write and reads it."""
+    import threading
+    import time
+    from codoc.workspace.layout import APPLIER_LOCK, locked
+    root = tmp_path / "repo"
+    cd = root / ".codoc"
+    cd.mkdir(parents=True)
+    ws = Workspace(cd)
+    seed_loop(ws)
+    ws.close()
+    started: list = []
+    with locked(cd / APPLIER_LOCK):
+        t = threading.Thread(target=lambda: started.append(Daemon.start(root, printer=lambda *_: None)))
+        t.start()
+        time.sleep(0.3)                              # the daemon has its lock and waits for this one
+        writer = Workspace(cd)
+        writer.submit([{"kind": K.TEXT_INSERT, "target": {"bid": "p1", "path": "text"},
+                        "payload": {"after": list(writer.store.blocks["p1"].text().last_live_ref()), "text": " Between."}}],
+                      actor="human:local")
+        writer.close()
+    t.join(10)
+    assert started[0].ws.store.blocks["p1"].text().live_text().endswith(" Between.")
+    started[0].ws.close()
+
+
+def test_a_daemon_that_stands_down_writes_nothing(tmp_path):
+    """A second `codoc watch` finds the lock held and exits. It opens no
+    workspace first, so it neither trims the live daemon's ack file nor cuts
+    the log line that daemon is in the middle of writing."""
+    from codoc.workspace.inbox import ACK_KEEP
+    root = tmp_path / "repo"
+    cd = root / ".codoc"
+    cd.mkdir(parents=True)
+    ws = Workspace(cd)
+    seed_loop(ws)
+    ws.close()
+    acks = I.inbox_dir(cd) / "ide.ack.jsonl"
+    acks.parent.mkdir(parents=True, exist_ok=True)
+    acks.write_text("".join(json.dumps({"cid": f"c{i}", "op": None}) + "\n" for i in range(ACK_KEEP + 5)))
+    with next((cd / "log").glob("*.jsonl")).open("a") as fh:
+        fh.write('{"id": "half a li')                # the live daemon is mid-append
+    with another_daemon(cd):
+        before = {f: f.read_bytes() for f in cd.rglob("*") if f.is_file()}
+        assert Daemon.start(root, printer=lambda *_: None) is None
+        assert {f: f.read_bytes() for f in cd.rglob("*") if f.is_file()} == before
 
 
 def test_a_daemonless_writer_starts_a_new_session_when_head_moves(tmp_path, monkeypatch):
@@ -253,6 +446,23 @@ def test_the_daemon_wakes_for_the_files_the_index_reads(tmp_path):
     assert {d.code_path(str(d.root / p)) for p in rel} - {None} == {"a.mts", "src/b.py"}
 
 
+def test_the_daemon_names_a_changed_file_as_the_index_does(tmp_path):
+    """A batch reflects a file under the key the index's walk gives it: a
+    linked file by its link's name, nothing under a linked directory, nothing
+    over the size limit. A removed file is named by its path, so its chunks
+    leave the index."""
+    import os
+    d, _ = make(tmp_path, [])
+    (d.root / "real.py").write_text("def f():\n    return 1\n")
+    os.symlink("real.py", d.root / "link.py")
+    (d.root / "pkg").mkdir()
+    (d.root / "pkg" / "mod.py").write_text("def g():\n    return 2\n")
+    os.symlink("pkg", d.root / "pkg_link")
+    (d.root / "bundle.py").write_text("x = 1\n" + "#" * 1_500_000)
+    named = {p: d.code_path(str(d.root / p)) for p in ("link.py", "pkg_link/mod.py", "bundle.py", "gone.py")}
+    assert named == {"link.py": "link.py", "pkg_link/mod.py": None, "bundle.py": None, "gone.py": "gone.py"}
+
+
 def test_projection_carries_the_realizing_lease_and_publish_skips_unchanged(tmp_path):
     root = tmp_path / "repo"
     (root / ".codoc").mkdir(parents=True)
@@ -263,7 +473,7 @@ def test_projection_carries_the_realizing_lease_and_publish_skips_unchanged(tmp_
     handoff(d.ws, "h1", actor="human:local")
     d.process_batch([])
     assert json.loads((d.codoc_dir / "status.json").read_text())["state"] == "queued"
-    (d.codoc_dir / "status.json").write_text(json.dumps({"state": "realizing", "version": 2}))
+    (d.codoc_dir / "status.json").write_text(json.dumps({"state": "realizing", "version": 2, "renewed": time.time()}))
     d.process_batch([])
     proj = json.loads((d.codoc_dir / "projection.json").read_text())
     assert proj["phases"] == {"h1": "realizing"}
@@ -274,18 +484,18 @@ def test_projection_carries_the_realizing_lease_and_publish_skips_unchanged(tmp_
 def test_every_publish_reads_the_lease_and_none_renews_it(tmp_path):
     """A one-shot publish (the CLI, a daemonless writer) shows a feature another
     pass is building as `realizing`, as the daemon's does, and leaves the
-    lease's file alone, so a pass that died lets it lapse."""
+    lease's `renewed` alone, so a pass that died lets it lapse."""
     from codoc.daemon.publish import publish
     ws = Workspace(tmp_path / ".codoc")
     seed_loop(ws)
     handoff(ws, "h1", actor="human:local")
     publish(ws.codoc_dir, ws.store, root_dir=str(tmp_path))
     status = ws.codoc_dir / "status.json"
-    status.write_text(json.dumps({"state": "realizing", "version": 2}))
-    stamp = status.stat().st_mtime_ns
+    renewed = time.time()
+    status.write_text(json.dumps({"state": "realizing", "version": 2, "renewed": renewed}))
     publish(ws.codoc_dir, ws.store, root_dir=str(tmp_path))
     assert json.loads((ws.codoc_dir / "projection.json").read_text())["phases"] == {"h1": "realizing"}
-    assert status.stat().st_mtime_ns == stamp
+    assert json.loads(status.read_text())["renewed"] == renewed
     ws.close()
 
 
@@ -453,16 +663,14 @@ def test_a_citing_attach_settles_nothing_while_an_agent_epoch_is_open_and_settle
     d, _ = make(tmp_path, [])
     ho = handoff(d.ws, "h1", actor="human:local")
     act = d.codoc_dir / "activity.json"
-    write_activity(d.codoc_dir, {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": []})
+    write_activity(d.codoc_dir, {"version": 1, "epoch": {"id": "ep-1", "open": True}})
     assert "opened" in d.process_batch([str(act)])
     I.submit(d.codoc_dir, "agent-claude-code", [Submission(
         cid="c1", kind=K.BIND_ATTACH, target={"fid": "h1"}, payload={"symbol": "c.py::retry"},
         caused_by=ho.id)])
     d.process_batch([str(I.inbox_dir(d.codoc_dir) / "agent-claude-code.jsonl")])
     assert queued(d.ws.store) == ["h1"]
-    data = read_activity(d.codoc_dir)
-    data["epoch"]["open"] = False
-    write_activity(d.codoc_dir, data)
+    close_epoch(d.codoc_dir, "ep-1")
     assert "closed" in d.process_batch([str(act)])
     assert queued(d.ws.store) == []
     assert [o.caused_by for o in d.ws.store.ops if o.kind == K.FEATURE_REALIZED] == [ho.id]
@@ -531,24 +739,134 @@ def test_the_daemon_prints_what_a_batch_did_and_nothing_for_a_no_op(tmp_path, mo
     assert [line for line in said if line.startswith("▸")] == ["▸ 1 client op(s)"]
 
 
+def test_the_quiet_tick_runs_while_files_that_do_not_wake_the_daemon_keep_changing(tmp_path, monkeypatch):
+    """watchfiles times out only when no event at all arrives, so a steady
+    write to a file the daemon ignores (a log, a build's output) must not hold
+    the tick off. Run against the real watchfiles, with a short tick."""
+    import atexit
+    import signal
+    import threading
+    import time
+    import watchfiles
+    from codoc.daemon import daemon as D
+    d, _ = make(tmp_path, [])
+    stop = threading.Event()
+    real = watchfiles.watch
+    monkeypatch.setattr(watchfiles, "watch", lambda *a, **k: real(*a, **k, stop_event=stop))
+    monkeypatch.setattr(signal, "signal", lambda *a: None)
+    monkeypatch.setattr(atexit, "register", lambda *a: None)
+    monkeypatch.setattr(D, "TICK_MS", 300)
+    ran: list[list[str]] = []
+
+    def batch(paths):
+        ran.append(paths)
+        if len(ran) == 2:
+            stop.set()
+    d.batch = batch
+
+    def churn():
+        i = 0
+        while not stop.is_set():
+            (d.root / "NOTES.md").write_text(str(i))
+            i += 1
+            time.sleep(0.05)
+    threading.Thread(target=churn, daemon=True).start()
+    give_up = threading.Timer(5, stop.set)
+    give_up.start()
+    try:
+        d.run(debounce_ms=50)
+    finally:
+        stop.set()
+        give_up.cancel()
+        d.ws.close()
+    assert ran == [[], []], "the startup batch, then the tick"
+
+
 def test_a_daemon_started_after_a_turn_went_silent_reflects_that_turn(tmp_path):
     """A turn that touched c.py was killed without its hooks while no daemon
     ran. The daemon that starts later closes the stale epoch and runs the
-    pass over what that turn touched, as if it had seen the turn open."""
+    pass over every code file changed since the index was last updated, as if
+    it had seen the turn open."""
     import time
     root = tmp_path / "repo"
     (root / ".codoc").mkdir(parents=True)
-    calls: list[set[str]] = []
+    calls: list[bool] = []
 
-    def changeset(_root, _codoc, files):
-        calls.append(set(files))
+    def changeset(_root, _codoc, whole, _bindings):
+        calls.append(whole)
         return ChangeSet(modified=[ChunkRef("c.py::send", "f2", "t1")])
-    write_activity(root / ".codoc", {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": ["c.py"]})
+    write_activity(root / ".codoc", {"version": 1, "epoch": {"id": "ep-1", "open": True}})
     old = time.time() - 2000
     os.utime(root / ".codoc" / "activity.json", (old, old))
     d = Daemon(root, changeset=changeset, propose=lambda *a, **k: [], printer=lambda *_: None)
     assert "recovered a dead agent session" in d.process_batch([])
-    assert read_activity(root / ".codoc")["epoch"]["open"] is False and calls == [{"c.py"}]
+    assert read_activity(root / ".codoc")["epoch"]["open"] is False and calls == [False]
+
+
+def test_a_daemon_started_after_a_turn_closed_reflects_that_turn(tmp_path):
+    """As above, with the turn ended by its Stop hook instead of being killed.
+    The hook reflects no code, so the pass over that turn is the daemon's."""
+    root = tmp_path / "repo"
+    (root / ".codoc").mkdir(parents=True)
+    calls: list[bool] = []
+
+    def changeset(_root, _codoc, whole, _bindings):
+        calls.append(whole)
+        return ChangeSet(modified=[ChunkRef("c.py::send", "f2", "t1")])
+    write_activity(root / ".codoc", {"version": 1, "epoch": {"id": "ep-1", "open": True}})
+    close_epoch(root / ".codoc", "ep-1")
+    d = Daemon(root, changeset=changeset, propose=lambda *a, **k: [], printer=lambda *_: None)
+    assert "agent session closed" in d.process_batch([]) and calls == [False]
+
+
+def _a_turn_a_daemon_reflected(tmp_path):
+    """A repository whose last agent turn, which changed c.py, a daemon
+    reflected when it closed; that daemon has since exited."""
+    root = tmp_path / "repo"
+    cd = root / ".codoc"
+    cd.mkdir(parents=True)
+    d = Daemon(root, changeset=lambda *a: ChangeSet(), propose=lambda *a, **k: [], printer=lambda *_: None)
+    seed_loop(d.ws)
+    write_activity(cd, {"version": 1, "epoch": {"id": "ep-1", "open": True}})
+    close_epoch(cd, "ep-1")
+    assert "agent session closed" in d.process_batch([str(cd / "activity.json")])
+    d.ws.close()
+    return root, cd
+
+
+def test_a_close_a_daemon_reflected_is_not_reflected_again_so_a_later_hand_edit_cites_nothing(tmp_path):
+    """A hand-off is queued after the turn, and the person edits c.py by hand
+    while no daemon runs. The daemon that starts next reads the close as
+    reflected, so the pass over the hand edit cites nothing and settles
+    nothing (docs/concurrency.md, section 10)."""
+    from codoc.calculus.derive import queued
+    root, cd = _a_turn_a_daemon_reflected(tmp_path)
+    ws = Workspace(cd)
+    handoff(ws, "h1", actor="human:local")
+    ws.close()
+    (root / "c.py").write_text("def send(): ...\n")
+    d = Daemon(root, changeset=lambda *a: ChangeSet(modified=[ChunkRef("c.py::send", "f2", "t1")]),
+               propose=lambda *a, **k: [], printer=lambda *_: None)
+    assert "closed" not in d.process_batch([])
+    assert "reflect" in d.process_batch([str(root / "c.py")])
+    assert [o.caused_by for o in d.ws.store.ops if o.kind == K.BIND_REFRESH] == [None]
+    assert queued(d.ws.store) == ["h1"]
+
+
+def test_a_restart_after_a_reflected_close_writes_nothing_for_a_deleted_feature(tmp_path):
+    """The pass a close runs settles a deleted heading whose hand-off did not
+    ask for its code to go, whatever the pass found (``realize._phantom_done``).
+    So a restart that took the reflected close for a new one would settle a
+    deletion handed off after the turn, which no agent saw."""
+    root, cd = _a_turn_a_daemon_reflected(tmp_path)
+    ws = Workspace(cd)
+    ws.submit([{"kind": K.BLOCK_DELETE, "target": {"bid": "h1"}, "payload": {}}], actor="human:local")
+    handoff(ws, "h1", actor="human:local")
+    ws.close()
+    d = Daemon(root, changeset=lambda *a: ChangeSet(), propose=lambda *a, **k: [], printer=lambda *_: None)
+    n = len(d.ws.store.ops)
+    d.process_batch([])
+    assert d.ws.store.ops[n:] == []
 
 
 def test_a_lease_that_names_its_process_holds_while_the_process_lives(tmp_path):

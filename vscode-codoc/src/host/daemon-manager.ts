@@ -25,7 +25,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { output } from './output';
-import { readPid, removePidfile } from './pidfile';
+import { daemonRunning } from './pidfile';
 
 const FAST_EXIT_MS = 5_000;
 const MAX_FAST_EXITS = 3;
@@ -44,28 +44,6 @@ export function resetDaemonBackoff(): void {
 }
 
 /**
- * Whether `pid` is a running `codoc watch`. Liveness alone is not enough where
- * the command line can be read: process ids are reused, so a pidfile left by a
- * previous boot can name the person's browser. Windows has no `ps`, and there
- * liveness is the whole test, as it is for the daemon's own check.
- */
-function isLiveDaemon(pid: number): boolean {
-    try {
-        process.kill(pid, 0);
-    } catch (e) {
-        // EPERM: the process exists and belongs to someone else.
-        if ((e as NodeJS.ErrnoException).code !== 'EPERM') return false;
-    }
-    if (process.platform === 'win32') return true;
-    try {
-        const command = cp.execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8', timeout: 5_000 });
-        return command.includes('codoc') && command.includes('watch');
-    } catch {
-        return false;
-    }
-}
-
-/**
  * Start the daemon for `rootDir` unless one is already running or it may not
  * run here. Returns true when this call spawned one.
  */
@@ -75,17 +53,9 @@ export function startDaemon(codocPath: string, rootDir: string): boolean {
     const codocDir = path.join(rootDir, '.codoc');
     if (!fs.existsSync(codocDir)) return false;
     if (fastExits >= MAX_FAST_EXITS) return false;
+    if (daemonRunning(codocDir)) return false;
 
     const log = output();
-    const pid = readPid(codocDir);
-    if (pid !== undefined) {
-        if (isLiveDaemon(pid)) return false;
-        // The file names a process that is not a daemon. Left in place, the
-        // daemon about to start could take it for a live one and stand down.
-        removePidfile(codocDir);
-        log.appendLine(`codoc: removed a stale watch.pid (pid ${pid})`);
-    }
-
     log.appendLine(`$ ${codocPath} watch --root ${rootDir}`);
     const proc = cp.spawn(codocPath, ['watch', '--root', rootDir], { cwd: rootDir, shell: false });
     proc.stdout?.on('data', (buf: Buffer) => log.append(buf.toString()));

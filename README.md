@@ -130,8 +130,10 @@ both; the daemon rebuilds from the union after a pull.
 
 The tree can be written in any language (`codoc lang zh-Hans`, or the toolbar
 switcher). Prose is translated; identifiers, symbol paths and citations are
-not. `codoc translate` converts an existing tree and refuses any block whose
-translation would drop a citation, a link or a person's bold.
+not. `codoc translate` converts an existing tree. When a person wrote a
+feature, or its translation would drop a citation, a link or a bold span the
+person placed, the translation lands as one plan for them to accept or reject
+instead of replacing their words.
 
 ## Development
 

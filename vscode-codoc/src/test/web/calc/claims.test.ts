@@ -58,9 +58,20 @@ describe('plan paints', () => {
 });
 
 describe('history paints', () => {
-    it('display runs snap to word boundaries', () => {
-        const { f } = paragraph('keep this maybe', [run('s:1', 0, 7, 'human:a'), run('l:1', 7, 15, 'loop')]);
-        expect(displayRuns(f)).toEqual([{ start: 0, end: 9, actor: 'human:a' }, { start: 9, end: 15, actor: 'loop' }]);
+    it('display runs keep each character with its author, in any script', () => {
+        // An agent changed one character of a person's Chinese sentence: 两 → 三.
+        const zh = paragraph('重试三次后放弃', [run('s:1', 0, 2, 'human:a'), run('a:1', 2, 3, 'agent:x'), run('s:2', 3, 7, 'human:a')]);
+        expect(displayRuns(zh.f)).toEqual([
+            { start: 0, end: 2, actor: 'human:a' }, { start: 2, end: 3, actor: 'agent:x' }, { start: 3, end: 7, actor: 'human:a' },
+        ]);
+        // A boundary inside an English word stays where it is too.
+        const en = paragraph('keep this maybe', [run('s:1', 0, 7, 'human:a'), run('l:1', 7, 15, 'loop')]);
+        expect(displayRuns(en.f)).toEqual([{ start: 0, end: 7, actor: 'human:a' }, { start: 7, end: 15, actor: 'loop' }]);
+    });
+
+    it('adjacent display runs by one author merge', () => {
+        const { f } = paragraph('keep this', [run('s:1', 0, 5, 'human:a'), run('s:2', 5, 9, 'human:a')]);
+        expect(displayRuns(f)).toEqual([{ start: 0, end: 9, actor: 'human:a' }]);
     });
 
     it('one class per kind of actor', () => {

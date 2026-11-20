@@ -181,3 +181,19 @@ def test_no_self_loops():
     edges = extract_edges(rows)
     for e in edges:
         assert not (e["src_symbol"] == e["dst_symbol"]), f"Self-loop detected: {e}"
+
+
+def test_an_html_element_in_jsx_is_not_a_call_to_a_project_symbol():
+    """`<main>` is an HTML element, not a reference: it must not resolve by
+    leaf name to `cli.py::main`. A component tag still does."""
+    from codoc.index.lang import get_adapter
+    app = ("export function App() {\n"
+           "  return <main><form><Panel /><input /></form></main>;\n}\n\n"
+           "export function Panel() {\n  return null;\n}\n")
+    rows = [FakeRow("web/app.tsx", c.symbol, c.source, language="tsx")
+            for c in get_adapter("tsx").extract_chunks("web/app.tsx", app)]
+    rows += [FakeRow("cli.py", "cli.py::main", "def main():\n    pass\n"),
+             FakeRow("forms.py", "forms.py::Builder.form", "def form(self):\n    pass\n")]
+    calls = sorted((e["src_symbol"], e["dst_symbol"]) for e in extract_edges(rows)
+                   if e["internal"] and e["kind"] == "call")
+    assert calls == [("web/app.tsx::App", "web/app.tsx::Panel")]

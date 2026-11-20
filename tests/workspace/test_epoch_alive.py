@@ -16,7 +16,6 @@ def _write(codoc_dir, *, open: bool, epoch_id: str = "ep-1") -> None:
     data = {
         "version": 1,
         "epoch": {"id": epoch_id, "open": open, "started_at": "2026-07-11T00:00:00+00:00", "ended_at": None},
-        "touched": [],
     }
     activity_path(codoc_dir).write_text(json.dumps(data))
 

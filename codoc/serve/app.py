@@ -200,11 +200,14 @@ def handle_message(cd: Path, s: Session, m: dict) -> JSONResponse:
             return JSONResponse({"error": "only a maintainer changes the tree's language"}, status_code=403)
         tag = str(m.get("tag") or "").strip()
         from codoc.doclang import is_language_tag, resolve
-        from codoc.workspace.config import write_config
+        from codoc.workspace.config import ConfigUnreadable, write_config
         if not is_language_tag(tag):
             return JSONResponse({"error": "a BCP 47 language tag is required"}, status_code=400)
         # The same normalized tag `codoc lang` writes.
-        write_config(cd, doc_language=resolve(tag).code)
+        try:
+            write_config(cd, doc_language=resolve(tag).code)
+        except ConfigUnreadable as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
         return JSONResponse({"ok": True})
     if kind in REFUSED:
         return JSONResponse({"ok": False, "error": REFUSED[kind]}, status_code=202)

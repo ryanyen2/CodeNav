@@ -22,6 +22,7 @@ Kind(
     lift:    (LiftContext) -> dict | None,             # code -> content
     lower:   (old, new, LowerContext) -> str | None,   # a change to the block -> a directive line
     consult: (content) -> str,         # what the realizing agent reads
+    lifted:  tuple[str, ...],          # fields only `lift` writes
 )
 ```
 
@@ -42,6 +43,9 @@ leaves it out).
   `required`. Text fields arrive as Markdown strings.
 - A codec sees content through `kinds.plain`: each Text field as a string in the
   `rejected` read mode, raw for a source field and inline Markdown otherwise.
+- `lifted` names the fields only the loop's `lift` writes: what it fetched or extracted.
+  `inbox.client_payload` drops them from a client's `block.add` and refuses a client's
+  `block.set` of one, so a url block's excerpt is always what the URL served.
 - A kind never produces ops, actors or plans.
 
 | codec | input | output | run by |
@@ -69,7 +73,7 @@ shows ink and ground as a paragraph does. Any other field is replaced whole by
 | `pdf` | `caption` | Extracts text from a file under `.codoc/media/` when `pypdf` is installed. | | The excerpt, or the file path. |
 | `image` | `alt`, `caption` | | | The alt text, caption and file. |
 | `screenshot` | `caption` | | | The file and caption. |
-| `comment` | `body` | | While the thread is open and the body is not empty: the anchor text and the body; with `scope: both`, also a request to amend the description through `codoc_reflect`. | The anchor text and the body. |
+| `comment` | `body` | | While the thread is open (its first message says so) and the body is not empty: the anchor text and the body; with `scope: both`, also a request to amend the description through `codoc_reflect`. | |
 
 `table` and `code` are part of the feature's description, so the agent reads them there.
 The `url` and `pdf` extractors are in the optional `media` extra.
@@ -90,7 +94,7 @@ Content written to a kind block goes through `codoc/kinds/write.py`
 | writer | how | actor | lands |
 |---|---|---|---|
 | A coding agent | `codoc_write_block(content, bid)`, or `kind` and `feature_id` to add a block at the end of the feature's body. It runs `plan_write` against a read-only replay and submits through the inbox. | `agent:claude-code` | The trunk, or the agent's plan when it passes `plan`. An ingest goes through the machine gate. |
-| The loop | `kinds.lift.lift_pass`: every live block whose kind has a `lift`, on a feature that is not held. Only the changed fields are written. | `loop` | The trunk. The ingest is marked `derived`, which skips the machine gate. |
+| The loop | `kinds.lift.lift_pass`: every live block whose kind has a `lift`, on a feature that is not held, that no open plan added (`unvetted_block`). A field an open plan set is read as the owner's value (`derive.rejected_content`), so a url a suggester proposed is not fetched. Only the changed fields are written. | `loop` | The trunk. The ingest is marked `derived`, which skips the machine gate. |
 | The editor | Comment cards write comment blocks directly as ops (`block.add`, `text.insert`, `text.mark(comment)`, `block.set(status)`). | the person | The trunk. |
 
 A tree edit (`add_node`, `amend`) carries prose and source blocks only. A plugin kind block
@@ -98,7 +102,13 @@ in a model's description is dropped.
 
 ## 5. Kinds in the directive
 
-For each block of the feature's body (`loops/realize.py`, `_kind_lines`):
+For each block of the feature's body (`loops/realize.py`, `_kind_lines`), read from
+`realize.rejected_view`, which holds no block an open plan added (`derive.unvetted_block`):
+the view kills each, though a reject keeps one holding another's words, so a url a plan
+gave a block at add is never a `consult` line. Its content is read in the `rejected` mode
+(`kinds.plain`). A JSON field carries no plan tag, so one an open plan set reads as its
+value from before the plans, the owner's (`derive.rejected_content`, by the rule in
+[model.md](model.md#read-modes)):
 
 - An in-flow block adds its `consult` line.
 - A block whose kind has a `lower` adds what `lower` makes of `(old, new)`. `old` is the
@@ -109,7 +119,15 @@ For each block of the feature's body (`loops/realize.py`, `_kind_lines`):
   loop lifted from the code is already in the code.
 - A comment is out of the flow, so it speaks only through `lower`. Its `lower` does not
   compare `old` and `new`: an open thread is in every directive of its feature until it is
-  resolved.
+  resolved. Each message's `status`, `scope` and `anchor_text` are its thread's (section 6).
+  No other line of the directive reads a comment: a link in one is not a `Consult:` line,
+  and its words are not `added:`.
+- A client's words that a codec or the directive quotes inside one of its lines (a
+  comment's body and `anchor_text`, a title, a link's label, a caption, a url) are
+  `derive.one_line`'d: every run of whitespace, line breaks included, is one space. The
+  directive is read line by line, so a line break in them would write a `Consult:` or an
+  `Author asked:` of their own. A comment's body is collapsed rather than kept on
+  prefixed lines, because its `Comment on` line is what voices it as a comment.
 - An in-flow block of a kind this process has no declaration for adds `<kind>: <words>`,
   its Text fields in the `rejected` mode (`derive.kind_words`).
 
@@ -124,7 +142,30 @@ message's block id), each with `anchor` (the block the thread is on), `anchor_te
 `scope` (`code` or `both`) and `status` (`open` or `resolved`). The words it discusses
 carry a `comment` mark whose `block` attr names the first message. The mark is removed
 whole and does not grow (I2). A comment is not exported to `tree.codoc` and is left out of
-`ink`, `ground`, `phase` and drift.
+`ink`, `ground`, `phase` and drift. A client's `block.add` of a comment takes the comment
+kind's layout whatever `layout` it sends (`inbox.client_payload`): a suggester writes a
+comment untagged, and a layout of their own would put their words into the prose.
+
+A block's thread is its `thread` when that is a non-empty string, else its own id. A
+thread is open or resolved as a whole, and its first message says which, what it is on
+(`anchor_text`) and what it asks for (`scope`): the block the thread names, when that is a
+live comment of this thread, else the thread's earliest live message in document order. A
+reply's own `status`, `scope` and `anchor_text` are whatever its writer sent and decide
+nothing, wherever it was placed. The rule is written once per language,
+`derive.thread_id` and `derive.first_message` in Python and `threadIdOf` and `threadsOf`
+in `comments.ts`, and `vscode-codoc/src/test/fixtures/thread-cases.json` holds both to the
+same cases. The directive (`realize._kind_lines`), the margin, and the policy on who may
+resolve a thread ([concurrency.md](concurrency.md#7-roles-and-authority)) read it, so a
+reply that says `open` on a resolved thread, or `both` on a `code` one, neither shows in
+the margin nor reaches the agent.
+
+Each message is voiced by its own author's role (`realize._kind_lines`, from the role
+table). An owner's, a maintainer's or a machine's is `Comment on "…": …`, the person's
+note, which the realize prompt lets win over the description. Anyone else's, a hub
+contributor's on a thread of their own or as a reply in the owner's, is
+`Contributor <actor> commented on "…": …`, which the prompt reads as a suggestion the
+person did not write: followed only where it agrees with the description and the
+person's words, never over them.
 
 ## 7. In the editor
 

@@ -24,6 +24,7 @@ mutation that changes them:
 from __future__ import annotations
 
 import bisect
+import copy
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -126,6 +127,29 @@ class Watermarks:
 Policy = Callable[["Store", Op], str | None]   # (store, op) → denial reason, or None
 
 
+class _CopyOnFetch(dict):
+    """A fork's blocks while it is written: each is copied from the parent the
+    first time it is fetched by key (``[bid]`` or ``get``), which is how a
+    plan's reject reaches every block it writes. Iterating gives what is
+    there, copied or not, so a write that reaches blocks by iterating (an
+    accept: ``verdict._proposed_marks``) would write into the parent."""
+
+    def __init__(self, parent: dict) -> None:
+        super().__init__(parent)
+        self.mine: set[str] = set()
+
+    def __getitem__(self, bid: str) -> Block:
+        b = dict.__getitem__(self, bid)
+        if bid not in self.mine:
+            b = copy.deepcopy(b)
+            dict.__setitem__(self, bid, b)
+            self.mine.add(bid)
+        return b
+
+    def get(self, bid, default=None):
+        return self[bid] if bid in self else default
+
+
 class Store:
     def __init__(self, policy: Policy | None = None) -> None:
         # Names this store instance. A rebuild makes a new store, and positions
@@ -160,10 +184,42 @@ class Store:
         # and has none now is proposed for deletion; after a fold there is no
         # `bind.attach` op left to read, so it is state and not history.
         self.bound_once: set[str] = set()
+        # A fork's log is its parent's, which it never appends to (`fork`).
+        self.forked = False
 
     @property
     def pos(self) -> int:
         return len(self.ops)
+
+    def fork(self, write: Callable[[Store], object]) -> Store:
+        """This store as ``write`` leaves a throwaway copy of it, for a view
+        that applies ops it does not keep (``realize.rejected_view``). The log
+        and its indexes are shared and never appended to: a fork records
+        nothing and indexes nothing, so ``write`` may not move characters
+        between fields. ``write`` may only reject plans: a reject kills,
+        revives and drops marks in place and reaches blocks by key, while an
+        accept iterates the blocks (``_CopyOnFetch``) and would write into
+        this store.
+        What an op writes is copied: each block the first time ``write``
+        fetches it, the order, the bindings, the open plans, the removal lists,
+        the watermark table, the plan table. So a fork costs the blocks its ops
+        reach and a few copies of tables the size of the tree, never the log's
+        length. The fork has an id of its own, so no cache keyed on
+        the store mistakes it for this one, and no policy: it judges no one.
+        Read it, never write it again: its untouched blocks are this store's."""
+        f = copy.copy(self)
+        f.id, f.forked, f.policy = uuid.uuid4().hex[:12], True, None
+        f.blocks = _CopyOnFetch(self.blocks)
+        f.order = list(self.order)
+        f.removed = {k: set(v) for k, v in self.removed.items()}
+        f.bindings = dict(self.bindings)
+        f.open_plans = {k: copy.copy(p) for k, p in self.open_plans.items()}
+        f.plans = {**self.plans, **f.open_plans}
+        f.watermarks_by_fid = dict(self.watermarks_by_fid)
+        f.bound_once = set(self.bound_once)
+        write(f)
+        f.blocks = dict(f.blocks)               # written: a read copies nothing
+        return f
 
     # ── blocks and order ───────────────────────────────────────────────────
     def add_block(self, block: Block) -> None:
@@ -365,6 +421,12 @@ class Store:
             out.extend(mine)
         return out
 
+    def kept(self, bid: str, symbol: str) -> dict | None:
+        """The entry block ``bid`` keeps for ``symbol`` from a kind change (marked
+        ``set``), or None."""
+        b = self.blocks.get(bid)
+        return next((dict(e) for e in b.detached if e.get("set") and e["symbol"] == symbol), None) if b else None
+
     def refeature(self, b: Block, prev_kind: str, symbols) -> tuple[list[dict], list[dict]]:
         """The one rule for a kind change, by ``block.set`` or a verdict's
         ``set`` step. A heading made another kind leaves as a delete does: its
@@ -378,9 +440,10 @@ class Store:
         ``(detached, attached)``."""
         if prev_kind == HEADING and b.kind != HEADING:
             gone = self.unbind(b.id)
-            names = {e["symbol"] for e in gone}
-            b.detached = [*(d for d in b.detached if not (d.get("set") and d["symbol"] in names)),
-                          *({**e, "set": True} for e in gone)]
+            fresh = {e["symbol"]: {**e, "set": True} for e in gone}
+            # In place, so a reopen that takes the same code off again leaves the list as it was.
+            b.detached = [fresh.pop(d["symbol"]) if d.get("set") and d["symbol"] in fresh else d for d in b.detached] \
+                + list(fresh.values())
             return gone, []
         if b.kind == HEADING and prev_kind != HEADING:
             want = set(symbols or ())
@@ -396,6 +459,8 @@ class Store:
 
     # ── characters and marks ───────────────────────────────────────────────
     def index_text(self, bid: str, path: str, text: Text) -> None:
+        if self.forked:
+            return
         for s in text.segs:
             self.char_index.setdefault(s.op, set()).add((bid, path))
         for m in text.marks:
@@ -453,6 +518,8 @@ class Store:
 
     # ── record keeping ─────────────────────────────────────────────────────
     def record(self, op: Op, touched: set[str], structural: bool) -> None:
+        if self.forked:
+            return
         self.ops.append(op)
         self.by_id[op.id] = op
         self.position[op.id] = len(self.ops) - 1

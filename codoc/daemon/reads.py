@@ -103,7 +103,7 @@ def read_history(codoc_dir: str | Path, feature_id: str, limit: int = 20, *, ops
             blame[b.id if f == "text" else f"{b.id}.{f}"] = [
                 {"actor": r.actor, "start": r.start, "end": r.end, "text": live[r.start:r.end]}
                 for r in attribution(b.text(f))]
-    return {"ok": True, "feature_id": feature_id, "title": title(store, feature_id), "batches": rows, "attribution": blame}
+    return {"ok": True, "feature_id": feature_id, "title": title(store, feature_id), "changes": rows, "attribution": blame}
 
 
 def _op_entry(store, o) -> dict:

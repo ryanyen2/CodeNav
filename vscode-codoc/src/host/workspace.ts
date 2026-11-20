@@ -13,7 +13,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 
-import { readPid } from './pidfile';
+import { daemonRunning } from './pidfile';
 
 interface Status { state?: string; pending?: number; detail?: string; features?: number }
 
@@ -45,14 +45,7 @@ export class Workspace implements vscode.Disposable {
     }
 
     get daemonRunning(): boolean {
-        const pid = this.codocDir ? readPid(this.codocDir) : undefined;
-        if (pid === undefined) return false;
-        try {
-            process.kill(pid, 0);
-            return true;
-        } catch {
-            return false;
-        }
+        return !!this.codocDir && daemonRunning(this.codocDir);
     }
 
     refresh(): void {

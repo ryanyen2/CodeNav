@@ -6,8 +6,8 @@ codoc reacts to each action as it happens:
 * **terminal**: one compact line per action (edit / read / reflect / fetch /
   run), so the person can see what the agent is doing without reading the
   diff. Plain text, dim ANSI only on a tty.
-* **activity.json**: every file touch reopens the agent epoch and records the
-  file, as the interactive pre-tool hook does (``workspace.epoch``).
+* **activity.json**: every file touch reopens the agent epoch and renews its
+  lease, as the interactive pre-tool hook does (``workspace.epoch``).
 * **status.json**: the pass renews the realizing lease from its own tool
   activity. ``autorealize.start_realize`` takes the lease and starts this
   module as ``python -m codoc.claude.sdk_realize <root> [<permission mode>]``,
@@ -103,12 +103,13 @@ class RealizeMonitor:
         except Exception:  # noqa: BLE001 (the heartbeat is advisory, never break realize)
             pass
 
-    def _record_touch(self, rel: str) -> None:
-        """Record the touch as the interactive pre-tool hook does: a streamed
-        tool-use block arrives when the tool is requested, before it writes."""
+    def _record_touch(self) -> None:
+        """Open the epoch and renew its lease, as the interactive pre-tool
+        hook does: a streamed tool-use block arrives when the tool is
+        requested, before it writes."""
         try:
             reopen_epoch(self.codoc_dir, self.session)
-            touch_epoch(self.codoc_dir, rel)
+            touch_epoch(self.codoc_dir)
         except Exception:  # noqa: BLE001 (signals never break the run)
             pass
 
@@ -127,7 +128,7 @@ class RealizeMonitor:
             rel = self._rel(path)
             if rel is None:
                 return
-            self._record_touch(rel)
+            self._record_touch()
             if name in _WRITE_TOOLS:
                 self.writes.add(rel)
                 self._line("●", "edit", rel)

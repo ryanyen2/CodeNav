@@ -17,6 +17,7 @@ push access), never the visitor's. The browser holds only an opaque cookie.
 """
 from __future__ import annotations
 
+import logging
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -98,10 +99,13 @@ class AuthContext:
         cadence. Revoking access has to reach a tab that is already open, and
         the role it signed in with is a decision somebody has since changed.
 
-        A changed role is written back to the tracked ``config.json`` as well:
-        the session gate decides what the HTTP routes allow, and the roles table
-        decides what the applier allows. A demotion that reached only the first
-        would leave the daemon accepting their verdicts."""
+        The role is written back to the tracked ``config.json`` at every
+        re-check as well (``record_role`` writes nothing when the table already
+        says it): the session gate decides what the HTTP routes allow, and the
+        roles table decides what the applier allows. A demotion that reached
+        only the first would leave the daemon accepting their verdicts, and a
+        role a sign-in could not record (the file did not parse) is recorded at
+        the first re-check after somebody fixes it."""
         s = self.store.get(sid)
         if s is None:
             return None
@@ -110,13 +114,11 @@ class AuthContext:
             return s
         s.checked_at = now
         role = authorize(s.login, self.resolver)
+        if codoc_dir is not None:
+            record_role(codoc_dir, s.login, role)
         if role == NONE:
             self.store.delete(s.sid)
-            if codoc_dir is not None:
-                record_role(codoc_dir, s.login, NONE)
             return None
-        if role != s.role and codoc_dir is not None:
-            record_role(codoc_dir, s.login, role)
         s.role = role
         return s
 
@@ -131,17 +133,19 @@ def record_role(codoc_dir: str | Path, login: str, role: str) -> None:
     This adds the person to the role table, or changes their entry, and so
     edits a tracked file: signing in for the first time, and a re-check that
     finds a changed role, leave ``config.json`` modified for the maintainer to
-    commit. It writes the ``roles`` key and nothing else."""
-    from codoc.workspace.config import read_config, write_config
+    commit. It writes the ``roles`` key and nothing else.
+
+    A ``config.json`` that does not parse is left for the maintainer to fix
+    and the role is not recorded: the session still carries it, and writing
+    over the file would lose every other setting in it. The session's next
+    re-check records it once the file parses again."""
+    from codoc.workspace.config import ConfigUnreadable, read_config, write_config
     from codoc.workspace.inbox import hub_actor
     roles = dict(read_config(codoc_dir).get("roles") or {})
     if roles.get(hub_actor(login)) == role:
         return                       # a tracked file: signing in is not a change
     roles[hub_actor(login)] = role
-    write_config(codoc_dir, roles=roles)
-
-
-def read_roles(codoc_dir: str | Path) -> dict[str, str]:
-    from codoc.workspace.config import read_config
-    d = read_config(codoc_dir).get("roles")
-    return {str(k): str(v) for k, v in d.items()} if isinstance(d, dict) else {}
+    try:
+        write_config(codoc_dir, roles=roles)
+    except ConfigUnreadable as e:
+        logging.getLogger(__name__).warning("%s's role (%s) is not recorded: %s", login, role, e)

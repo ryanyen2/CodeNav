@@ -44,5 +44,8 @@ a diff, against a stated base, with marks kept by identity.
 **Machine gate**: where a machine's ingest lands when it named no plan: the
 trunk, or a plan when the feature is held or the rewrite deletes too much.
 
-**Projection**: the daemon's per-block view for the editor (text, runs, spans,
-phases, claims, watermarks), adopted per block.
+**Projection**: the daemon's view of the document for the editor
+(`derive.projection`): every block with its text, runs and spans, and each
+feature's phase, editors, claims and bindings, with the plans offered and the
+work in flight. The editor adopts it per block. The keys are listed in
+`docs/model.md` §8.

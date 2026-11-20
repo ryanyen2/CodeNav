@@ -132,11 +132,14 @@ def reflect(ws: Workspace, cs: ChangeSet, graph: Graph, *, propose, repo_name: s
     # already (a branch switched back to code the loop refreshed on). An agent's
     # or a person's attach or refresh says whose code it is, not that the prose
     # fits it, so their chunk is judged, a new symbol an agent attached
-    # included. The refresh records that the loop has now described it.
+    # included. The refresh records that the loop has now described it. A pass
+    # stopped between its refresh and its model call recorded that too soon,
+    # so the chunks it left (`cs.unjudged`) are judged whatever their binding says.
     stale: dict[str, str] = {}                  # bound symbol to judge -> its feature
     for c in cs.modified + cs.added:
         b = store.bindings.get(c.symbol)
-        if b and (b.fingerprint != c.fingerprint or b.types_hash != c.types_hash or b.set_by != LOOP):
+        if b and (b.fingerprint != c.fingerprint or b.types_hash != c.types_hash or b.set_by != LOOP
+                  or c.symbol in cs.unjudged):
             stale[c.symbol] = b.feature
             bodies.append(_bind(K.BIND_REFRESH, b.feature, c.symbol, c.fingerprint, c.types_hash,
                                 caused_by=p.cause(b.feature)))

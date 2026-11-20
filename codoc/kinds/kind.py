@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from codoc.calculus.derive import field_text
+from codoc.calculus.derive import field_text, rejected_content
 from codoc.calculus.doc import Block, Layout, is_one_line, register_kind
 from codoc.calculus.store import Binding, Store
 from codoc.calculus.text import Text
@@ -45,6 +45,8 @@ class Kind:
     lift: Callable[[LiftContext], dict | None] | None = None
     lower: Callable[[dict, dict, LowerContext], str | None] | None = None
     consult: Callable[[dict], str] = lambda c: ""
+    # Fields only ``lift`` writes (what it fetched or extracted): no client sends one.
+    lifted: tuple[str, ...] = ()
 
     def validate(self, content: dict, *, partial: bool = False) -> str | None:
         """Why ``content`` does not fit the schema, or None. Text fields are
@@ -78,7 +80,7 @@ def register(kind: Kind) -> Kind:
     if is_one_line(kind.name):
         raise ValueError(f"{kind.name} is a prose kind of the calculus")
     _REGISTRY[kind.name] = kind
-    register_kind(kind.name, kind.layout)
+    register_kind(kind.name, kind.layout, frozenset(kind.lifted))
     return kind
 
 
@@ -92,6 +94,8 @@ def kinds() -> list[Kind]:
 
 def plain(block: Block, store: Store | None = None, mode: str = "rejected") -> dict:
     """A block's content as a codec sees it: each Text field as a string (raw
-    for a source field, inline Markdown otherwise) in the read mode ``mode``."""
+    for a source field, inline Markdown otherwise) in the read mode ``mode``,
+    and under ``rejected`` each other field as ``derive.rejected_content`` has it."""
+    content = rejected_content(store, block) if store is not None and mode == "rejected" else block.content
     return {k: field_text(block, k, mode, store) if k in block.layout.text and isinstance(v, Text) else v
-            for k, v in block.content.items()}
+            for k, v in content.items()}

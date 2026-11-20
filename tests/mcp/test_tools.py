@@ -375,7 +375,7 @@ def test_new_code_a_daemonless_turn_wrote_binds_and_settles_when_the_turn_ends(t
     ho = handoff(ws, "h1", actor=H)
     ws.close()
     (tmp_path / "c.py").write_text("def send():\n    return 1\n\n\ndef retry_twice():\n    return send()\n")
-    write_activity(cd, {"version": 1, "epoch": {"id": "ep-s", "open": True}, "touched": ["c.py"], "cited": []})
+    write_activity(cd, {"version": 1, "epoch": {"id": "ep-s", "open": True}, "cited": []})
     try:
         r = tools.reflect(str(cd), ops=[{"kind": "attach", "feature_id": "h1", "bindings": ["c.py::retry_twice"]}],
                           caused_by=f"d:{ho.id}", root_dir=str(tmp_path))
@@ -477,7 +477,7 @@ def test_a_binding_names_a_file_as_the_index_walk_does(tmp_path):
     assert canonical_file(tmp_path, "../elsewhere.py") is None
     walk = subprocess.run(
         [sys.executable, "-c", "import json, sys; from codoc.index.changes import compute_changeset; "
-         "print(json.dumps(sorted(c.symbol for c in compute_changeset(sys.argv[1], sys.argv[1] + '/.codoc').added)))",
+         "print(json.dumps(sorted(r.symbol for r in compute_changeset(sys.argv[1], sys.argv[1] + '/.codoc').rows)))",
          str(tmp_path)], capture_output=True, text=True, timeout=120,
         env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])})
     assert walk.returncode == 0, walk.stderr
@@ -592,8 +592,9 @@ def test_the_agent_is_claude_code_unless_codoc_agent_names_another(monkeypatch):
 def test_an_unbindable_symbol_is_refused_with_the_reason(tmp_path):
     """A symbol the index's walk leaves out is defined but cannot be bound, and
     the refusal says why: under an excluded directory (tests/ by default),
-    under a symlinked directory the walk does not enter, or in an excluded
-    file. A symbol no file defines is refused as undefined."""
+    under a symlinked directory the walk does not enter, in an excluded file,
+    or in a file too large to index. A symbol no file defines is refused as
+    undefined."""
     cd, ws = workspace(tmp_path)
     ws.close()
     (tmp_path / "c.py").write_text("def send():\n    return 1\n")
@@ -603,6 +604,7 @@ def test_an_unbindable_symbol_is_refused_with_the_reason(tmp_path):
     (tmp_path / "real").mkdir()
     (tmp_path / "real" / "lib.py").write_text("def f():\n    return 2\n")
     (tmp_path / "linked").symlink_to(tmp_path / "real", target_is_directory=True)
+    (tmp_path / "bundle.py").write_text("def big():\n    return 1\n" + "#" * 1_500_000)
 
     def attach(sym):
         try:
@@ -611,11 +613,12 @@ def test_an_unbindable_symbol_is_refused_with_the_reason(tmp_path):
         finally:
             client.release(cd)
     got = {sym: attach(sym) for sym in ("tests/test_lists.py::test_natural_list_conjunction", "test_root.py::test_root",
-                                        "linked/lib.py::f", "c.py::nope")}
+                                        "linked/lib.py::f", "bundle.py::big", "c.py::nope")}
     assert not any(r["ok"] for r in got.values()), got
     assert "is under tests/, a directory codoc does not index (index_exclude in .codoc/config.json" in \
         got["tests/test_lists.py::test_natural_list_conjunction"]["error"]
-    assert "is in a file codoc does not index (index_exclude" in got["test_root.py::test_root"]["error"]
+    assert "test_root.py is a file codoc does not index (index_exclude" in got["test_root.py::test_root"]["error"]
     assert "is under linked/, a symlinked directory the index does not enter" in got["linked/lib.py::f"]["error"]
+    assert "bundle.py is over 1,500,000 bytes" in got["bundle.py::big"]["error"]
     assert all("does not define" not in r["error"] for sym, r in got.items() if sym != "c.py::nope")
     assert "the code does not define c.py::nope" in got["c.py::nope"]["error"]

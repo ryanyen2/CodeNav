@@ -7,7 +7,9 @@ and can be deleted.
 
 Primitives: ``atomic_write`` (tmp file, then rename), ``read_json`` (a missing
 or corrupt file degrades to the caller's default), ``locked`` (an exclusive
-``flock`` for a read-modify-write), and ``find_codoc_dir``.
+``flock`` for a read-modify-write), ``hold_lock`` (the same lock, kept as
+long as the caller keeps the descriptor open: the daemon's on ``watch.pid``,
+the hub's on ``serve.lock``), and ``find_codoc_dir``.
 """
 from __future__ import annotations
 
@@ -35,7 +37,7 @@ MEDIA_DIR = "media"               # files that image and pdf blocks reference
 # Channels into the applier.
 INBOX_DIR = "inbox"               # <client>.jsonl submissions and <client>.ack.jsonl answers
 OFFSETS = "offsets.json"          # under inbox/: how far each client's file has been drained
-ACTIVITY = "activity.json"        # the agent epoch and what the session touched
+ACTIVITY = "activity.json"        # the agent epoch: its lease, cited hand-offs, the last reflected close
 
 # Derived files the applier publishes.
 EXPORT = "tree.codoc"             # the Markdown export
@@ -44,10 +46,11 @@ HISTORY = "history.json"          # the timeline window
 STATUS = "status.json"            # workspace state and the realizing lease
 REALIZE = "realize.md"            # the queued directives, as the realizing agent reads them
 GRAPH_CACHE = "cache/graph.json"  # the code graph
+PENDING = "cache/pending.json"    # the change set of a reflect pass that has not finished
 
 # Other local state.
 HUB_PRS = "cache/hub-prs.json"    # hand-off → pull-request branch, kept by the hub
-PIDFILE = "watch.pid"             # the daemon's pid
+PIDFILE = "watch.pid"             # the daemon holds a lock on it and writes its pid in it
 APPLIER_LOCK = "applier.lock"     # held for one apply-and-publish turn
 SERVE_LOCK = "serve.lock"         # the hub that owns this checkout
 
@@ -149,19 +152,42 @@ def locked(path: str | Path, timeout: float | None = None):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
     try:
-        if timeout is None:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        else:
-            deadline = time.monotonic() + timeout
-            while True:
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError(f"could not lock {path} within {timeout}s") from None
-                    time.sleep(0.01)
+        take_flock(fd, path, timeout)
         yield
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
+
+
+def hold_lock(path: str | Path) -> int | None:
+    """Take an exclusive ``flock`` on *path* and write this process's pid into
+    it, for a person to read. Returns the open descriptor, which holds the
+    lock until it is closed or the process ends; None, with nothing written,
+    when another process holds it. Liveness is the lock, never the pid."""
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        take_flock(fd, path, timeout=1)
+    except TimeoutError:
+        os.close(fd)
+        return None
+    os.ftruncate(fd, 0)
+    os.write(fd, str(os.getpid()).encode())
+    return fd
+
+
+def take_flock(fd: int, path: str | Path, timeout: float | None = None) -> None:
+    """Take an exclusive ``flock`` on the open file *fd* (*path* names it in
+    the error). With a *timeout*, raises ``TimeoutError`` instead of waiting
+    past it."""
+    if timeout is None:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"could not lock {path} within {timeout}s") from None
+            time.sleep(0.01)

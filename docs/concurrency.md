@@ -17,12 +17,24 @@ One process applies ops at a time. It is called the applier.
 | the MCP server (the coding agent) | `agent-<CODOC_AGENT>` | Same as the CLI. |
 | the hub, per signed-in user | `hub-<login>` | Appends submissions to that user's inbox file. |
 
-- A daemon is alive when `.codoc/watch.pid` names a running process. A second daemon
-  refuses to start.
-- A daemon builds its store, writes the pidfile, then rebuilds the store once under the
-  applier lock. A daemonless writer that applied before that is in the logs it reads.
-  A writer that saw no daemon and got the lock after the pidfile was written checks for
-  a daemon again under the lock and submits through the inbox instead.
+- A daemon is alive while it holds an exclusive `flock` on `.codoc/watch.pid`
+  (`daemon/pidfile.py`). It takes the lock when it starts and keeps it until it exits;
+  the OS releases it however the process ends. The file also holds the daemon's pid, for
+  a person to read, but liveness never depends on it: a file left by a killed daemon, or
+  naming a pid another program has since been given, reads as no daemon. The file is
+  never removed, since a daemon that removed it as it exited could leave one starting at
+  that moment holding the lock on a file no longer at the path. A second daemon cannot
+  take the lock and exits with status 3, having written nothing.
+- The editor host cannot take a `flock`, so it reads the pid as a hint: a daemon runs
+  while that process exists and its command line is a `codoc watch`
+  (`vscode-codoc/src/host/pidfile.ts`). The hint decides only what the status bar says
+  and whether to spawn a daemon; one spawned beside a live daemon finds the lock held and
+  exits with status 3.
+- A daemon takes the lock before it writes anything, then builds its store under the
+  applier lock. A daemonless writer applying at that moment finishes first, and its log
+  is read. A writer that saw no daemon and got the applier lock after the daemon
+  took its lock checks for a daemon again under the applier lock and submits through the
+  inbox instead.
 - Every client submission, applied directly or drained from an inbox, goes through
   `Workspace.apply_submission`: what a client may assert, how a suggester's edit becomes
   a plan, and what an amend or an ingest answers are decided there.
@@ -146,11 +158,13 @@ The drain, per line:
 3. A `cid` the logs name in a `sub` and the ack file does not is acked from the log (the
    first op it names) and not applied again: the applier stopped between logging it and
    acking it.
-4. `caused_by` is dropped unless the actor is a machine.
+4. `caused_by` is dropped unless the actor is a machine. A `batch` whose first op is
+   another actor's is replaced by a fresh one: an undo sends every inverse in its batch as
+   the undoer, and batch ids are readable in `history.json`.
 5. Provisional anchors are resolved (below).
-6. For an actor with the `suggest` role and no plan tag: a range `text.delete` becomes a
-   `suggest_del` mark over the same range, unless every character in the range was minted
-   by an open plan of that actor. Any plannable op that is not part of a comment is then
+6. For an actor with the `suggest` role and no plan tag: a range `text.delete` outside a
+   comment becomes a `suggest_del` mark over the same range, unless every character in the
+   range was minted by an open plan of that actor. Any plannable op that is not part of a comment is then
    tagged with a plan of that actor, opened or reused by the drain (section 9).
 7. An `ingest` runs the diff in the applier and goes through the machine gate
    (section 7). Any other kind is minted (next `seq`, `tick`, actor) and applied.
@@ -198,14 +212,19 @@ name. Ack files are trimmed to their newest 2000 lines when a session opens, and
 `offsets.json` keeps the applier from re-reading lines it has drained.
 
 **The daemon's batch.** File events are debounced (600 ms). A batch starts on a change to
-a code file the index reads, to `activity.json`, to a client's `inbox/<client>.jsonl`, to
-a file in `log/` other than the daemon's own session file, or to its own session file
-when git took or replaced it (`git stash -u`, `git clean`, a `stash pop` that puts it
-back). It never starts on the daemon's own writes (its appends to its session file, acks,
-`offsets.json`), so a batch does not start the next. After 30 seconds with no such event a
-batch runs anyway (`TICK_MS`), so the close of a stale agent epoch and an auto-realize
-retry do not wait for an edit. A batch that did nothing prints nothing. For each batch the
-daemon does, in order:
+a code file the index reads, to `activity.json`, to `config.json`, to a client's
+`inbox/<client>.jsonl`, to a file in `log/` other than the daemon's own session file, or
+to its own session file when git took or replaced it (`git stash -u`, `git clean`, a
+`stash pop` that puts it back). It never starts on the daemon's own writes (its appends
+to its session file, acks, `offsets.json`), so a batch does not start the next, with one
+exception: the batch that reflects an agent's close records it in `activity.json` (step
+3), which starts one more batch, and that batch finds nothing to do. 30 seconds after the last batch, a
+batch runs anyway (`TICK_MS`), however many files that start none changed meanwhile, so
+the close of a stale agent epoch and an auto-realize retry do not wait for an edit. The
+daemon takes every file event and filters it itself: watchfiles' timeout runs out only
+when no event at all arrives, so a filter inside watchfiles would let a log or a build's
+output that keeps changing hold the tick off. A batch that did nothing prints nothing.
+For each batch the daemon does, in order:
 
 1. Follow the logs on disk (section 5). If `HEAD` moved (its commit or its branch), or
    git took the session file: start a new session and rebuild the store from the log
@@ -220,13 +239,37 @@ daemon does, in order:
    submissions written while no daemon ran are applied.
 3. Read the agent epoch from `activity.json`, every batch, so a daemon started during a
    turn knows it. While a coding agent's session is open, changed code files are
-   deferred. When it closes, or after 900 seconds of silence (the daemon then closes it,
-   whether or not it saw it open), the deferred files and every file the session touched
-   go to step 4, and that pass cites every queued hand-off. Every epoch has an id, and
-   only a stop naming it closes it: a realize pass that runs no hooks opens one under its
-   own id and closes it when the pass ends.
-4. Reflect the changed code files that are not deferred: the loop's pass, which writes
-   ops as `loop` and cites the hand-offs step 1 noted.
+   deferred. When it closes, or after 900 seconds of silence (the daemon then closes it),
+   step 4 runs a pass whether or not a changed file woke the batch, and that pass cites
+   every queued hand-off: the pass reads what changed from the index, so code the turn
+   changed through a shell, which names no file, is reflected too. A close is an epoch
+   the daemon saw open that is open no longer, or a closed epoch whose `ended_at` is not
+   the last close reflected, which the daemon never saw open: a turn can open and close
+   while one batch runs, or while no daemon runs (the Stop hook reflects no code). After
+   the pass, the daemon records the close's `ended_at` as `reflected` in `activity.json`,
+   and a daemon starts from that record, so a close is reflected once: a daemon that
+   starts after a turn closed with none running reflects that turn, and one that starts
+   after a reflected close does not reflect it again, so the code changed since (a hand
+   edit, a `git pull`) cites nothing. Every epoch has an id, and only a stop naming it
+   closes it: a realize pass that runs no hooks opens one under its own id and closes it
+   when the pass ends.
+4. Reflect, unless an epoch is open: the loop's pass, which writes ops as `loop` and
+   cites the hand-offs step 1 noted. It covers every code file changed since the index
+   was last updated, not only those the batch saw change, so an edit made while no
+   daemon ran is reflected by the next pass. The pass updates the index
+   before its model call, so it writes the change set it read, and the hand-offs whose
+   trailers it cites (`landed`), to `cache/pending.json` before the call and deletes the
+   file once it has applied. A file this codoc cannot read counts as empty. A pass that was stopped
+   (the editor's or the hub's `SIGTERM`, a kill) leaves the file. A batch that finds
+   it runs the pass even when no code file changed, so the next daemon's startup batch,
+   or its next tick, applies it; while an agent session is open it waits, as changed
+   code does, for the pass the close runs. That pass merges the file into its own
+   change set: per chunk the newer change wins, except that a chunk added since the
+   last finished pass stays added. The stopped pass may have refreshed bindings before
+   its model call, so the model judges every bound chunk the file names. A pass that
+   raises an error deletes the file, so a change set that breaks the pass is reported
+   once, not on every pass after it. Limit: a pass stopped while the index is being
+   updated, before the file is written, loses what that update indexed.
 5. Unless an agent epoch is open, settle hand-offs (section 10).
 6. Publish the derived files.
 
@@ -327,19 +370,36 @@ recorded for it.
 |---|---|
 | `owner`, `maintainer` | Everything. |
 | `machine` | Every op, untagged or tagged with any open plan, except the verdict kinds: `plan.accept`, `plan.reject`, `plan.reopen`, `feature.handoff`, `feature.realized`. Two exceptions: `loop` may write `feature.realized`; a machine may reject its own open plan that has no ops. |
-| `suggest` | `plan.open`. Ops tagged with a plan the same actor opened. Comments, as below. A reject of its own open plan that has no ops. Nothing else. |
+| `suggest` | `plan.open`. Ops tagged with a plan the same actor opened, except `bind.*`. Comments, as below. A reject of its own open plan that has no ops. Nothing else. |
 | `none` | Nothing. The hub records it when access is revoked. |
 
 A suggester's comment ops, all untagged:
 
 | op | allowed when |
 |---|---|
-| `block.add` of a `comment` block | Always. A reply is a new block. |
-| `text.mark` of kind `comment` | Always. It is the anchor on the prose. |
-| Text ops and `block.set` on a comment block | The actor added that block. |
-| `block.set` of `status` on a comment block | The actor added the thread's first block, which `thread` names. |
+| `block.add` of a `comment` block | Always. A reply is a new block. It takes the comment kind's layout (out of the flow, not exported) whatever `layout` the client sent (`inbox.client_payload`). |
+| `text.mark` of kind `comment` | The comment block its `attrs.block` names is one the actor added. It is that message's anchor on the prose, so they place their own and take off only their own: removing another person's would un-anchor their thread. |
+| Text ops and `block.set` on a comment block | The actor added that block. A text op writes only into the block it names: the applier refuses one whose characters another block holds (`bad_anchor`), so naming a comment of one's own reaches no other words. |
+| `block.set` of `status` on a comment block | The actor added the thread's first message (`derive.first_message`). |
+
+A thread is open or resolved as its first message's `status` says; a reply's own `status`
+decides nothing ([kinds.md](kinds.md#6-comments)). The first message is the block the
+thread names when that is a comment of the thread, else its earliest message. So only
+the person who started a thread, an owner or a maintainer resolves or reopens it.
+
+A comment needs no verdict, so a contributor's open thread is in every directive of its
+feature (section 10). It is voiced there as theirs, `Contributor <actor> commented on`,
+which the realize prompt reads as a suggestion that never overrides the description or
+the person's own words (realize.txt's "Reading a hand-off" legend, which the hub's
+sandboxed agent is given too, `realize_agent.build_directive_prompt`); only an owner's,
+a maintainer's or a machine's message is the person's note ([kinds.md](kinds.md#6-comments)).
 
 - A suggester's `block.merge` or `block.delete` cannot ride in a plan, so it is refused.
+- A suggester's `bind.*` op is refused, tagged or not. An attach applies at once, and the
+  hub worker confines its agent to the feature's bound files, so it would widen what the
+  agent may edit before any verdict. The editor never sends one. The worker reads the
+  scope with every open plan rejected (section 10), so a binding a machine's open plan
+  made is not in it.
 - The check runs once, when the op arrives, and the answer is recorded on the op: a
   refused op is stored with `conflict: "authority"`.
 - Replay does not ask again. A role changed later never removes what someone already
@@ -347,10 +407,15 @@ A suggester's comment ops, all untagged:
 - The policy reads the plans and, for comments, who added a block. It does not read the
   rest of the document, so a log can be checked without the document it was written against.
 - The hub writes `human:gh:<login>` into the table when a user signs in, as `maintainer`,
-  `suggest` or `none`, from their GitHub permission on the repository, and again when a
-  periodic re-check finds that permission changed (`serve/auth.py`, `record_role`). The
+  `suggest` or `none`, from their GitHub permission on the repository, and again at every
+  periodic re-check, which writes nothing when the table already says it
+  (`serve/auth.py`, `record_role`). The
   table is in the tracked `config.json`, so a first sign-in adds a person to it and leaves
   the file modified for the maintainer to commit; the hub writes only the `roles` key.
+- A `config.json` that does not parse (a merge conflict, a hand edit) reads as empty and is
+  never written over: every writer refuses (`config.ConfigUnreadable`), and the hub then
+  leaves the role unrecorded until a person fixes the file. The session's next re-check
+  after that records it.
 
 **Foreign logs.** Because replay trusts the record, a log file is a capability: a file
 edited to remove the conflict from a refused verdict would apply on every clone that
@@ -480,9 +545,9 @@ What each tagged op becomes:
 | `text.mark` of any other kind | A `suggest_mark` record. The document's marks are unchanged. | The toggle is applied to the document under the proposer's actor and op. The record is removed. | The record is removed. |
 | `text.delete`, `text.restore` | Act on the plan's own words only. | Stay. | A delete's words come back; a restore's go back to dead by the delete it undid. |
 | `block.add`, `block.split` | The block exists. | Stays. | The block dies if it holds no live text. |
-| `block.set` | Applied. | Stays. | The previous value returns, or the field is absent again. A heading the plan made prose takes back the code it lost; a block the plan made a heading loses the code bound to it since. |
+| `block.set` | Applied. | Stays. | The field, a content field, `kind` or `level` alike, takes its value with every set the verdict takes back and every rejected plan's set taken out, walking back from the newest set ([model.md](model.md#read-modes), `without_plans`), absent included; a kind set wrote the level too. A value set since by anyone else, an open plan included, stands. So rejecting every plan that set a field, in any order, leaves what was there before any of them. A heading given back takes back the code this set and every set the walk took out took off, whether or not another plan had made it a heading again meanwhile, except a symbol a set took off while an attach this verdict also takes back had bound it; a block the plan made a heading loses the code bound to it since. |
 | `block.move` | Applied. | Stays. | Each block's previous rank, level and `ranked_by` return, while the move is still the op that ranked it. Otherwise the later move stands. |
-| `bind.attach` | Applied. | Stays. | The symbol returns to the owner it displaced, or is unbound, unless someone re-bound it since. |
+| `bind.attach` | Applied. | Stays. | The symbol returns to the owner it displaced, or is unbound, unless someone re-bound it since. If a kind change since took it off the heading, the block's entry for it goes back to what it kept before the attach (`kept`), and an unowned symbol returns to the owner it displaced. A symbol the heading had lost to an older kind change whose plan was rejected while this attach held it stays with the heading, as the block kept it before the attach. |
 
 `plan.accept`, in order:
 
@@ -514,10 +579,11 @@ changed nothing is not recorded.
 | `kill` | `bid`, `path`, `segments`; `by`, `actor`, `at` when it put back another op's kill | The characters die, by the op that recorded the step unless `by` says otherwise. | They live again, those still dead by that killer. |
 | `revive` | `bid`, `path`, `segments`, `by`, `actor`, `at` | The characters `by` had killed live again. | They die again, by `by`, with its actor and clock. |
 | `mark` | `bid`, `path`, `mark` (with its `actor`, `op`, `at`), `on`, `segments` | That mark was added (`on`) or removed; `segments` are the characters it covered. | Removed: every mark equal to it but for its range whose first character is one of `segments`, in every field holding them. Added: one piece per field holding any of `segments`, from the first of them to the last. |
-| `set` | `bid`, `from`, `to`; for `kind`, `bindings`, `detached`, `attached` | `kind`, `level`, `rank` with `ranked_by`, or content fields went from `from` to `to`. A content field missing from one side was absent there. A `kind` change is a feature leaving or coming back as `block.set` has it: leaving, its bindings came off (`detached`); coming back, it took back `bindings`, what the plan's op detached (`attached`). | `from` again; for `rank`, only while `ranked_by` is still the one in `to`. For `kind`, the same rule the other way: the code bound since comes off, or `detached` comes back. On a block that has died since, it is kept on the block as a delete keeps it (recorded as `attached`), and the block's restore re-attaches it. |
+| `set` | `bid`, `from`, `to`; for `kind`, `bindings`, `detached`, `attached`, `held` | `kind`, `level`, `rank` with `ranked_by`, or content fields went from `from` to `to`. A content field missing from one side was absent there. A `kind` change is a feature leaving or coming back as `block.set` has it: leaving, its bindings came off (`detached`) and replaced the entries the block kept for those symbols from an earlier kind change (`held`); coming back, it took back `bindings`, what the sets it took out detached (`attached`). | `from` again; for `rank`, only while `ranked_by` is still the one in `to`. For `kind`, the same rule the other way: the code bound since comes off, or `detached` comes back, and the block keeps what it kept before: the entries leaving wrote go and `held` come back in their places. On a block that has died since, it is kept on the block as a delete keeps it (recorded as `attached`), and the block's restore re-attaches it. |
 | `void` | `bid`, `op`, `to` | The move `op` could not be put back, and `to` is the place it found the block, kept in the block's `void`. | It is dropped from `void`. |
 | `kill_block` | `bid`, `in`? | The block died by the op that recorded the step, while in feature `in`. | It lives again, if that op is still its killer. |
 | `bind` | `symbol`, `from`, `to` | The binding went from `from` to `to`; `null` is unbound. A `to` that is not a live heading now is `null`. | `from` again, unless it is not a live heading now. |
+| `keep` | `bid`, `symbol`, `from`, `to`, `at` | The entry the block keeps for `symbol` from a kind change (`detached`, marked `set`) went from `from` to `to`; `null` is none, and `at` is its place in the list. | `from` again, at `at`. |
 | `detach` | `fid`, `bindings` | The dead heading's bindings were removed and kept on it. | Each is re-attached unless the symbol has an owner now. |
 
 A `mark` step finds its mark by the characters it covered, so a split that cut the mark
@@ -620,6 +686,18 @@ removed. The paragraph reads `Retries once.`
 
 - `feature.handoff` moves a feature's `handoff` frontier. It is the one gesture that
   turns documentation into a request. Only `owner` and `maintainer` may write it.
+- The directive (`loops/realize.directive`) quotes every open comment thread of the
+  feature, each message voiced by its author's role: a contributor's as their suggestion,
+  never as the person's note (section 7).
+- The directive, the queue in `realize.md`, and the hub worker's queue, title and write
+  scope read the document as it would be with every open plan rejected, structural ops
+  included (`realize.rejected_view`: each open plan rejected by the applier's own
+  `plan.reject` on a fork of the store, then every block an open plan added killed but a
+  heading the owner handed off, [model.md](model.md#read-modes)). Neither the
+  worker nor the queue waits for verdicts, so an open plan's move, kind or level change,
+  split or attach would otherwise reach a building agent as the owner's text or scope:
+  the owner's sentence moved out of the feature, another feature's comment moved into it
+  and voiced as the owner's note, a queued heading made prose and so dropped.
 - `feature.realized` moves the `realized` frontier. It conflicts `nothing_queued` when no
   hand-off is waiting.
 - The applier writes `feature.realized` as `loop`, and only on evidence: a feature
@@ -645,14 +723,17 @@ removed. The paragraph reads `Retries once.`
   through the one path the indexer reads it by (`index.app.file_chunks`: decoded by its
   byte-order mark, else as UTF-8 with undecodable bytes replaced, line endings kept), and
   named as the index's walk names it (`canonical_file`: repo-relative, with `./`, `..`
-  and an absolute path folded lexically; a linked file keeps its link's name, a file under
-  a linked or excluded directory is not read, since the walk enters neither; a path none
+  and an absolute path folded lexically; a linked file keeps its link's name; a path none
   of whose ancestors is the repository, such as one through a link from outside into a
   subdirectory (`/tmp/src -> repo/src`), is named by its real path below the root when
-  the walk keys the file by that name, and refused as outside the repository otherwise),
-  so the evidence and the binding it is compared with are the same text under the same
-  key:
-  - a symbol the files do not define is refused, and nothing of the call is written;
+  the walk keys the file by that name, and refused as outside the repository otherwise).
+  It is read only when the walk reads it (`why_not_indexed`, the one rule the walk and
+  the daemon also follow): not under a linked or excluded directory, not excluded itself,
+  at most 1.5 MB, and spelled as its directory lists it, so on a case-insensitive
+  filesystem `SRC/rate.py` does not stand for `src/rate.py`. The evidence and the binding
+  it is compared with are then the same text under the same key:
+  - a symbol the files do not define, or one in a file the walk does not read, is
+    refused with the reason, and nothing of the call is written;
   - a symbol the feature does not own is attached (`bind.attach`);
   - a symbol the feature owns is refreshed (`bind.refresh`) when its code changed since
     the hand-off: its hashes on disk differ from the binding's, or a binding op on it
@@ -755,7 +836,7 @@ store as the folded ops left it:
 
 | op | one per | carries | actor |
 |---|---|---|---|
-| `block.add` | block, live or dead | `rank`, `level`, the full Text of each Text field (segments with actors, clocks and killers; marks), other fields, `added_by`, `dead`, `dead_actor`, `dead_at`, `dead_in`, `detached`, `prior`, `bound_once`, `code_at`, `realized_at`, `ranked_by`, `void` | `import` |
+| `block.add` | block, live or dead | `rank`, `level`, the full Text of each Text field (segments with actors, clocks and killers; marks), other fields, `added_by`, `added_plan`, `dead`, `dead_actor`, `dead_at`, `dead_in`, `detached`, `prior`, `bound_once`, `code_at`, `realized_at`, `ranked_by`, `void` | `import` |
 | `bind.attach` | binding | the hashes | `import` |
 | `plan.open` | plan | `kind`, `target`, `note`, `ops`, `opened_by`, `build` | the plan's actor |
 | `plan.accept` or `plan.reject` | plan | `verdict`, the op it folded; it sets the plan's status and verdict and does nothing else | the actor who decided |

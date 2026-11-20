@@ -27,7 +27,6 @@ def test_insert_mints_identity_and_keeps_live_text():
     assert t.live_text() == "hello world"
     assert t.ref_at(0) == (op(1), 0)
     assert t.ref_at(6) == (op(2), 1)
-    assert t.offset_of((op(2), 5)) == 10
 
 
 def test_insert_in_the_middle_splits_segment_without_changing_identity():

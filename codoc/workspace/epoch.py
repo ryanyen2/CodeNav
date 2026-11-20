@@ -3,24 +3,26 @@ hooks, its MCP server and a realize pass, read by the daemon and the Stop hook.
 
 An epoch is one agent session's hold on the code. While it is open the daemon
 defers reflecting code changes, since the agent is mid-edit; when it closes,
-the daemon reflects everything the session touched in one pass.
+the daemon runs one pass over every code file changed since the index was last
+updated, the session's included.
 
 Schema (version 1)::
 
     {
       "version": 1,
       "epoch": {"id": "ep-<session_id>", "open": true, "started_at": "<iso>", "ended_at": null},
-      "touched": ["src/theme.py"],
       "cited": ["s-3f9a:12"],
-      "realize_seen": 2
+      "realize_seen": 2,
+      "reflected": "<iso>"
     }
 
-``touched`` is the repo-relative files the turn's tools read or wrote.
-``cited`` is the hand-offs the turn's MCP calls cited in ``caused_by``. Both
-reset when the epoch opens. ``realize_seen`` is the size of the realize queue
-the hooks last announced to the session. ``open`` is a lease, not a flag: a
-session that is hard-killed never runs the hook that would clear it, so a
-reader trusts it only while the file keeps being written (``epoch_alive``,
+``cited`` is the hand-offs the turn's MCP calls cited in ``caused_by``; it
+resets when the epoch opens. ``realize_seen`` is the size of the realize queue
+the hooks last announced to the session. ``reflected`` is the ``ended_at`` of
+the last close a daemon reflected, so a daemon that starts later does not
+reflect it again. ``open`` is a lease, not a flag: a session that is
+hard-killed never runs the hook that would clear it, so a reader trusts it
+only while the file keeps being written (``epoch_alive``,
 ``EPOCH_STALE_SECONDS``).
 
 Every write is a read-modify-write under one lock, so two hooks firing
@@ -54,11 +56,11 @@ def _now_iso() -> str:
 
 
 def _fresh(session_id: str | None) -> dict:
-    """A new epoch, open, with nothing touched or cited."""
+    """A new epoch, open, with nothing cited."""
     return {"version": 1,
             "epoch": {"id": f"ep-{session_id or int(_time.time())}", "open": True, "started_at": _now_iso(),
                       "ended_at": None},
-            "touched": [], "cited": []}
+            "cited": []}
 
 
 # ── reading ──────────────────────────────────────────────────────────────────
@@ -68,7 +70,7 @@ def read_activity(codoc_dir: str | Path) -> dict:
     data = read_json(activity_path(codoc_dir))
     if isinstance(data, dict):
         return data
-    return {"version": 1, "epoch": {"id": "", "open": False, "started_at": None, "ended_at": None}, "touched": []}
+    return {"version": 1, "epoch": {"id": "", "open": False, "started_at": None, "ended_at": None}}
 
 
 def epoch_age(codoc_dir: str | Path, now: float | None = None) -> float:
@@ -86,14 +88,9 @@ def epoch_alive(codoc_dir: str | Path, *, now: float | None = None, ttl: float =
     return bool((read_activity(codoc_dir).get("epoch") or {}).get("open")) and epoch_age(codoc_dir, now) <= ttl
 
 
-def epoch_touched_files(codoc_dir: str | Path) -> list[str]:
-    """The repo-relative files the last epoch touched."""
-    return list(read_activity(codoc_dir).get("touched") or [])
-
-
 def repo_relative(path: str, codoc_dir: str | Path) -> str | None:
-    """``path`` relative to the repository ``codoc_dir`` belongs to, as
-    ``touched`` records it; None outside the repository."""
+    """``path`` relative to the repository ``codoc_dir`` belongs to; None
+    outside the repository."""
     try:
         return str(Path(path).resolve().relative_to(Path(codoc_dir).resolve().parent))
     except ValueError:
@@ -115,7 +112,7 @@ def open_epoch(codoc_dir: str | Path, session_id: str | None) -> None:
 
 def reopen_epoch(codoc_dir: str | Path, session_id: str | None) -> None:
     """A turn starts (the person's prompt, or a tool call before it writes):
-    reopen this session's closed epoch with nothing touched or cited. A
+    reopen this session's closed epoch with nothing cited. A
     caller that names no session reopens whatever closed epoch is there. A
     closed epoch of another session, one that missed its start, or none at
     all, is replaced by a new one, so every epoch has an id. An open epoch,
@@ -128,21 +125,17 @@ def reopen_epoch(codoc_dir: str | Path, session_id: str | None) -> None:
         mine = f"ep-{session_id}" if session_id else ""
         if ep.get("id") and ep["id"] == (mine or ep["id"]):
             data["epoch"] = {**ep, "open": True, "ended_at": None, "started_at": ep.get("started_at") or _now_iso()}
-            data["touched"], data["cited"] = [], []
+            data["cited"] = []
         else:
             data = _fresh(session_id)
         write_json(activity_path(codoc_dir), data)
 
 
-def touch_epoch(codoc_dir: str | Path, rel: str) -> None:
-    """Add a repo-relative file to what this turn touched. The write renews
-    the epoch's lease even when the file is already listed."""
+def touch_epoch(codoc_dir: str | Path) -> None:
+    """Renew the epoch's lease: rewrite the file as it is, so it was written
+    now (``epoch_alive``)."""
     with _lock(codoc_dir):
-        data = read_activity(codoc_dir)
-        touched = list(data.get("touched") or [])
-        if rel not in touched:
-            touched.append(rel)
-        write_json(activity_path(codoc_dir), {**data, "touched": touched})
+        write_json(activity_path(codoc_dir), read_activity(codoc_dir))
 
 
 def note_cited(codoc_dir: str | Path, handoff: str) -> None:
@@ -165,6 +158,16 @@ def note_queue_size(codoc_dir: str | Path, n: int) -> bool:
         if n != seen:
             write_json(activity_path(codoc_dir), {**data, "realize_seen": n})
         return n > seen
+
+
+def note_reflected(codoc_dir: str | Path, ended_at: str) -> None:
+    """Record that a daemon reflected the close ``ended_at``, if it is still
+    the close in the file: a turn that reopened the epoch since is left
+    alone, so the write does not renew its lease."""
+    with _lock(codoc_dir):
+        data = read_activity(codoc_dir)
+        if ended_at and (data.get("epoch") or {}).get("ended_at") == ended_at:
+            write_json(activity_path(codoc_dir), {**data, "reflected": ended_at})
 
 
 def close_epoch(codoc_dir: str | Path, expected_id: str, *,

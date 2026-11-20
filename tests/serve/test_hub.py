@@ -12,11 +12,10 @@ from codoc.serve.auth import (
     SUGGEST,
     AuthContext,
     SessionStore,
-    read_roles,
     role_for_permission,
 )
 from codoc.serve.push import Feed
-from codoc.workspace import Workspace
+from codoc.workspace import Roles, Workspace
 from codoc.workspace import inbox, log as L
 from codoc.workspace.inbox import Submission
 from tests.helpers import seed_loop
@@ -93,7 +92,7 @@ def test_auth_gate_records_roles_and_a_suggester_cannot_set_the_language(tmp_pat
     assert c.get("/api/whoami").json() == {"authenticated": True, "login": "alice", "role": SUGGEST}
     # The actor is namespaced: a GitHub login called "local" can never arrive
     # as the maintainer's own identity, here or in the roles table.
-    assert read_roles(cd) == {"human:gh:alice": SUGGEST}
+    assert Roles.load(cd).table == {"human:gh:alice": SUGGEST}
     assert json.loads((cd / "config.json").read_text())["roles"] == {"human:gh:alice": SUGGEST}
     assert c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "set-language", "tag": "ja"}).status_code == 403
     r = c.post("/api/message", headers={"x-codoc-csrf": "1"}, json={"kind": "submit", "subs": [
@@ -103,7 +102,7 @@ def test_auth_gate_records_roles_and_a_suggester_cannot_set_the_language(tmp_pat
     s = auth.store.create("bob", role_for_permission("admin"))
     from codoc.serve.auth import record_role
     record_role(cd, "bob", s.role)
-    assert read_roles(cd) == {"human:gh:alice": SUGGEST, "human:gh:bob": MAINTAINER}
+    assert Roles.load(cd).table == {"human:gh:alice": SUGGEST, "human:gh:bob": MAINTAINER}
     assert inbox.actor_for(client_name("local")) == "human:gh:local" != "human:local"
 
 
@@ -119,9 +118,84 @@ def test_feed_sends_a_snapshot_then_only_changes_and_this_viewers_acks(tmp_path)
     inbox.ack(cd, "hub-other", "c9", None)
     got = feed.pending()
     assert got == [{"kind": "acks", "acks": [{"cid": "c1", "op": "", "conflict": "unknown_anchor"}]}]
-    (cd / "config.json").write_text(json.dumps({"doc_language": "ja"}))
+    status = json.loads((cd / "status.json").read_text())
+    (cd / "status.json").write_text(json.dumps({**status, "doc_language": "ja"}))   # as the daemon republishes it
     got = feed.pending()
     assert [m["kind"] for m in got] == ["status"] and got[0]["status"]["doc_language"] == "ja"
+
+
+def test_the_hub_shows_the_language_the_daemon_resolved(tmp_path):
+    """The status message carries status.json's tag, never config.json's raw
+    one, and a config.json the hub cannot parse does not drop the message."""
+    from codoc.serve.push import status_message
+    cd = workspace(tmp_path)
+    status = json.loads((cd / "status.json").read_text())
+    (cd / "status.json").write_text(json.dumps({**status, "doc_language": "zh-Hans"}))
+    (cd / "config.json").write_text(json.dumps({"doc_language": "zh"}))
+    assert status_message(cd, "human:gh:alice")["status"]["doc_language"] == "zh-Hans"
+    (cd / "config.json").write_text("{not json")
+    assert status_message(cd, "human:gh:alice")["status"]["doc_language"] == "zh-Hans"
+
+
+def test_the_hub_sends_a_language_change_made_during_a_build(tmp_path, monkeypatch):
+    """The feed notices status.json by mtime and size. A language changed while
+    a pass holds the lease is written into the lease without renewing it, and
+    the file's mtime moves with the write, so a tag as long as the old one
+    (en to ja) still reaches the viewers."""
+    import os
+    from codoc.daemon.publish import read_status, write_realizing, write_status
+    from codoc.workspace.config import write_config
+    monkeypatch.delenv("CODOC_DOC_LANGUAGE", raising=False)
+    monkeypatch.delenv("CODOC_REALIZE_OWNER", raising=False)
+    cd = workspace(tmp_path)
+    (cd / "realize.md").write_text("queued\n")
+    write_config(cd, doc_language="en")
+    renewed = write_realizing(cd, pending=1, detail="building 1 of 1", owner="other", pid=os.getpid()).get("renewed")
+    write_status(cd, store=None)                    # the lease is fresh: only the language is written
+    feed = Feed(cd, "ide", replay=0)
+    assert [m["status"]["doc_language"] for m in feed.pending() if m["kind"] == "status"] == ["en"]
+    write_config(cd, doc_language="ja")
+    feed.pending()                                  # the hub polls before the daemon republishes
+    write_status(cd, store=None)
+    st = read_status(cd)
+    assert st["state"] == "realizing" and st.get("renewed") == renewed and st["doc_language"] == "ja", st
+    assert [m["status"]["doc_language"] for m in feed.pending() if m["kind"] == "status"] == ["ja"]
+
+
+def test_a_config_that_does_not_parse_is_never_written_over(tmp_path):
+    """config.json is tracked: one that does not parse (a merge conflict, a
+    trailing comma) holds settings only a person can recover. A sign-in does
+    not record a role into it, and a setting written to it is refused, so
+    doc_language, index_exclude and the other roles stay where they are."""
+    import pytest
+    from codoc.serve.auth import record_role
+    from codoc.workspace.config import ConfigUnreadable, read_config, write_config
+    cd = tmp_path / ".codoc"
+    cd.mkdir()
+    broken = '{\n  "doc_language": "ja",\n  "index_exclude": ["gen/"],\n  "roles": {"human:gh:bob": "none"},\n}\n'
+    (cd / "config.json").write_text(broken)
+    assert read_config(cd) == {}
+    record_role(cd, "alice", "suggest")
+    with pytest.raises(ConfigUnreadable):
+        write_config(cd, doc_language="en")
+    assert (cd / "config.json").read_text() == broken and sorted(p.name for p in cd.iterdir()) == ["config.json"]
+
+
+def test_a_role_a_sign_in_could_not_record_is_recorded_once_the_file_is_fixed(tmp_path):
+    """A maintainer who signs in while config.json is merge-conflicted keeps
+    the role in their session only. The next re-check records it, without
+    waiting for the role to change, so the applier does not take them for a
+    suggester (and refuse their verdicts) until the cookie expires."""
+    cd = workspace(tmp_path)
+    (cd / "config.json").write_text("<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> theirs\n")
+    auth = AuthContext(SessionStore(), resolver=FakeResolver({"alice": "admin"}), oauth=FakeOAuth(), recheck_seconds=0)
+    c = TestClient(build_app(str(cd), auth=auth), follow_redirects=False)
+    state = c.get("/auth/login").headers["location"].split("state=")[1].split("&")[0]
+    c.cookies.set(COOKIE_NAME, c.get("/auth/callback", params={"code": "good", "state": state}).cookies[COOKIE_NAME])
+    assert Roles.load(cd).role("human:gh:alice") == SUGGEST          # not recorded: the file does not parse
+    (cd / "config.json").write_text("{}\n")                           # the maintainer resolves the conflict
+    assert c.get("/api/whoami").json()["role"] == MAINTAINER          # a re-check runs (recheck_seconds=0)
+    assert Roles.load(cd).role("human:gh:alice") == MAINTAINER
 
 
 def test_a_viewer_keeps_receiving_acks_after_the_daemon_trims_the_ack_file(tmp_path):

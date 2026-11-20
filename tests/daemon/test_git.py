@@ -258,8 +258,7 @@ def test_a_daemon_start_leaves_the_committed_gitignore_alone(repo):
     gitignore.write_text(gitignore.read_text().replace("!log/\n!log/**\n", ""))
     git("add", "-A")
     git("commit", "-qm", "keep the logs local")
-    d = Daemon(root, changeset=lambda *a: ChangeSet(), propose=lambda *a, **k: [], printer=lambda *_: None)
-    d.start()
+    d = Daemon.start(root, changeset=lambda *a: ChangeSet(), propose=lambda *a, **k: [], printer=lambda *_: None)
     d.ws.close()
     assert git("status", "--porcelain", "--", ".codoc/.gitignore").stdout == ""
 

@@ -26,11 +26,40 @@ The excludes are:
   `examples/`): they are code, but the tree describes what the product does, and every
   indexed file costs a bootstrap call. `"index_exclude": []` indexes them.
 
-`codoc sync` runs one pass without a daemon. A pass, in `codoc/loops/reflect.py`:
+A pass reads what changed from the chunk index (`codoc/index/changes.py`): the index
+before and after it is brought up to date, compared over every file. Two cases differ:
+
+- No index before the update. The index (`.codoc/lancedb`, `.codoc/cocoindex.db`) is not
+  tracked, so a fresh clone starts without one, and so does a reset. The change set is
+  then a baseline, compared with the bindings: a bound chunk whose hashes differ from its
+  binding is changed, a bound symbol the code no longer defines is removed, and no chunk
+  is added, since nothing tells code written since the last pass from code a person
+  detached. The graph is built whole. Code that arrived unbound while there was no index
+  (a commit by someone not running codoc) is therefore not placed.
+- A file that does not parse. An autosave in the middle of typing can make the parser
+  fold the function after it into a syntax error, or nest it in the function before. A
+  chunk lost that way would be detached, and the pass that sees it again cannot tell it
+  is the same code. So when a file's parse has errors and has lost a chunk whose name
+  the parse still declares (in a declaration that is not a chunk, or in the text of an
+  ERROR node), the index holds the file (`index/app.py`): it keeps the chunks it had for
+  it and indexes no change to it at all, so no pass sees any edit to that file while it
+  is held. The file is released by the first index update whose parse of it hides no
+  chunk, as when it parses again, and that pass sees every change made while it was
+  held. A name left in a call or a comment outside an ERROR node hides nothing, so a
+  deleted definition is removed even then. Limit: a definition deleted while another
+  declaration in the file has its name, or an ERROR node's text holds it, keeps the file
+  held until that goes or the file parses. The bundled TypeScript grammar reads some
+  newer syntax as errors (`accessor`, `using`, `in`/`out` variance annotations,
+  `export type *`, import attributes), so a file that uses it never parses. A `.tsx`
+  file is parsed with the TSX grammar, since the TypeScript one reads JSX as errors.
+
+`codoc sync` runs one pass without a daemon. While an agent session is open it applies
+submissions and publishes, and leaves the code to the first pass after the session ends,
+which cites its hand-offs. A pass, in `codoc/loops/reflect.py`:
 
 | step | ops, all by `loop` | lands |
 |---|---|---|
-| Binding maintenance: a changed bound chunk, a removed one, a relocated one (same content moved, or a unique AST shape renamed). A changed bound chunk is refreshed, and judged in the LLM pass below, unless `loop` set the hashes it has now (`Binding.set_by`): then the loop described that code already, as after switching back to a branch. An agent's or a person's binding is judged even when its hashes match. | `bind.refresh`, `bind.detach`, `bind.attach` | trunk |
+| Binding maintenance: a changed bound chunk, a removed one, a relocated one (same content moved, or a unique AST shape renamed). A changed bound chunk is refreshed, and judged in the LLM pass below, unless `loop` set the hashes it has now (`Binding.set_by`) and no stopped pass left the chunk (`ChangeSet.unjudged`): then the loop described that code already, as after switching back to a branch. An agent's or a person's binding is judged even when its hashes match. | `bind.refresh`, `bind.detach`, `bind.attach` | trunk |
 | A live feature that once had a binding, has none now, has never had a `delete` plan, and is not held. | `plan.open` with `kind = delete` | plan |
 | One LLM pass (`codoc/prompts/tree_update.txt`) over the unbound added chunks and the bound chunks to judge, with the ego-graph context of `loops/context.py`. It names features and blocks by short aliases (`f12`, `f12.3`), which are mapped back to ids; an alias that names nothing is refused. Its answer is a list of tree edits, compiled by `loops/edits.py`. | below | below |
 | Chunks the model left unplaced: each goes to the feature that owns most of its graph neighbours, else to a new node named after its file. | `bind.attach`; `block.add` for a new node | trunk; a plan for a new node |
@@ -57,7 +86,9 @@ pass caused by a hand edit cites nothing.
 2. A hand-off records `feature.handoff`. Its `covers` defaults to the applier's frontier,
    so it includes the edits flushed in the same batch.
 3. The applier writes every queued hand-off into `.codoc/realize.md`, as `loops/realize.py`'s
-   `directive` renders it.
+   `directive` renders it. An open comment thread is in it, each message voiced by its
+   author: a hub contributor's as their suggestion, not the person's note
+   ([concurrency.md](concurrency.md#7-roles-and-authority)).
 4. A coding agent builds it: `/codoc:realize` in Claude Code, `codoc realize`
    (`--engine sdk` or `cli`), or `codoc watch --auto-realize`. On the hub, the worker
    opens a pull request (section 3.6). `codoc realize` runs the agent with
@@ -75,8 +106,8 @@ pass caused by a hand edit cites nothing.
    is left until the daemon restarts, and the daemon says so once, since a pass that fails
    after spending spends again. A hand-off queued later gets its own three passes. A
    `codoc snapshot` records each hand-off again under a new id, so one that was given up on
-   is tried again after a snapshot. The daemon runs an empty batch after 30 seconds with no
-   file event, so the retry and the close of a stale agent epoch do not wait for an edit.
+   is tried again after a snapshot. The daemon runs an empty batch 30 seconds after its last
+   batch, so the retry and the close of a stale agent epoch do not wait for an edit.
 5. The build cites the hand-off in binding ops, in any of three ways. The agent's
    `codoc_reflect` attaches the symbols it wrote or changed, with `caused_by` the
    hand-off's `d:` id; any agent that runs the MCP server can do this, with or without
@@ -85,7 +116,7 @@ pass caused by a hand edit cites nothing.
    code, so an attach is evidence only of code the build left there
    ([concurrency.md](concurrency.md#10-hand-off-and-realization)). Claude Code's hooks also keep the agent
    epoch open in `.codoc/activity.json` while a turn runs, and the daemon reflects the
-   deferred files with `caused_by` when the epoch closes. A commit whose `Codoc-Handoff`
+   code changed meanwhile with `caused_by` when the epoch closes. A commit whose `Codoc-Handoff`
    trailer names the hand-off and whose `Codoc-Base` trailer names a branch (the hub's
    pull requests carry both, the base being the branch the pull request targets) is
    reflected with `caused_by` when `HEAD` moves over it while `HEAD` is on that branch:
@@ -196,7 +227,8 @@ question. It reads with `codoc_tree` and `codoc_context` and writes nothing.
   `maintain` is `maintainer`; `read` or `triage` is `suggest`; no permission is `none`.
   The hub records it in `config.json` under `human:gh:<login>`.
 - Their submissions go to `inbox/hub-<login>.jsonl`. A suggester's untagged edit becomes a
-  plan of theirs in the drain; their comments stay untagged.
+  plan of theirs in the drain; their comments stay untagged and reach the directive
+  voiced as a contributor's suggestion.
 - With GitHub configured, the worker builds each hand-off that has no realization and no
   pull request yet, on its own worktree, with a sandboxed agent, and opens a pull request.
   Its commit names the hand-off in a `Codoc-Handoff` trailer and the branch the pull
@@ -217,6 +249,9 @@ branches' files and the store is rebuilt from the union
 feature's title and description, and its rationales, in that language. An amend keeps the
 language of the description it changes, a block it adds included, so the loop does not
 leave a description half in one language (`doclang.prompt_directive` tells the model so).
+The daemon wakes on `config.json` and writes the tag it resolved (`CODOC_DOC_LANGUAGE`
+first, `zh` read as `zh-Hans`) into `status.json` as `doc_language`, which the editor and
+the hub show, so they never name a language the daemon is not writing in.
 `codoc translate` rewrites existing prose as `translator:<lang>`, one `Workspace.amend`
 per feature: on the trunk when machines wrote the feature, as one plan when a person wrote
 any of it, the feature has pending intent, or the translation would drop a citation, link

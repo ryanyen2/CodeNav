@@ -10,6 +10,8 @@
  * is a trusted, initialised, provisioned repository with no live daemon, start
  * one. `reconcileDaemon` asks on activation, on a timer, on a trust grant and
  * on every `.codoc` change, so a missed event costs at most one timer tick.
+ * The timer also repaints the status bar, since a daemon that exits changes
+ * no file the extension watches.
  *
  * The extension holds no model of the tree. The page reads the daemon's
  * projection and writes ops to the daemon's inbox.
@@ -25,7 +27,7 @@ import { CodocEditorProvider } from './host/provider';
 import { DEFAULT_HUB_PORT, serveArgs } from './host/serve-manager';
 import { bootstrapCredentials } from './host/setup/credentials';
 import { ProvisionCancelledError, WorkspaceUntrustedError, cachedCodoc, ensureUv, provisionCodoc } from './host/setup/provision';
-import { commandLine } from './host/shell';
+import { runInTerminal } from './host/terminal';
 import { Workspace, statusBarView } from './host/workspace';
 
 const DAEMON_RECONCILE_MS = 15_000;
@@ -94,9 +96,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const term = (name: string, args: string[], cwd = state.rootDir) => {
         const codoc = cachedCodoc(context);
         if (!codoc || !cwd) { void vscode.window.showWarningMessage('codoc is not set up yet. Run "codoc: Set up codoc".'); return; }
-        const t = vscode.window.createTerminal({ name: `codoc ${name}`, cwd });
-        t.show(true);
-        t.sendText(commandLine([codoc, ...args]));
+        void runInTerminal(codoc, name, args, cwd);
     };
 
     const setLanguage = (root: string, tag: string): Promise<void> => {
@@ -107,18 +107,6 @@ export function activate(context: vscode.ExtensionContext): void {
         CodocEditorProvider.viewType, new CodocEditorProvider(context, root => term('realize', ['realize'], root), setLanguage),
         { webviewOptions: { retainContextWhenHidden: true }, supportsMultipleEditorsPerDocument: false }));
 
-    const reconcileDaemon = (): void => {
-        if (!vscode.workspace.isTrusted || !state.rootDir || !state.initialized) return;
-        const codoc = cachedCodoc(context);
-        if (codoc) startDaemon(codoc, state.rootDir);
-    };
-    reconcileDaemon();
-    const daemonTicker = setInterval(reconcileDaemon, DAEMON_RECONCILE_MS);
-    context.subscriptions.push({ dispose: () => clearInterval(daemonTicker) },
-        vscode.workspace.onDidGrantWorkspaceTrust(() => reconcileDaemon()),
-        state.onDidChange(() => reconcileDaemon()),
-        { dispose: () => stopDaemon() });
-
     const bar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
     const paint = () => {
         const v = statusBarView(state, !!cachedCodoc(context));
@@ -128,6 +116,20 @@ export function activate(context: vscode.ExtensionContext): void {
     };
     paint();
     context.subscriptions.push(bar, state.onDidChange(paint));
+
+    const reconcileDaemon = (): void => {
+        if (!vscode.workspace.isTrusted || !state.rootDir || !state.initialized) return;
+        const codoc = cachedCodoc(context);
+        if (codoc) startDaemon(codoc, state.rootDir);
+    };
+    reconcileDaemon();
+    // The tick repaints too: a daemon that exits writes nothing, so no file
+    // event says it stopped.
+    const daemonTicker = setInterval(() => { reconcileDaemon(); paint(); }, DAEMON_RECONCILE_MS);
+    context.subscriptions.push({ dispose: () => clearInterval(daemonTicker) },
+        vscode.workspace.onDidGrantWorkspaceTrust(() => reconcileDaemon()),
+        state.onDidChange(() => reconcileDaemon()),
+        { dispose: () => stopDaemon() });
 
     const staticDir = vscode.Uri.joinPath(context.extensionUri, 'dist', 'webview').fsPath;
     const serve = (tunnel: boolean) => { if (state.rootDir) term('serve', serveArgs({ root: state.rootDir, port: DEFAULT_HUB_PORT, staticDir, tunnel })); };

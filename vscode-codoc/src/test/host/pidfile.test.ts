@@ -1,9 +1,10 @@
+import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { parsePid, readPid, removePidfile } from '../../host/pidfile';
+import { daemonRunning, parsePid, readPid } from '../../host/pidfile';
 
 describe('parsePid', () => {
     it('reads the bare decimal pid the daemon writes', () => {
@@ -35,11 +36,33 @@ describe('the pidfile on disk', () => {
         fs.writeFileSync(path.join(codocDir, 'watch.pid'), '4242');
         expect(readPid(codocDir)).toBe(4242);
     });
+});
 
-    it('can be removed, and removing a missing one is not an error', () => {
-        fs.writeFileSync(path.join(codocDir, 'watch.pid'), '4242');
-        removePidfile(codocDir);
-        expect(readPid(codocDir)).toBeUndefined();
-        removePidfile(codocDir);
+describe('daemonRunning', () => {
+    let codocDir: string;
+    beforeEach(() => { codocDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codoc-pidfile-')); });
+    afterEach(() => { fs.rmSync(codocDir, { recursive: true, force: true }); });
+    const names = (pid: number | undefined) => fs.writeFileSync(path.join(codocDir, 'watch.pid'), String(pid));
+
+    it('is false with no pidfile', () => {
+        expect(daemonRunning(codocDir)).toBe(false);
+    });
+
+    it('is false for a live pid another program has been given', () => {
+        names(process.pid);
+        expect(daemonRunning(codocDir)).toBe(false);
+    });
+
+    it.skipIf(process.platform === 'win32')('is true while a codoc watch runs, and false once it has exited', async () => {
+        const watch = cp.spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)', 'codoc', 'watch']);
+        try {
+            names(watch.pid);
+            expect(daemonRunning(codocDir)).toBe(true);
+        } finally {
+            const exited = new Promise(resolve => watch.once('exit', resolve));
+            watch.kill();
+            await exited;
+        }
+        expect(daemonRunning(codocDir)).toBe(false);
     });
 });

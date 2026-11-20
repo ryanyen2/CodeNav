@@ -22,7 +22,7 @@ describe('the daemon is reconciled', () => {
     });
 
     it('on a timer, for a window where nothing else happens', () => {
-        expect(extension).toMatch(/setInterval\(reconcileDaemon, DAEMON_RECONCILE_MS\)/);
+        expect(extension).toMatch(/setInterval\(\(\) => \{ reconcileDaemon\(\);[^}]*\}, DAEMON_RECONCILE_MS\)/);
         expect(extension).toMatch(/clearInterval\(daemonTicker\)/);
     });
 
@@ -30,6 +30,12 @@ describe('the daemon is reconciled', () => {
         const at = extension.indexOf("registerCommand('codoc.startDaemon'");
         expect(at).toBeGreaterThan(-1);
         expect(extension.slice(at, at + 600)).toMatch(/resetDaemonBackoff\(\)/);
+    });
+});
+
+describe('the status bar', () => {
+    it('is repainted on the timer, since a daemon that exits writes no file the extension watches', () => {
+        expect(extension).toMatch(/setInterval\(\(\) => \{[^}]*paint\(\);[^}]*\}, DAEMON_RECONCILE_MS\)/);
     });
 });
 

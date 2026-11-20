@@ -22,8 +22,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from codoc.calculus import ops as K
+from codoc.calculus.doc import lifted_fields
 from codoc.calculus.store import Store
-from codoc.calculus.text import SUGGEST_DEL, nfc
+from codoc.calculus.text import COMMENT, SUGGEST_DEL, nfc
 from codoc.workspace.layout import CODOC_DIR, INBOX_DIR, OFFSETS, atomic_write
 
 # Locally the inbox file name is the identity: any process that writes
@@ -267,6 +268,14 @@ def client_payload(store: Store, kind: str, payload: dict, actor: str = "", targ
     - Snapshot-only fields are removed, from an amend's or a plan's bodies
       too; a body keeps only its kind, target and payload, since the
       submission decides the plan.
+    - A field only the loop's lift writes (``doc.lifted_fields``: a url
+      block's fetched excerpt) is removed from a ``block.add``, and a
+      ``block.set`` of one is refused: a client never says what a URL served.
+    - A comment's ``block.add`` takes the comment kind's layout (out of the
+      flow, not exported), whatever ``layout`` it sent. A comment is the one
+      block a suggester writes untagged (``roles.is_comment_op``), so a layout
+      of their own would put their words into the prose, the export and the
+      directive with no verdict.
     - ``set_by`` and ``prev_set_by`` are removed from every op: the hashes a
       client sends are set by that client. Naming another actor (the loop)
       would tell the reflect pass the change had already been reviewed.
@@ -275,8 +284,26 @@ def client_payload(store: Store, kind: str, payload: dict, actor: str = "", targ
       of that mark kind on that field: an undo of their removal of a mark
       someone else placed (``_recorded_restore``). The recorded body is used,
       ``chars`` included. Any other mark is the sender's own, and a proposed
-      deletion's ``chars`` are the ones the applier reads from its range."""
+      deletion's ``chars`` are the ones the applier reads from its range.
+    - A ``text.delete`` that names the delete it kills as (``by``,
+      ``by_actor``, ``by_at``) is honoured only as the recorded inverse of one
+      of the sender's own ``text.restore`` ops, their undo of a restore, and
+      only while no restore since brought any of those characters back
+      (``_undoes_own_latest_restore``). Any other delete is the sender's own,
+      so no words die in another's name."""
     out = {k: v for k, v in payload.items() if k not in K.SNAPSHOT_ONLY.get(kind, ())}
+    killer = ("by", "by_actor", "by_at")
+    if kind == K.TEXT_DELETE and any(k in out for k in killer) and not _undoes_own_latest_restore(store, actor, out):
+        for k in killer:
+            out.pop(k, None)
+    if kind == K.BLOCK_ADD and isinstance(out.get("content"), dict):
+        lifted = lifted_fields(str(out.get("kind")))
+        out["content"] = {k: v for k, v in out["content"].items() if k not in lifted}
+    if kind == K.BLOCK_ADD and out.get("kind") == COMMENT:
+        out.pop("layout", None)
+    if kind == K.BLOCK_SET and (b := store.blocks.get(str((target or {}).get("bid") or ""))) is not None \
+            and (target or {}).get("path") in lifted_fields(b.kind):
+        raise ValueError(f"{b.kind}.{(target or {})['path']} is written by the loop's lift, not by a client")
     out.pop("set_by", None)
     out.pop("prev_set_by", None)
     if kind in ("amend", "propose"):
@@ -295,6 +322,29 @@ def client_payload(store: Store, kind: str, payload: dict, actor: str = "", targ
         out["attrs"] = {k: v for k, v in (out.get("attrs") or {}).items() if k != "chars"}
     return out
 
+
+
+def _undoes_own_latest_restore(store: Store, actor: str, out: dict) -> bool:
+    """Whether ``out`` is the recorded inverse of one of ``actor``'s own
+    ``text.restore`` ops, and no restore since revived any of its characters.
+    After another restore brought them back (the deleter undoing their own
+    delete), replaying the older inverse would kill those words in the
+    deleter's name."""
+    want = {k: out.get(k) for k in ("segments", "by", "by_actor", "by_at")}
+    later: list = []
+    for o in reversed(store.ops):
+        if o.kind != K.TEXT_RESTORE or o.conflict:
+            continue
+        if o.actor == actor and o.inverse and o.inverse[0]["payload"] == want:
+            return not any(_overlap(want["segments"] or [], s) for s in later)
+        later.append(o.payload.get("segments") or [])
+    return False
+
+
+def _overlap(a: list, b: list) -> bool:
+    """Whether two ``segments`` lists (``[op, k0, length]`` each) share a character."""
+    return any(str(oa) == str(ob) and int(ka) < int(kb) + int(nb) and int(kb) < int(ka) + int(na)
+               for oa, ka, na in a for ob, kb, nb in b)
 
 def _recorded_restore(store: Store, actor: str, target: dict, payload: dict) -> dict | None:
     """The ``text.mark`` payload that ``payload`` repeats (``chars`` aside)

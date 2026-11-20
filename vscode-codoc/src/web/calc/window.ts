@@ -81,11 +81,14 @@ function depth(batch: string): number {
 
 /** The ops to submit for the next undo (`redo=false`) or redo of one of the
  *  `mine` batches, with the batch id they go under; null when there is nothing
- *  to invert. A batch with no inverse is never offered (a snapshot fold's ops
- *  have none), nor one whose undo batch is in `refused`. */
-export function nextUndo(w: HistoryWindow, mine: ReadonlySet<string>, redo = false, refused: ReadonlySet<string> = new Set()): { batch: string; ops: OpBody[] } | null {
+ *  to invert. Only `viewer`'s own entries count: a batch id is readable in
+ *  history.json, and an undo sends every inverse as the viewer, so another
+ *  actor's op in one of these batches is never offered. A batch with no
+ *  inverse is never offered (a snapshot fold's ops have none), nor one whose
+ *  undo batch is in `refused`. */
+export function nextUndo(w: HistoryWindow, mine: ReadonlySet<string>, viewer: string, redo = false, refused: ReadonlySet<string> = new Set()): { batch: string; ops: OpBody[] } | null {
     const batches = new Map<string, WindowEntry[]>();
-    for (const e of w.ops) if (mine.has(e.batch)) (batches.get(e.batch) ?? batches.set(e.batch, []).get(e.batch)!).push(e);
+    for (const e of w.ops) if (mine.has(e.batch) && e.actor === viewer) (batches.get(e.batch) ?? batches.set(e.batch, []).get(e.batch)!).push(e);
     const undone = new Set([...batches.keys()].filter(b => b.startsWith('u-')).map(b => b.slice(2)));
     const candidates = [...batches.entries()]
         .filter(([b]) => (depth(b) % 2 === 1) === redo && !undone.has(b) && !refused.has(`u-${b}`))
@@ -120,9 +123,15 @@ export function textAt(w: HistoryWindow, bid: string, path: string, pos: number,
     return w.before[bid]?.[path] ?? live;
 }
 
+/** Word segmentation that knows every script: a language written without
+ *  spaces (Chinese, Japanese, Thai) still splits into words, and spaces and
+ *  punctuation are pieces of their own. */
+const WORDS = new Intl.Segmenter(undefined, { granularity: 'word' });
+const words = (s: string): string[] => Array.from(WORDS.segment(s), w => w.segment);
+
 /** A display-only word diff between two texts: [kind, text] pieces. */
 export function wordDiff(a: string, b: string): Array<['eq' | 'del' | 'ins', string]> {
-    const A = a.split(/(\s+)/).filter(Boolean), B = b.split(/(\s+)/).filter(Boolean);
+    const A = words(a), B = words(b);
     const n = A.length, m = B.length;
     const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
     for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);

@@ -71,7 +71,7 @@ def test_reflect_attaches_and_repairs_and_closes_the_queue(tmp_path, monkeypatch
     me = next(e for e in ctx["subtree"] if e["id"] == client_id)
     assert me["blocks"] and "written_by" in me and "phase" not in me
     from codoc.workspace.epoch import write_activity
-    write_activity(cd, {"version": 1, "epoch": {"id": "ep-1", "open": True}, "touched": []})   # the agent's turn
+    write_activity(cd, {"version": 1, "epoch": {"id": "ep-1", "open": True}})   # the agent's turn
     res = tools.reflect(str(cd), ops=[
         {"kind": "attach", "feature_id": client_id, "bindings": ["net/client.py::Client.retry"]},
         {"kind": "amend", "feature_id": client_id, "blocks": [{"id": me["blocks"][0]["id"], "text": "Sends requests, three times if need be."}]},
@@ -173,10 +173,46 @@ def test_sync_applies_under_the_applier_lock(tmp_path, monkeypatch):
             held.append(True)
         return "probed"
     monkeypatch.setattr(Daemon, "process_batch", lambda self, paths, **k: probe())
-    monkeypatch.setattr(Daemon, "reflect", lambda self, files, **k: probe())
     r = runner.invoke(app, ["sync", "--root", str(root)])
-    assert r.exit_code == 0 and held == [True, True], (r.output, held)
+    assert r.exit_code == 0 and held == [True], (r.output, held)
 
+
+def test_sync_leaves_an_open_agent_sessions_code_to_the_pass_after_it_ends(tmp_path, monkeypatch):
+    """Reflecting during an agent's session would land its half-written code
+    uncited and use up the diff the close cites (concurrency.md section 4,
+    step 3). Sync still drains and publishes, and says why it skipped."""
+    from codoc.daemon.daemon import Daemon
+    from codoc.workspace.epoch import open_epoch
+    root, cd = seeded(tmp_path)
+    open_epoch(cd, "ep-1")
+    seen = []
+    monkeypatch.setattr(Daemon, "reflect", lambda self, **k: seen.append(k) or "reflected")
+    r = runner.invoke(app, ["sync", "--root", str(root)])
+    assert r.exit_code == 0 and seen == [] and "agent session is open" in r.output, (r.output, seen)
+
+
+def test_sync_runs_one_pass_even_with_a_change_set_a_stopped_pass_left(tmp_path, monkeypatch):
+    """The batch decides whether to reflect; sync only asks it to cover the
+    whole tree, so a leftover file does not cause a second pass."""
+    from codoc.daemon.daemon import Daemon
+    root, cd = seeded(tmp_path)
+    (cd / "cache").mkdir(exist_ok=True)
+    (cd / "cache" / "pending.json").write_text(json.dumps({"added": [], "modified": [], "removed": []}))
+    seen = []
+    monkeypatch.setattr(Daemon, "reflect", lambda self, **k: seen.append(k) or "reflected")
+    r = runner.invoke(app, ["sync", "--root", str(root)])
+    assert r.exit_code == 0 and len(seen) == 1 and seen[0]["whole"] is True, (r.output, seen)
+
+
+def test_sync_publishes_once(tmp_path, monkeypatch):
+    """The batch publishes after its pass; sync adds no second write."""
+    from codoc.daemon.publish import Publisher
+    root, cd = seeded(tmp_path)
+    calls = []
+    real = Publisher.publish
+    monkeypatch.setattr(Publisher, "publish", lambda self, *a, **k: calls.append(k) or real(self, *a, **k))
+    r = runner.invoke(app, ["sync", "--root", str(root)])
+    assert r.exit_code == 0 and len(calls) == 1, (r.output, calls)
 
 def test_a_daemon_that_starts_before_the_lock_gets_a_message_not_a_traceback(tmp_path, monkeypatch):
     """The commands that apply themselves learn about a daemon under the lock."""
@@ -326,7 +362,7 @@ def test_history_is_one_row_per_change_so_a_plan_does_not_bury_the_handoff(tmp_p
     assert len(feature_history(client.read(cd).store, fid)) > 15         # more ops than the default limit
     out = runner.invoke(app, ["history", fid, "--root", str(root)]).output
     assert f"plan {pid}: opened; 10 bullets added; 50 words added" in out and "hand-off: 'retry thrice'" in out, out
-    rows = reads.read_history(cd, fid, 2)["batches"]
+    rows = reads.read_history(cd, fid, 2)["changes"]
     assert [r["summary"] for r in rows] == [f"accepted plan {pid}", "hand-off: 'retry thrice'"] and "ops" not in rows[0]
     detail = runner.invoke(app, ["history", fid, "--root", str(root), "--limit", "1", "--ops"]).output
     assert "feature.handoff  'retry thrice'" in detail and "accepted plan" not in detail, detail
@@ -468,18 +504,22 @@ def test_the_back_off_counts_from_when_the_failed_pass_ended(tmp_path, monkeypat
 
 def test_a_quiet_daemon_still_runs_its_batch_on_a_tick(tmp_path, monkeypatch):
     """Auto-realize's retry and the stale-epoch close run in a batch; with no
-    file event the watch yields empty on a timeout, and that is a batch too."""
+    file event the watch yields empty when its timeout (`TICK_MS`) runs out,
+    and that is a batch too."""
     import atexit
     import signal
+    import time
     import watchfiles
     from codoc.daemon import daemon as D
     root, cd = seeded(tmp_path)
     seen, ran = {}, []
     monkeypatch.setattr(signal, "signal", lambda *a: None)       # run() installs process-wide handlers
     monkeypatch.setattr(atexit, "register", lambda *a: None)
+    monkeypatch.setattr(D, "TICK_MS", 20)
 
     def fake_watch(*paths, **kw):
         seen.update(kw)
+        time.sleep(kw["rust_timeout"] / 1000)
         yield set()                              # the timeout, with no change
     monkeypatch.setattr(watchfiles, "watch", fake_watch)
     d = D.Daemon(root, cd, changeset=lambda *a: None, propose=lambda *a, **k: [], printer=lambda *_: None,
@@ -509,7 +549,7 @@ def test_history_rows_are_changes_in_the_order_they_happened(tmp_path):
     ws.submit([{"kind": K.BLOCK_ADD, "target": {"bid": "p2"}, "payload": {"kind": "paragraph", "after": "p1"}},
                {"kind": K.TEXT_INSERT, "target": {"bid": "p2", "path": "text"},
                 "payload": {"after": START, "text": "Logs each failure to the console."}}], actor="loop")
-    before = len(reads.read_history(cd, "h1", 100)["batches"])
+    before = len(reads.read_history(cd, "h1", 100)["changes"])
     done = ws.amend("h1", rewrites=[("p1", "text", "Retries three times before giving up.", None),
                                     ("p2", "text", "Logs each failure to a file.", None)], actor="agent:claude-code")
     assert done.ops and not done.plan
@@ -520,7 +560,7 @@ def test_history_rows_are_changes_in_the_order_they_happened(tmp_path):
                             {"id": "p2", "text": "Logs each failure to stderr."}]}]
     res = reflect(ws, ChangeSet(modified=[chunk("c.py::send", "f2", "t1")]), Graph(), propose=propose)
     assert not res.plans and res.ops, res.summary()
-    rows = reads.read_history(cd, "h1", 100)["batches"]
+    rows = reads.read_history(cd, "h1", 100)["changes"]
     assert [r["actor"] for r in rows[before:]] == ["agent:claude-code", "loop"], [r["summary"] for r in rows[before:]]
     first = Compiler(ws.store).compile({"kind": "amend", "feature_id": "h1", "blocks": [{"text": "- Retries on 503."}]})
     pid = ws.amend("h1", rewrites=[], bodies=first.bodies, actor="loop", structural=True).plan
@@ -528,7 +568,7 @@ def test_history_rows_are_changes_in_the_order_they_happened(tmp_path):
     later = Compiler(ws.store).compile({"kind": "amend", "feature_id": "h1", "blocks": [{"text": "- Gives up after 3 tries."}]})
     newest = ws.amend("h1", rewrites=[], bodies=later.bodies, actor="loop", structural=True, join=pid).ops[-1]
     ws.close()
-    rows = reads.read_history(cd, "h1", 3, ops=True)["batches"]
+    rows = reads.read_history(cd, "h1", 3, ops=True)["changes"]
     assert [(r["actor"], r.get("plan")) for r in rows] == [("loop", pid), (H, None), ("loop", pid)]
     assert newest.id in [e["op"] for e in rows[-1]["ops"]] and rows[-1]["at"] > rows[-2]["at"] > rows[0]["at"]
 
