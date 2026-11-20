@@ -129,9 +129,10 @@ Policy = Callable[["Store", Op], str | None]   # (store, op) → denial reason, 
 
 class _CopyOnFetch(dict):
     """A fork's blocks while it is written: each is copied from the parent the
-    first time it is fetched by key (``[bid]`` or ``get``), which is how the
-    applier reaches every block it writes. Iterating gives what is there,
-    copied or not."""
+    first time it is fetched by key (``[bid]`` or ``get``), which is how a
+    plan's reject reaches every block it writes. Iterating gives what is
+    there, copied or not, so a write that reaches blocks by iterating (an
+    accept: ``verdict._proposed_marks``) would write into the parent."""
 
     def __init__(self, parent: dict) -> None:
         super().__init__(parent)
@@ -195,7 +196,10 @@ class Store:
         that applies ops it does not keep (``realize.rejected_view``). The log
         and its indexes are shared and never appended to: a fork records
         nothing and indexes nothing, so ``write`` may not move characters
-        between fields (a verdict kills, revives and drops marks in place).
+        between fields. ``write`` may only reject plans: a reject kills,
+        revives and drops marks in place and reaches blocks by key, while an
+        accept iterates the blocks (``_CopyOnFetch``) and would write into
+        this store.
         What an op writes is copied: each block the first time ``write``
         fetches it, the order, the bindings, the open plans, the removal lists,
         the watermark table, the plan table. So a fork costs the blocks its ops

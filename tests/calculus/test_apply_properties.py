@@ -698,3 +698,24 @@ def test_rejecting_every_plan_on_a_kind_or_level_in_any_order_restores_it_fuzz(s
         apply(s, m.op(K.PLAN_REJECT, {"pid": pid}, {}))
     assert (b.kind, b.level, sorted(s.bindings)) == start, seed
     assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+def test_rejecting_a_plan_that_unbound_a_heading_gives_the_code_back_though_another_made_it_one_again():
+    """P1 makes a bound heading prose, so its code comes off; P2, opened later,
+    makes it a heading again. Rejecting P1 and accepting P2 leaves the heading
+    with the code P1 took, as if P1 had never been."""
+    m, s = Mint("c"), Store()
+    heading(m, s, "h1", "Root")
+    heading(m, s, "h2", "Two", level=2, after="h1")
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h2"}, {"symbol": "a"}))
+    for pid in ("P1", "P2"):
+        apply(s, m.op(K.PLAN_OPEN, {"pid": pid}, {"kind": "edit", "target": "h2"}, actor="agent:x"))
+    apply(s, m.op(K.BLOCK_SET, {"bid": "h2", "path": "kind"}, {"value": PARAGRAPH}, actor="agent:x", plan="P1"))
+    apply(s, m.op(K.BLOCK_SET, {"bid": "h2", "path": "kind"}, {"value": HEADING, "level": 2},
+                  actor="agent:x", plan="P2"))
+    assert "a" not in s.bindings
+    apply(s, m.op(K.PLAN_REJECT, {"pid": "P1"}, {}))
+    apply(s, m.op(K.PLAN_ACCEPT, {"pid": "P2"}, {}))
+    assert s.blocks["h2"].kind == HEADING
+    assert s.bindings.get("a") and s.bindings["a"].feature == "h2", sorted(s.bindings)
+    assert replay(s).state_fingerprint() == s.state_fingerprint()

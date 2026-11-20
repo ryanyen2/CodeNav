@@ -287,7 +287,9 @@ def _undo_steps(store: Store, o: Op, undone: list[Op]) -> list[dict]:
         if path == "kind":                                  # a kind set wrote the level too
             to["level"] = without_plans(store, b, "level", ("rejected",), undone)[1]
         step = {"do": "set", "bid": b.id, "from": _read(b, list(to) or [path]), "to": to}
-        lost = by.payload.get("detached") if path == "kind" and by is not None else None
+        # The code the heading lost: the set the walk took back, or this op's
+        # own when the walk stopped at another open plan's set.
+        lost = (by or o).payload.get("detached") if path == "kind" else None
         if not lost:
             return [step]
         if b.kind != HEADING:
