@@ -421,6 +421,12 @@ class Store:
             out.extend(mine)
         return out
 
+    def kept(self, bid: str, symbol: str) -> dict | None:
+        """The entry block ``bid`` keeps for ``symbol`` from a kind change (marked
+        ``set``), or None."""
+        b = self.blocks.get(bid)
+        return next((dict(e) for e in b.detached if e.get("set") and e["symbol"] == symbol), None) if b else None
+
     def refeature(self, b: Block, prev_kind: str, symbols) -> tuple[list[dict], list[dict]]:
         """The one rule for a kind change, by ``block.set`` or a verdict's
         ``set`` step. A heading made another kind leaves as a delete does: its

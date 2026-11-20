@@ -22,6 +22,7 @@ Conflict strings are stable identifiers, not prose; the UI maps them.
 from __future__ import annotations
 
 from dataclasses import replace
+from itertools import dropwhile
 
 from codoc.calculus import ops as K
 from codoc.calculus import rank as R
@@ -548,18 +549,17 @@ def _h_block_set(store: Store, op: Op, touched: set[str]):
             b.content[path] = value
         canonical["prev"] = prev
         if is_human(op.actor) or op.plan:
-            # The author's set, kept with what it replaced until a realization
-            # covers it (`Block.prior`). A plan's set stays until the plan is
-            # accepted: a realization covering its position does not make an
-            # open or rejected plan's value the owner's, and `without_plans`
-            # walks past it. A machine's untagged set (a lift) is code already
-            # written and asks nothing.
+            # The author's set, kept with what it replaced (`Block.prior`). A
+            # realization settles a person's sets, and only the oldest run of
+            # settled ones is dropped. A plan's set is never dropped, since a
+            # verdict can be reopened and an accepted plan's value can become a
+            # proposal again; nor is a person's set after it, where
+            # `without_plans` must stop rather than walk on to the plan's. A
+            # machine's untagged set (a lift) is code already written and asks
+            # nothing.
             w = store.watermarks_by_fid.get(store.feature_of(bid) or "")
-
-            def settled(e) -> bool:
-                return bool(w and in_frontier(e[0], w.realized)) and (
-                    not e[2] or getattr(store.plans.get(e[2]), "status", "") == "accepted")
-            b.prior[path] = [e for e in b.prior.get(path, []) if not settled(e)] + [[op.id, prev, op.plan or ""]]
+            settled = lambda e: not e[2] and bool(w and in_frontier(e[0], w.realized))   # noqa: E731
+            b.prior[path] = [*dropwhile(settled, b.prior.get(path, [])), [op.id, prev, op.plan or ""]]
         inverse = [body(K.BLOCK_SET, {"bid": bid, "path": path}, {"unset": True} if absent else {"value": prev})]
     touched.add(bid)
     return canonical, inverse
@@ -779,14 +779,20 @@ def _h_bind_attach(store: Store, op: Op, touched: set[str]):
     key = p["symbol"]
     fp, th, by = p.get("fingerprint", ""), p.get("types_hash", ""), _set_by(op)
     prior = store.bindings.get(key)
+    kept = store.kept(fid, key)
     # After the payload is read, not before: a malformed attach conflicts, and
     # a feature that never had code must not be remembered as one that lost it
     # (`reflect._emptied` proposes deleting exactly those).
     store.bound_once.add(fid)
     touched.add(fid)
     # The canonical says what the attach did, never what the payload claimed:
-    # a verdict reads `prev_*` to undo a refresh rather than an attach.
-    sent = {k: v for k, v in p.items() if k not in ("displaced", "prev_fingerprint", "prev_types_hash", "prev_set_by")}
+    # a verdict reads `prev_*` to undo a refresh rather than an attach, and
+    # `kept`, what the block kept for the symbol from an earlier kind change,
+    # to give the block that back if a kind change since took this binding off.
+    sent = {k: v for k, v in p.items()
+            if k not in ("displaced", "prev_fingerprint", "prev_types_hash", "prev_set_by", "kept")}
+    if kept:
+        sent["kept"] = kept
     if prior and prior.feature == fid:
         store.bindings[key] = replace(prior, fingerprint=fp, types_hash=th, set_by=by)
         canonical = {**sent, "displaced": None, "prev_fingerprint": prior.fingerprint,

@@ -196,6 +196,23 @@ def _step(store: Store, me: Op, s: dict, touched: set[str], undo_of: str | None)
             return []
         touched.add(b.id)
         return [dict(s)]
+    if do == "keep":
+        # The entry the block keeps for one symbol from a kind change, at its
+        # place in the list, so a reopen puts a dropped one back where it was.
+        b, key = store.blocks[s["bid"]], str(s["symbol"])
+        want = s.get("to") if fwd else s.get("from")
+        i = next((j for j, d in enumerate(b.detached) if d.get("set") and d["symbol"] == key), None)
+        was = b.detached[i] if i is not None else None
+        if was == want:
+            return []
+        if i is None:
+            i = min(int(s.get("at", len(b.detached))), len(b.detached))
+        else:
+            del b.detached[i]
+        if want:
+            b.detached.insert(i, {**want, "set": True})
+        touched.add(b.id)
+        return [{**s, "from": was, "to": want, "at": i} if fwd else {**s, "from": want, "to": was, "at": i}]
     if do == "bind":
         key = str(s["symbol"])
         want = s.get("to") if fwd else s.get("from")
@@ -253,11 +270,12 @@ def _undo_steps(store: Store, o: Op, undone: list[Op]) -> list[dict]:
     absent included: a set since by anyone else, an open plan included, stands,
     and so rejecting every plan that set a field, in any order, leaves what was
     there before any of them. A kind set wrote the level too, which goes back
-    by the same rule; a heading given back takes back the code the set that
-    made it something else took off. A move is put back while it is
+    by the same rule; a heading given back takes back the code this set and
+    the sets the walk took out took off. A move is put back while it is
     still the op that ranked the block; otherwise the later move stands and
     this one's place is void. A binding goes back to the owner it displaced
-    unless someone re-bound it since (their attach stands)."""
+    unless someone re-bound it since (their attach stands), and what the
+    block kept for it goes back to what it kept before the attach."""
     p, t = o.payload, o.target
     if o.kind == K.TEXT_INSERT:
         return [{"do": "kill", "bid": p["bid"], "path": p["path"], "segments": [[o.id, 0, len(p["text"])]]}]
@@ -282,25 +300,43 @@ def _undo_steps(store: Store, o: Op, undone: list[Op]) -> list[dict]:
         b, path = store.blocks.get(t["bid"]), t["path"]
         if b is None or not b.live:
             return []
-        absent, value, by = without_plans(store, b, path, ("rejected",), undone)
+        absent, value, took = without_plans(store, b, path, ("rejected",), undone)
         to = {} if absent else {path: value}
         if path == "kind":                                  # a kind set wrote the level too
             to["level"] = without_plans(store, b, "level", ("rejected",), undone)[1]
         step = {"do": "set", "bid": b.id, "from": _read(b, list(to) or [path]), "to": to}
-        # The code the heading lost: the set the walk took back, or this op's
-        # own when the walk stopped at another open plan's set.
-        lost = (by or o).payload.get("detached") if path == "kind" else None
+        if path != "kind":
+            return [step]
+        # The code the heading lost: what this op took off, and what every set
+        # the walk took out took off, so neither an older set the walk passed
+        # nor the walk stopping at another open plan's set loses any of it.
+        # A symbol a set took off while an attach this verdict also takes back
+        # had bound it is not lost: the block first keeps what it kept before
+        # that attach (`_unkeep`), and gets the symbol back only if an older set
+        # took it off too. `refeature` takes back only what the block kept and
+        # nobody owns now.
+        mine = {u.id for u in undone}
+        lost, first = {}, []
+        for x in (o, *took):
+            for e in x.payload.get("detached") or []:
+                y = _attached_by(store, x, e["symbol"])
+                if y is not None and y.id in mine:
+                    first += [k for k in _unkeep(store, y) if k not in first]
+                    if "prev_fingerprint" not in y.payload:
+                        continue
+                lost.setdefault(e["symbol"], e)
         if not lost:
-            return [step]
+            return [*first, step]
         if b.kind != HEADING:
-            step["bindings"] = lost         # the heading it gives back takes back the code it lost
-            return [step]
+            step["bindings"] = list(lost.values())     # the heading it gives back takes back the code it lost
+            return [*first, step]
         # Still a heading (an open plan made it one again): the code comes back
-        # by itself, as the kind change would take it, from what the block kept.
-        names = {e["symbol"] for e in lost}
-        return [step] + [{"do": "bind", "symbol": e["symbol"], "from": None,
-                          "to": {k: e.get(k, "") for k in ("feature", "symbol", "fingerprint", "types_hash", "set_by")}}
-                         for e in b.detached if e.get("set") and e["symbol"] in names and e["symbol"] not in store.bindings]
+        # by itself, as the kind change would take it, from what the block
+        # keeps once `first` has run.
+        kept = {e["symbol"]: e for e in b.detached if e.get("set")} | {k["symbol"]: k["to"] for k in first}
+        return [*first, step] + [{"do": "bind", "symbol": k, "from": None,
+                                  "to": {f: e.get(f, "") for f in ("feature", "symbol", "fingerprint", "types_hash", "set_by")}}
+                                 for k, e in kept.items() if e and k in lost and k not in store.bindings]
     if o.kind == K.BLOCK_MOVE:
         out = []
         for bid, *was in p.get("prev", []):
@@ -313,14 +349,74 @@ def _undo_steps(store: Store, o: Op, undone: list[Op]) -> list[dict]:
             out.append({"do": "set", "bid": bid, "from": _read(b, list(to)), "to": to})
         return out
     if o.kind == K.BIND_ATTACH:
-        cur = store.bindings.get(p["symbol"])
-        if cur is None or cur.feature != t["fid"]:
-            return []
-        # A plan that only refreshed a binding the feature already had gives the old hashes back.
-        to = {**cur.to_json(), "fingerprint": p.get("prev_fingerprint", ""), "types_hash": p.get("prev_types_hash", ""),
-              "set_by": p.get("prev_set_by", "")} if "prev_fingerprint" in p else p.get("displaced")
-        return [{"do": "bind", "symbol": p["symbol"], "from": cur.to_json(), "to": to}]
+        key, fid = p["symbol"], t["fid"]
+        cur = store.bindings.get(key)
+        out = _unkeep(store, o)
+        # A kind set this verdict also takes back took this binding off, and
+        # its undo left the symbol out: what is bound now came back for another
+        # reason, and stays.
+        taken = any(x.kind == K.BLOCK_SET and x.target.get("bid") == fid and x.target.get("path") == "kind"
+                    and key in {e["symbol"] for e in x.payload.get("detached") or []}
+                    and getattr(_attached_by(store, x, key), "id", None) == o.id for x in undone)
+        if "prev_fingerprint" in p:
+            # A plan that only refreshed a binding the feature already had gives the old hashes back.
+            to = {**cur.to_json(), **_old_hashes(p)} if cur is not None else None
+        else:
+            to = p.get("displaced")
+        if cur is None:
+            # A kind change took it off: it goes back to the owner it displaced.
+            return out + ([{"do": "bind", "symbol": key, "from": None, "to": to}] if to and (out or taken) else [])
+        if cur.feature != fid or taken:
+            return out
+        if to is None and p.get("kept") and _owed(store, o, undone):
+            # The heading owes the symbol from before this attach: it goes back
+            # to what the block kept for it then.
+            to = {k: p["kept"].get(k, "") for k in ("feature", "symbol", "fingerprint", "types_hash", "set_by")}
+        return out + [{"do": "bind", "symbol": key, "from": cur.to_json(), "to": to}]
     return []
+
+
+def _owed(store: Store, y: Op, undone: list[Op]) -> bool:
+    """Whether the block attach ``y`` bound its symbol to would hold that
+    symbol without ``y``: it is a heading again because a kind set older than
+    ``y`` that took the symbol off is taken out (the walk passes it), and that
+    set's plan was rejected after ``y``. That reject could not give the symbol
+    back, since ``y`` held it; a reject before ``y`` already did, and what
+    happened to the symbol since stands."""
+    b, key, at = store.blocks.get(y.target["fid"]), y.payload["symbol"], store.position.get(y.id, -1)
+    if b is None or not b.live or b.kind != HEADING:
+        return False
+    return any(store.position.get(x.id, -1) < at < store.position.get(getattr(store.plans.get(x.plan or ""), "verdict", ""), -1)
+               and key in {e["symbol"] for e in x.payload.get("detached") or []}
+               for x in without_plans(store, b, "kind", ("rejected",), undone)[2])
+
+
+def _old_hashes(p: dict) -> dict:
+    """The hashes and setter a refresh replaced, from its canonical."""
+    return {"fingerprint": p.get("prev_fingerprint", ""), "types_hash": p.get("prev_types_hash", ""),
+            "set_by": p.get("prev_set_by", "")}
+
+
+def _attached_by(store: Store, x: Op, symbol: str) -> Op | None:
+    """The attach whose binding of ``symbol`` kind set ``x`` took off its
+    block: the newest ``bind.attach`` of it to that block before ``x``."""
+    bid, at = x.target["bid"], store.position.get(x.id, -1)
+    return next((y for y in reversed(store.ops_on([bid])) if store.position[y.id] < at and y.kind == K.BIND_ATTACH
+                 and y.conflict is None and y.target.get("fid") == bid and y.payload.get("symbol") == symbol), None)
+
+
+def _unkeep(store: Store, y: Op) -> list[dict]:
+    """The ``keep`` step that gives the block of attach ``y`` back what it kept
+    for the symbol before ``y`` (``kept``), or for a refresh the entry with its
+    old hashes: so undoing a kind change later does not bring back code only
+    ``y`` bound. Empty unless a kind change since took ``y``'s binding off and
+    the block still keeps that."""
+    p, fid = y.payload, y.target["fid"]
+    held = store.kept(fid, p["symbol"])
+    if held is None or held == p.get("kept"):
+        return []
+    to = {**held, **_old_hashes(p)} if "prev_fingerprint" in p else p.get("kept")
+    return [{"do": "keep", "bid": fid, "symbol": p["symbol"], "from": held, "to": to}]
 
 
 def _proposed_marks(store: Store, pid: str, accepted: set[str]) -> list[tuple[Block, str, Mark]]:

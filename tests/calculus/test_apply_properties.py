@@ -719,3 +719,195 @@ def test_rejecting_a_plan_that_unbound_a_heading_gives_the_code_back_though_anot
     assert s.blocks["h2"].kind == HEADING
     assert s.bindings.get("a") and s.bindings["a"].feature == "h2", sorted(s.bindings)
     assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+def _note_plans(realize_after: str) -> tuple[Mint, Store]:
+    """The owner's ``note`` is O. Plan P sets A; with ``realize_after="P"`` P is
+    accepted, else the owner sets B and back to A by hand. The feature is
+    realized, then plan Q sets C."""
+    m, s = Mint("z"), Store()
+    heading(m, s, "h1", "Root")
+    paragraph(m, s, "p1", "text", after="h1")
+    apply(s, m.op(K.BLOCK_SET, {"bid": "p1", "path": "note"}, {"value": "O"}))
+    apply(s, m.op(K.PLAN_OPEN, {"pid": "P"}, {"kind": "edit", "target": "p1"}, actor=AGENT))
+    apply(s, m.op(K.BLOCK_SET, {"bid": "p1", "path": "note"}, {"value": "A"}, actor=AGENT, plan="P"))
+    if realize_after == "P":
+        apply(s, m.op(K.PLAN_ACCEPT, {"pid": "P"}, {}))
+    else:
+        for v in ("B", "A"):
+            apply(s, m.op(K.BLOCK_SET, {"bid": "p1", "path": "note"}, {"value": v}))
+    assert apply(s, m.op(K.FEATURE_HANDOFF, {"fid": "h1"}, {})).conflict is None
+    assert apply(s, m.op(K.FEATURE_REALIZED, {"fid": "h1"}, {})).conflict is None
+    apply(s, m.op(K.PLAN_OPEN, {"pid": "Q"}, {"kind": "edit", "target": "p1"}, actor=AGENT))
+    apply(s, m.op(K.BLOCK_SET, {"bid": "p1", "path": "note"}, {"value": "C"}, actor=AGENT, plan="Q"))
+    return m, s
+
+
+def test_an_accepted_plans_value_is_a_proposal_again_when_the_accept_is_undone_after_a_realization():
+    """A realization covers the accepted P; undoing the accept makes P's A a
+    proposal again. It is not read as the owner's, and rejecting both plans
+    puts the owner's O back: a plan's entry in ``Block.prior`` is never pruned."""
+    from codoc.calculus.derive import rejected_content
+    m, s = _note_plans("P")
+    (back,) = invert(s, m, s.by_id[s.plans["P"].verdict])
+    assert back.conflict is None and s.plans["P"].status == "open"
+    assert rejected_content(s, s.blocks["p1"])["note"] == "O"
+    for pid in ("P", "Q"):
+        apply(s, m.op(K.PLAN_REJECT, {"pid": pid}, {}))
+    assert s.blocks["p1"].content["note"] == "O"
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+def test_a_realization_does_not_let_the_walk_pass_the_owners_set_to_an_older_plans():
+    """The owner set the field back to A by hand over open P's A, and the
+    feature was realized. The owner's sets are not pruned while P's older
+    entry stays, so the walk stops at the owner's A: the ``rejected`` read and
+    rejecting both plans give A, not the O from before P."""
+    from codoc.calculus.derive import rejected_content
+    m, s = _note_plans("owner")
+    assert rejected_content(s, s.blocks["p1"])["note"] == "A"
+    for pid in ("P", "Q"):
+        apply(s, m.op(K.PLAN_REJECT, {"pid": pid}, {}))
+    assert s.blocks["p1"].content["note"] == "A", s.blocks["p1"].prior
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+def test_rejecting_a_plan_that_unbound_a_heading_gives_the_code_back_past_two_rejected_sets_that_cancel():
+    """X made the heading prose and Y made it a heading again; both were
+    rejected, then code was bound and the log folded. Q makes it prose and is
+    rejected: the walk passes Q, Y and X, and the code Q took off comes back,
+    on the unfolded store as on the folded one, which no longer has X and Y."""
+    clock = Clock()
+    m, s = Mint("c", clock=clock), Store()
+    heading(m, s, "h1", "Root")
+    heading(m, s, "h2", "Two", level=2, after="h1")
+    for pid in ("X", "Y"):
+        apply(s, m.op(K.PLAN_OPEN, {"pid": pid}, {"kind": "edit", "target": "h2"}, actor=AGENT))
+    apply(s, m.op(K.BLOCK_SET, {"bid": "h2", "path": "kind"}, {"value": PARAGRAPH}, actor=AGENT, plan="X"))
+    apply(s, m.op(K.BLOCK_SET, {"bid": "h2", "path": "kind"}, {"value": HEADING, "level": 2}, actor=AGENT, plan="Y"))
+    for pid in ("X", "Y"):
+        apply(s, m.op(K.PLAN_REJECT, {"pid": pid}, {}))
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h2"}, {"symbol": "a"}))
+    assert settled_prefix(s) == len(s.ops)
+    f = Store()
+    for d in snapshot_ops(s, "snap", clock):
+        replay_recorded(f, Op.from_json(d))
+    for o in [m.op(K.PLAN_OPEN, {"pid": "Q"}, {"kind": "edit", "target": "h2"}, actor=AGENT),
+              m.op(K.BLOCK_SET, {"bid": "h2", "path": "kind"}, {"value": PARAGRAPH}, actor=AGENT, plan="Q"),
+              m.op(K.PLAN_REJECT, {"pid": "Q"}, {})]:
+        apply(f, Op.from_json(copy.deepcopy(o.to_json())))
+        apply(s, o)
+    for st in (s, f):
+        assert st.blocks["h2"].kind == HEADING and sorted(st.bindings) == ["a"], sorted(st.bindings)
+    assert f.state_fingerprint() == s.state_fingerprint()
+
+
+def _bound_h2() -> tuple[Mint, Store]:
+    m, s = Mint("c"), Store()
+    heading(m, s, "h1", "Root")
+    heading(m, s, "h2", "Two", level=2, after="h1")
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h2"}, {"symbol": "a"}))
+    return m, s
+
+
+@pytest.mark.parametrize("order", ["AB", "BA"])
+def test_a_rejected_plans_attach_does_not_come_back_with_the_heading(order):
+    """A binds c to the heading; B makes it prose, taking a and c off. However
+    the two are rejected, the heading gets back a, and not c, which only a
+    rejected plan bound: undoing A's attach drops what the block kept of c."""
+    m, s = _bound_h2()
+    for pid in "AB":
+        apply(s, m.op(K.PLAN_OPEN, {"pid": pid}, {"kind": "edit", "target": "h2"}, actor=AGENT))
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h2"}, {"symbol": "c"}, actor=AGENT, plan="A"))
+    apply(s, m.op(K.BLOCK_SET, {"bid": "h2", "path": "kind"}, {"value": PARAGRAPH}, actor=AGENT, plan="B"))
+    for pid in order:
+        apply(s, m.op(K.PLAN_REJECT, {"pid": pid}, {}))
+    assert s.blocks["h2"].kind == HEADING and sorted(s.bindings) == ["a"], sorted(s.bindings)
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+@pytest.mark.parametrize("order", ["PQ", "QP"])
+def test_the_owners_binding_survives_rejecting_every_plan_after_a_plan_bound_it_again(order):
+    """P makes the heading prose (a comes off) and a heading again; Q binds a
+    again and makes it prose. Rejecting both, in either order, gives the
+    heading back a as the owner bound it, not as Q did."""
+    m, s = _bound_h2()
+    for pid in "PQ":
+        apply(s, m.op(K.PLAN_OPEN, {"pid": pid}, {"kind": "edit", "target": "h2"}, actor=AGENT))
+    apply(s, m.op(K.BLOCK_SET, {"bid": "h2", "path": "kind"}, {"value": PARAGRAPH}, actor=AGENT, plan="P"))
+    apply(s, m.op(K.BLOCK_SET, {"bid": "h2", "path": "kind"}, {"value": HEADING, "level": 2}, actor=AGENT, plan="P"))
+    apply(s, m.op(K.BIND_ATTACH, {"fid": "h2"}, {"symbol": "a"}, actor=AGENT, plan="Q"))
+    apply(s, m.op(K.BLOCK_SET, {"bid": "h2", "path": "kind"}, {"value": PARAGRAPH}, actor=AGENT, plan="Q"))
+    for pid in order:
+        apply(s, m.op(K.PLAN_REJECT, {"pid": pid}, {}))
+    assert s.blocks["h2"].kind == HEADING and sorted(s.bindings) == ["a"], sorted(s.bindings)
+    assert s.bindings["a"].set_by == m.actor
+    assert replay(s).state_fingerprint() == s.state_fingerprint()
+
+
+@pytest.mark.parametrize("seed", range(200))
+def test_rejecting_every_plan_that_binds_code_or_changes_a_kind_restores_the_code_fuzz(seed):
+    """Plans make a bound heading another kind and back and bind code to it,
+    interleaved, some decided on the way; with ``trunk``, the person changes the
+    kind and binds and unbinds code too. Every verdict's reopen gives back the
+    exact state before it, code sits only on live headings, and a rebuild and a
+    fold give the same store. Rejecting the rest in any order, when only plans
+    and their rejects touched the heading, gives back its kind, level and code."""
+    from codoc.calculus.doc import BULLET
+    for trunk in (False, True):
+        rng, clock = random.Random(seed), Clock()
+        m, s = Mint(f"k{seed}", clock=clock), Store()
+        heading(m, s, "h1", "Root")
+        heading(m, s, "p1", "Two", level=2, after="h1")
+        for sym in "ab":
+            apply(s, m.op(K.BIND_ATTACH, {"fid": "p1"}, {"symbol": sym}))
+        b = s.blocks["p1"]
+        code = lambda: (b.kind, b.level, sorted((k, v.feature) for k, v in s.bindings.items()))   # noqa: E731
+        start, touched = code(), False
+
+        def decide(kind, pid):
+            before = copy.deepcopy(s.state_fingerprint())
+            done = apply(s, m.op(kind, {"pid": pid}, {}))
+            assert done.conflict is None
+            probe = replay(s)
+            (back,) = invert(probe, Mint("u", "human:a", clock), done)
+            assert back.conflict is None and probe.state_fingerprint() == before, (seed, trunk, kind)
+
+        for step in range(rng.randint(3, 16)):
+            r = rng.random()
+            if not s.open_plans or r < 0.15:
+                apply(s, m.op(K.PLAN_OPEN, {"pid": f"P{step}"}, {"kind": "edit", "target": "p1"}, actor=AGENT))
+                continue
+            pid = rng.choice(sorted(s.open_plans))
+            if r < 0.55:
+                pl = {"value": rng.choice([HEADING, PARAGRAPH, BULLET, HEADING])}
+                if rng.random() < 0.5:
+                    pl["level"] = rng.randint(1, 3)
+                apply(s, m.op(K.BLOCK_SET, {"bid": "p1", "path": "kind"}, pl, actor=AGENT, plan=pid))
+            elif r < 0.65:
+                if b.kind == HEADING:
+                    apply(s, m.op(K.BIND_ATTACH, {"fid": "p1"}, {"symbol": rng.choice("abc")}, actor=AGENT, plan=pid))
+            elif trunk and r < 0.75:
+                touched, q, sym = True, rng.random(), rng.choice("abc")
+                if q < 0.4:
+                    apply(s, m.op(K.BLOCK_SET, {"bid": "p1", "path": "kind"}, {"value": rng.choice([HEADING, PARAGRAPH])}))
+                elif q < 0.7:
+                    apply(s, m.op(K.BIND_ATTACH, {"fid": rng.choice(["h1"] + (["p1"] if b.kind == HEADING else []))},
+                                  {"symbol": sym}))
+                elif sym in s.bindings:
+                    apply(s, m.op(K.BIND_DETACH, {"fid": s.bindings[sym].feature}, {"symbol": sym}))
+            else:
+                decide(K.PLAN_REJECT if rng.random() < 0.6 else K.PLAN_ACCEPT, pid)
+            assert _code_on_live_headings(s), (seed, trunk, step)
+        for pid in rng.sample(sorted(s.open_plans), len(s.open_plans)):
+            decide(K.PLAN_REJECT, pid)
+            assert _code_on_live_headings(s), (seed, trunk)
+        if not touched and not any(p.status == "accepted" for p in s.plans.values()):
+            assert code() == start, (seed, trunk, code(), start)
+        assert replay(s).state_fingerprint() == s.state_fingerprint(), (seed, trunk)
+        f = Store()
+        for d in snapshot_ops(state_at(s, settled_prefix(s)), "snap", clock):
+            assert replay_recorded(f, Op.from_json(d)).conflict is None
+        for o in s.ops[settled_prefix(s):]:
+            replay_recorded(f, Op.from_json(copy.deepcopy(o.to_json())))
+        assert f.state_fingerprint() == s.state_fingerprint(), (seed, trunk)

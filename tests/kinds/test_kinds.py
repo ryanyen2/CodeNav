@@ -699,10 +699,12 @@ def test_rejecting_a_plan_that_set_the_url_twice_keeps_an_open_plans_url_out(tmp
     ws.close()
 
 
-def _realized_then_second_plan(tmp_path, monkeypatch):
+def _realized_then_second_plan(tmp_path, monkeypatch, accepted=False):
     """A suggester's open plan P sets the owner's url; the owner's feature is
     realized (`codoc done`), which covers P's position; then a second
-    contributor's plan Q sets the same field."""
+    contributor's plan Q sets the same field. With ``accepted``, the owner
+    accepted P before the realization and undoes that accept (their ⌘Z) after
+    Q's set, so P is a proposal again."""
     from codoc.kinds import fetch_guard
     from codoc.workspace import inbox as I
     fetched: list = []
@@ -720,25 +722,34 @@ def _realized_then_second_plan(tmp_path, monkeypatch):
                          batch=pid, plan=pid)])
         assert [o.conflict for o in ws.drain_inbox()] == [None, None]
     plan("mallory", "P", "https://attacker.example/one")
+    acc = _verdict(ws, K.PLAN_ACCEPT, "P") if accepted else None
     handoff(ws, "h1", actor="human:local")
     assert ws.submit([{"kind": K.FEATURE_REALIZED, "target": {"fid": "h1"}, "payload": {}}],
                      actor="human:local")[0].conflict is None
     plan("trent", "Q", "https://x.example/two")
+    if acc is not None:
+        (undo,) = acc.inverse
+        assert ws.submit([undo], actor="human:local")[0].conflict is None and ws.store.plans["P"].status == "open"
     return codoc, ws, bid, fetched
 
 
-def test_a_realization_does_not_make_an_open_plans_url_the_owners(tmp_path, monkeypatch):
+@pytest.mark.parametrize("accepted", [False, True])
+def test_a_realization_does_not_make_an_open_plans_url_the_owners(tmp_path, monkeypatch, accepted):
     from codoc.calculus.derive import rejected_content
-    codoc, ws, bid, fetched = _realized_then_second_plan(tmp_path, monkeypatch)
+    codoc, ws, bid, fetched = _realized_then_second_plan(tmp_path, monkeypatch, accepted)
     assert rejected_content(ws.store, ws.store.blocks[bid])["url"] == _OWNERS
     lift_pass(ws, None, str(codoc))
     assert "https://attacker.example/one" not in fetched, fetched
     assert "https://attacker.example/one" not in export_markdown(ws.store)
+    assert "https://attacker.example/one" not in directive(ws.store, "h1")
+    ws.close()
 
 
-def test_rejecting_both_plans_after_a_realization_puts_the_owners_url_back(tmp_path, monkeypatch):
-    codoc, ws, bid, _ = _realized_then_second_plan(tmp_path, monkeypatch)
+@pytest.mark.parametrize("accepted", [False, True])
+def test_rejecting_both_plans_after_a_realization_puts_the_owners_url_back(tmp_path, monkeypatch, accepted):
+    codoc, ws, bid, _ = _realized_then_second_plan(tmp_path, monkeypatch, accepted)
     for pid in ("P", "Q"):
         assert ws.submit([{"kind": K.PLAN_REJECT, "target": {"pid": pid}, "payload": {}}],
                          actor="human:local")[0].conflict is None
     assert ws.store.blocks[bid].content["url"] == _OWNERS
+    ws.close()

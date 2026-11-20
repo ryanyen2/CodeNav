@@ -165,11 +165,12 @@ def _sets(store: Store, b: Block, path: str) -> list:
 
 
 def without_plans(store: Store, b: Block, path: str, past: tuple[str, ...],
-                  undoing: list[Op] | tuple = ()) -> tuple[bool, object, Op | None]:
+                  undoing: list[Op] | tuple = ()) -> tuple[bool, object, list[Op]]:
     """Field ``path`` of ``b`` with plans' sets taken out, as (absent, value,
-    by): the one rule for the value from before the plans (docs/model.md,
+    took): the one rule for the value from before the plans (docs/model.md,
     Read modes), for a content field and for ``kind`` and ``level`` alike.
-    ``by`` is the oldest set taken out, whose replaced value this is, or None.
+    ``took`` is every set the walk took out, newest first; the value is the
+    one the last of them replaced, or the field as it is when it is empty.
     ``Block.prior`` keeps each content set with the value it replaced; a kind
     or level set carries it in its payload. The walk goes from the newest set
     back, starting from the field as it is. A set whose plan's status is in
@@ -181,13 +182,9 @@ def without_plans(store: Store, b: Block, path: str, past: tuple[str, ...],
     set, an accepted plan's, one whose plan's status ``past`` leaves out, and a
     set whose op a fold archived. So a value someone set since stands. A value
     a lift wrote since matches no set, so it stays."""
-    sets = _sets(store, b, path)
     taking = {o.id: o for o in undoing if _sets_on(o, b, path)}
-    # A set a realization covered has left `prior`; what it replaced is in its payload.
-    have = {e[0] for e in sets}
-    sets = [[i, _replaced(o, path), o.plan or ""] for i, o in taking.items() if i not in have] + sets
-    now, by = _field(b, path), None
-    for op_id, prev, pid in reversed(sets):
+    now, took = _field(b, path), []
+    for op_id, prev, pid in reversed(_sets(store, b, path)):
         plan = store.plans.get(pid) if pid else None
         if op_id not in taking and (plan is None or plan.status not in past):
             break
@@ -199,8 +196,9 @@ def without_plans(store: Store, b: Block, path: str, past: tuple[str, ...],
             break
         if _wrote(op, path) != now:
             continue        # a verdict already took this set back
-        now, by = was, op
-    return now[0], now[1], by
+        now = was
+        took.append(op)
+    return now[0], now[1], took
 
 
 def rejected_content(store: Store, b: Block) -> dict:
